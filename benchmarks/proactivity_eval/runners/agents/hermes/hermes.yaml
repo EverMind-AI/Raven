@@ -1,0 +1,14 @@
+# Hermes-agent config (cases + pbench — both run as subprocesses that
+# import Hermes's cron modules directly).
+
+name: hermes
+
+# Override systems.hermes_src from runners.config.yaml. null → use global.
+hermes_src: null
+
+# Per-case subprocess timeout (overridden by --timeout).
+subprocess_timeout_s: 300
+
+# Copy ~/.hermes/{config.yaml,.env,auth.json} into each temp HERMES_HOME.
+# Set to false in CI when you pass credentials via shell env only.
+inherit_home: true

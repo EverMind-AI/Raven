@@ -1,0 +1,20 @@
+# ProactiveBench reward_data benchmark (S1 protocol, single-decision).
+#
+# The jsonl is vendored under proactivity-eval/data/pbench/ so the
+# benchmark is self-contained. To use a different source (e.g. a newer
+# snapshot from liutj9/ProactiveAgent), drop a pbench.local.yaml next
+# to this file or set PROACTIVITY_EVAL_BENCHMARK_PBENCH.
+
+name: pbench
+
+# JSONL file with one record per line — each has obs[], category,
+# help_needed, annotation[], etc. (ProactiveAgent reward_data schema).
+# Relative paths resolve against this yaml's directory.
+dataset_file: ../../../data/pbench/test_data.jsonl
+
+# 4-cell stratification used by sample_stratified().
+categories:
+  - "Correct-Detection (CD)"
+  - "Correct-Rejection (CR)"
+  - "Missed-Need (MN)"
+  - "False-Alarm (FA)"

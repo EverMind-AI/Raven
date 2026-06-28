@@ -1,0 +1,39 @@
+# Global runner configuration — LLM endpoints + system locations.
+#
+# Per-benchmark dataset paths live in runners/benchmarks/<name>/<name>.yaml
+# (claweval-style) and are read via _common.get_benchmark_config(name).
+#
+# Lookup order (first hit wins):
+#   1. CLI --config <path>
+#   2. $PROACTIVITY_EVAL_CONFIG env var
+#   3. proactivity-eval/runners.config.local.yaml  (gitignored, user override)
+#   4. proactivity-eval/runners.config.yaml         (this file, tracked default)
+#
+# Per-field env var escape hatches (override yaml when set):
+#   HERMES_AGENT_SRC, OPENCLAW_CMD
+#   VLLM_BASE_URL, VLLM_MODEL_ID, JUDGE_BASE_URL, JUDGE_MODEL
+#
+# Paths may use `~` and `$VAR`; both are expanded at load time.
+# Relative paths are resolved against this config file's directory.
+
+systems:
+  # hermes-agent source tree (has cron/scheduler.py etc.). Longrun inner
+  # monkeypatches hermes_time.now before importing cron modules, so source
+  # must be importable by whichever python executable we subprocess.
+  # Override via $HERMES_AGENT_SRC env var or runners.config.local.yaml.
+  hermes_src: ~/path/to/hermes-agent
+  # openclaw CLI executable; "openclaw" = PATH lookup.
+  openclaw_cmd: openclaw
+
+llm:
+  # LAN vLLM endpoint used by all three systems + by the RM judge.
+  # Override with $VLLM_BASE_URL env var or runners.config.local.yaml.
+  vllm_base_url: https://your-vllm-endpoint.example.com/v1
+  vllm_model_id: qwen3.5-27B
+  vllm_api_key: <your-api-key>
+  vllm_context_window: 65536
+  vllm_max_tokens: 8192
+  # ProactiveAgent reward-model judge (separate larger model, optional).
+  # Override with $JUDGE_BASE_URL env var or runners.config.local.yaml.
+  judge_base_url: https://your-judge-endpoint.example.com/v1
+  judge_model: Qwen3.5-397B-A17B-GPTQ-Int4

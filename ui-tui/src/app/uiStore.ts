@@ -1,0 +1,45 @@
+import { atom, computed } from 'nanostores'
+
+import { MOUSE_TRACKING } from '../config/env.js'
+import { ZERO } from '../domain/usage.js'
+import { DEFAULT_THEME } from '../theme.js'
+
+import { DEFAULT_INDICATOR_STYLE, type UiState } from './interfaces.js'
+
+const buildUiState = (): UiState => ({
+  bgTasks: new Set(),
+  busy: false,
+  busyInputMode: 'queue',
+  compact: false,
+  escapeArmed: false,
+  detailsMode: 'collapsed',
+  detailsModeCommandOverride: false,
+  indicatorStyle: DEFAULT_INDICATOR_STYLE,
+  info: null,
+  inlineDiffs: true,
+  mouseTracking: MOUSE_TRACKING,
+  sections: {},
+  showCost: false,
+  // Default ON so reasoning models (deepseek-v4-pro / qwen /
+  // o-series) show their thinking stream out of the box instead of leaving
+  // the user staring at a silent screen for 1-4 min. Toggle via /thinking.
+  showReasoning: true,
+  sid: null,
+  status: 'summoning raven…',
+  statusBar: 'bottom',
+  streaming: true,
+  theme: DEFAULT_THEME,
+  usage: ZERO
+})
+
+export const $uiState = atom<UiState>(buildUiState())
+
+export const $uiTheme = computed($uiState, state => state.theme)
+export const $uiSessionId = computed($uiState, state => state.sid)
+
+export const getUiState = () => $uiState.get()
+
+export const patchUiState = (next: Partial<UiState> | ((state: UiState) => UiState)) =>
+  $uiState.set(typeof next === 'function' ? next($uiState.get()) : { ...$uiState.get(), ...next })
+
+export const resetUiState = () => $uiState.set(buildUiState())

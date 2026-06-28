@@ -1,0 +1,675 @@
+generated_at: '2023-10-25T15:00:00Z'
+persona_id: student-01
+anchor_date: '2026-05-01'
+total_days: 30
+events:
+- at: '2026-05-01T10:30:00'
+  topic: 组会前 ablation study 结果怎么看都不显著😭
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/12组会汇报
+  reveals_new_fact: null
+- at: '2026-05-01T14:15:00'
+  topic: GPU 资源又被占了跑不了实验💢
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - GPU资源紧张
+  reveals_new_fact: null
+- at: '2026-05-01T20:30:00'
+  topic: 突然发现 NeurIPS workshop 格式要求好复杂📑
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-01T23:45:00'
+  topic: 睡前刷到一篇超赞的 instruction tuning 论文🧠
+  kind: learning
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: 收藏了arxiv链接
+- at: '2026-05-02T11:00:00'
+  topic: 昨天那篇论文的方法能用到自己项目吗？
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T15:30:00'
+  topic: 周老师突然要提前看 ablation 结果😱
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/12组会汇报
+  reveals_new_fact: null
+- at: '2026-05-02T22:00:00'
+  topic: 记录今天实验参数（怕明天忘记）
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-03T09:45:00'
+  topic: 食堂代餐吃腻了求推荐😋
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 对花生过敏
+- at: '2026-05-03T14:00:00'
+  topic: batch size 32 跑不动降到16会有影响吗？
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - GPU资源紧张
+  reveals_new_fact: null
+- at: '2026-05-03T21:30:00'
+  topic: 突然焦虑我是不是不适合读博🥲
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T10:00:00'
+  topic: 健身房年卡打折最后一天！该办吗？
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-04T16:20:00'
+  topic: 师妹问答辩 rehearsal 时间怎么安排
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-04T23:00:00'
+  topic: 发现 baseline 代码有bug要重跑😭
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-05T13:00:00'
+  topic: 周末图书馆座位预约攻略
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T20:00:00'
+  topic: 打游戏连输三把求安慰🎮
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T15:00:00'
+  topic: 周日晚上突然焦虑下周进度
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 5/12组会汇报
+  reveals_new_fact: null
+- at: '2026-05-06T22:30:00'
+  topic: 临时决定通宵改论文💪
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-07T10:30:00'
+  topic: 通宵后组会汇报求救命稻草
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/12组会汇报
+  reveals_new_fact: null
+- at: '2026-05-07T14:00:00'
+  topic: 周老师突然要求加实验😱
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T21:00:00'
+  topic: 记录新实验参数配置
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-08T11:30:00'
+  topic: 新买的代餐粉求测评方法
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 喜欢巧克力口味
+- at: '2026-05-08T16:00:00'
+  topic: GPU排队系统有漏洞怎么利用（不是）
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - GPU资源紧张
+  reveals_new_fact: null
+- at: '2026-05-08T23:30:00'
+  topic: 睡前刷到周老师当年博士论文🤯
+  kind: learning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T09:00:00'
+  topic: 突然想起来师妹答辩要准备问题
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-09T14:30:00'
+  topic: 实验结果波动太大怎么办？
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-09T20:00:00'
+  topic: 游戏新赛季求组队队友
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-10T12:00:00'
+  topic: NeurIPS格式检查工具推荐
+  kind: tech_consultation
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-10T18:00:00'
+  topic: 健身房第三次打卡失败忏悔
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-10T22:00:00'
+  topic: 突然想转CV怎么办（第二天会撤回）
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T10:00:00'
+  topic: 组会前突击整理实验记录
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-11T15:00:00'
+  topic: 发现arxiv上有篇类似工作😨
+  kind: learning
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T21:30:00'
+  topic: 焦虑到睡不着求催眠建议
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T09:30:00'
+  topic: 组会前最后检查slides
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/12组会汇报
+  reveals_new_fact: null
+- at: '2026-05-12T12:00:00'
+  topic: 组会被问住求安慰🥲
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T19:00:00'
+  topic: 决定重做部分实验💪
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-13T14:00:00'
+  topic: 周末图书馆发现好位置😎
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T21:00:00'
+  topic: 周日晚上赶进度崩溃边缘
+  kind: vent
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-14T10:30:00'
+  topic: 新一周实验计划制定
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-14T15:00:00'
+  topic: GPU配额又用完了😭
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - GPU资源紧张
+  reveals_new_fact: null
+- at: '2026-05-14T22:00:00'
+  topic: 记录今天发现的论文写作技巧
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-15T11:00:00'
+  topic: 代餐吃完了求紧急替代方案
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T16:30:00'
+  topic: 实验结果终于显著了🎉
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 实验记录
+  reveals_new_fact: null
+- at: '2026-05-15T23:00:00'
+  topic: 睡前想到论文新related work
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-16T10:00:00'
+  topic: 师妹突然要改rehearsal时间
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-16T14:30:00'
+  topic: latex编译报错求紧急救援
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-16T20:00:00'
+  topic: 游戏新活动攻略查询
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T09:30:00'
+  topic: 突然发现NeurIPS deadline时差算错了
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-17T15:00:00'
+  topic: 周老师要求提前看论文初稿😱
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T22:30:00'
+  topic: 通宵改论文flag立起来💪
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-18T11:00:00'
+  topic: 通宵后求提神方法推荐
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 咖啡因敏感
+- at: '2026-05-18T17:00:00'
+  topic: 实验结果图表美化咨询
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-18T23:00:00'
+  topic: 突然焦虑引用格式问题
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-19T10:00:00'
+  topic: 最后冲刺求鼓励💪
+  kind: vent
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-19T15:00:00'
+  topic: latex模板最后检查
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-19T20:00:00'
+  topic: 投稿前突然想改标题
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-19T23:30:00'
+  topic: 最终提交前的焦虑发作
+  kind: vent
+  depth: multi_turn
+  expected_followups: 5
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-20T00:30:00'
+  topic: NeurIPS投稿终于提交🎉
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-20T14:00:00'
+  topic: 投稿后空虚求新目标
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T21:00:00'
+  topic: 决定补之前落下的实验记录
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-21T11:00:00'
+  topic: 周老师突然问下阶段计划
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T16:00:00'
+  topic: 健身房第四次尝试前咨询
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-21T22:00:00'
+  topic: 刷到ACL录用结果开始焦虑
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T10:30:00'
+  topic: 师妹答辩rehearsal材料反馈
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-22T15:00:00'
+  topic: 实验记录整理进度检查
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-22T20:30:00'
+  topic: 游戏新版本更新求队友
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T09:00:00'
+  topic: 老板周会前数据可视化求助
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-23T14:30:00'
+  topic: 突然被要求接手新项目😨
+  kind: vent
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T21:00:00'
+  topic: 记录新项目初步想法
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 新项目关于多模态
+- at: '2026-05-24T11:00:00'
+  topic: 健身房终于打卡成功！
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-24T16:00:00'
+  topic: 老板周会slides最后修改
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-24T23:00:00'
+  topic: 睡前想到师妹答辩可能问题
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-25T10:00:00'
+  topic: 老板周会前紧张求鼓励
+  kind: vent
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 5/25老板周会
+  reveals_new_fact: null
+- at: '2026-05-25T12:30:00'
+  topic: 周会顺利通过求庆祝建议
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T20:00:00'
+  topic: 决定周末好好休息调整
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T14:00:00'
+  topic: 图书馆发现有趣的认知科学书
+  kind: learning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: 对认知科学感兴趣
+- at: '2026-05-26T21:00:00'
+  topic: 周日晚上师妹答辩最后准备
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-27T10:00:00'
+  topic: 师妹答辩现场技术支持
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids:
+  - 5/28师妹答辩
+  reveals_new_fact: null
+- at: '2026-05-27T15:00:00'
+  topic: 答辩通过后庆祝计划
+  kind: social_coord
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-27T22:00:00'
+  topic: 反思这月进度与下月计划
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-28T11:00:00'
+  topic: 突然收到NeurIPS初审意见？
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 5
+  related_memory_ids:
+  - 5/20NeurIPS投稿
+  reveals_new_fact: null
+- at: '2026-05-28T16:00:00'
+  topic: 健身房第二次打卡坚持中
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-28T21:30:00'
+  topic: 睡前突然想到论文新实验
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-29T10:30:00'
+  topic: 组会汇报新项目初步想法
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 新项目关于多模态
+  reveals_new_fact: null
+- at: '2026-05-29T15:00:00'
+  topic: 周老师要求写项目申请书
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-29T23:00:00'
+  topic: 焦虑睡不着求学术鸡汤
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-30T09:00:00'
+  topic: 健身房打卡满一周成就🎉
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 健身房flag
+  reveals_new_fact: null
+- at: '2026-05-30T14:00:00'
+  topic: 项目申请书框架咨询
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - 新项目关于多模态
+  reveals_new_fact: null
+- at: '2026-05-30T20:00:00'
+  topic: 五月最后一天进度总结
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 4
+  related_memory_ids: []
+  reveals_new_fact: null

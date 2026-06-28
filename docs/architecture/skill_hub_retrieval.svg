@@ -1,0 +1,204 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBack" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#be123c"/>
+    </marker>
+    <style>
+      .t   { font-size:13px; fill:#0f172a; }
+      .tb  { font-size:14px; font-weight:600; fill:#0f172a; }
+      .sub { font-size:11px; fill:#475569; }
+      .lane{ font-size:15px; font-weight:700; }
+      .edge{ stroke:#334155; stroke-width:1.6; fill:none; }
+      .edgeBack{ stroke:#be123c; stroke-width:1.8; fill:none; stroke-dasharray:5 3; }
+      .elbl{ font-size:11px; fill:#334155; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1180" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="700" fill="#0f172a">Skill Hub Retrieval Mechanism — Raven</text>
+  <text x="40" y="68" class="sub">Two retrieval paths: (A) per-turn automatic ranking via SkillForgeRouter, and (B) on-demand tool calls (use_skill / read_skill). Both share the client, registry, and storage.</text>
+
+  <!-- Agent / LLM -->
+  <rect x="600" y="92" width="400" height="54" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="800" y="118" text-anchor="middle" class="tb" fill="#3730a3">Agent / LLM turn</text>
+  <text x="800" y="136" text-anchor="middle" class="sub">consumes injected skills · may call skill tools</text>
+
+  <!-- Registration note -->
+  <rect x="1140" y="92" width="420" height="78" rx="8" fill="#fffbeb" stroke="#b45309" stroke-width="1.5"/>
+  <text x="1152" y="112" class="tb" fill="#92400e">Tool registration (AgentLoop)</text>
+  <text x="1152" y="130" class="sub">_register_default_tools() · _build_skill_hub_client()</text>
+  <text x="1152" y="146" class="sub">use_skill: registers if registry OR hub client present</text>
+  <text x="1152" y="161" class="sub">read_skill: registers only if hub endpoint configured</text>
+
+  <!-- ===================== PANEL A ===================== -->
+  <rect x="40" y="190" width="760" height="760" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="60" y="218" class="lane" fill="#047857">A · Per-turn automatic selection (SkillForgeRouter)</text>
+
+  <!-- SkillsSegmentBuilder -->
+  <rect x="120" y="236" width="600" height="48" rx="9" fill="#ecfdf5" stroke="#047857" stroke-width="1.8"/>
+  <text x="420" y="256" text-anchor="middle" class="tb" fill="#065f46">SkillsSegmentBuilder.build()  (context_engine/segments/skills.py)</text>
+  <text x="420" y="274" text-anchor="middle" class="sub">runs every turn · query = current message · history = session messages</text>
+
+  <!-- Router -->
+  <rect x="120" y="306" width="600" height="58" rx="9" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+  <text x="420" y="328" text-anchor="middle" class="tb" fill="#065f46">SkillForgeRouter.select(query, history, k)  ·  skill_forge/router.py</text>
+  <text x="420" y="347" text-anchor="middle" class="sub">over-fetch per source (k × over_fetch_factor) · asyncio.gather · per-source failures isolated</text>
+
+  <!-- Sources -->
+  <rect x="60" y="392" width="220" height="74" rx="9" fill="#eff6ff" stroke="#0369a1" stroke-width="1.8"/>
+  <text x="170" y="414" text-anchor="middle" class="tb" fill="#075985">LocalSkillSource</text>
+  <text x="170" y="432" text-anchor="middle" class="sub">weight 1.0 · curated</text>
+  <text x="170" y="450" text-anchor="middle" class="sub">→ RouterHit(local/&lt;name&gt;)</text>
+
+  <rect x="310" y="392" width="220" height="74" rx="9" fill="#eff6ff" stroke="#0369a1" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="420" y="414" text-anchor="middle" class="tb" fill="#075985">EverosSkillSource</text>
+  <text x="420" y="432" text-anchor="middle" class="sub">weight 0.9 · if backend present</text>
+  <text x="420" y="450" text-anchor="middle" class="sub">→ RouterHit(everos/&lt;id&gt;)</text>
+
+  <rect x="560" y="392" width="220" height="74" rx="9" fill="#eff6ff" stroke="#0369a1" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="670" y="414" text-anchor="middle" class="tb" fill="#075985">HubSkillSource</text>
+  <text x="670" y="432" text-anchor="middle" class="sub">weight 0.85 · if hub endpoint</text>
+  <text x="670" y="450" text-anchor="middle" class="sub">→ RouterHit(hub/&lt;id&gt;)</text>
+
+  <!-- Backends -->
+  <rect x="60" y="500" width="220" height="86" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="170" y="522" text-anchor="middle" class="tb" fill="#5b21b6">LocalPool (BM25)</text>
+  <text x="170" y="540" text-anchor="middle" class="sub">+ SkillRegistry</text>
+  <text x="170" y="557" text-anchor="middle" class="sub">in-memory Okapi BM25</text>
+  <text x="170" y="574" text-anchor="middle" class="sub">ScoredSkill → SkillMeta.content</text>
+
+  <rect x="310" y="500" width="220" height="86" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="420" y="522" text-anchor="middle" class="tb" fill="#5b21b6">EverOS backend</text>
+  <text x="420" y="540" text-anchor="middle" class="sub">recall(owner_id="agent:…")</text>
+  <text x="420" y="557" text-anchor="middle" class="sub">Memory[] → text + score</text>
+
+  <rect x="560" y="500" width="220" height="86" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="670" y="522" text-anchor="middle" class="tb" fill="#5b21b6">SkillHubClient</text>
+  <text x="670" y="540" text-anchor="middle" class="sub">search() catalog (no body)</text>
+  <text x="670" y="557" text-anchor="middle" class="sub">_maybe_prefetch_bodies()</text>
+  <text x="670" y="574" text-anchor="middle" class="sub">min_safety gate</text>
+
+  <!-- RRF -->
+  <rect x="160" y="624" width="520" height="56" rx="9" fill="#fff1f2" stroke="#be123c" stroke-width="2"/>
+  <text x="420" y="646" text-anchor="middle" class="tb" fill="#9f1239">rrf_merge_weighted()  ·  fusion.py</text>
+  <text x="420" y="665" text-anchor="middle" class="sub">score = Σ wᵢ / (60 + rankᵢ) · dedup_by name · returns top-k RouterHit[]</text>
+
+  <!-- Render -->
+  <rect x="160" y="704" width="520" height="58" rx="9" fill="#ecfdf5" stroke="#047857" stroke-width="1.8"/>
+  <text x="420" y="726" text-anchor="middle" class="tb" fill="#065f46">render_router_skills() → "# Skills" prompt section</text>
+  <text x="420" y="745" text-anchor="middle" class="sub">metadata: injected_skill_ids → AssembledContext.metadata</text>
+
+  <!-- File watcher -->
+  <rect x="60" y="800" width="720" height="56" rx="9" fill="#f1f5f9" stroke="#475569" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="420" y="822" text-anchor="middle" class="tb" fill="#334155">SkillFileWatcher (daemon)  ·  skill_local/watcher.py</text>
+  <text x="420" y="840" text-anchor="middle" class="sub">on SKILL.md change → registry.invalidate_source() → LocalPool.rebuild_index()</text>
+
+  <text x="60" y="892" class="sub">SkillMeta = id · name · description · path · content · source   (skill_local/types.py)</text>
+  <text x="60" y="912" class="sub">RouterHit = qualified_id · name · content · score · meta{rrf_score, contributing_sources}</text>
+
+  <!-- ===================== PANEL B ===================== -->
+  <rect x="820" y="190" width="740" height="760" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+  <text x="840" y="218" class="lane" fill="#b45309">B · On-demand tool calls (agent/tools/skill_hub.py)</text>
+
+  <rect x="860" y="236" width="320" height="48" rx="9" fill="#fffbeb" stroke="#b45309" stroke-width="1.8"/>
+  <text x="1020" y="256" text-anchor="middle" class="tb" fill="#92400e">use_skill(skill_id)</text>
+  <text x="1020" y="274" text-anchor="middle" class="sub">materialize → returns scripts_dir + body</text>
+
+  <rect x="1210" y="236" width="320" height="48" rx="9" fill="#fffbeb" stroke="#b45309" stroke-width="1.8"/>
+  <text x="1370" y="256" text-anchor="middle" class="tb" fill="#92400e">read_skill(skill_id)</text>
+  <text x="1370" y="274" text-anchor="middle" class="sub">fetch full SKILL.md body (Hub-only delivery)</text>
+
+  <!-- split -->
+  <rect x="1010" y="312" width="360" height="44" rx="9" fill="#fef9c3" stroke="#b45309" stroke-width="1.6"/>
+  <text x="1190" y="330" text-anchor="middle" class="tb" fill="#854d0e">_split_qualified_id(skill_id)</text>
+  <text x="1190" y="347" text-anchor="middle" class="sub">"&lt;source&gt;/&lt;native_id&gt;"  (bare id → hub)</text>
+
+  <!-- local/everos branch -->
+  <rect x="860" y="396" width="320" height="84" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="1020" y="418" text-anchor="middle" class="tb" fill="#5b21b6">source ∈ {local, everos}</text>
+  <text x="1020" y="437" text-anchor="middle" class="sub">SkillRegistry.get(native, source)</text>
+  <text x="1020" y="454" text-anchor="middle" class="sub">read_skill → meta.content</text>
+  <text x="1020" y="471" text-anchor="middle" class="sub">use_skill → meta.path.parent/scripts</text>
+
+  <!-- hub branch -->
+  <rect x="1210" y="396" width="320" height="84" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="1370" y="418" text-anchor="middle" class="tb" fill="#5b21b6">source == hub → SkillHubClient</text>
+  <text x="1370" y="437" text-anchor="middle" class="sub">read_skill → client.get() → skill_md</text>
+  <text x="1370" y="454" text-anchor="middle" class="sub">use_skill → client.install()</text>
+  <text x="1370" y="471" text-anchor="middle" class="sub">get + download + _safe_extract()</text>
+
+  <rect x="1210" y="500" width="320" height="70" rx="9" fill="#eef2ff" stroke="#4338ca" stroke-width="1.5"/>
+  <text x="1370" y="522" text-anchor="middle" class="tb" fill="#3730a3">_safe_extract()</text>
+  <text x="1370" y="540" text-anchor="middle" class="sub">zip guard: no traversal · suffix allowlist</text>
+  <text x="1370" y="557" text-anchor="middle" class="sub">size caps · extract to cache_dir</text>
+
+  <rect x="860" y="500" width="320" height="70" rx="9" fill="#ecfdf5" stroke="#047857" stroke-width="1.4"/>
+  <text x="1020" y="522" text-anchor="middle" class="tb" fill="#065f46">after install: invalidate "hub"</text>
+  <text x="1020" y="540" text-anchor="middle" class="sub">downloaded bundle becomes</text>
+  <text x="1020" y="557" text-anchor="middle" class="sub">local-discoverable next turn</text>
+
+  <!-- ===================== STORAGE ===================== -->
+  <text x="40" y="996" class="lane" fill="#334155">Storage &amp; remote</text>
+  <rect x="40" y="1010" width="470" height="100" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.8"/>
+  <text x="275" y="1036" text-anchor="middle" class="tb" fill="#334155">Local disk</text>
+  <text x="275" y="1058" text-anchor="middle" class="sub">workspace/skills/**/SKILL.md</text>
+  <text x="275" y="1076" text-anchor="middle" class="sub">+ builtin skills (memory_engine/skills)</text>
+  <text x="275" y="1094" text-anchor="middle" class="sub">scanned by SkillRegistry · indexed by LocalPool</text>
+
+  <rect x="540" y="1010" width="470" height="100" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.8"/>
+  <text x="775" y="1036" text-anchor="middle" class="tb" fill="#334155">Hub cache (on disk)</text>
+  <text x="775" y="1058" text-anchor="middle" class="sub">&lt;workspace&gt;/skills/hub/&lt;slug&gt;@&lt;version&gt;</text>
+  <text x="775" y="1076" text-anchor="middle" class="sub">extracted bundles · cache-hit skips re-download</text>
+  <text x="775" y="1094" text-anchor="middle" class="sub">discoverable by the local registry</text>
+
+  <rect x="1040" y="1010" width="520" height="100" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="1300" y="1036" text-anchor="middle" class="tb" fill="#5b21b6">Remote Skill Hub service</text>
+  <text x="1300" y="1058" text-anchor="middle" class="sub">OpenAPI: /openapi/v1/skills  ·  /{id}  ·  /{id}/download</text>
+  <text x="1300" y="1076" text-anchor="middle" class="sub">config: endpoint · api_key · timeout_s · source · min_safety</text>
+  <text x="1300" y="1094" text-anchor="middle" class="sub">SkillForgeRouterConfig.hub</text>
+
+  <!-- legend -->
+  <text x="1130" y="1150" class="sub">Legend:  solid box = always present · dashed = conditional (backend / hub) · red dashed = result injected back into the turn</text>
+
+  <!-- ============ EDGES Panel A ============ -->
+  <path class="edge" d="M800,146 C740,170 540,200 420,234" marker-end="url(#arrow)"/>
+  <path class="edge" d="M420,284 L420,304" marker-end="url(#arrow)"/>
+  <path class="edge" d="M300,364 C240,378 200,382 170,390" marker-end="url(#arrow)"/>
+  <path class="edge" d="M420,364 L420,390" marker-end="url(#arrow)"/>
+  <path class="edge" d="M540,364 C600,378 640,382 670,390" marker-end="url(#arrow)"/>
+  <path class="edge" d="M170,466 L170,498" marker-end="url(#arrow)"/>
+  <path class="edge" d="M420,466 L420,498" marker-end="url(#arrow)"/>
+  <path class="edge" d="M670,466 L670,498" marker-end="url(#arrow)"/>
+  <path class="edge" d="M170,586 C200,608 300,616 360,624" marker-end="url(#arrow)"/>
+  <path class="edge" d="M420,586 L420,622" marker-end="url(#arrow)"/>
+  <path class="edge" d="M670,586 C640,608 540,616 480,624" marker-end="url(#arrow)"/>
+  <path class="edge" d="M420,680 L420,702" marker-end="url(#arrow)"/>
+  <!-- inject back to agent -->
+  <path class="edgeBack" d="M680,724 C920,700 760,300 800,150" marker-end="url(#arrowBack)"/>
+  <text class="elbl" x="745" y="430" fill="#be123c">injected skills</text>
+  <!-- watcher to disk/pool -->
+  <path class="edge" d="M170,856 L170,920 L120,920" marker-end="url(#arrow)" opacity="0.5"/>
+
+  <!-- ============ EDGES Panel B ============ -->
+  <path class="edge" d="M1000,146 C1060,180 1120,200 1170,234" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1020,284 C1020,300 1120,306 1160,312" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1370,284 C1370,300 1260,306 1220,312" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1120,356 C1080,372 1050,380 1020,394" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1260,356 C1300,372 1340,380 1370,394" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1370,480 L1370,498" marker-end="url(#arrow)"/>
+  <path class="edge" d="M1290,480 C1180,492 1100,494 1020,498" marker-end="url(#arrow)"/>
+
+  <!-- branches to storage -->
+  <path class="edge" d="M1020,480 C760,560 320,820 275,1008" marker-end="url(#arrow)"/>
+  <text class="elbl" x="470" y="760" fill="#334155">registry / pool read</text>
+  <path class="edge" d="M1370,570 C1140,720 850,900 775,1008" marker-end="url(#arrow)"/>
+  <text class="elbl" x="980" y="800" fill="#334155">extract bundle</text>
+  <path class="edge" d="M1450,570 C1480,720 1380,900 1320,1008" marker-end="url(#arrow)"/>
+  <text class="elbl" x="1460" y="800" fill="#334155">HTTP fetch / download</text>
+
+  <!-- return to agent from tools -->
+  <path class="edgeBack" d="M1180,260 C1120,210 1060,180 1000,150" marker-end="url(#arrowBack)" opacity="0.7"/>
+</svg>

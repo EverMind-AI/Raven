@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1340" viewBox="0 0 1600 1340" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#0369a1"/>
+    </marker>
+    <style>
+      .t   { font-size:13px; fill:#0f172a; }
+      .tb  { font-size:14px; font-weight:600; fill:#0f172a; }
+      .sub { font-size:11px; fill:#475569; }
+      .lane{ font-size:15px; font-weight:700; }
+      .edge{ stroke:#334155; stroke-width:1.6; fill:none; }
+      .edgeD{ stroke:#0369a1; stroke-width:1.6; fill:none; stroke-dasharray:5 3; }
+      .elbl{ font-size:11px; fill:#334155; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1600" height="1340" fill="#ffffff"/>
+  <text x="40" y="44" font-size="24" font-weight="700" fill="#0f172a">Context Builder — One-Turn Assembly Pipeline (Raven)</text>
+  <text x="40" y="68" class="sub">AgentLoop assembles each turn through the unified ContextAssembler: 5 concurrent segments (phase A) + the Curator (phase B), bounded by a TokenBudget.</text>
+
+  <!-- Entry -->
+  <rect x="40" y="90" width="420" height="56" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="250" y="114" text-anchor="middle" class="tb" fill="#3730a3">AgentLoop._process_message()  ·  agent/loop/main.py</text>
+  <text x="250" y="133" text-anchor="middle" class="sub">inbound message → get/create session → assemble → run loop</text>
+
+  <!-- inputs -->
+  <rect x="40" y="172" width="420" height="70" rx="9" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text x="250" y="194" text-anchor="middle" class="tb" fill="#334155">_context_messages_for_session(session)</text>
+  <text x="250" y="213" text-anchor="middle" class="sub">owns_compaction → full append-only log</text>
+  <text x="250" y="229" text-anchor="middle" class="sub">else → post-consolidation slice</text>
+
+  <!-- TokenBudget -->
+  <rect x="490" y="172" width="430" height="70" rx="9" fill="#fff7ed" stroke="#c2410c" stroke-width="1.8"/>
+  <text x="705" y="194" text-anchor="middle" class="tb" fill="#9a3412">_make_token_budget() → TokenBudget</text>
+  <text x="705" y="213" text-anchor="middle" class="sub">available_history = context_window − reserved_output − tools − system</text>
+  <text x="705" y="229" text-anchor="middle" class="sub">threshold = 75% of available_history · estimate_prompt_tokens()</text>
+
+  <!-- ===================== ASSEMBLER CONTAINER ===================== -->
+  <rect x="40" y="270" width="1120" height="640" rx="14" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/>
+  <rect x="40" y="270" width="1120" height="48" rx="14" fill="#ecfeff" stroke="#0e7490" stroke-width="2"/>
+  <text x="60" y="300" class="lane" fill="#155e75">ContextAssembler.assemble()  ·  context_engine/assembler.py  (the one engine · owns_compaction)</text>
+
+  <!-- Phase A -->
+  <rect x="62" y="334" width="1076" height="160" rx="10" fill="#ffffff" stroke="#0369a1" stroke-width="1.6" stroke-dasharray="6 3"/>
+  <text x="78" y="356" class="tb" fill="#075985">Phase A — concurrent (asyncio.gather) · order 1–5 · no prefix needed</text>
+
+  <!-- seg 1 -->
+  <rect x="74" y="368" width="200" height="112" rx="8" fill="#eff6ff" stroke="#0369a1" stroke-width="1.6"/>
+  <text x="174" y="388" text-anchor="middle" class="tb" fill="#075985">1 · Identity</text>
+  <text x="174" y="408" text-anchor="middle" class="sub">identity_text(workspace)</text>
+  <text x="174" y="424" text-anchor="middle" class="sub">intro + runtime</text>
+  <text x="174" y="440" text-anchor="middle" class="sub">+ platform policy</text>
+
+  <!-- seg 2 -->
+  <rect x="288" y="368" width="200" height="112" rx="8" fill="#eff6ff" stroke="#0369a1" stroke-width="1.6"/>
+  <text x="388" y="388" text-anchor="middle" class="tb" fill="#075985">2 · Bootstrap</text>
+  <text x="388" y="408" text-anchor="middle" class="sub">workspace files</text>
+  <text x="388" y="424" text-anchor="middle" class="sub">soul.md · agent.md</text>
+  <text x="388" y="440" text-anchor="middle" class="sub">TOOLS.md</text>
+
+  <!-- seg 3 -->
+  <rect x="502" y="368" width="200" height="112" rx="8" fill="#eff6ff" stroke="#0369a1" stroke-width="1.6"/>
+  <text x="602" y="388" text-anchor="middle" class="tb" fill="#075985">3 · Memory</text>
+  <text x="602" y="408" text-anchor="middle" class="sub">MemoryStore.get_</text>
+  <text x="602" y="424" text-anchor="middle" class="sub">memory_context(user.md)</text>
+  <text x="602" y="440" text-anchor="middle" class="sub">+ backend.recall(user:)</text>
+  <text x="602" y="462" text-anchor="middle" class="sub">meta: memory_hits</text>
+
+  <!-- seg 4 -->
+  <rect x="716" y="368" width="200" height="112" rx="8" fill="#eff6ff" stroke="#0369a1" stroke-width="1.6"/>
+  <text x="816" y="388" text-anchor="middle" class="tb" fill="#075985">4 · Active Skills</text>
+  <text x="816" y="408" text-anchor="middle" class="sub">catalog.get_always_</text>
+  <text x="816" y="424" text-anchor="middle" class="sub">skills()</text>
+  <text x="816" y="440" text-anchor="middle" class="sub">load_skills_for_context</text>
+  <text x="816" y="462" text-anchor="middle" class="sub">(full bodies, max_inject)</text>
+
+  <!-- seg 5 -->
+  <rect x="930" y="368" width="200" height="112" rx="8" fill="#eff6ff" stroke="#0369a1" stroke-width="2"/>
+  <text x="1030" y="388" text-anchor="middle" class="tb" fill="#075985">5 · Skills (router)</text>
+  <text x="1030" y="408" text-anchor="middle" class="sub">SkillForgeRouter</text>
+  <text x="1030" y="424" text-anchor="middle" class="sub">.select(query, hist, k)</text>
+  <text x="1030" y="440" text-anchor="middle" class="sub">render_router_skills</text>
+  <text x="1030" y="462" text-anchor="middle" class="sub">meta: injected_skill_ids</text>
+
+  <!-- Merge A -->
+  <rect x="62" y="510" width="1076" height="42" rx="8" fill="#ecfdf5" stroke="#047857" stroke-width="1.6"/>
+  <text x="600" y="536" text-anchor="middle" class="tb" fill="#065f46">Merge phase A → system_prefix  (texts sorted by order, joined "—") · metadata merged</text>
+
+  <!-- user msg -->
+  <rect x="62" y="566" width="1076" height="44" rx="8" fill="#fefce8" stroke="#a16207" stroke-width="1.6"/>
+  <text x="600" y="588" text-anchor="middle" class="tb" fill="#854d0e">Build user message — runtime context (time · channel · chat_id) + content (± image blocks)</text>
+  <text x="600" y="604" text-anchor="middle" class="sub">becomes part of the prefix handed to phase B</text>
+
+  <!-- Phase B -->
+  <rect x="62" y="626" width="1076" height="160" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="6 3"/>
+  <text x="78" y="648" class="tb" fill="#5b21b6">Phase B — serial · order 6 · needs_prefix = true</text>
+
+  <rect x="74" y="660" width="1052" height="116" rx="8" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="600" y="682" text-anchor="middle" class="tb" fill="#5b21b6">6 · CuratorSegmentBuilder.build(prefix = system_prefix + user_msg + tool_defs)</text>
+  <text x="600" y="704" text-anchor="middle" class="sub">manifest: tokenize + relevance-score every session message · fixed overhead from prefix</text>
+  <text x="600" y="724" text-anchor="middle" class="sub">FAST path (history &lt; threshold): keep all  ·  SLOW path: internal Curator LLM loop builds a selection plan</text>
+  <text x="600" y="744" text-anchor="middle" class="sub">FALLBACK: deterministic heuristic (recent + protected + high-relevance)</text>
+  <text x="600" y="764" text-anchor="middle" class="sub">returns Segment(text = working state, history = selected messages, meta = {path, trace})</text>
+
+  <!-- Final assembly -->
+  <rect x="62" y="800" width="1076" height="44" rx="8" fill="#ecfeff" stroke="#0e7490" stroke-width="1.8"/>
+  <text x="600" y="822" text-anchor="middle" class="tb" fill="#155e75">Final: messages = [ system_prefix + curator state ,  *curator history ,  user_msg ]</text>
+  <text x="600" y="838" text-anchor="middle" class="sub">+ metadata { injected_skill_ids, memory_hits, path, engine }</text>
+
+  <text x="78" y="876" class="sub">Segment = text (system slot) · history (history slot, Curator only) · meta (folded into AssembledContext.metadata)</text>
+
+  <!-- ===================== RIGHT RAIL ===================== -->
+  <text x="1200" y="296" class="lane" fill="#0369a1">Skill retrieval (feeds segment 5)</text>
+
+  <rect x="1200" y="312" width="360" height="92" rx="9" fill="#ecfdf5" stroke="#047857" stroke-width="1.8"/>
+  <text x="1380" y="334" text-anchor="middle" class="tb" fill="#065f46">SkillForgeRouter.select()</text>
+  <text x="1380" y="354" text-anchor="middle" class="sub">over-fetch · gather · isolate failures</text>
+  <text x="1380" y="371" text-anchor="middle" class="sub">rrf_merge_weighted → top-k RouterHit[]</text>
+  <text x="1380" y="389" text-anchor="middle" class="sub">→ qualified ids: local/ everos/ hub/</text>
+
+  <rect x="1200" y="416" width="360" height="96" rx="9" fill="#eff6ff" stroke="#0369a1" stroke-width="1.6"/>
+  <text x="1380" y="438" text-anchor="middle" class="tb" fill="#075985">Sources (1–3)</text>
+  <text x="1380" y="458" text-anchor="middle" class="sub">LocalSkillSource — LocalPool BM25 + Registry</text>
+  <text x="1380" y="475" text-anchor="middle" class="sub">EverosSkillSource — backend.recall (if backend)</text>
+  <text x="1380" y="492" text-anchor="middle" class="sub">HubSkillSource — SkillHubClient (if endpoint)</text>
+
+  <rect x="1200" y="524" width="360" height="80" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="1380" y="546" text-anchor="middle" class="tb" fill="#5b21b6">EverOS backend (optional plugin)</text>
+  <text x="1380" y="566" text-anchor="middle" class="sub">recall(user:) → segment 3 memory</text>
+  <text x="1380" y="583" text-anchor="middle" class="sub">recall(agent:) → segment 5 skills</text>
+
+  <rect x="1200" y="624" width="360" height="120" rx="9" fill="#fef2f2" stroke="#b91c1c" stroke-width="1.6"/>
+  <text x="1380" y="646" text-anchor="middle" class="tb" fill="#991b1b">LocalSkillCatalog (skill_forge/catalog.py)</text>
+  <text x="1380" y="666" text-anchor="middle" class="sub">_registry · _local_pool · _file_watcher</text>
+  <text x="1380" y="683" text-anchor="middle" class="sub">get_always_skills() → segment 4</text>
+  <text x="1380" y="700" text-anchor="middle" class="sub">load_skills_for_context() → seg 4 + tools</text>
+  <text x="1380" y="717" text-anchor="middle" class="sub">resolves bundled refs ({baseDir}, md-links)</text>
+  <text x="1380" y="734" text-anchor="middle" class="sub">wired in ContextBuilder.__init__</text>
+
+  <!-- ===================== OUTPUT / LOOP ===================== -->
+  <rect x="300" y="938" width="600" height="56" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="600" y="962" text-anchor="middle" class="tb" fill="#3730a3">AssembledContext(messages, metadata)</text>
+  <text x="600" y="980" text-anchor="middle" class="sub">injected_skill_ids stashed → AgentLoop._last_injected_skill_ids</text>
+
+  <rect x="300" y="1018" width="600" height="54" rx="10" fill="#eef2ff" stroke="#4338ca" stroke-width="2"/>
+  <text x="600" y="1042" text-anchor="middle" class="tb" fill="#3730a3">_run_agent_loop() → provider.chat_with_retry() (LLM)</text>
+  <text x="600" y="1060" text-anchor="middle" class="sub">iterate: call → tool calls → results → until stop / error / max iters</text>
+
+  <!-- after-turn -->
+  <text x="40" y="1118" class="lane" fill="#334155">After-turn pipeline</text>
+  <g>
+    <rect x="40" y="1132" width="280" height="78" rx="9" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+    <text x="180" y="1154" text-anchor="middle" class="tb" fill="#334155">save_turn + sessions.save</text>
+    <text x="180" y="1173" text-anchor="middle" class="sub">record turn · truncate large</text>
+    <text x="180" y="1189" text-anchor="middle" class="sub">results · strip runtime ctx</text>
+
+    <rect x="336" y="1132" width="280" height="78" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="476" y="1154" text-anchor="middle" class="tb" fill="#5b21b6">context_engine.after_turn()</text>
+    <text x="476" y="1173" text-anchor="middle" class="sub">Curator archives manifest</text>
+    <text x="476" y="1189" text-anchor="middle" class="sub">saves next-turn state</text>
+
+    <rect x="632" y="1132" width="280" height="78" rx="9" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="772" y="1154" text-anchor="middle" class="tb" fill="#5b21b6">backend.store / feedback</text>
+    <text x="772" y="1173" text-anchor="middle" class="sub">store turn (indexing)</text>
+    <text x="772" y="1189" text-anchor="middle" class="sub">feedback: everos/ skill usage</text>
+
+    <rect x="928" y="1132" width="280" height="78" rx="9" fill="#fff7ed" stroke="#c2410c" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text x="1068" y="1154" text-anchor="middle" class="tb" fill="#9a3412">maybe_consolidate()</text>
+    <text x="1068" y="1173" text-anchor="middle" class="sub">only if NOT engine-owned</text>
+    <text x="1068" y="1189" text-anchor="middle" class="sub">markdown compaction (legacy)</text>
+  </g>
+
+  <text x="40" y="1252" class="sub">Legend:  blue = context segment · green = skill orchestration · purple = curator / EverOS plugin · orange = token / consolidation · slate = session store · dashed = optional / conditional</text>
+  <text x="40" y="1272" class="sub">Note: ContextBuilder (agent/context/builder.py) wires LocalSkillCatalog + MemoryStore and renders system prompt for token estimation; the per-turn request path runs through ContextAssembler.</text>
+
+  <!-- ===================== EDGES ===================== -->
+  <path class="edge" d="M250,146 L250,170" marker-end="url(#arrow)"/>
+  <path class="edge" d="M250,242 C250,256 350,262 470,270" marker-end="url(#arrow)"/>
+  <path class="edge" d="M705,242 C705,256 660,262 640,270" marker-end="url(#arrow)"/>
+  <text class="elbl" x="690" y="262">budget → curator</text>
+
+  <!-- merge to user to phaseB to final -->
+  <path class="edge" d="M600,494 L600,508" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,552 L600,564" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,610 L600,658" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,776 L600,798" marker-end="url(#arrow)"/>
+
+  <!-- seg5 to router -->
+  <path class="edgeD" d="M1130,420 L1198,360" marker-end="url(#arrowB)"/>
+  <path class="edgeD" d="M1380,404 L1380,414" marker-end="url(#arrowB)"/>
+  <path class="edgeD" d="M1380,512 L1380,522" marker-end="url(#arrowB)"/>
+  <!-- catalog to seg4 / sources -->
+  <path class="edgeD" d="M1380,624 C1300,560 1200,520 1132,470" marker-end="url(#arrowB)"/>
+  <path class="edgeD" d="M1200,690 C1000,640 920,520 916,482" marker-end="url(#arrowB)"/>
+  <text class="elbl" x="1140" y="556" fill="#0369a1">always skills</text>
+  <!-- backend to seg3 -->
+  <path class="edgeD" d="M1200,560 C950,540 760,500 702,470" marker-end="url(#arrowB)"/>
+
+  <!-- container to output -->
+  <path class="edge" d="M600,910 L600,936" marker-end="url(#arrow)"/>
+  <path class="edge" d="M600,994 L600,1016" marker-end="url(#arrow)"/>
+  <!-- loop to after-turn -->
+  <path class="edge" d="M450,1072 C350,1100 220,1112 180,1130" marker-end="url(#arrow)"/>
+  <path class="edge" d="M320,1171 L334,1171" marker-end="url(#arrow)"/>
+  <path class="edge" d="M616,1171 L630,1171" marker-end="url(#arrow)"/>
+  <path class="edge" d="M912,1171 L926,1171" marker-end="url(#arrow)"/>
+</svg>

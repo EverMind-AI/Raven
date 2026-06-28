@@ -1,0 +1,284 @@
+"""Subagent manager for background task execution."""
+
+import asyncio
+import json
+import uuid
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
+
+from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from raven.agent.tools.registry import ToolRegistry
+from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.web import WebFetchTool, WebSearchTool
+from raven.config.schema import ExecToolConfig
+from raven.providers.base import LLMProvider
+from raven.sandbox import SandboxConfig, build_executor
+from raven.utils.helpers import build_assistant_message
+
+
+class SubagentManager:
+    """Manages background subagent execution."""
+
+    def __init__(
+        self,
+        provider: LLMProvider,
+        workspace: Path,
+        model: str | None = None,
+        brave_api_key: str | None = None,
+        web_proxy: str | None = None,
+        exec_config: "ExecToolConfig | None" = None,
+        restrict_to_workspace: bool = False,
+        sandbox_config: "SandboxConfig | None" = None,
+        owned_ids: set[str] | None = None,
+        jina_api_key: str | None = None,
+        max_concurrent: int = 4,
+    ):
+        from raven.config.schema import ExecToolConfig
+        self.provider = provider
+        self.workspace = workspace
+        # Spine submit, late-bound (the scheduler pins its home loop at
+        # construction and is built inside each entry point's run loop; this
+        # manager is built in AgentLoop.__init__ in the sync prologue). Wired via
+        # set_submit before any announce; the result re-injection submits a
+        # SUBAGENT-origin turn.
+        self._submit = None
+        self.model = model or provider.get_default_model()
+        self.brave_api_key = brave_api_key
+        self.jina_api_key = jina_api_key
+        self.web_proxy = web_proxy
+        self.exec_config = exec_config or ExecToolConfig()
+        self.restrict_to_workspace = restrict_to_workspace
+        self._sandbox_config = sandbox_config
+        self._owned_ids = owned_ids
+        self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._gate = asyncio.Semaphore(max_concurrent)
+
+    async def spawn(
+        self,
+        task: str,
+        label: str | None = None,
+        origin_channel: str = "cli",
+        origin_chat_id: str = "direct",
+        session_key: str | None = None,
+    ) -> str:
+        """Spawn a subagent to execute a task in the background."""
+        task_id = str(uuid.uuid4())[:8]
+        display_label = label or task[:30] + ("..." if len(task) > 30 else "")
+        origin = {"channel": origin_channel, "chat_id": origin_chat_id}
+
+        bg_task = asyncio.create_task(
+            self._run_subagent(task_id, task, display_label, origin)
+        )
+        self._running_tasks[task_id] = bg_task
+        if session_key:
+            self._session_tasks.setdefault(session_key, set()).add(task_id)
+
+        def _cleanup(_: asyncio.Task) -> None:
+            self._running_tasks.pop(task_id, None)
+            if session_key and (ids := self._session_tasks.get(session_key)):
+                ids.discard(task_id)
+                if not ids:
+                    del self._session_tasks[session_key]
+
+        bg_task.add_done_callback(_cleanup)
+
+        logger.info("Spawned subagent [{}]: {}", task_id, display_label)
+        return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+
+    async def _run_subagent(
+        self,
+        task_id: str,
+        task: str,
+        label: str,
+        origin: dict[str, str],
+    ) -> None:
+        """Execute the subagent task and announce the result."""
+        logger.info("Subagent [{}] starting task: {}", task_id, label)
+
+        try:
+            # Each subagent runs its own sandbox VM; gate the count so heavy
+            # fan-out can't exhaust host resources.
+            async with self._gate:
+                executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
+                async with executor:
+                    await self._run_subagent_inner(task_id, task, label, origin, executor)
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            logger.error("Subagent [{}] failed: {}", task_id, e)
+            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+
+    async def _run_subagent_inner(
+        self,
+        task_id: str,
+        task: str,
+        label: str,
+        origin: dict[str, str],
+        executor: Any,
+    ) -> None:
+        try:
+            # Build subagent tools (no message tool, no spawn tool)
+            tools = ToolRegistry()
+            allowed_dir = self.workspace if self.restrict_to_workspace else None
+            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            tools.register(ExecTool(
+                working_dir=str(self.workspace),
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+                path_append=self.exec_config.path_append,
+                executor=executor,
+            ))
+            tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+            tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
+
+            system_prompt = self._build_subagent_prompt()
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": task},
+            ]
+
+            # Run agent loop (limited iterations)
+            max_iterations = 15
+            iteration = 0
+            final_result: str | None = None
+
+            while iteration < max_iterations:
+                iteration += 1
+
+                response = await self.provider.chat_with_retry(
+                    messages=messages,
+                    tools=tools.get_definitions(),
+                    model=self.model,
+                )
+
+                if response.has_tool_calls:
+                    tool_call_dicts = [
+                        tc.to_openai_tool_call()
+                        for tc in response.tool_calls
+                    ]
+                    messages.append(build_assistant_message(
+                        response.content or "",
+                        tool_calls=tool_call_dicts,
+                        reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    ))
+
+                    # Execute tools
+                    for tool_call in response.tool_calls:
+                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                        logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
+                        result = await tools.execute(tool_call.name, tool_call.arguments)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "content": result,
+                        })
+                else:
+                    final_result = response.content
+                    break
+
+            if final_result is None:
+                final_result = "Task completed but no final response was generated."
+
+            logger.info("Subagent [{}] completed successfully", task_id)
+            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+
+        except Exception as e:
+            error_msg = f"Error: {str(e)}"
+            logger.error("Subagent [{}] failed: {}", task_id, e)
+            await self._announce_result(task_id, label, task, error_msg, origin, "error")
+
+    def set_submit(self, submit) -> None:
+        self._submit = submit
+
+    async def _announce_result(
+        self,
+        task_id: str,
+        label: str,
+        task: str,
+        result: str,
+        origin: dict[str, str],
+        status: str,
+    ) -> None:
+        """Announce the subagent result to the main agent via the spine.
+
+        Note: this inbound system message already triggers a main-agent turn,
+        so subagent completion is event-driven end-to-end. Do NOT also
+        enqueue a heartbeat SystemEvent here — that would process the same
+        fact twice (double LLM cost, risk of double-notifying the user).
+        """
+        status_text = "completed successfully" if status == "ok" else "failed"
+
+        announce_content = f"""[Subagent '{label}' {status_text}]
+
+Task: {task}
+
+Result:
+{result}
+
+Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
+
+        # Re-inject to trigger a main-agent turn in the originating session. The
+        # spine path routes by conversation (= originating session) with
+        # origin=SUBAGENT; the reply rides emit -> hub -> outlet (source.channel
+        # is the originating channel). Fire-and-forget — the announce is fixed,
+        # the turn's output isn't read back.
+        assert self._submit is not None
+        from raven.spine import ChatType, Origin, Source, TurnRequest
+
+        self._submit(TurnRequest(
+            origin=Origin.SUBAGENT,
+            source=Source(
+                channel=origin["channel"], chat_id=origin["chat_id"],
+                sender_id="subagent", chat_type=ChatType.DM,
+            ),
+            text=announce_content,
+            conversation=f"{origin['channel']}:{origin['chat_id']}",
+        ))
+        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
+
+    def _build_subagent_prompt(self) -> str:
+        """Build a focused system prompt for the subagent."""
+        from raven.agent.context import ContextBuilder
+        from raven.memory_engine.skill_forge import LocalSkillCatalog
+
+        # Use a transient ContextBuilder to access the runtime-context
+        # builder; SubagentManager doesn't have its own ContextBuilder.
+        time_ctx = ContextBuilder(self.workspace)._build_runtime_context(None, None)
+        parts = [f"""# Subagent
+
+{time_ctx}
+
+You are a subagent spawned by the main agent to complete a specific task.
+Stay focused on the assigned task. Your final response will be reported back to the main agent.
+
+## Workspace
+{self.workspace}"""]
+
+        skills_summary = LocalSkillCatalog(
+            self.workspace, start_watcher=False,
+        ).build_skills_summary()
+        if skills_summary:
+            parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
+
+        return "\n\n".join(parts)
+
+    async def cancel_by_session(self, session_key: str) -> int:
+        """Cancel all subagents for the given session. Returns count cancelled."""
+        tasks = [self._running_tasks[tid] for tid in self._session_tasks.get(session_key, [])
+                 if tid in self._running_tasks and not self._running_tasks[tid].done()]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return len(tasks)
+
+    def get_running_count(self) -> int:
+        """Return the number of currently running subagents."""
+        return len(self._running_tasks)

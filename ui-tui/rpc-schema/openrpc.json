@@ -1,0 +1,1668 @@
+{
+  "openrpc": "1.2.6",
+  "info": {
+    "title": "Raven TUI RPC",
+    "description": "JSON-RPC 2.0 contract between the Raven Python parent process (RpcServer) and the Node TUI child process (RpcClient). Single source of truth for both sides. Pydantic v2 models in raven/tui_rpc/models.py and codegen-derived TypeScript types in ui-tui/src/rpc/generated.ts must stay in sync with this file. Drift is caught in CI by tests/test_rpc_schema_match.py and `npm run lint:rpc`.",
+    "version": "0.1.0",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "methods": [
+    {
+      "name": "session.list",
+      "summary": "List tui-channel sessions sorted by updated_at descending.",
+      "params": [
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Max sessions to return."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sessions"],
+          "properties": {
+            "sessions": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SessionListItem" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.get",
+      "summary": "Get a single session by session_key.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SessionGetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session"],
+          "properties": {
+            "session": { "$ref": "#/components/schemas/SessionInfo" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" }
+      ]
+    },
+    {
+      "name": "session.create",
+      "summary": "Create a new session given a channel + chat_id.",
+      "params": [
+        {
+          "name": "channel",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "chat_id",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "metadata",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session"],
+          "properties": {
+            "session": { "$ref": "#/components/schemas/SessionInfo" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "session.resume",
+      "summary": "Resume a session, returning recent messages.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SessionResumeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session", "last_messages"],
+          "properties": {
+            "session": { "$ref": "#/components/schemas/SessionInfo" },
+            "last_messages": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SessionMessage" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" },
+        { "$ref": "#/components/errors/TurnInProgress" }
+      ]
+    },
+    {
+      "name": "session.delete",
+      "summary": "Delete a session file and invalidate its cache entry.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key as sent by the UI."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "deleted": {
+              "type": "string",
+              "description": "The session_id that was deleted (matches the request param); null when no such session file existed."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.most_recent",
+      "summary": "Return the most-recently-updated tui session key.",
+      "params": [],
+      "result": {
+        "name": "SessionMostRecentResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Full tui:<chat_id> key; absent/null when no sessions exist."
+            },
+            "source": { "type": "string" },
+            "started_at": { "type": "number" },
+            "title": { "type": "string" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.title",
+      "summary": "Get or set the title of a session.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key."
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "When present, set as the new title; when absent, return the current title."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionTitleResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session_key", "pending"],
+          "properties": {
+            "title": { "type": "string" },
+            "session_key": { "type": "string" },
+            "pending": {
+              "type": "boolean",
+              "description": "True when the title is held in memory for a lazy (never-saved) session and lands with the session's first save."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.clear",
+      "summary": "Wipe a session's messages in place, keeping the same session_id.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key to clear."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionClearResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["session_id", "cleared"],
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "The same session_key (no new id minted)."
+            },
+            "cleared": {
+              "type": "boolean",
+              "description": "True when the in-place wipe ran."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.undo",
+      "summary": "Drop the last n turns of a session (default 1).",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Full session_key to undo."
+          }
+        },
+        {
+          "name": "n",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Trailing turns to drop (role==user boundary)."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionUndoResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["removed"],
+          "properties": {
+            "removed": {
+              "type": "integer",
+              "description": "Messages dropped (0 = nothing to undo)."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.export",
+      "summary": "Render a session transcript to a Markdown file and return its path.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Session id / prefix / full key to export; current session when omitted."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionExportResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exported"],
+          "properties": {
+            "exported": {
+              "type": "boolean",
+              "description": "True when a Markdown file was written."
+            },
+            "path": {
+              "type": "string",
+              "description": "Absolute path of the written file, or null on failure."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Failure reason when not exported: not_found | ambiguous | write_failed."
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Candidate full keys when reason is ambiguous."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "session.history",
+      "summary": "Paginated message history for a session.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['sessions', 'history', '<session_key>'], width=W).",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "max_messages",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Maximum number of messages to return; default 500 to match Session.get_history."
+          }
+        },
+        {
+          "name": "before_index",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "Return messages with index < before_index. Used for pagination."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionHistoryResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["messages", "total"],
+          "properties": {
+            "messages": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SessionMessage" }
+            },
+            "total": { "type": "integer" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" }
+      ]
+    },
+    {
+      "name": "turn.send",
+      "summary": "Send a user message to a session and start a turn.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "content",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "channel",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "chat_id",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "sender_id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "TurnSendResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["turn_id", "accepted"],
+          "properties": {
+            "turn_id": { "type": "string" },
+            "accepted": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" },
+        { "$ref": "#/components/errors/TurnInProgress" },
+        { "$ref": "#/components/errors/ModelNotAvailable" }
+      ]
+    },
+    {
+      "name": "turn.subscribe",
+      "summary": "Subscribe to streaming TurnEvent notifications for a session.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "TurnSubscribeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subscription_id"],
+          "properties": {
+            "subscription_id": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" }
+      ]
+    },
+    {
+      "name": "turn.unsubscribe",
+      "summary": "Stop receiving notifications; turn itself continues.",
+      "params": [
+        {
+          "name": "subscription_id",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "TurnUnsubscribeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unsubscribed"],
+          "properties": {
+            "unsubscribed": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "turn.cancel",
+      "summary": "Abort the current turn (calls AgentLoop.stop()).",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "TurnCancelResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cancelled"],
+          "properties": {
+            "cancelled": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" }
+      ]
+    },
+    {
+      "name": "mcp.list",
+      "summary": "List MCP servers.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'list'], width=W).",
+      "params": [],
+      "result": {
+        "name": "McpListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["servers"],
+          "properties": {
+            "servers": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/McpServerInfo" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "mcp.test",
+      "summary": "Test connectivity to a single MCP server (handshake probe).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'test', '<server_name>'], width=W).",
+      "params": [
+        {
+          "name": "server_name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "McpTestResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ok", "latency_ms"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "latency_ms": { "type": "number" },
+            "error": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/McpServerNotConnected" }
+      ]
+    },
+    {
+      "name": "mcp.tools",
+      "summary": "List tools exposed by an MCP server.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'tools', '<server_name>'], width=W).",
+      "params": [
+        {
+          "name": "server_name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "McpToolsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tools"],
+          "properties": {
+            "tools": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/McpToolInfo" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/McpServerNotConnected" },
+        { "$ref": "#/components/errors/McpToolCallFailed" }
+      ]
+    },
+    {
+      "name": "skill.list",
+      "summary": "List skills.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['skill', 'list'], width=W).",
+      "params": [
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["local", "remote", "all"],
+            "description": "Filter by skill source; default 'all'."
+          }
+        }
+      ],
+      "result": {
+        "name": "SkillListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["skills"],
+          "properties": {
+            "skills": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SkillInfo" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "skill.pin",
+      "summary": "Pin a skill (write action; structured handler).",
+      "params": [
+        {
+          "name": "skill_name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SkillPinResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pinned"],
+          "properties": {
+            "pinned": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SkillNotFound" },
+        { "$ref": "#/components/errors/SkillPinConflict" }
+      ]
+    },
+    {
+      "name": "skill.unpin",
+      "summary": "Unpin a skill.",
+      "params": [
+        {
+          "name": "skill_name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SkillUnpinResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unpinned"],
+          "properties": {
+            "unpinned": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SkillNotFound" }
+      ]
+    },
+    {
+      "name": "model.list",
+      "summary": "List available routable models.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['model', 'list'], width=W).",
+      "params": [],
+      "result": {
+        "name": "ModelListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["models"],
+          "properties": {
+            "models": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/ModelInfo" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "model.current",
+      "summary": "Get the currently selected model for a session or globally.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['model', 'show'], width=W).",
+      "params": [
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "ModelCurrentResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model"],
+          "properties": {
+            "model": { "$ref": "#/components/schemas/ModelInfo" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ModelNotAvailable" }
+      ]
+    },
+    {
+      "name": "model.switch",
+      "summary": "Switch a session's model.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "model_id",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "ModelSwitchResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "applied_at"],
+          "properties": {
+            "model": { "$ref": "#/components/schemas/ModelInfo" },
+            "applied_at": {
+              "type": "string",
+              "description": "ISO-8601 timestamp when switch was applied."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SessionNotFound" },
+        { "$ref": "#/components/errors/ModelNotAvailable" },
+        { "$ref": "#/components/errors/ModelSwitchInTurn" }
+      ]
+    },
+    {
+      "name": "config.get",
+      "summary": "Read hot-changeable config fields (whitelist).",
+      "params": [
+        {
+          "name": "keys",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "If omitted, return all whitelisted fields. Unknown keys are silently dropped."
+          }
+        }
+      ],
+      "result": {
+        "name": "ConfigGetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["config"],
+          "properties": {
+            "config": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "config.set",
+      "summary": "Set a hot-changeable config field.",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "value",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/JsonValue" }
+        }
+      ],
+      "result": {
+        "name": "ConfigSetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["applied", "previous"],
+          "properties": {
+            "applied": { "type": "boolean" },
+            "previous": {
+              "oneOf": [
+                { "$ref": "#/components/schemas/JsonValue" },
+                { "type": "null" }
+              ]
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigFieldReadonly" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "system.hello",
+      "summary": "Initial handshake (must be the first RPC call from client).",
+      "params": [
+        {
+          "name": "client_version",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "client_capabilities",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      ],
+      "result": {
+        "name": "SystemHelloResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["server_version", "server_capabilities", "session"],
+          "properties": {
+            "server_version": { "type": "string" },
+            "server_capabilities": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "session": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["default_channel", "default_session_key"],
+              "properties": {
+                "default_channel": {
+                  "type": "string",
+                  "const": "tui"
+                },
+                "default_session_key": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "system.ping",
+      "summary": "Liveness probe.",
+      "params": [],
+      "result": {
+        "name": "SystemPingResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pong", "server_time_ms"],
+          "properties": {
+            "pong": {
+              "type": "boolean",
+              "const": true
+            },
+            "server_time_ms": { "type": "number" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "system.version",
+      "summary": "Report server / schema / package versions.",
+      "params": [],
+      "result": {
+        "name": "SystemVersionResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["server_version", "schema_version", "raven_version"],
+          "properties": {
+            "server_version": { "type": "string" },
+            "schema_version": {
+              "type": "string",
+              "description": "OpenRPC info.version mirrored back to client."
+            },
+            "raven_version": { "type": "string" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "cli.dispatch",
+      "summary": "Dispatch an Raven CLI command in-process, capture rich-rendered output.",
+      "description": "D7 mixed-mode main channel: read-only CLI commands route through cli.dispatch and reuse the Typer CLI's Rich rendering. width is contract-required (client measures Ink container, server cannot guess). See design.md §3 D7.",
+      "params": [
+        {
+          "name": "argv",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Pre-tokenized argv (TUI side has already shlex-split)."
+          }
+        },
+        {
+          "name": "width",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 20,
+            "maximum": 500,
+            "description": "Ink container width in cells; required for Rich Console wrapping."
+          }
+        },
+        {
+          "name": "timeout_s",
+          "required": false,
+          "schema": {
+            "type": "number",
+            "description": "Override the default 30s timeout for long-running commands."
+          }
+        }
+      ],
+      "result": {
+        "name": "CliDispatchResult",
+        "schema": { "$ref": "#/components/schemas/CliResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/CliCommandFailed" },
+        { "$ref": "#/components/errors/CliCommandTimeout" },
+        { "$ref": "#/components/errors/NotDispatchCompatible" }
+      ]
+    },
+    {
+      "name": "setup.status",
+      "summary": "Report whether an LLM provider is configured (hermes startup hook).",
+      "description": "Called by hermes UI useSessionLifecycle.ts / setupHandoff.ts at startup. v0.1 reads ~/.raven/config.json; if read fails, returns provider_configured=true as fallback (see design.md §3a.1).",
+      "params": [],
+      "result": {
+        "name": "SetupStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider_configured"],
+          "properties": {
+            "provider_configured": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "reload.mcp",
+      "summary": "No-op in v0.1 (hermes polls every 5s).",
+      "description": "MUST NOT throw. hermes UI useConfigSync.ts:202 polls every 5s; throwing would spam logs. v0.1 implementation returns {ok: true} unconditionally. See design.md §3a.2.",
+      "params": [],
+      "result": {
+        "name": "ReloadMcpResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ok"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "reloaded": { "type": "integer" },
+            "tools_changed": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "commands.catalog",
+      "summary": "Dynamic CLI command catalog reflected from the Typer app (replaces v0.0.2 -32012 stub).",
+      "description": "Reflects raven.cli.commands.app to build a slash-command catalog consumed by ui-tui's alias / prefix-1-match / multi-match-ambiguous logic in createSlashHandler.ts. Filters out _DISPATCH_BLACKLIST entries (gateway / provider login / channels login / sandbox shell / tui / onboard) and agent-without-message. See harness-command-catalog-dynamic design.md §D1-D2.",
+      "params": [],
+      "result": {
+        "name": "CommandsCatalogResult",
+        "schema": { "$ref": "#/components/schemas/CommandsCatalogResponse" }
+      },
+      "errors": []
+    },
+    {
+      "name": "voice.toggle",
+      "summary": "hermes-only stub: voice not supported in Raven v0.1.",
+      "params": [
+        {
+          "name": "action",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "VoiceToggleResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "browser.manage",
+      "summary": "hermes-only stub: browser automation not supported.",
+      "params": [
+        {
+          "name": "action",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "url",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "BrowserManageResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "spawn_tree.save",
+      "summary": "hermes-only stub: spawn_tree topology not supported.",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SpawnTreeSaveResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "spawn_tree.list",
+      "summary": "hermes-only stub: spawn_tree topology not supported.",
+      "params": [],
+      "result": {
+        "name": "SpawnTreeListResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "spawn_tree.load",
+      "summary": "hermes-only stub: spawn_tree topology not supported.",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SpawnTreeLoadResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "process.stop",
+      "summary": "hermes-only stub: use Ctrl+C instead.",
+      "params": [],
+      "result": {
+        "name": "ProcessStopResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "rollback.list",
+      "summary": "hermes-only stub: filesystem rollback not supported; use git.",
+      "params": [],
+      "result": {
+        "name": "RollbackListResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "rollback.diff",
+      "summary": "hermes-only stub: filesystem rollback not supported.",
+      "params": [
+        {
+          "name": "id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "RollbackDiffResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "rollback.restore",
+      "summary": "hermes-only stub: filesystem rollback not supported.",
+      "params": [
+        {
+          "name": "id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "RollbackRestoreResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    },
+    {
+      "name": "tools.configure",
+      "summary": "hermes-only stub: edit config.json directly.",
+      "params": [],
+      "result": {
+        "name": "ToolsConfigureResult",
+        "schema": { "$ref": "#/components/schemas/StubResult" }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/NotSupportedInV01" }
+      ]
+    }
+  ],
+  "components": {
+    "schemas": {
+      "JsonValue": {
+        "description": "Recursive JSON value type. Implemented as an unconstrained object in JSON Schema; downstream Pydantic uses typing.Any.",
+        "type": ["string", "number", "integer", "boolean", "null", "array", "object"]
+      },
+      "SessionInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_key",
+          "channel",
+          "chat_id",
+          "created_at",
+          "updated_at",
+          "message_count",
+          "metadata",
+          "has_pending_clarification"
+        ],
+        "properties": {
+          "session_key": {
+            "type": "string",
+            "description": "<channel>:<chat_id> composite key."
+          },
+          "channel": { "type": "string" },
+          "chat_id": { "type": "string" },
+          "created_at": {
+            "type": "string",
+            "description": "ISO-8601 timestamp."
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "ISO-8601 timestamp."
+          },
+          "message_count": { "type": "integer" },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          },
+          "has_pending_clarification": { "type": "boolean" }
+        }
+      },
+      "SessionListItem": {
+        "type": "object",
+        "description": "One row in the TUI session picker (gatewayTypes.ts SessionListItem).",
+        "additionalProperties": false,
+        "required": ["id", "message_count", "preview", "started_at", "title"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Full session_key: <channel>:<chat_id>."
+          },
+          "message_count": { "type": "integer" },
+          "preview": { "type": "string" },
+          "source": { "type": "string" },
+          "started_at": {
+            "type": "number",
+            "description": "Unix timestamp derived from created_at."
+          },
+          "title": { "type": "string" }
+        }
+      },
+      "SessionMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "role", "content", "timestamp"],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "description": "0-based position within session.messages."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["user", "assistant", "system", "tool"]
+          },
+          "content": { "type": "string" },
+          "timestamp": {
+            "type": "string",
+            "description": "ISO-8601 timestamp."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          }
+        }
+      },
+      "McpServerInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "transport", "connected", "tool_count"],
+        "properties": {
+          "name": { "type": "string" },
+          "transport": {
+            "type": "string",
+            "enum": ["stdio", "sse", "streamableHttp"]
+          },
+          "connected": { "type": "boolean" },
+          "tool_count": { "type": "integer" }
+        }
+      },
+      "McpToolInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "description", "parameters"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Raw tool name (without mcp_<server>_ prefix)."
+          },
+          "description": { "type": "string" },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" },
+            "description": "JSON Schema for the tool's input arguments."
+          }
+        }
+      },
+      "SkillInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "source", "pinned", "description", "tags"],
+        "properties": {
+          "name": { "type": "string" },
+          "source": {
+            "type": "string",
+            "enum": ["local", "remote"]
+          },
+          "pinned": { "type": "boolean" },
+          "description": { "type": "string" },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "ModelInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model_id", "provider", "context_window", "available"],
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "description": "e.g. 'claude-opus-4-7'"
+          },
+          "provider": {
+            "type": "string",
+            "description": "e.g. 'anthropic' / 'openai'"
+          },
+          "context_window": { "type": "integer" },
+          "available": { "type": "boolean" }
+        }
+      },
+      "UsageSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+        "properties": {
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "cost_usd": { "type": "number" },
+          "context_used": { "type": "integer" },
+          "context_max": { "type": "integer" },
+          "context_percent": { "type": "integer" }
+        }
+      },
+      "CliResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stdout", "stderr", "exit_code"],
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "description": "Rich-rendered output with ANSI SGR sequences."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Error / warning output with ANSI SGR sequences."
+          },
+          "exit_code": {
+            "type": "integer",
+            "description": "CLI command exit code; 0 = success."
+          },
+          "error_code": {
+            "type": "integer",
+            "description": "Only present for timeout / not-dispatch-compatible cases (mirrors a JSON-RPC error code)."
+          }
+        }
+      },
+      "StubResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable explanation of why this method is not supported in v0.1."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Optional hint to the user (e.g., 'Press Ctrl+C')."
+          }
+        }
+      },
+      "CommandsCatalogResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canon", "pairs", "sub", "categories", "skill_count"],
+        "properties": {
+          "canon": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "alias (with leading /) -> canonical mapping. v0.1: alias = canonical 1:1 (no short aliases generated; TS-side prefix-1-match handles partials). Group + subcommand are space-separated (e.g. '/channels status'), not slash- or dot-separated."
+          },
+          "pairs": {
+            "type": "array",
+            "description": "Ordered (alias, canonical) tuples. TS-side createGatewayEventHandler.ts:198 gates on non-empty pairs; empty pairs degrades to slash.exec direct dispatch.",
+            "items": {
+              "type": "array",
+              "prefixItems": [
+                { "type": "string", "description": "alias (with leading /)" },
+                { "type": "string", "description": "canonical (with leading /)" }
+              ],
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "sub": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "description": "group -> [subcommand]. Blacklisted entries (e.g. channels login) and agent-REPL are filtered out."
+          },
+          "categories": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered category list: '(top-level)' first then alphabetical group names. Fully filtered groups (e.g. tui) do not appear."
+          },
+          "skill_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total skill count from skill_forge store SQL count; 0 if DB missing (warning field then populated)."
+          },
+          "warning": {
+            "type": "string",
+            "description": "Optional warning pushed to TUI activity strip (e.g. 'skill store not initialized')."
+          }
+        }
+      },
+      "MessageStartEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "message.start" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["turn_id"],
+            "properties": {
+              "turn_id": { "type": "string" }
+            }
+          }
+        }
+      },
+      "TokenDeltaEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "token.delta" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ThinkingDeltaEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "thinking.delta" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ToolStartEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "tool.start" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tool_call_id", "name", "arguments"],
+            "properties": {
+              "tool_call_id": { "type": "string" },
+              "name": { "type": "string" },
+              "arguments": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+              }
+            }
+          }
+        }
+      },
+      "ToolProgressEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "tool.progress" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tool_call_id", "preview"],
+            "properties": {
+              "tool_call_id": { "type": "string" },
+              "preview": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ToolCompleteEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "tool.complete" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tool_call_id", "result_preview", "truncated"],
+            "properties": {
+              "tool_call_id": { "type": "string" },
+              "result_preview": { "type": "string" },
+              "truncated": { "type": "boolean" }
+            }
+          }
+        }
+      },
+      "MessageCompleteEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "message.complete" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["turn_id", "usage"],
+            "properties": {
+              "turn_id": { "type": "string" },
+              "usage": { "$ref": "#/components/schemas/UsageSnapshot" }
+            }
+          }
+        }
+      },
+      "ErrorEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "error" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "type": "integer" },
+              "message": { "type": "string" },
+              "reason": {
+                "type": "string",
+                "enum": ["cancelled_by_client", "internal"]
+              }
+            }
+          }
+        }
+      },
+      "CronDeliveredEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "cron.delivered" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["job_id", "name", "text", "fired_at"],
+            "properties": {
+              "job_id": { "type": "string" },
+              "name": { "type": "string" },
+              "text": { "type": "string" },
+              "fired_at": { "type": "string" }
+            }
+          }
+        }
+      },
+      "TurnEvent": {
+        "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/MessageStartEvent" },
+          { "$ref": "#/components/schemas/TokenDeltaEvent" },
+          { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
+          { "$ref": "#/components/schemas/ToolStartEvent" },
+          { "$ref": "#/components/schemas/ToolProgressEvent" },
+          { "$ref": "#/components/schemas/ToolCompleteEvent" },
+          { "$ref": "#/components/schemas/MessageCompleteEvent" },
+          { "$ref": "#/components/schemas/ErrorEvent" },
+          { "$ref": "#/components/schemas/CronDeliveredEvent" }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "message.start": "#/components/schemas/MessageStartEvent",
+            "token.delta": "#/components/schemas/TokenDeltaEvent",
+            "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
+            "tool.start": "#/components/schemas/ToolStartEvent",
+            "tool.progress": "#/components/schemas/ToolProgressEvent",
+            "tool.complete": "#/components/schemas/ToolCompleteEvent",
+            "message.complete": "#/components/schemas/MessageCompleteEvent",
+            "error": "#/components/schemas/ErrorEvent",
+            "cron.delivered": "#/components/schemas/CronDeliveredEvent"
+          }
+        }
+      }
+    },
+    "errors": {
+      "SessionNotFound": {
+        "code": -32001,
+        "message": "session_not_found"
+      },
+      "SessionLocked": {
+        "code": -32002,
+        "message": "session_locked"
+      },
+      "TurnInProgress": {
+        "code": -32003,
+        "message": "turn_in_progress"
+      },
+      "McpServerNotConnected": {
+        "code": -32004,
+        "message": "mcp_server_not_connected"
+      },
+      "McpToolCallFailed": {
+        "code": -32005,
+        "message": "mcp_tool_call_failed"
+      },
+      "SkillNotFound": {
+        "code": -32006,
+        "message": "skill_not_found"
+      },
+      "SkillPinConflict": {
+        "code": -32007,
+        "message": "skill_pin_conflict"
+      },
+      "ModelNotAvailable": {
+        "code": -32008,
+        "message": "model_not_available"
+      },
+      "ModelSwitchInTurn": {
+        "code": -32009,
+        "message": "model_switch_in_turn"
+      },
+      "ConfigFieldReadonly": {
+        "code": -32010,
+        "message": "config_field_readonly"
+      },
+      "ConfigValidationError": {
+        "code": -32011,
+        "message": "config_validation_error"
+      },
+      "NotSupportedInV01": {
+        "code": -32012,
+        "message": "not_supported_in_v01"
+      },
+      "CliCommandFailed": {
+        "code": -32013,
+        "message": "cli_command_failed"
+      },
+      "CliCommandTimeout": {
+        "code": -32014,
+        "message": "cli_command_timeout"
+      },
+      "NotDispatchCompatible": {
+        "code": -32015,
+        "message": "not_dispatch_compatible"
+      }
+    }
+  }
+}

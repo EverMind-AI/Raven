@@ -1,0 +1,800 @@
+generated_at: '2024-03-28T12:00:00'
+persona_id: caregiver-01
+anchor_date: '2026-05-01'
+total_days: 30
+events:
+- at: '2026-05-01T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T09:00:00'
+  topic: 准备去社区医院复诊，需要带血压记录
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-02T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-03T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-03T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-03T15:00:00'
+  topic: 物理治疗师上门，需要准备什么
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-03T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-03T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-05T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-06T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-07T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-08T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-08T09:00:00'
+  topic: 准备去社区医院复诊，需要带血压记录
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-08T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-08T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-08T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T15:00:00'
+  topic: 物理治疗师上门，需要准备什么
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-09T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-10T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-10T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-10T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-10T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-11T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-14T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-14T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-14T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-14T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T09:00:00'
+  topic: 准备去社区医院复诊，需要带血压记录
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-15T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T15:00:00'
+  topic: 物理治疗师上门，需要准备什么
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-18T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-18T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-18T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-18T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-20T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T09:00:00'
+  topic: 准备去社区医院复诊，需要带血压记录
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T15:00:00'
+  topic: 物理治疗师上门，需要准备什么
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-22T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-23T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-24T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-24T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-24T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-24T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T09:00:00'
+  topic: 准备去社区医院复诊，需要带血压记录
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-25T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T06:50:00'
+  topic: 提醒我妈吃氨氯地平 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T11:20:00'
+  topic: 提醒我妈吃多奈哌齐 5mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T15:00:00'
+  topic: 物理治疗师上门，需要准备什么
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T17:20:00'
+  topic: 提醒我妈吃美托洛尔 25mg
+  kind: set_reminder
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-26T22:00:00'
+  topic: 记录我妈今天的情绪状态
+  kind: reflection
+  depth: null

@@ -1,0 +1,496 @@
+generated_at: '2024-03-28T12:00:00Z'
+persona_id: team-lead-01
+anchor_date: '2026-05-01'
+total_days: 30
+events:
+- at: '2026-05-01T07:30:00'
+  topic: 周一晨跑想听首提神的歌
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T09:00:00'
+  topic: 站会后想确认今天 unblock 同事的优先级
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T14:00:00'
+  topic: service migration RFC 的架构图需要优化
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-01T18:30:00'
+  topic: 今天会议太多想分析时间分配
+  kind: vent
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-01T22:00:00'
+  topic: 整理明天 TODO 特别是 RFC 进度
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-02T10:00:00'
+  topic: code review 发现 junior 的经典错误想记录教学点
+  kind: learning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: 发现 junior 常犯的数据库事务错误
+- at: '2026-05-02T16:00:00'
+  topic: 1-on-1 前想梳理对组员 A 的反馈点
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: null
+- at: '2026-05-02T22:00:00'
+  topic: 失眠想着 RFC 的 deadline 压力
+  kind: vent
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-03T14:00:00'
+  topic: 咨询如何优雅处理服务迁移中的兼容性问题
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-03T18:30:00'
+  topic: 终于下班了吐槽今天 6 个会议
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T09:00:00'
+  topic: 站会后需要调整今日计划因紧急 bug
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-04T16:00:00'
+  topic: 准备明天和组员 B 的 1-on-1 话题
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: null
+- at: '2026-05-05T10:00:00'
+  topic: RFC 最后冲刺想确认几个技术决策
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-05T22:00:00'
+  topic: 焦虑 RFC 明天 deadline 检查清单
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-06T08:30:00'
+  topic: 今天要提交 RFC 需要最后 sanity check
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-06T14:00:00'
+  topic: RFC 提交后想规划 team review 安排
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-07T09:00:00'
+  topic: 站会后需要调整 sprint 11 stories 优先级
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-07T16:00:00'
+  topic: 准备和组员 C 的 1-on-1 反馈
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: null
+- at: '2026-05-08T10:00:00'
+  topic: RFC team review 前想预演 Q&A
+  kind: planning
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-08T18:30:00'
+  topic: 终于下班了分享 RFC 通过的好消息
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - service_migration
+  reveals_new_fact: null
+- at: '2026-05-09T14:00:00'
+  topic: 开始设计 sprint 11 的技术方案
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-09T22:00:00'
+  topic: 思考如何改进团队 retro 效率
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: null
+- at: '2026-05-10T16:00:00'
+  topic: 和组员 D 的 1-on-1 后想记录关键点
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: 组员 D 对职业发展的新诉求
+- at: '2026-05-10T20:00:00'
+  topic: 陪女儿时想到幼儿园毕业准备
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - daughter_graduation
+  reveals_new_fact: null
+- at: '2026-05-11T10:00:00'
+  topic: 周六看技术 newsletter 发现相关工具
+  kind: learning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: 对 X 工具产生兴趣
+- at: '2026-05-11T15:00:00'
+  topic: 陪家人时想找适合全家看的电影
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-12T09:00:00'
+  topic: 周日规划下周重点特别是 sprint 启动
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-12T14:00:00'
+  topic: mentor 同事时发现其 PR 的架构问题
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T07:30:00'
+  topic: 周一晨跑想听新歌
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-13T10:00:00'
+  topic: sprint 启动需要调整任务分配
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-14T14:00:00'
+  topic: 解决 sprint 中遇到的性能瓶颈问题
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-14T22:00:00'
+  topic: 睡前想着明天和组员 E 的 1-on-1 准备
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: null
+- at: '2026-05-15T16:00:00'
+  topic: 和组员 E 的 1-on-1 后记录发展计划
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: 组员 E 希望参与更多架构设计
+- at: '2026-05-15T18:30:00'
+  topic: 终于下班了吐槽跨组沟通低效
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-16T10:00:00'
+  topic: code review 时发现可复用的模式
+  kind: learning
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids: []
+  reveals_new_fact: 总结出新的代码模式 X
+- at: '2026-05-16T14:00:00'
+  topic: 咨询如何优化团队 CI/CD 流程
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-17T09:00:00'
+  topic: 站会后需要重新评估 sprint 进度
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-17T16:00:00'
+  topic: 准备和组员 F 的 1-on-1 话题
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: null
+- at: '2026-05-18T14:00:00'
+  topic: 解决生产环境偶发 bug 的方案咨询
+  kind: bug_debug
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-18T22:00:00'
+  topic: 睡前思考如何提升团队技术分享质量
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-19T10:00:00'
+  topic: 周六学习新技术时遇到概念困惑
+  kind: learning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: 开始学习 Y 技术栈
+- at: '2026-05-19T15:00:00'
+  topic: 陪女儿玩时想到毕业典礼服装
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - daughter_graduation
+  reveals_new_fact: null
+- at: '2026-05-20T09:00:00'
+  topic: 周日规划下周重点特别是 retro 准备
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: null
+- at: '2026-05-20T14:00:00'
+  topic: mentor 同事时讨论职业发展路径
+  kind: social_coord
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-21T10:00:00'
+  topic: 开始收集 retro 的 blocker 数据
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: null
+- at: '2026-05-21T16:00:00'
+  topic: 和组员 F 的 1-on-1 后总结行动项
+  kind: reflection
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - 1-on-1_plan
+  reveals_new_fact: 完成所有组员 1-on-1 目标
+- at: '2026-05-22T14:00:00'
+  topic: sprint 收尾需要调整部分任务
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - sprint_11
+  reveals_new_fact: null
+- at: '2026-05-22T22:00:00'
+  topic: 焦虑明天 retro 能否有效解决问题
+  kind: vent
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: null
+- at: '2026-05-23T09:00:00'
+  topic: retro 前最后确认收集的反馈
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: null
+- at: '2026-05-23T18:30:00'
+  topic: retro 后想记录关键改进项
+  kind: reflection
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - retro_plan
+  reveals_new_fact: 团队最关注的 3 个改进点
+- at: '2026-05-24T14:00:00'
+  topic: 新 sprint planning 的技术风险评估
+  kind: tech_consultation
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-24T20:00:00'
+  topic: 陪女儿时想到毕业典礼邀请名单
+  kind: planning
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - daughter_graduation
+  reveals_new_fact: null
+- at: '2026-05-25T10:00:00'
+  topic: 月度季度对齐 PPT 大纲构思
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-25T22:00:00'
+  topic: 失眠想着 PPT 的关键数据
+  kind: vent
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-26T14:00:00'
+  topic: 周六学习时验证新技术概念
+  kind: learning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids: []
+  reveals_new_fact: 新技术 Y 的初步测试结果
+- at: '2026-05-26T20:00:00'
+  topic: 家庭电影夜选片咨询
+  kind: lifestyle_query
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-27T09:00:00'
+  topic: 周日集中写月度季度对齐 PPT
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 3
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-27T21:00:00'
+  topic: 下周规划特别关注技术债务
+  kind: planning
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids: []
+  reveals_new_fact: null
+- at: '2026-05-28T10:00:00'
+  topic: PPT 最后修改需要数据验证
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-28T16:00:00'
+  topic: 和老板预演季度汇报要点
+  kind: planning
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-29T14:00:00'
+  topic: 季度对齐前最后调整 PPT 叙事线
+  kind: admin_task
+  depth: multi_turn
+  expected_followups: 2
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-29T22:00:00'
+  topic: 焦虑明天汇报失眠
+  kind: vent
+  depth: multi_turn
+  expected_followups: 1
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-30T08:30:00'
+  topic: 季度对齐前最后确认关键指标
+  kind: admin_task
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: null
+- at: '2026-05-30T18:30:00'
+  topic: 终于下班了分享季度汇报结果
+  kind: vent
+  depth: single_turn
+  expected_followups: 0
+  related_memory_ids:
+  - monthly_review
+  reveals_new_fact: 获得管理层对技术路线认可

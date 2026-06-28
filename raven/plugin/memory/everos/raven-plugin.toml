@@ -1,0 +1,32 @@
+[plugin]
+id                 = "everos-memory"
+version            = "1.0.0"
+display_name       = "EverOS memory"
+raven           = ">=0.1"
+bundled            = true
+enabled_by_default = true
+
+[[plugin.contributes.memory_backends]]
+name    = "everos"
+factory = "raven.plugin.memory.everos.backend:make_backend"
+
+# Multimodal understanding exposed as an agent tool: the LLM calls
+# ``understand_media(paths=[...])`` to read attachments it can't consume
+# natively (PDF / audio / Office / scanned images), reusing EverOS's
+# memory-ingest multimodal parser. Requires the ``everos[multimodal]``
+# extra + ``EVEROS_MULTIMODAL__*`` config at call time.
+[[plugin.contributes.tools]]
+name    = "understand_media"
+factory = "raven.plugin.memory.everos.tools:make_understand_media_tool"
+
+# Config schema sketch — the registry passes the user's
+# ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)``
+# verbatim; full schema validation will land alongside EM-2.
+[plugin.config_schema]
+mode          = { type = "string", enum = ["embedded", "http"], default = "embedded" }
+base_url      = { type = "string", default = "http://localhost:1995" }
+recall_method = { type = "string", enum = ["keyword", "vector", "hybrid"], default = "hybrid" }
+# Pre-configured, stable agent identity: owner of the agent track (cases /
+# skills accrue under it across sessions). Bare id, matched verbatim
+# against the ``agent_id`` the host passes to recall.
+agent_id      = { type = "string", default = "agent:default" }

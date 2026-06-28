@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Skill Hub 集成方案</title><style>
+  :root{--fg:#1f2328;--muted:#656d76;--bg:#fff;--soft:#f6f8fa;--border:#d0d7de;--accent:#0969da;--code:#0550ae}
+  @media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--muted:#9198a1;--bg:#0d1117;--soft:#161b22;--border:#30363d;--accent:#4493f8;--code:#79c0ff}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",Helvetica,Arial,sans-serif}
+  .wrap{max-width:920px;margin:0 auto;padding:48px 28px 96px}
+  h1,h2,h3,h4{line-height:1.3;font-weight:700}h1{font-size:2em;margin:.2em 0 .6em;padding-bottom:.3em;border-bottom:2px solid var(--border)}
+  h2{font-size:1.5em;margin:2em 0 .6em;padding-bottom:.3em;border-bottom:1px solid var(--border)}h3{font-size:1.2em;margin:1.6em 0 .5em}h4{font-size:1.05em;margin:1.3em 0 .4em}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+  blockquote{margin:1em 0;padding:.4em 1em;color:var(--muted);border-left:4px solid var(--border);background:var(--soft);border-radius:4px}
+  code{font-family:"SF Mono",SFMono-Regular,Consolas,Menlo,monospace;font-size:.88em;background:var(--soft);padding:.15em .4em;border-radius:5px;color:var(--code)}
+  pre{background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:14px 16px;overflow:auto}pre code{background:none;padding:0;color:var(--fg);font-size:.85em;line-height:1.55}
+  table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.92em;display:block;overflow:auto}th,td{border:1px solid var(--border);padding:7px 12px;text-align:left;vertical-align:top}
+  th{background:var(--soft);font-weight:600}tr:nth-child(2n) td{background:var(--soft)}
+  hr{border:0;border-top:1px solid var(--border);margin:2.2em 0}ul,ol{padding-left:1.5em}li{margin:.25em 0}
+</style></head><body><div class="wrap">
+<h1>Skill Hub 集成方案</h1>
+<p>把远程 Skill Hub(语义检索 + 元数据/正文 + zip 下载的技能市场)接入 Raven,使
+agent 能在每轮<strong>发现</strong>相关 skill、由 <strong>LLM 决策</strong>用哪个、<strong>按需取正文/脚本</strong>并<strong>执行</strong>。</p>
+<blockquote>
+<p>复用 Raven 现有 skill 栈(<code>SkillRouter</code> / <code>MassSkillSource</code> / <code>LocalPool</code> /
+<code># Skills</code> &amp; <code># Active Skills</code> 段 / <code>exec</code> + <code>sandbox</code>),新增:<strong>发现源</strong>
+<code>SkillHubSource</code>、<strong>HTTP 客户端</strong> <code>SkillHubClient</code>、两个工具 <code>read_skill</code> / <code>use_skill</code>。</p>
+</blockquote>
+<hr />
+<h2>直接回答:要下载到本地吗?</h2>
+<p><strong>多数情况不用。下载只为&quot;脚本/资产&quot;,不为&quot;正文&quot;。</strong></p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>调用</th>
+<th>下载 zip?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>发现 / 粗筛</strong></td>
+<td><code>GET /skills?q=</code>(目录元数据)</td>
+<td>否</td>
+</tr>
+<tr>
+<td><strong>读正文 / 细选 / 确认 / 执行纯指令 skill</strong></td>
+<td><code>GET /skills/{id}</code> → <code>result.skill_md</code></td>
+<td><strong>否</strong>(正文随元数据返回)</td>
+</tr>
+<tr>
+<td><strong>执行带脚本/资产的 skill</strong></td>
+<td><code>GET /skills/{id}/download</code> → zip</td>
+<td><strong>是</strong>(仅此情形:脚本要落盘给 <code>exec</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>关键:Hub 的 <code>GET /skills/{id}</code> <strong>直接回传完整 <code>skill_md</code></strong> → 读正文是一次轻量 GET,无需下载。
+只有当 skill <strong>捆绑了可执行脚本/资产</strong>(SKILL.md 引用了 <code>scripts/</code> 等本地文件)、需要文件落盘时,才下载 zip。<strong>纯指令 skill 全程不落盘。</strong></p>
+<hr />
+<h2>1. 关键约束(决定设计的事实)</h2>
+<p><strong>Skill Hub API</strong>(统一信封 <code>{error, requestId, status, result}</code>,<code>error==&quot;ok&quot; &amp;&amp; status==0</code> 为成功;<code>X-Request-ID</code> 透传):</p>
+<table>
+<thead>
+<tr>
+<th>端点</th>
+<th>返回</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /openapi/v1/skills?q=&amp;category=&amp;sort=&amp;page=&amp;limit=</code></td>
+<td><code>result.items[]</code>(元数据,<strong>无正文</strong>)</td>
+<td>语义检索 / 目录粗筛</td>
+</tr>
+<tr>
+<td><code>GET /openapi/v1/skills/{id}</code></td>
+<td>完整元数据 <strong>+ <code>skill_md</code>(正文)+ <code>subscores</code></strong></td>
+<td>读正文 / 细选 / 确认</td>
+</tr>
+<tr>
+<td><code>GET /openapi/v1/skills/{id}/download?source=</code></td>
+<td><strong>zip 字节流</strong>(<code>SKILL.md</code> + 脚本/资产)</td>
+<td>取可执行文件落盘</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>检索 item 字段:<code>id/slug/name/description/scenario_tags/score/score_availability/score_robustness/score_safety/token_p50/version/install_count/last_evolved_at/zip_url</code>。</li>
+<li>详情额外字段:<code>skill_id/is_editable/git_url/license/download_url/</code><strong><code>skill_md</code></strong><code>/subscores{safety,utility,robustness,flags}</code>。</li>
+<li><code>{id}</code> 接受 UUID 或 <code>{source}/{skill-name}</code>。</li>
+</ul>
+<p><strong>Raven 现状</strong>:<code>SkillRouter</code>(RRF 融合 Local/Mass/Everos)· <code>MassSkillSource</code>(远程库搜索源)· <code># Skills</code>(目录注入)/ <code># Active Skills</code>(全文注入)· skill=SKILL.md(+可选脚本),执行=正文进上下文+按指令做事+脚本经 <code>exec</code>。<strong>缺口</strong>:无&quot;取远程 skill 正文/脚本&quot;的机制。</p>
+<hr />
+<h2>2. 总体架构:三级渐进式披露</h2>
+<pre><code>每轮:  user query
+          │
+   ① 粗筛  SkillRouter ── Local / Everos / SkillHubSource(GET /skills?q=)
+          │   RRF 融合 → top-N 候选
+          └─► 注入 &quot;# Skills&quot; 目录(Tier 0 元数据:name/desc/tags/score_*/id)
+          ▼
+   ② 细选  LLM 对候选不确定 → 读正文再判断
+          │   read_skill(id) ─GET /skills/{id}─► result.skill_md(轻量,不下载)
+          │   (或 host 预取 top-K 的 skill_md 随目录注入,免往返)
+          └─► 据正文选定真正适配的 skill
+          ▼
+   ③ 使用  ├─ 纯指令 skill:已有 skill_md 在上下文 → 直接按指令执行(不下载)
+          └─ 带脚本 skill:use_skill(id) ─GET /skills/{id}/download─► zip
+                 → 校验+解压本地缓存 → 注册 LocalPool → 返回 skill_md + scripts_dir
+          ▼
+   ④ 执行  LLM 按 SKILL.md 执行;bundled 脚本经 exec/sandbox 运行
+</code></pre>
+<p><strong>三级披露</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>级</th>
+<th>内容</th>
+<th>调用</th>
+<th>时机</th>
+<th>落盘</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tier 0 目录</td>
+<td>元数据(name/desc/tags/score_*/id)</td>
+<td><code>GET /skills?q=</code></td>
+<td>每轮 <code># Skills</code>(粗筛)</td>
+<td>否</td>
+</tr>
+<tr>
+<td>Tier 1 正文</td>
+<td>完整 <code>skill_md</code></td>
+<td><code>GET /skills/{id}</code></td>
+<td>细选 / 确认 / 纯指令执行</td>
+<td>否</td>
+</tr>
+<tr>
+<td>Tier 2 脚本</td>
+<td>zip 内 scripts/assets</td>
+<td><code>GET /skills/{id}/download</code></td>
+<td>仅带脚本 skill 执行时</td>
+<td><strong>是(缓存)</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>原则</strong>:<strong>目录粗筛 → 正文细选+确认 → 脚本执行</strong>。
+<code>name/description</code> 往往<strong>不足以最终选定</strong>(同名/近义、措辞含糊、能力边界差异)——所以**&quot;选哪个&quot;也要读正文**;但读正文只是 <code>GET /skills/{id}</code>(正文随返回),<strong>轻量、不下载</strong>。下载(Tier 2)是<strong>例外</strong>,仅当 skill 捆绑可执行文件、需落盘给 <code>exec</code> 时。</p>
+<hr />
+<h2>3. 组件设计</h2>
+<h3>3.1 <code>SkillHubSource</code>(发现层,host SkillSource)</h3>
+<p><code>raven/memory_engine/skill_forge/hub_source.py</code>,实现 <code>SkillSource</code> 协议(仿 <code>MassSkillSource</code>):</p>
+<ul>
+<li><code>search(query, history, k)</code> → <code>list[RouterHit]</code>。</li>
+<li>调 <code>GET {endpoint}/openapi/v1/skills?q={query}&amp;limit={k*over_fetch}</code>,带 <code>Authorization: Bearer &lt;api_key&gt;</code> + <code>X-Request-ID</code>。</li>
+<li>解信封:<code>error==&quot;ok&quot; &amp;&amp; status==0</code> 才取 <code>result.items</code>;否则返回 <code>[]</code>(交 <code>SkillRouter._safe_search</code> 单源故障隔离)。</li>
+<li>映射 item → <code>RouterHit</code>:<code>name=item.name</code>,<code>qualified_id=f&quot;hub/{item.slug}&quot;</code>,<code>score=item.score</code>,<code>metadata={id, slug, description, scenario_tags, score_availability/robustness/safety, token_p50, version, install_count, last_evolved_at}</code>。</li>
+<li>安全分过滤:<code>score_safety &lt; min_safety</code> 不进候选(配置阈值)。</li>
+<li>进 <code>SkillRouter</code>,<code>SkillRouterConfig.weights</code> 加 <code>hub</code>(建议 0.85)。<code>q</code> 空 → Hub 退化为排序列表(API 已支持)。</li>
+</ul>
+<h3>3.2 <code># Skills</code> 目录注入(Tier 0)</h3>
+<ul>
+<li>复用现有 <code># Skills</code> 段,渲染 RRF 融合后的候选:<code>name · description · scenario_tags · score_safety · 来源(hub)· id</code>。</li>
+<li>提示词补:<em>&quot;目录里的 skill 仅是候选;不确定就调 <code>read_skill(&lt;id&gt;)</code> 读正文判断,选定后纯指令直接执行、带脚本则 <code>use_skill(&lt;id&gt;)</code> 取脚本。&quot;</em></li>
+</ul>
+<h3>3.3 <code>SkillHubClient</code>(HTTP 客户端)</h3>
+<p><code>raven/skill_hub/client.py</code>:</p>
+<ul>
+<li><code>search(q, **filters) -&gt; list[dict]</code>:<code>GET /skills</code>(供 SkillHubSource)。</li>
+<li><code>get(id) -&gt; dict</code>:<code>GET /skills/{id}</code> → 解信封返回 <code>result</code>(含 <strong><code>skill_md</code></strong> + 元数据 + subscores)。<strong>读正文主路径,不下载。</strong></li>
+<li><code>download(id, source=&quot;raven&quot;) -&gt; bytes</code>:<code>GET /skills/{id}/download?source=raven</code> → zip 字节(非信封)。</li>
+<li><code>install(id) -&gt; dict</code>:<code>download</code> → 校验 → 解压缓存 → 返回 <code>{slug, version, dir, scripts_dir}</code>。缓存命中(同 <code>slug@version</code>)不重复下载。</li>
+</ul>
+<h3>3.4 <code>read_skill</code> 工具(细选 / 读正文,<strong>不下载</strong>)</h3>
+<pre><code>read_skill(skill_id: str) -&gt; { &quot;skill_md&quot;: str, &quot;name&quot;: str, &quot;version&quot;: str,
+                               &quot;scenario_tags&quot;: [str], &quot;subscores&quot;: {...} }
+</code></pre>
+<ul>
+<li>内部仅 <code>SkillHubClient.get(id)</code>(<code>GET /skills/{id}</code>)→ 把 <code>skill_md</code> 返回进上下文。</li>
+<li>用于:① 细选(对粗筛候选逐个读正文比较);② 确认适配;③ <strong>纯指令 skill 的&quot;使用&quot;——正文进上下文即可按指令执行,无需任何下载。</strong></li>
+<li>轻量、可对多个候选连续调用;不注册、不落盘。</li>
+</ul>
+<h3>3.5 <code>use_skill</code> 工具(取脚本 / 落盘,<strong>仅带脚本 skill 需要</strong>)</h3>
+<pre><code>use_skill(skill_id: str) -&gt; { &quot;skill_md&quot;: str, &quot;name&quot;: str, &quot;version&quot;: str,
+                              &quot;scripts_dir&quot;: str, &quot;cached&quot;: bool }
+</code></pre>
+<ul>
+<li>行为:<code>SkillHubClient.install(id)</code>(下载 zip → 校验解压到本地缓存 → 注册 LocalPool/SkillRegistry)→ 返回 <code>skill_md</code> + <code>scripts_dir</code>。</li>
+<li>用于:skill 的 SKILL.md 引用了 <code>scripts/</code>/资产、需文件落盘给 <code>exec</code> 时。</li>
+<li>纯指令 skill <strong>不必调</strong>此工具(<code>read_skill</code> 已够)。</li>
+<li>失败(网络/校验/不存在)→ 结构化错误,不抛崩 turn。</li>
+</ul>
+<blockquote>
+<p>何时 <code>read_skill</code> 何时 <code>use_skill</code>?判据是<strong>这个 skill 要不要本地文件</strong>:正文(指令)用 <code>read_skill</code> 就够;只有当指令依赖捆绑脚本/资产时才 <code>use_skill</code> 落盘。提示词里说明,LLM 读了正文即可判断(SKILL.md 里若出现 <code>scripts/x.sh</code> 之类即需 <code>use_skill</code>)。</p>
+</blockquote>
+<h3>3.6 执行(Tier 2,复用)</h3>
+<ul>
+<li>正文(<code>skill_md</code>)在上下文;若已 <code>use_skill</code>,脚本在 <code>scripts_dir</code>。</li>
+<li>LLM 经现有 <code>exec</code> 工具跑脚本,走 <code>tools.sandbox</code>(限时/限网/隔离)。与本地 skill 执行路径一致,无需新执行器。</li>
+</ul>
+<hr />
+<h2>4. 本地缓存 / 版本 / 失效(仅 Tier 2)</h2>
+<ul>
+<li>仅&quot;下载过 zip 的 skill&quot;落盘:<code>~/.raven/skills/hub/&lt;slug&gt;@&lt;version&gt;/</code>(<code>SKILL.md</code> + <code>scripts/</code> + <code>meta.json</code>)。</li>
+<li>索引 <code>index.json</code>:<code>slug → {version, id, installed_at, dir, last_evolved_at}</code>。</li>
+<li>失效:候选带 <code>version</code>/<code>last_evolved_at</code>;<code>use_skill</code> 时本地版本 &lt; Hub → 重新下载新版本。</li>
+<li>离线:已装(带脚本)skill 不依赖网络;纯指令 skill 每次走 <code>read_skill</code>(可加正文短缓存)。</li>
+<li>可选 CLI:<code>raven skill hub list/prune</code>。</li>
+</ul>
+<h2>5. 安全</h2>
+<ul>
+<li><strong>zip 解压防护</strong>:拒 <code>../</code>/绝对路径/symlink 逃逸;单文件与总大小上限;后缀白名单。</li>
+<li><strong>脚本执行</strong>:强制 <code>tools.sandbox</code>(<code>exec</code> 限时、可选限网)。</li>
+<li><strong>下载完整性</strong>:用 <code>/download</code> 字节流(<code>zip_url</code> 预签名会过期,不缓存签名 URL);有校验和则校验。</li>
+<li><strong>安全分门槛</strong>:<code>score_safety</code>/<code>subscores.safety</code> 低于阈值的不进目录、<code>use_skill</code> 亦拒。</li>
+<li><strong>来源标记</strong>:下载带 <code>source=raven</code>(统计/审计)。</li>
+</ul>
+<h2>6. 配置</h2>
+<p><code>SkillRouterConfig</code> 新增 <code>hub</code>(与 <code>mass</code> 平级):</p>
+<pre><code class="language-jsonc">&quot;skillRouter&quot;: {
+  &quot;weights&quot;: { &quot;local&quot;: 1.0, &quot;everos&quot;: 0.9, &quot;hub&quot;: 0.85 },
+  &quot;hub&quot;: {
+    &quot;endpoint&quot;: &quot;https://mss.evermind.ai&quot;,  // 不配则禁用 Hub 源,优雅降级
+    &quot;apiKey&quot;: &quot;&quot;,                            // 可选 Bearer
+    &quot;timeoutS&quot;: 2.0,                         // 热路径,紧
+    &quot;minSafety&quot;: 0.7,                        // 安全分门槛
+    &quot;prefetchBodies&quot;: 1,                     // 预取 top-K 正文随目录注入(0=关)
+    &quot;source&quot;: &quot;raven&quot;                        // 下载统计标识
+  }
+}
+</code></pre>
+<h2>7. 与现有 Raven 的映射</h2>
+<table>
+<thead>
+<tr>
+<th>需求</th>
+<th>复用 / 新增</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>远程检索源</td>
+<td><strong>新增 <code>SkillHubSource</code></strong>(仿 <code>MassSkillSource</code>)</td>
+</tr>
+<tr>
+<td>多源融合</td>
+<td>现有 <code>SkillRouter</code> RRF(+<code>weights.hub</code>)</td>
+</tr>
+<tr>
+<td>目录注入(Tier0)</td>
+<td>现有 <code># Skills</code> 段</td>
+</tr>
+<tr>
+<td>读正文(Tier1)</td>
+<td><strong>新增 <code>read_skill</code> 工具 + <code>SkillHubClient.get</code></strong> / 现有 <code># Active Skills</code> 回填</td>
+</tr>
+<tr>
+<td>取脚本落盘(Tier2)</td>
+<td><strong>新增 <code>use_skill</code> 工具 + <code>SkillHubClient.install</code></strong></td>
+</tr>
+<tr>
+<td>本地 skill 管理</td>
+<td>现有 <code>LocalPool</code> / <code>SkillRegistry</code></td>
+</tr>
+<tr>
+<td>执行脚本</td>
+<td>现有 <code>exec</code> + <code>tools.sandbox</code></td>
+</tr>
+<tr>
+<td>配置</td>
+<td><code>SkillRouterConfig.hub</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Skill Hub 是第一方远程库,定位等同现有 &quot;Mass&quot; 源 → 走 host SkillSource。</p>
+</blockquote>
+<h2>8. 分阶段实现</h2>
+<p><strong>P1 — 发现</strong>:<code>SkillHubSource</code>(GET 搜索 + 信封解析 + RouterHit + 安全分过滤)· <code>SkillRouterConfig.hub</code> + 工厂条件注册 · 目录渲染 · mock 单测。→ hub skill 进 <code># Skills</code>。</p>
+<p><strong>P2 — 读正文 + 细选</strong>:<code>SkillHubClient.get</code>(<code>GET /skills/{id}</code> → skill_md)· <code>read_skill</code> 工具 ·(可选)host 预取 top-K 正文注入 · 提示词引导 · mock 单测。→ LLM 能读正文细选并执行纯指令 skill。</p>
+<p><strong>P3 — 取脚本 + 执行</strong>:<code>SkillHubClient.download/install</code>(解压、校验、缓存)· <code>use_skill</code> 工具 · sandbox 接线 · mock 单测(正常/路径穿越/超大/缺 SKILL.md)。→ 带脚本 skill 可落盘执行。</p>
+<p><strong>P4 — 打磨(可选)</strong>:版本失效/LRU/<code>raven skill hub</code> CLI · <code>memory_fields</code> 联动 everos 预取(若 Hub 提供)· <code>real_*</code> 集成跑全链路。</p>
+<h2>9. 测试</h2>
+<ul>
+<li><strong>单元</strong>(默认 CI,无网络):<code>test_skill_hub_source.py</code>(MockTransport:RouterHit 映射/信封降级/安全分)、<code>test_skill_hub_client.py</code>(mock get→skill_md;mock zip:正常/路径穿越/超大/缺正文)、<code>test_*_tools.py</code>(read_skill/use_skill 契约)。</li>
+<li><strong>集成</strong>(<code>real_*</code>,opt-in):<code>test_skill_hub_e2e.py</code> —— 发现 → read_skill 选定 →(带脚本则 use_skill)→ exec 执行。</li>
+</ul>
+<h2>10. 开放问题</h2>
+<ol>
+<li><strong>何时需 <code>use_skill</code></strong>:靠 LLM 读正文判断&quot;是否引用本地脚本&quot;,还是 Hub 在 <code>/skills/{id}</code> 加 <code>has_bundle</code>/<code>assets</code> 标志更可靠?(建议后者)。</li>
+<li><strong>正文短缓存</strong>:<code>read_skill</code> 的 <code>skill_md</code> 是否进程内短缓存(同 turn 多次比较免重复 GET)。</li>
+<li><strong>同名 dedup</strong>:hub 与 local/everos 同名时 <code>SkillRouter.dedup_by</code> 与优先级。</li>
+<li><strong>鉴权/配额</strong>:游客 200 上限、限流、token 续期。</li>
+</ol>
+<hr />
+<h2>一句话</h2>
+<blockquote>
+<p>给 <code>SkillRouter</code> 加 <strong><code>SkillHubSource</code>(目录</strong>粗筛**)**;读正文用 <strong><code>read_skill</code></strong>(<code>GET /skills/{id}</code> 直接拿 <code>skill_md</code>,<strong>不下载</strong>)做细选/确认/执行纯指令 skill;只有 skill <strong>带可执行脚本</strong>时才用 <strong><code>use_skill</code></strong>(<code>/download</code> 取 zip、解压落盘、注册 LocalPool)。三级:<strong>目录粗筛 → 正文细选 → 脚本执行</strong>。<strong>下载是例外,不是常态</strong>——因为 <code>GET /skills/{id}</code> 已直接给正文。其余全复用 Raven 现有 skill 栈。</p>
+</blockquote>
+</div></body></html>
