@@ -1,0 +1,176 @@
+[project]
+name = "raven"
+version = "0.1.0"
+description = "Raven — Agent framework with intelligent context management, proactivity, token efficiency, and skill self-evolution"
+requires-python = ">=3.12"
+license =  "MIT"
+license-files = ["LICENSE", "LICENSES/*.txt", "NOTICES.md"]
+authors = [
+    {name = "EverMind"}
+]
+keywords = ["ai", "agent", "context-management", "skill-evolution"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "typer>=0.20.0,<1.0.0",
+    "litellm>=1.82.1,<2.0.0",
+    "pydantic>=2.12.0,<3.0.0",
+    "pydantic-settings>=2.12.0,<3.0.0",
+    "httpx>=0.28.0,<1.0.0",
+    "loguru>=0.7.3,<1.0.0",
+    "rich>=14.0.0,<15.0.0",
+    "croniter>=6.0.0,<7.0.0",
+    "pyyaml>=6.0",
+    "prompt-toolkit>=3.0.0",
+    "json-repair>=0.30.0",
+    # everos token-aware truncation (text.py). Currently also a
+    # transitive dep of litellm — pinning it directly so the everos
+    # extractor keeps working if upstream ever drops it.
+    "tiktoken>=0.7.0,<1.0.0",
+    "questionary>=2.0.0,<3.0.0",
+    "watchfiles>=0.21,<2.0",
+    "everos[multimodal]==1.0.0",
+    "tomli-w>=1.2.0",
+]
+
+[project.optional-dependencies]
+channel-telegram = [
+    "python-telegram-bot[socks]>=22.6,<23.0",
+    "socksio>=1.0.0,<2.0.0",
+    "python-socks[asyncio]>=2.8.0,<3.0.0; sys_platform != 'win32'",
+]
+channel-slack = [
+    "slack-sdk>=3.39.0,<4.0.0",
+    "slackify-markdown>=0.2.0,<1.0.0",
+]
+channel-discord = ["websockets>=16.0,<17.0"]
+channel-whatsapp = []
+channel-matrix = [
+    "matrix-nio>=0.25.2; sys_platform != 'win32'",
+    "mistune>=3.0.0,<4.0.0",
+    "nh3>=0.2.17,<1.0.0",
+]
+channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
+channel-wecom = ["wecom-aibot-sdk-python>=0.1.5"]
+channel-mochat = [
+    "python-socketio>=5.16.0,<6.0.0",
+    "msgpack>=1.1.0,<2.0.0",
+    "websocket-client>=1.9.0,<2.0.0",
+]
+channel-qq = ["qq-botpy>=1.2.0,<2.0.0"]
+channel-dingtalk = ["dingtalk-stream>=0.24.0,<1.0.0"]
+channel-email = []
+channel-weixin = [
+    "qrcode[pil]>=8.0",
+    "pycryptodome>=3.20.0",
+]
+channels = [
+    "raven[channel-telegram]",
+    "raven[channel-slack]",
+    "raven[channel-discord]",
+    "raven[channel-whatsapp]",
+    "raven[channel-matrix]",
+    "raven[channel-feishu]",
+    "raven[channel-wecom]",
+    "raven[channel-mochat]",
+    "raven[channel-qq]",
+    "raven[channel-dingtalk]",
+    "raven[channel-email]",
+    "raven[channel-weixin]",
+]
+tools = [
+    "readability-lxml>=0.8.4,<1.0.0",
+    "oauth-cli-kit>=0.1.3,<1.0.0",
+]
+retrieval = [
+    "torch>=2.0.0",
+    "transformers>=4.45.0",
+]
+sandbox = [
+    "boxlite==0.8.2",
+    "anyio>=4.0",
+]
+dev = [
+    "pytest>=8.0,<10.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.6.0",
+]
+eval = [
+    # benchmarks/proactivity_eval PROBE adapter (deprioritized stretch test) needs
+    # this to pull the PROBE dataset. Keep out of main deps so production installs
+    # stay lean.
+    "huggingface-hub>=1.11.0",
+]
+
+[project.scripts]
+raven = "raven.cli.commands:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["raven"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"bridge" = "raven/bridge"
+
+[tool.hatch.build]
+include = [
+    "raven/**/*.py",
+    "raven/plugin/**/raven-plugin.toml",
+    "raven/templates/**/*.md",
+    "raven/skills/**/*.md",
+    "raven/skills/**/*.sh",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "raven/",
+    "bridge/",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.uv]
+constraint-dependencies = [
+    "aiohttp>=3.13.4",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "real_llm: hits a real everos runtime (LLM + embedding); skipped unless EVEROS_LLM__API_KEY / EVEROS_EMBEDDING__MODEL are configured",
+    "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
+]
+
+[dependency-groups]
+dev = [
+    "json-repair>=0.59.5",
+    "mcp>=1.0",
+    "oauth-cli-kit>=0.1.3",
+    "pexpect>=4.9",
+    "pip-audit>=2.10.0",
+    "pyte>=0.8",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
+]

@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="940" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#444"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="940" fill="#f8fafc"/>
+  <text x="30" y="38" font-size="22" font-weight="700" fill="#0f172a">Raven Plugin Tool Registry — understand_media</text>
+  <text x="30" y="60" font-size="13" fill="#64748b">Data (TOML manifest) → Activation (import factory refs) → Build (factory→Tool) → Register (ToolRegistry) → Call (LLM)</text>
+
+  <!-- ============ PHASE 1: DISCOVER / DATA ============ -->
+  <rect x="30" y="86" width="350" height="250" rx="10" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="48" y="110" font-weight="700" fill="#1d4ed8">① Manifest (pure data, no code import)</text>
+
+  <rect x="48" y="124" width="314" height="196" rx="8" fill="#ffffff" stroke="#93c5fd"/>
+  <text x="62" y="146" font-weight="700" fill="#0f172a" font-size="12">raven-plugin.toml</text>
+  <text x="62" y="168" font-family="monospace" font-size="11" fill="#334155">[plugin]</text>
+  <text x="62" y="184" font-family="monospace" font-size="11" fill="#334155">  id = "everos-memory"</text>
+  <text x="62" y="200" font-family="monospace" font-size="11" fill="#334155">  enabled_by_default = true</text>
+  <text x="62" y="222" font-family="monospace" font-size="11" fill="#334155">[[plugin.contributes.tools]]</text>
+  <text x="62" y="238" font-family="monospace" font-size="11" fill="#059669">  name = "understand_media"</text>
+  <text x="62" y="256" font-family="monospace" font-size="11" fill="#334155">  factory =</text>
+  <text x="74" y="272" font-family="monospace" font-size="10.5" fill="#7c3aed">  "raven_everos.tools:</text>
+  <text x="74" y="286" font-family="monospace" font-size="10.5" fill="#7c3aed">   make_understand_media_tool"</text>
+  <text x="62" y="308" font-family="monospace" font-size="10" fill="#94a3b8">[[plugin.contributes.memory_backends]]</text>
+
+  <!-- ============ PHASE 2: MANIFEST PARSE ============ -->
+  <rect x="415" y="86" width="350" height="250" rx="10" fill="#f5f3ff" stroke="#ddd6fe"/>
+  <text x="433" y="110" font-weight="700" fill="#6d28d9">② manifest.py — Pydantic schema</text>
+
+  <rect x="433" y="124" width="314" height="90" rx="8" fill="#ffffff" stroke="#c4b5fd"/>
+  <text x="447" y="145" font-weight="700" font-size="12" fill="#0f172a">ToolContribution</text>
+  <text x="447" y="164" font-family="monospace" font-size="11" fill="#334155">name: str  (min_length=1)</text>
+  <text x="447" y="181" font-family="monospace" font-size="11" fill="#334155">factory: str</text>
+  <text x="447" y="200" font-size="11" fill="#dc2626">regex: ^module.path:callable$</text>
+
+  <rect x="433" y="224" width="314" height="96" rx="8" fill="#ffffff" stroke="#c4b5fd"/>
+  <text x="447" y="245" font-weight="700" font-size="12" fill="#0f172a">PluginManifest validators</text>
+  <text x="447" y="264" font-size="11" fill="#334155">• id / version required</text>
+  <text x="447" y="282" font-size="11" fill="#334155">• name unique within manifest</text>
+  <text x="447" y="300" font-size="11" fill="#334155">• extra="ignore" → forward-compatible</text>
+  <text x="447" y="316" font-size="10.5" fill="#94a3b8">typo fails at startup, not first call</text>
+
+  <!-- ============ PHASE 3: REGISTRY ACTIVATE ============ -->
+  <rect x="800" y="86" width="350" height="250" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text x="818" y="110" font-weight="700" fill="#047857">③ PluginRegistry.activate()</text>
+
+  <rect x="818" y="124" width="314" height="100" rx="8" fill="#ffffff" stroke="#6ee7b7"/>
+  <text x="832" y="145" font-weight="700" font-size="12" fill="#0f172a">admit plugin?</text>
+  <text x="832" y="164" font-size="11" fill="#334155">id not in plugins.disabled  AND</text>
+  <text x="832" y="182" font-size="11" fill="#334155">enabled_by_default == true</text>
+  <text x="832" y="206" font-size="11" fill="#dc2626">dup name across manifests →</text>
+  <text x="832" y="220" font-size="11" fill="#dc2626">PluginConflict (startup fail)</text>
+
+  <rect x="818" y="232" width="314" height="88" rx="8" fill="#ffffff" stroke="#6ee7b7"/>
+  <text x="832" y="253" font-weight="700" font-size="12" fill="#0f172a">_resolve_factory(ref)</text>
+  <text x="832" y="272" font-family="monospace" font-size="10.5" fill="#334155">importlib.import_module(mod)</text>
+  <text x="832" y="289" font-family="monospace" font-size="10.5" fill="#334155">getattr(mod, callable)</text>
+  <text x="832" y="308" font-size="11" fill="#7c3aed">_tools["understand_media"] = factory</text>
+
+  <!-- arrows phase row -->
+  <line x1="380" y1="210" x2="413" y2="210" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <line x1="765" y1="210" x2="798" y2="210" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- ============ PHASE 4: CLI BUILD ============ -->
+  <rect x="30" y="370" width="540" height="250" rx="10" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="48" y="394" font-weight="700" fill="#c2410c">④ CLI boot — agent_commands.py / _plugin_stack.py</text>
+
+  <rect x="48" y="408" width="504" height="58" rx="8" fill="#ffffff" stroke="#fdba74"/>
+  <text x="62" y="429" font-family="monospace" font-size="11" fill="#334155">registry = build_plugin_registry(config)   # discover+activate once</text>
+  <text x="62" y="450" font-family="monospace" font-size="11" fill="#334155">backend = maybe_build_memory_backend(.., registry)</text>
+
+  <rect x="48" y="476" width="504" height="134" rx="8" fill="#ffffff" stroke="#fdba74"/>
+  <text x="62" y="497" font-weight="700" font-size="12" fill="#0f172a">build_plugin_tools(workspace, config, registry)</text>
+  <text x="62" y="518" font-family="monospace" font-size="11" fill="#334155">for name in registry.tool_names():</text>
+  <text x="62" y="535" font-family="monospace" font-size="11" fill="#334155">  ctx = PluginContext(config_slice, ServiceLocator)</text>
+  <text x="62" y="552" font-family="monospace" font-size="11" fill="#334155">  tool = registry.build_tool(name, ..)  # factory(ctx)</text>
+  <text x="62" y="574" font-size="11" fill="#059669">lenient: factory raises → log + skip</text>
+  <text x="62" y="592" font-size="11" fill="#059669">factory returns None → clean opt-out (extra absent)</text>
+
+  <!-- ============ PHASE 5: FACTORY GATE ============ -->
+  <rect x="610" y="370" width="540" height="250" rx="10" fill="#fdf2f8" stroke="#fbcfe8"/>
+  <text x="628" y="394" font-weight="700" fill="#be185d">⑤ Factory gate — raven_everos/tools.py</text>
+
+  <rect x="628" y="408" width="504" height="100" rx="8" fill="#ffffff" stroke="#f9a8d4"/>
+  <text x="642" y="429" font-weight="700" font-size="12" fill="#0f172a">make_understand_media_tool(ctx) -> Tool | None</text>
+  <text x="642" y="450" font-family="monospace" font-size="11" fill="#334155">if not _multimodal_available():</text>
+  <text x="662" y="467" font-family="monospace" font-size="11" fill="#dc2626">return None   # LLM never sees a dead tool</text>
+  <text x="642" y="488" font-family="monospace" font-size="11" fill="#334155">return UnderstandMediaTool()</text>
+  <text x="642" y="504" font-size="10.5" fill="#94a3b8">probe: everos...require_multimodal()</text>
+
+  <rect x="628" y="518" width="504" height="92" rx="8" fill="#ffffff" stroke="#f9a8d4"/>
+  <text x="642" y="539" font-weight="700" font-size="12" fill="#0f172a">UnderstandMediaTool(Tool)</text>
+  <text x="642" y="558" font-size="11" fill="#334155">name = "understand_media"</text>
+  <text x="642" y="576" font-size="11" fill="#334155">parameters = { paths: [string] }   (JSON Schema)</text>
+  <text x="642" y="594" font-size="11" fill="#334155">async execute(paths) → understand_files(paths)</text>
+
+  <!-- arrow phase3 -> phase4 -->
+  <path d="M975 336 L975 354 L300 354 L300 368" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="640" y="349" font-size="11" fill="#059669">activated registry reused at boot</text>
+  <!-- arrow phase4 -> phase5 -->
+  <line x1="572" y1="495" x2="606" y2="458" stroke="#444" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ============ PHASE 6: AGENT LOOP ============ -->
+  <rect x="30" y="654" width="540" height="246" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="48" y="678" font-weight="700" fill="#4338ca">⑥ AgentLoop._register_default_tools()</text>
+
+  <rect x="48" y="692" width="504" height="74" rx="8" fill="#ffffff" stroke="#a5b4fc"/>
+  <text x="62" y="713" font-size="11" fill="#334155">register built-ins (Cron, …)</text>
+  <text x="62" y="732" font-family="monospace" font-size="11" fill="#334155">for tool in self.plugin_tools:</text>
+  <text x="62" y="749" font-family="monospace" font-size="11" fill="#334155">    self.tools.register(tool)   # registered LAST</text>
+
+  <rect x="48" y="776" width="504" height="112" rx="8" fill="#ffffff" stroke="#a5b4fc"/>
+  <text x="62" y="797" font-weight="700" font-size="12" fill="#0f172a">ToolRegistry</text>
+  <text x="62" y="816" font-size="11" fill="#334155">• plugin tool may override built-in by name</text>
+  <text x="62" y="834" font-size="11" fill="#334155">• _apply_disabled_tools() can still strip it</text>
+  <text x="62" y="855" font-size="11" fill="#334155">• exposed to the LLM as a callable function</text>
+  <text x="62" y="876" font-size="10.5" fill="#94a3b8">media attachments surfaced via render.build_user_content</text>
+
+  <!-- ============ PHASE 7: RUNTIME CALL ============ -->
+  <rect x="610" y="654" width="540" height="246" rx="10" fill="#f0fdfa" stroke="#99f6e4"/>
+  <text x="628" y="678" font-weight="700" fill="#0f766e">⑦ Runtime — LLM tool call</text>
+
+  <rect x="628" y="692" width="504" height="50" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="642" y="713" font-size="11" fill="#334155">LLM sees [Attachment: x.pdf (path: …)] note</text>
+  <text x="642" y="731" font-family="monospace" font-size="11" fill="#7c3aed">→ understand_media(paths=["x.pdf","https://…"])</text>
+
+  <rect x="628" y="752" width="504" height="64" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="642" y="773" font-weight="700" font-size="12" fill="#0f172a">multimodal.understand_files()</text>
+  <text x="642" y="792" font-size="11" fill="#334155">local file → base64 ContentItem (bypass URI allowlist)</text>
+  <text x="642" y="810" font-size="11" fill="#334155">http(s) URL → uri item (everalgo fetch + dispatch)</text>
+
+  <rect x="628" y="826" width="504" height="62" rx="8" fill="#ffffff" stroke="#5eead4"/>
+  <text x="642" y="847" font-weight="700" font-size="12" fill="#0f172a">everos.memory.extract.parser (deferred import)</text>
+  <text x="642" y="866" font-size="11" fill="#334155">enrich_content_items() per-item → text / error</text>
+  <text x="642" y="882" font-size="10.5" fill="#94a3b8">same parser EverOS uses during memory ingest</text>
+
+  <!-- arrow phase5 -> phase6 -->
+  <path d="M880 612 L880 632 L300 632 L300 652" fill="none" stroke="#444" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="500" y="627" font-size="11" fill="#475569">built Tool list → AgentLoop(plugin_tools=…)</text>
+  <!-- arrow phase6 -> phase7 -->
+  <line x1="572" y1="775" x2="606" y2="775" stroke="#0f766e" stroke-width="2" marker-end="url(#arrowGreen)"/>
+</svg>
