@@ -15,15 +15,8 @@ import { asRpcResult } from '../lib/rpc.js'
 
 const TAB_PATH_RE = /((?:["']?(?:[A-Za-z]:[\\/]|\.{1,2}\/|~\/|\/|@|[^"'`\s]+\/))[^\s]*)$/
 
-// `/model` delegates to the two-step ModelPicker — exclude from slash palette.
-const MODEL_RE = /^\/model(?:\s|$)/
-
 export function slashCompletions(input: string, commands: SlashCommand[]): CompletionItem[] {
   if (!looksLikeSlashCommand(input)) {
-    return []
-  }
-
-  if (MODEL_RE.test(input)) {
     return []
   }
 

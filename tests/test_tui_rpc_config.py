@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from raven.tui_rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
+from raven.tui_rpc.errors import (
+    ConfigFieldReadonlyError,
+    ConfigValidationError,
+    ModelNotAvailableError,
+    ModelSwitchInTurnError,
+)
 from raven.tui_rpc.methods.config import (
     CONFIG_WRITABLE_KEYS,
     config_get,
@@ -126,6 +132,121 @@ async def test_config_set_missing_key_param_raises_validation(fake_home: Path) -
         await config_set({"value": "x"})
     with pytest.raises(ConfigValidationError):
         await config_set({"key": "tui.theme"})
+
+
+# ----------------------------------------------------------------------------
+# config.set key="model" — the live-loop switch branch
+# ----------------------------------------------------------------------------
+
+
+async def test_config_set_model_reassigns_loop_and_persists(
+    fake_home: Path, monkeypatch
+) -> None:
+    import raven.tui_rpc.methods.config as config_mod
+
+    loop = SimpleNamespace(provider="old-prov", model="old-model")
+    new_provider = SimpleNamespace(name="new-prov")
+
+    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(
+            agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))
+        ),
+    )
+
+    result = await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "session_id": "tui:default",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["applied"] is True
+    assert result["value"] == "anthropic/claude-opus-4-8"
+    assert loop.model == "anthropic/claude-opus-4-8"
+    assert loop.provider is new_provider
+
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+    assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
+    # A bare `/model <name>` carries no provider; _set_model must derive it from
+    # the model so a previously-forced provider does not silently mis-route.
+    result = await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+    assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_config_set_model_rejected_during_active_turn(
+    fake_home: Path, monkeypatch
+) -> None:
+    import raven.tui_rpc.methods.config as config_mod
+
+    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: True)
+
+    with pytest.raises(ModelSwitchInTurnError):
+        await config_set(
+            {
+                "key": "model",
+                "value": "anthropic/claude-opus-4-8",
+                "session_id": "tui:default",
+            },
+            agent_loop_factory=lambda: SimpleNamespace(provider=None, model="x"),
+        )
+
+
+async def test_config_set_model_unconstructable_preserves_previous(
+    fake_home: Path, monkeypatch
+) -> None:
+    import raven.tui_rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    def _boom(_cfg):
+        raise RuntimeError("no api key")
+
+    monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
+    monkeypatch.setattr(config_mod, "make_provider", _boom)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(
+            agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))
+        ),
+    )
+
+    loop = SimpleNamespace(provider="keep-prov", model="anthropic/claude-sonnet-4-5")
+    with pytest.raises(ModelNotAvailableError):
+        await config_set(
+            {
+                "key": "model",
+                "value": "broken/model",
+                "session_id": "tui:default",
+            },
+            agent_loop_factory=lambda: loop,
+        )
+
+    # Loop untouched and on-disk model preserved.
+    assert loop.model == "anthropic/claude-sonnet-4-5"
+    assert loop.provider == "keep-prov"
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
 
 
 # ----------------------------------------------------------------------------
