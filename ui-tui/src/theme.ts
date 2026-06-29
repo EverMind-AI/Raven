@@ -415,10 +415,13 @@ const TRUE_RE = /^(?:1|true|yes|on)$/
 const FALSE_RE = /^(?:0|false|no|off)$/
 
 // TERM_PROGRAM fallback allow-list for terminals whose default profile is
-// light and which may not expose COLORFGBG. This currently includes Apple
-// Terminal. Explicit RAVEN_TUI_THEME / COLORFGBG signals above still win,
-// so dark Apple Terminal profiles that advertise a dark background stay dark.
-const LIGHT_DEFAULT_TERM_PROGRAMS = new Set<string>(['Apple_Terminal'])
+// light and which may not expose COLORFGBG. Empty by default: a TERM_PROGRAM
+// alone can't tell a light profile from a dark one (Terminal.app ships both
+// and emits no COLORFGBG either way), and dark profiles are common, so an
+// undetectable terminal stays dark unless an explicit signal (RAVEN_TUI_THEME
+// / RAVEN_TUI_LIGHT / RAVEN_TUI_BACKGROUND / COLORFGBG) says light. Still
+// injectable so tests can exercise the precedence rules.
+const LIGHT_DEFAULT_TERM_PROGRAMS = new Set<string>([])
 
 // Best-effort RGB → luminance check.  Currently only accepts a 3- or
 // 6-digit hex value (with or without a leading `#`); the env var name
@@ -470,7 +473,8 @@ function backgroundLuminance(raw: string): null | number {
 //      slot 7 or 15 on light profiles; 0–15 ranges are otherwise
 //      treated as authoritatively dark so the TERM_PROGRAM
 //      allow-list below cannot override an explicit dark profile.
-//   5. `TERM_PROGRAM` light-default allow-list.
+//   5. `TERM_PROGRAM` light-default allow-list (empty by default; see
+//      LIGHT_DEFAULT_TERM_PROGRAMS).
 //
 // Anything we can't decide stays dark — the default Raven palette
 // is the dark one.
@@ -541,10 +545,82 @@ const DEFAULT_SCHEME: ColorScheme = DEFAULT_LIGHT_MODE ? 'light' : 'dark'
 
 export const DEFAULT_THEME: Theme = resolveTheme(DEFAULT_SCHEME, activeColorTier())
 
+// Scheme detected at runtime by the OSC 11 background-color probe (see
+// applyDetectedBackground). Null until — or unless — the terminal answers the
+// query. When set it wins over the env-sniffed DEFAULT_SCHEME for every theme
+// built afterwards, so a late reply re-themes the whole app.
+let detectedScheme: ColorScheme | null = null
+
+/** Effective light/dark scheme: the OSC 11 probe result if we have one, else
+ *  the env-sniffed default. Theme builders read this (not DEFAULT_SCHEME) so a
+ *  late probe reply takes effect when the theme is rebuilt. */
+export function currentScheme(): ColorScheme {
+  return detectedScheme ?? DEFAULT_SCHEME
+}
+
+/** Curated per-scheme palette for the current scheme + color tier, with no
+ *  skin applied. Used to rebuild the theme when the probe flips the scheme
+ *  before any gateway skin has arrived. */
+export function resolveCurrentDefaultTheme(): Theme {
+  return resolveTheme(currentScheme(), activeColorTier())
+}
+
+// Parse an OSC 11 background reply payload into a #rrggbb hex string.
+// xterm-class terminals answer `rgb:RRRR/GGGG/BBBB` (1-4 hex digits per
+// channel, scaled to that channel's max); a few reply `#RRGGBB`. Anything
+// else returns null so the caller keeps the env-based scheme.
+function oscColorToHex(data: string): null | string {
+  const s = data.trim().toLowerCase()
+  const m = /^rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/.exec(s)
+
+  if (m) {
+    const scale = (h: string) => Math.round((parseInt(h, 16) / (16 ** h.length - 1)) * 255)
+
+    return '#' + [m[1]!, m[2]!, m[3]!].map(h => scale(h).toString(16).padStart(2, '0')).join('')
+  }
+
+  const hex = s.startsWith('#') ? s.slice(1) : s
+
+  if (HEX_6_RE.test(hex)) {
+    return '#' + hex
+  }
+
+  if (HEX_3_RE.test(hex)) {
+    return '#' + [...hex].map(c => c + c).join('')
+  }
+
+  return null
+}
+
+/**
+ * Fold an OSC 11 background-color reply into light/dark detection.
+ *
+ * Caches the parsed color into RAVEN_TUI_BACKGROUND and re-runs
+ * detectLightMode() so the existing precedence rules apply unchanged — an
+ * explicit RAVEN_TUI_THEME / RAVEN_TUI_LIGHT still wins over the measured
+ * background. Returns the resolved scheme and whether it differs from the
+ * scheme that was in effect (so the caller knows whether to re-theme), or
+ * null when the reply isn't a color we can parse.
+ */
+export function applyDetectedBackground(oscData: string): { changed: boolean; scheme: ColorScheme } | null {
+  const hex = oscColorToHex(oscData)
+
+  if (!hex) {
+    return null
+  }
+
+  process.env.RAVEN_TUI_BACKGROUND = hex
+  const scheme: ColorScheme = detectLightMode() ? 'light' : 'dark'
+  const changed = scheme !== currentScheme()
+  detectedScheme = scheme
+
+  return { changed, scheme }
+}
+
 // ── Skin → Theme ─────────────────────────────────────────────────────
 
 function skinColors(colors: Record<string, string>): ThemeColors {
-  const base = (DEFAULT_SCHEME === 'light' ? LIGHT_THEME : DARK_THEME).color
+  const base = (currentScheme() === 'light' ? LIGHT_THEME : DARK_THEME).color
   const c = (k: string) => colors[k]
   const hasSkinColors = Object.keys(colors).length > 0
 
@@ -631,7 +707,7 @@ export function fromSkin(
   // (per product decision) — only branding + banner art carry over. The hex
   // path covers tier 3 and, harmlessly, tier 0 (codes are stripped anyway).
   const tier = activeColorTier()
-  const color = tier === 1 || tier === 2 ? resolveTheme(DEFAULT_SCHEME, tier).color : skinColors(colors)
+  const color = tier === 1 || tier === 2 ? resolveTheme(currentScheme(), tier).color : skinColors(colors)
 
   return { color, brand, bannerLogo, bannerHero, yellow: yellowRamp(tier) }
 }

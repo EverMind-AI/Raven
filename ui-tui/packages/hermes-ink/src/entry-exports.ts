@@ -27,4 +27,5 @@ export { scrollFastPathStats, type ScrollFastPathStats } from './ink/render-node
 export { createRoot, forceRedraw, default as render, renderSync } from './ink/root.js'
 export { stringWidth } from './ink/stringWidth.js'
 export { isXtermJs } from './ink/terminal.js'
+export { oscColor } from './ink/terminal-querier.js'
 export { default as TextInput, UncontrolledTextInput } from 'ink-text-input'

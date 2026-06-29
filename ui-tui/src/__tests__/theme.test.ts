@@ -95,10 +95,12 @@ describe('detectLightMode', () => {
     expect(detectLightMode({})).toBe(false)
   })
 
-  it('defaults Apple Terminal to light when no stronger signal is present', async () => {
+  it('stays dark on Apple Terminal when no stronger signal is present', async () => {
     const { detectLightMode } = await importThemeWithCleanEnv()
 
-    expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(true)
+    // TERM_PROGRAM alone is no longer a light signal: Terminal.app ships both
+    // light and dark profiles and emits no COLORFGBG, so it defaults to dark.
+    expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(false)
   })
 
   it('honors RAVEN_TUI_LIGHT on/off', async () => {
@@ -185,6 +187,50 @@ describe('detectLightMode', () => {
 
     // Dark COLORFGBG must beat the allow-list.
     expect(detectLightMode({ COLORFGBG: '15;0', TERM_PROGRAM: 'Apple_Terminal' }, allowList)).toBe(false)
+  })
+})
+
+describe('applyDetectedBackground (OSC 11 reply)', () => {
+  it('parses 16-bit rgb: replies and flips the scheme to light on a bright bg', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithCleanEnv()
+
+    expect(currentScheme()).toBe('dark')
+
+    const res = applyDetectedBackground('rgb:ffff/ffff/ffff')
+
+    expect(res).toEqual({ changed: true, scheme: 'light' })
+    expect(currentScheme()).toBe('light')
+  })
+
+  it('parses 8-bit rgb: and #rrggbb dark replies as dark', async () => {
+    const { applyDetectedBackground } = await importThemeWithCleanEnv()
+
+    expect(applyDetectedBackground('rgb:1e/1e/2e')).toEqual({ changed: false, scheme: 'dark' })
+    expect(applyDetectedBackground('#1e1e2e')).toEqual({ changed: false, scheme: 'dark' })
+  })
+
+  it('caches the measured color into RAVEN_TUI_BACKGROUND', async () => {
+    const { applyDetectedBackground } = await importThemeWithCleanEnv()
+
+    applyDetectedBackground('rgb:eaea/eaea/eaea')
+
+    expect(process.env.RAVEN_TUI_BACKGROUND).toBe('#eaeaea')
+  })
+
+  it('lets an explicit RAVEN_TUI_THEME override the measured background', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithEnv({ RAVEN_TUI_THEME: 'dark' })
+
+    // Bright measured bg, but the explicit dark override wins (precedence is
+    // reused from detectLightMode).
+    expect(applyDetectedBackground('rgb:ffff/ffff/ffff')).toEqual({ changed: false, scheme: 'dark' })
+    expect(currentScheme()).toBe('dark')
+  })
+
+  it('returns null and leaves the scheme untouched on an unparseable reply', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithCleanEnv()
+
+    expect(applyDetectedBackground('not-a-color')).toBeNull()
+    expect(currentScheme()).toBe('dark')
   })
 })
 
