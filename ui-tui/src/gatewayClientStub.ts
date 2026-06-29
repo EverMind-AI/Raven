@@ -14,7 +14,7 @@
 
 import { EventEmitter } from 'node:events'
 
-import type { GatewayEvent } from './gatewayTypes.js'
+import type { GatewayEvent, ModelOptionProvider } from './gatewayTypes.js'
 import {
   STUB_COMMANDS_CATALOG,
   STUB_CONFIG_FULL,
@@ -30,6 +30,9 @@ import {
 
 const DELAY_MS = 50
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+const stubProvider = (slug: unknown): ModelOptionProvider | undefined =>
+  STUB_MODEL_OPTIONS.providers?.find(p => p.slug === slug)
 
 export class GatewayClientStub extends EventEmitter {
   private bufferedEvents: GatewayEvent[] = []
@@ -86,6 +89,41 @@ export class GatewayClientStub extends EventEmitter {
 
       case 'model.options':
         return STUB_MODEL_OPTIONS as unknown as T
+
+      case 'model.save_key': {
+        const base = stubProvider(params.slug) ?? { name: String(params.slug ?? ''), slug: String(params.slug ?? '') }
+
+        return { provider: { ...base, authenticated: true } } as unknown as T
+      }
+
+      case 'model.disconnect':
+        return { disconnected: true } as unknown as T
+
+      case 'model.add_model': {
+        const base = stubProvider(params.slug) ?? { name: String(params.slug ?? ''), slug: String(params.slug ?? '') }
+        const model = String(params.model ?? '')
+        const models = base.models?.includes(model) ? base.models : [...(base.models ?? []), model]
+
+        return { provider: { ...base, models, total_models: models.length } } as unknown as T
+      }
+
+      case 'model.remove_model': {
+        const base = stubProvider(params.slug) ?? { name: String(params.slug ?? ''), slug: String(params.slug ?? '') }
+        const model = String(params.model ?? '')
+        const models = (base.models ?? []).filter(m => m !== model)
+
+        return { provider: { ...base, models, total_models: models.length } } as unknown as T
+      }
+
+      case 'config.set':
+        if (params.key === 'model') {
+          const value = String(params.value ?? '')
+
+          return { applied: true, previous: STUB_MODEL_OPTIONS.model ?? null, value } as unknown as T
+        }
+
+        return {} as T
+
       case 'config.get':
         switch (params?.key) {
           case 'full':

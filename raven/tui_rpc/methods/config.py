@@ -29,13 +29,19 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from raven.cli._helpers import load_runtime_config, make_provider
+from raven.providers.registry import find_by_model
 from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
+    ModelNotAvailableError,
+    ModelSwitchInTurnError,
 )
+from raven.tui_rpc.methods.turn import is_turn_active
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods.session import AgentLoopFactory
 
 
 _CONFIG_DIR_NAME = ".raven"
@@ -214,8 +220,15 @@ async def config_get(params: dict) -> dict:
     return {"config": out}
 
 
-async def config_set(params: dict) -> dict:
+async def config_set(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
     """Write a single whitelisted key. Returns ``{applied, previous}``.
+
+    The special key ``"model"`` switches the live agent loop's provider/model
+    (returns ``{applied, previous, value}``); see :func:`_set_model`.
 
     Raises:
         ConfigValidationError (-32011): params shape or value invalid.
@@ -240,6 +253,9 @@ async def config_set(params: dict) -> dict:
         )
     raw_value = params["value"]
 
+    if key == "model":
+        return _set_model(params, raw_value, agent_loop_factory)
+
     if key not in _VALIDATORS:
         raise ConfigFieldReadonlyError(
             f"key '{key}' is not in the v0.1 hot-changeable whitelist",
@@ -256,10 +272,84 @@ async def config_set(params: dict) -> dict:
     return {"applied": True, "previous": previous}
 
 
-def register_config_methods(dispatcher: "Dispatcher") -> None:
+def _set_model(
+    params: dict,
+    raw_value: Any,
+    agent_loop_factory: "AgentLoopFactory | None",
+) -> dict:
+    """Switch the global model (and provider) and reassign the live loop.
+
+    Build the provider from the prospective config BEFORE persisting, so a
+    rebuild failure aborts cleanly with the on-disk model untouched.
+    """
+    if not isinstance(raw_value, str) or not raw_value:
+        raise ConfigValidationError(
+            "config.set model value must be a non-empty string",
+            data={"field": "value", "got": repr(raw_value)},
+        )
+    new_provider = params.get("provider")
+    if new_provider is not None and not isinstance(new_provider, str):
+        raise ConfigValidationError(
+            "config.set model provider must be a string",
+            data={"field": "provider", "got": repr(new_provider)},
+        )
+    # Bare `/model <name>` carries no provider; derive it from the model so a
+    # previously-forced provider does not silently mis-route the new model.
+    # Gateway/local models (no keyword match) leave the forced provider intact.
+    if new_provider is None:
+        spec = find_by_model(raw_value)
+        if spec is not None:
+            new_provider = spec.name
+
+    session_id = params.get("session_id")
+    if isinstance(session_id, str) and session_id and is_turn_active(session_id):
+        raise ModelSwitchInTurnError(
+            f"cannot switch model while session {session_id!r} has an active turn",
+            data={"session_id": session_id},
+        )
+
+    payload = _load_config()
+    previous = _get_nested(payload, "agents.defaults.model")
+
+    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    built_provider = None
+    if loop is not None:
+        runtime = load_runtime_config(None, None)
+        runtime.agents.defaults.model = raw_value
+        if new_provider is not None:
+            runtime.agents.defaults.provider = new_provider
+        try:
+            built_provider = make_provider(runtime)
+        except (SystemExit, RuntimeError, ValueError) as exc:
+            raise ModelNotAvailableError(
+                f"cannot build provider for model {raw_value!r}",
+                data={"model": raw_value, "error": str(exc)},
+            ) from exc
+
+    _set_nested(payload, "agents.defaults.model", raw_value)
+    if new_provider is not None:
+        _set_nested(payload, "agents.defaults.provider", new_provider)
+    _save_config(payload)
+
+    if loop is not None:
+        loop.provider = built_provider
+        loop.model = raw_value
+
+    return {"applied": True, "previous": previous, "value": raw_value}
+
+
+def register_config_methods(
+    dispatcher: "Dispatcher",
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> None:
     """Register ``config.get`` / ``config.set`` on a dispatcher instance."""
+
+    async def _set(params: dict) -> dict:
+        return await config_set(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("config.get", config_get)
-    dispatcher.register("config.set", config_set)
+    dispatcher.register("config.set", _set)
 
 
 __all__ = [

@@ -339,7 +339,7 @@ export interface AppLayoutActions {
   answerSudo: (pw: string) => void
   clearSelection: () => void
   deleteSessionWithFallback: (id: string) => Promise<boolean>
-  onModelSelect: (value: string) => void
+  onModelSelect: (model: string, providerSlug: string) => void
   resumeById: (id: string) => void
   setStickyPrompt: (value: string) => void
 }
@@ -398,7 +398,7 @@ export interface AppOverlaysProps {
   onApprovalChoice: (choice: string) => void
   onClarifyAnswer: (value: string) => void
   onConfirmAnswer: (answer: boolean) => void
-  onModelSelect: (value: string) => void
+  onModelSelect: (model: string, providerSlug: string) => void
   onPickerDeleteActive: (sessionId: string) => Promise<boolean>
   onPickerSelect: (sessionId: string) => void
   onSecretSubmit: (value: string) => void

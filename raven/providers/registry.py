@@ -79,8 +79,14 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=(),
         env_key="",
         display_name="Custom",
-        litellm_prefix="",
-        is_direct=True,
+        # Route through LiteLLM as a generic OpenAI-compatible gateway: the
+        # `openai/` prefix + configured api_base reach any OpenAI-compatible
+        # endpoint, and LiteLLM gives streaming / retry / tool-calling that the
+        # old direct CustomProvider lacked. Matched only via an explicit
+        # `provider: custom` selection (keywords empty).
+        litellm_prefix="openai",
+        is_gateway=True,
+        default_api_base="http://localhost:8000/v1",
     ),
 
     # === Azure OpenAI (direct API calls with API version 2024-10-21) =====

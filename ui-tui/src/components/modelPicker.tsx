@@ -7,7 +7,6 @@ import { Box, Text, useInput, useStdout } from '@hermes/ink'
 import { useEffect, useMemo, useState } from 'react'
 
 import { providerDisplayNames } from '../domain/providers.js'
-import { TUI_SESSION_MODEL_FLAG } from '../domain/slash.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
@@ -19,20 +18,23 @@ const VISIBLE = 12
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
-type Stage = 'provider' | 'key' | 'model' | 'disconnect'
+type Stage = 'provider' | 'key' | 'model' | 'addModel' | 'disconnect'
+type KeyField = 'api_key' | 'api_base'
 
 export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPickerProps) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([])
   const [currentModel, setCurrentModel] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
-  const [persistGlobal, setPersistGlobal] = useState(false)
   const [providerIdx, setProviderIdx] = useState(0)
   const [modelIdx, setModelIdx] = useState(0)
   const [stage, setStage] = useState<Stage>('provider')
   const [keyInput, setKeyInput] = useState('')
+  const [baseInput, setBaseInput] = useState('')
+  const [keyField, setKeyField] = useState<KeyField>('api_key')
   const [keySaving, setKeySaving] = useState(false)
   const [keyError, setKeyError] = useState('')
+  const [modelNameInput, setModelNameInput] = useState('')
 
   const { stdout } = useStdout()
   // Pin the picker to a stable width so the FloatBox parent (which shrinks-
@@ -78,10 +80,20 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const names = useMemo(() => providerDisplayNames(providers), [providers])
 
   const back = () => {
+    if (stage === 'addModel') {
+      setStage('model')
+      setModelNameInput('')
+      setKeyError('')
+
+      return
+    }
+
     if (stage === 'model' || stage === 'key' || stage === 'disconnect') {
       setStage('provider')
       setModelIdx(0)
       setKeyInput('')
+      setBaseInput('')
+      setKeyField('api_key')
       setKeyError('')
       setKeySaving(false)
 
@@ -94,14 +106,43 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   useOverlayKeys({ onBack: back, onClose: onCancel })
 
   useInput((ch, key) => {
-    // Key entry stage handles its own input
+    // Key entry stage handles its own input (api_key + optional api_base)
     if (stage === 'key') {
       if (keySaving) {
         return
       }
 
+      const showBase = provider?.auth_type === 'api_key'
+      const focusBase = showBase && keyField === 'api_base'
+
+      // Tab moves between the two fields when api_base is shown.
+      if (key.tab && showBase) {
+        setKeyField(f => (f === 'api_key' ? 'api_base' : 'api_key'))
+
+        return
+      }
+
       if (key.return) {
-        if (!keyInput.trim()) {
+        // Enter on api_key advances to api_base instead of submitting, so the
+        // user can fill both fields with single-key navigation.
+        if (showBase && keyField === 'api_key') {
+          setKeyField('api_base')
+
+          return
+        }
+
+        const apiKey = keyInput.trim()
+        const apiBase = baseInput.trim()
+
+        if (!apiKey) {
+          setKeyError('API key is required')
+
+          return
+        }
+
+        if (provider?.needs_api_base && !apiBase) {
+          setKeyError('API base URL is required for this provider')
+
           return
         }
 
@@ -109,7 +150,8 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         setKeyError('')
         gw.request<{ provider?: ModelOptionProvider }>('model.save_key', {
           slug: provider?.slug,
-          api_key: keyInput.trim(),
+          api_key: apiKey,
+          ...(apiBase ? { api_base: apiBase } : {}),
           ...(sessionId ? { session_id: sessionId } : {}),
         })
           .then(raw => {
@@ -127,6 +169,8 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
               prev.map(p => p.slug === r.provider!.slug ? r.provider! : p)
             )
             setKeyInput('')
+            setBaseInput('')
+            setKeyField('api_key')
             setKeySaving(false)
             setStage('model')
             setModelIdx(0)
@@ -140,20 +184,90 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       }
 
       if (key.backspace || key.delete) {
-        setKeyInput(v => v.slice(0, -1))
+        if (focusBase) {
+          setBaseInput(v => v.slice(0, -1))
+        } else {
+          setKeyInput(v => v.slice(0, -1))
+        }
 
         return
       }
 
-      // ctrl+u clears input
+      // ctrl+u clears the focused field
       if (ch === '\u0015') {
-        setKeyInput('')
+        if (focusBase) {
+          setBaseInput('')
+        } else {
+          setKeyInput('')
+        }
 
         return
       }
 
       if (ch && !key.ctrl && !key.meta) {
-        setKeyInput(v => v + ch)
+        if (focusBase) {
+          setBaseInput(v => v + ch)
+        } else {
+          setKeyInput(v => v + ch)
+        }
+      }
+
+      return
+    }
+
+    // Add-model-name sub-input
+    if (stage === 'addModel') {
+      if (keySaving) {
+        return
+      }
+
+      if (key.return) {
+        const model = modelNameInput.trim()
+
+        if (!model || !provider) {
+          return
+        }
+
+        setKeySaving(true)
+        setKeyError('')
+        gw.request<{ provider?: ModelOptionProvider }>('model.add_model', {
+          slug: provider.slug,
+          model,
+          ...(sessionId ? { session_id: sessionId } : {}),
+        })
+          .then(raw => {
+            const r = asRpcResult<{ provider?: ModelOptionProvider }>(raw)
+
+            if (!r?.provider) {
+              setKeyError('failed to add model')
+              setKeySaving(false)
+
+              return
+            }
+
+            setProviders(prev => prev.map(p => p.slug === r.provider!.slug ? r.provider! : p))
+            const idx = (r.provider.models ?? []).indexOf(model)
+            setModelNameInput('')
+            setKeySaving(false)
+            setStage('model')
+            setModelIdx(idx >= 0 ? idx : 0)
+          })
+          .catch((e: unknown) => {
+            setKeyError(rpcErrorMessage(e))
+            setKeySaving(false)
+          })
+
+        return
+      }
+
+      if (key.backspace || key.delete) {
+        setModelNameInput(v => v.slice(0, -1))
+
+        return
+      }
+
+      if (ch && !key.ctrl && !key.meta) {
+        setModelNameInput(v => v + ch)
       }
 
       return
@@ -229,14 +343,17 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         }
 
         if (provider.authenticated === false) {
-          // api_key providers: prompt for key inline
-          if (provider.auth_type === 'api_key' && provider.key_env) {
+          // api_key providers prompt for key inline, even when key_env is null
+          // (custom / azure use a generic key + required api_base).
+          if (provider.auth_type === 'api_key') {
             setStage('key')
             setKeyInput('')
+            setBaseInput('')
+            setKeyField('api_key')
             setKeyError('')
           }
 
-          // Other auth types: no-op (warning shown tells them to run raven model)
+          // OAuth / other auth types: no-op (warning tells them to run raven model)
           return
         }
 
@@ -246,10 +363,14 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         return
       }
 
+      if (stage === 'model' && keySaving) {
+        return
+      }
+
       const model = models[modelIdx]
 
       if (provider && model) {
-        onSelect(`${model} --provider ${provider.slug}${persistGlobal ? ' --global' : ` ${TUI_SESSION_MODEL_FLAG}`}`)
+        onSelect(model, provider.slug)
       } else {
         setStage('provider')
       }
@@ -257,8 +378,44 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       return
     }
 
-    if (ch.toLowerCase() === 'g') {
-      setPersistGlobal(v => !v)
+    // Model stage: add a model name to the provider's list.
+    if (ch.toLowerCase() === 'a' && stage === 'model' && provider && !keySaving) {
+      setStage('addModel')
+      setModelNameInput('')
+      setKeyError('')
+
+      return
+    }
+
+    // Model stage: delete the highlighted model name from the provider's list.
+    if ((ch.toLowerCase() === 'd' || ch.toLowerCase() === 'x') && stage === 'model' && !keySaving) {
+      const model = models[modelIdx]
+
+      if (!provider || !model) {
+        return
+      }
+
+      setKeySaving(true)
+      setKeyError('')
+      gw.request<{ provider?: ModelOptionProvider }>('model.remove_model', {
+        slug: provider.slug,
+        model,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      })
+        .then(raw => {
+          const r = asRpcResult<{ provider?: ModelOptionProvider }>(raw)
+
+          if (r?.provider) {
+            setProviders(prev => prev.map(p => p.slug === r.provider!.slug ? r.provider! : p))
+            setModelIdx(idx => Math.max(0, Math.min(idx, (r.provider!.models?.length ?? 1) - 1)))
+          }
+
+          setKeySaving(false)
+        })
+        .catch((e: unknown) => {
+          setKeyError(rpcErrorMessage(e))
+          setKeySaving(false)
+        })
 
       return
     }
@@ -295,7 +452,12 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
   // ── Key entry stage ──────────────────────────────────────────────────
   if (stage === 'key' && provider) {
+    const showBase = provider.auth_type === 'api_key'
+    const focusBase = showBase && keyField === 'api_base'
     const masked = keyInput ? '•'.repeat(Math.min(keyInput.length, 40)) : ''
+    const keyLabel = provider.key_env ?? 'API key'
+    const baseLabel = `API base${provider.needs_api_base ? ' (required)' : ' (optional)'}`
+    const caret = keySaving ? '' : '▎'
 
     return (
       <Box flexDirection="column" width={width}>
@@ -304,17 +466,66 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
-          Paste your API key below (saved to ~/.raven/.env)
+          Saved to ~/.raven/.env{showBase ? ' · Tab switches field' : ''}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end"> </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end">
-          {provider.key_env}:
+        <Text color={focusBase ? t.color.muted : t.color.accent} wrap="truncate-end">
+          {focusBase ? '  ' : '▸ '}{keyLabel}:
         </Text>
 
         <Text color={t.color.accent} wrap="truncate-end">
-          {'  '}{masked || '(empty)'}{keySaving ? '' : '▎'}
+          {'  '}{masked || '(empty)'}{focusBase ? '' : caret}
+        </Text>
+
+        {showBase ? (
+          <>
+            <Text color={focusBase ? t.color.accent : t.color.muted} wrap="truncate-end">
+              {focusBase ? '▸ ' : '  '}{baseLabel}:
+            </Text>
+
+            <Text color={t.color.accent} wrap="truncate-end">
+              {'  '}{baseInput || '(empty)'}{focusBase ? caret : ''}
+            </Text>
+          </>
+        ) : null}
+
+        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+
+        {keyError ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            error: {keyError}
+          </Text>
+        ) : keySaving ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            saving…
+          </Text>
+        ) : (
+          <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        )}
+
+        <OverlayHint t={t}>{showBase ? 'Enter next/save · Tab field · Ctrl+U clear · Esc back' : 'Enter save · Ctrl+U clear · Esc back'}</OverlayHint>
+      </Box>
+    )
+  }
+
+  // ── Add model name stage ─────────────────────────────────────────────
+  if (stage === 'addModel' && provider) {
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text bold color={t.color.accent} wrap="truncate-end">
+          Add model to {provider.name}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          Type the full model id
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+
+        <Text color={t.color.accent} wrap="truncate-end">
+          {'  '}{modelNameInput || '(empty)'}{keySaving ? '' : '▎'}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end"> </Text>
@@ -331,7 +542,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           <Text color={t.color.muted} wrap="truncate-end"> </Text>
         )}
 
-        <OverlayHint t={t}>Enter save · Ctrl+U clear · Esc back</OverlayHint>
+        <OverlayHint t={t}>Enter add · Ctrl+U clear · Esc back</OverlayHint>
       </Box>
     )
   }
@@ -430,9 +641,6 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           {offset + VISIBLE < rows.length ? ` ↓ ${rows.length - offset - VISIBLE} more` : ' '}
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end">
-          persist: {persistGlobal ? 'global' : 'session'} · g toggle
-        </Text>
         <OverlayHint t={t}>↑/↓ select · Enter choose · d disconnect · Esc/q cancel</OverlayHint>
       </Box>
     )
@@ -494,10 +702,12 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">
-        persist: {persistGlobal ? 'global' : 'session'} · g toggle
+        scope: global
       </Text>
       <OverlayHint t={t}>
-        {models.length ? '↑/↓ select · Enter switch · Esc back · q close' : 'Enter/Esc back · q close'}
+        {models.length
+          ? '↑/↓ select · Enter switch · a add · d/x delete · Esc back · q close'
+          : 'a add model · Enter/Esc back · q close'}
       </OverlayHint>
     </Box>
   )
@@ -506,7 +716,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 interface ModelPickerProps {
   gw: GatewayClient
   onCancel: () => void
-  onSelect: (value: string) => void
+  onSelect: (model: string, providerSlug: string) => void
   sessionId: string | null
   t: Theme
 }
