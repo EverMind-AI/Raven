@@ -101,11 +101,9 @@ export interface ConfigGetValueResponse {
 }
 
 export interface ConfigSetResponse {
-  applied?: boolean
   credential_warning?: string
   history_reset?: boolean
   info?: SessionInfo
-  previous?: null | string
   value?: string
   warning?: string
 }
@@ -340,10 +338,9 @@ export interface ModelOptionProvider {
   auth_type?: string
   authenticated?: boolean
   is_current?: boolean
-  key_env?: null | string
+  key_env?: string
   models?: string[]
   name: string
-  needs_api_base?: boolean
   slug: string
   total_models?: number
   warning?: string

@@ -261,6 +261,13 @@ class AgentDefaults(Base):
     # Cap on subagent VMs running at once (excess spawns queue). ge=1: a
     # 0/negative cap would deadlock every subagent (Semaphore(0)).
     max_concurrent_subagents: int = Field(default=4, ge=1)
+    # Spawn rate limit per session, per rolling hour — the concurrency gate
+    # alone can't stop a prompt-injected agent from spawning indefinitely (each
+    # finishes, freeing a slot for the next; the cross-turn re-injection loop
+    # needs no user input). A rolling window bounds a runaway to N/hour yet
+    # auto-recovers, so it never permanently locks out heavy legitimate use.
+    # Counted per session so one busy session can't throttle others.
+    max_subagent_spawns_per_hour: int = Field(default=30, ge=1)
     # Empty-response recovery: recover turns the model ends with no visible text
     # (post-tool empty / thinking-only) instead of surfacing a dud "no response
     # to give". Budgets are per-turn.
@@ -311,7 +318,6 @@ class ProviderConfig(Base):
     api_key: str = ""
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
-    models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
 
 
 class GeminiProviderConfig(ProviderConfig):

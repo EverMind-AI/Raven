@@ -138,19 +138,19 @@ export interface SkillInfo {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelOptionProvider".
+ * via the `definition` "ModelInfo".
  */
-export interface ModelOptionProvider {
-  slug: string;
-  name: string;
-  authenticated: boolean;
-  is_current: boolean;
-  auth_type: string;
-  key_env?: string;
-  models: string[];
-  total_models: number;
-  needs_api_base: boolean;
-  warning: string;
+export interface ModelInfo {
+  /**
+   * e.g. 'claude-opus-4-7'
+   */
+  model_id: string;
+  /**
+   * e.g. 'anthropic' / 'openai'
+   */
+  provider: string;
+  context_window: number;
+  available: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -755,83 +755,48 @@ export interface SkillUnpinResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelOptionsParams".
+ * via the `definition` "ModelListParams".
  */
-export interface ModelOptionsParams {
-  session_id?: string;
+export interface ModelListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelListResult".
+ */
+export interface ModelListResult {
+  models: ModelInfo[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelOptionsResult".
+ * via the `definition` "ModelCurrentParams".
  */
-export interface ModelOptionsResult {
-  model: string;
-  provider: string;
-  providers: ModelOptionProvider[];
+export interface ModelCurrentParams {
+  session_key?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelSaveKeyParams".
+ * via the `definition` "ModelCurrentResult".
  */
-export interface ModelSaveKeyParams {
-  slug: string;
-  api_key: string;
-  api_base?: string;
-  session_id?: string;
+export interface ModelCurrentResult {
+  model: ModelInfo;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelSaveKeyResult".
+ * via the `definition` "ModelSwitchParams".
  */
-export interface ModelSaveKeyResult {
-  provider: ModelOptionProvider;
+export interface ModelSwitchParams {
+  session_key: string;
+  model_id: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelDisconnectParams".
+ * via the `definition` "ModelSwitchResult".
  */
-export interface ModelDisconnectParams {
-  slug: string;
-  session_id?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelDisconnectResult".
- */
-export interface ModelDisconnectResult {
-  disconnected: boolean;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelAddModelParams".
- */
-export interface ModelAddModelParams {
-  slug: string;
-  model: string;
-  session_id?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelAddModelResult".
- */
-export interface ModelAddModelResult {
-  provider: ModelOptionProvider;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelRemoveModelParams".
- */
-export interface ModelRemoveModelParams {
-  slug: string;
-  model: string;
-  session_id?: string;
-}
-/**
- * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
- * via the `definition` "ModelRemoveModelResult".
- */
-export interface ModelRemoveModelResult {
-  provider: ModelOptionProvider;
+export interface ModelSwitchResult {
+  model: ModelInfo;
+  /**
+   * ISO-8601 timestamp when switch was applied.
+   */
+  applied_at: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

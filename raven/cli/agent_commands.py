@@ -331,6 +331,7 @@ def register(app: typer.Typer) -> None:
             empty_recovery=limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
+            max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,

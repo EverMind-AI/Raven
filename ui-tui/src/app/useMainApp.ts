@@ -793,9 +793,9 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     [overlay.confirm, respondWith]
   )
 
-  const onModelSelect = useCallback((model: string, providerSlug: string) => {
+  const onModelSelect = useCallback((value: string) => {
     patchOverlayState({ modelPicker: false })
-    slashRef.current(`/model ${model} --provider ${providerSlug}`)
+    slashRef.current(`/model ${value}`)
   }, [])
 
   const hasReasoning = useTurnSelector(state => Boolean(state.reasoning.trim()))

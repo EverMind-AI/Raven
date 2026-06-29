@@ -3,25 +3,12 @@
 import json
 import os
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 
 from raven.agent.tools.base import Tool
-
-
-def _validate_url(url: str) -> tuple[bool, str]:
-    """Validate URL: must be http(s) with valid domain."""
-    try:
-        p = urlparse(url)
-        if p.scheme not in ('http', 'https'):
-            return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
-        if not p.netloc:
-            return False, "Missing domain"
-        return True, ""
-    except Exception as e:
-        return False, str(e)
+from raven.security.network import validate_url_target
 
 
 class WebSearchTool(Tool):
@@ -129,7 +116,7 @@ class WebFetchTool(Tool):
 
     async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:  # noqa: N803  (LLM tool schema uses camelCase)
         max_chars = maxChars or self.max_chars
-        is_valid, error_msg = _validate_url(url)
+        is_valid, error_msg = validate_url_target(url)
         if not is_valid:
             return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 

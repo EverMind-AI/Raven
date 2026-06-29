@@ -9,6 +9,28 @@ from raven.sandbox.interfaces import ExecResult, SandboxExecutor
 _DEFAULT_TIMEOUT = 60
 _MAX_TIMEOUT = 600
 
+# DirectExecutor runs on the host with no isolation, so commands the agent is
+# coaxed into running (via prompt injection) would otherwise inherit every host
+# env var — including credentials. Pass only a minimal, non-sensitive baseline
+# plus whatever the caller explicitly supplies.
+_ENV_ALLOWLIST = (
+    # Locale / shell basics
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME",
+    "SHELL", "PWD", "TZ", "TMPDIR",
+    # Language runtimes (so python / node / venv-based tools resolve correctly)
+    "PYTHONPATH", "VIRTUAL_ENV",
+    # TLS trust + proxy (so git / curl / https tools work behind corp setups).
+    # These are config, not crown-jewel secrets (API keys / cloud creds / SSH
+    # are deliberately NOT here).
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+)
+
+
+def _baseline_env() -> dict[str, str]:
+    return {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
+
 
 class DirectExecutor(SandboxExecutor):
     """No-op sandbox: runs commands directly on the host (current behavior)."""
@@ -33,7 +55,7 @@ class DirectExecutor(SandboxExecutor):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env={**os.environ, **(env or {})},
+            env={**_baseline_env(), **(env or {})},
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(

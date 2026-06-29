@@ -110,8 +110,11 @@ class ExecTool(Tool):
                 # to a sandboxed executor — it would leak host credentials into the VM.
                 command = f'export PATH="$PATH:{shlex.quote(self.path_append)}" && {command}'
             else:
-                env = os.environ.copy()
-                env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
+                # Pass ONLY the PATH override. Copying os.environ here would hand
+                # the full host environment to DirectExecutor and defeat its
+                # baseline-allowlist hygiene; the executor supplies the rest.
+                base_path = os.environ.get("PATH", "")
+                env = {"PATH": base_path + os.pathsep + self.path_append}
 
         try:
             result = await self._executor.exec(command, cwd=cwd, timeout=effective_timeout, env=env)
