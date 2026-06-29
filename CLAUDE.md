@@ -133,9 +133,7 @@ self.logger = logger.bind(channel=self.name)
 | `chore` | Other misc |
 | `revert` | Revert a prior commit |
 
-**scope** — aligns with top-level subpackages under `raven/`. Common values:
-`channels` · `agent` · `providers` · `cli` · `cron` · `auth` · `bus` · `memory` · `routing` · `session` · `config` · `core` · `proactive_engine` · `skill_forge` · `tui_rpc` · `ui-tui` · `security` · `sandbox`.
-Spanning multiple scopes → omit the scope, or use `(*)`.
+**scope** — a top-level subpackage of `raven/`. See the `Repo layout` section of `README.md` for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
 
 **subject** — lowercase start; ≤ 72 chars; no trailing period; English.
 
@@ -154,7 +152,7 @@ No Chinese anywhere in the message — not just the subject; body and footer too
 | punctuation | No full-width punctuation (`：`,`，`,`。`,`「」`,`""` …), no `§`-numbering, no Chinese path names; the latin part of a §N.M anchor is fine |
 | trailer | `Co-authored-by: ...` is ASCII by format |
 
-**Why:** Conventional-Commits tooling (commitlint / semantic-release / changelog generators) parses ASCII grammar and mis-lints on Chinese; cross-language reviewers can't read a Chinese body; a future public GitHub repo wants an English history.
+**Why:** Conventional-Commits tooling (commitlint / semantic-release / changelog generators) parses ASCII grammar and mis-lints on Chinese; cross-language reviewers and a public commit history both need English.
 
 **Process:**
 1. **Before writing:** translate the points in your head to English first — don't write a Chinese body then translate (that leaves full-width residue).
@@ -178,20 +176,18 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 
 ### §3.3 Trailer rules (commit message + PR description)
 
-**✅ Required** (for internal AI-coding stats):
+**✅ Required:**
 
 - `Co-authored-by: Claude (<model-id>) <noreply@anthropic.com>` — when Claude helped write the code, append it at the end of the commit body (blank line above), or at the end of the PR description.
-  - `<model-id>` = the **actual current-session model ID** (e.g. `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5`), not a placeholder.
-  - Format follows the aider convention; the model version lets us track per-model contribution share over time.
+  - `<model-id>` = the **actual current-session model ID** (e.g. `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5`), not a placeholder. The model version keeps per-model contribution distinguishable.
+  - Format follows the aider convention; GitHub renders `Co-authored-by` as a co-author on the commit / PR.
 - Multiple co-authors → one per line, standard git trailer format (`Name <email>`).
 - The repo uses **rebase merge** (not squash): every commit's body/trailer enters `main` history as-is, so each commit must stand on its own — don't rely on the PR description.
 
 **❌ Don't add:**
 - `Refs: ...` pointing at locally-visible-only / git-ignored paths (invisible to others);
-- `🤖 Generated with Claude Code` and similar emoji banners (`Co-authored-by` already conveys co-authorship; no marketing badge);
+- `🤖 Generated with Claude Code` and similar emoji banners — `Co-authored-by` already conveys co-authorship (and is the structured, machine-readable attribution); a marketing badge adds no attribution value;
 - internal commit-hash references / temporary branch names — docs/PRs describe the present state only.
-
-**Note:** This reflects internal AI-coding stats. Match the repo's existing commit style; don't invent a new one.
 
 ### §3.4 Hard rule: when to commit
 
@@ -232,17 +228,6 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 
 After pushing a new feature branch, **proactively ask** whether to open the PR with `gh pr create` — don't leave the user to do it in the web UI.
 
-**Why:**
-- A multi-commit PR needs a summarizing title + description; GitHub defaults to the first commit's message, losing the cross-phase context.
-- Claude has the full picture right after the commits and can write an accurate description in one go (phase list, key decisions, test matrix, breaking-change notes).
-- Trailer injection: `Co-authored-by` in the PR description (§3.3) is easy to miss when creating the PR by hand.
-
-**Ask + preview flow (required):**
-1. After the push, say "push done — open the PR with `gh pr create`?" — **don't create it directly**.
-2. Once authorized, **show the drafted title + full description** for preview.
-3. Only after the user edits/confirms, run `gh pr create --title "..." --body "..."`.
-4. Report the PR URL back.
-
 **Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Title length may relax to ≤ 90 chars** (the 72 limit is for `git log --oneline` wrapping; web-UI titles don't wrap) — but shorter is better.
 
 **Description must be all English** (same as §3.1.1): no Chinese / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist); translate cited Chinese plans, don't paste.
@@ -275,12 +260,11 @@ After pushing a new feature branch, **proactively ask** whether to open the PR w
 ### Security
 
 - [ ] Security impact of change has been considered
-- [ ] Code follows company security practices and guidelines
+- [ ] Code follows security best practices and guidelines
 
 ### Code review
 
 - [ ] Pull request has a descriptive title and context useful to a reviewer. Screenshots or screencasts are attached as necessary
-- [ ] Pull request linked to JIRA ticket when applicable
 ```
 
 Filling rules:
