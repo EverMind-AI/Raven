@@ -123,6 +123,16 @@ packages = ["raven"]
 [tool.hatch.build.targets.wheel.force-include]
 "bridge" = "raven/bridge"
 
+# The prebuilt, self-contained TUI bundle (ui-tui/dist/entry.js) is packaged
+# into the wheel as raven/ui-tui/dist so `pip`/`uv tool install` yields a
+# working `raven tui` with no source checkout. It is added *conditionally* by
+# the custom build hook below (hatch_build.py) — a static force-include would
+# hard-fail when dist/ is absent (it's gitignored), breaking `git clone && uv
+# sync`. CI builds the bundle before building the release wheel
+# (see .github/workflows/release.yml).
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build]
 include = [
     "raven/**/*.py",
@@ -136,6 +146,7 @@ include = [
 include = [
     "raven/",
     "bridge/",
+    "hatch_build.py",
     "README.md",
     "LICENSE",
 ]

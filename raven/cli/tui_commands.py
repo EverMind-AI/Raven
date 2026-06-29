@@ -31,10 +31,35 @@ from raven.cli._log_file import redirect_loguru_to_file
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
-# Path to ui-tui/ relative to this file: raven/cli/tui_commands.py -> ../../ui-tui/
+# Path to the ui-tui/ source tree, relative to this file:
+# raven/cli/tui_commands.py -> ../../../ui-tui/. Only the `--dev` path (tsx from
+# source) needs this; it requires src/ + node_modules and is absent from wheels.
 _UI_TUI_DIR = Path(__file__).resolve().parent.parent.parent / "ui-tui"
 
+# Packaged location of the prebuilt, self-contained bundle inside an installed
+# wheel: raven/cli/tui_commands.py -> ../ui-tui/dist/entry.js (i.e.
+# raven/ui-tui/dist/entry.js). pyproject force-includes ui-tui/dist here so a
+# `pip`/`uv tool install` ships the TUI without a source checkout.
+_PACKAGED_DIST_ENTRY = Path(__file__).resolve().parent.parent / "ui-tui" / "dist" / "entry.js"
+
 _MIN_NODE_VERSION = (22, 0, 0)
+
+
+def resolve_dist_entry() -> Optional[Path]:
+    """Locate the prebuilt ``entry.js`` bundle for production (non-dev) launch.
+
+    Tries, in order:
+      1. The packaged copy inside the installed wheel (``raven/ui-tui/dist``).
+      2. The source-tree copy a developer built locally (``ui-tui/dist``).
+
+    The bundle is self-contained (esbuild ``bundle: true``), so no sibling
+    ``node_modules`` is needed — only a Node runtime. Returns the first path
+    that exists, or ``None`` if neither does.
+    """
+    for candidate in (_PACKAGED_DIST_ENTRY, _UI_TUI_DIR / "dist" / "entry.js"):
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _stdout_isatty() -> bool:
@@ -63,6 +88,18 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # Priority 3: PATH
         if path_node := shutil.which("node"):
             candidates.append(path_node)
+
+        # Priority 4: Raven-managed private runtime installed by install.sh
+        # into ~/.raven/runtime/. This is the zero-config fallback so a user
+        # who has no system Node still gets a working `raven tui` after the
+        # one-line installer provisioned a private Node here. Glob to tolerate
+        # the versioned dir name (e.g. node-v22.x.y-darwin-arm64/bin/node).
+        runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
+        if runtime_root.is_dir():
+            direct = runtime_root / "node" / "bin" / "node"
+            if direct.exists():
+                candidates.append(str(direct))
+            candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
 
     for node_path in candidates:
         if not Path(node_path).exists():
@@ -287,8 +324,8 @@ def _build_tui_agent_loop():
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.cli._helpers import load_runtime_config, make_provider
-        from raven.config.raven import load_raven_config
         from raven.config.paths import get_cron_dir
+        from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.session.manager import SessionManager
@@ -389,7 +426,6 @@ async def _run_rpc_server_until_done(
     # Lazy import: keeps tui_commands importable without pulling tui_rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
     from raven.tui_rpc.confirm_broker import ConfirmBroker
-    from raven.tui_rpc.question_broker import QuestionBroker
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.methods import register_aligned_methods_except_system
     from raven.tui_rpc.methods.system import (
@@ -399,6 +435,7 @@ async def _run_rpc_server_until_done(
         system_ping,
         system_version,
     )
+    from raven.tui_rpc.question_broker import QuestionBroker
     from raven.tui_rpc.server import RpcServer
     from raven.tui_rpc.spine import build_tui
     from raven.tui_rpc.subscriptions import SubscriptionEmitter
@@ -804,12 +841,12 @@ def _print_node_help(out=None) -> None:
     typer.echo(msg, file=out)
 
 
-def _diagnose_crash(node_path: str, dist_entry: Path) -> None:
+def _diagnose_crash(node_path: str, dist_entry: Path, cwd: Path) -> None:
     """When `tui` child exits non-zero, re-run capturing stderr for diagnosis."""
     try:
         proc = subprocess.run(
             [node_path, str(dist_entry)],
-            cwd=str(_UI_TUI_DIR),
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=5,
@@ -864,8 +901,8 @@ def tui(
     # no-TTY diagnostic spawns (--check / --print-colors / --preview-colors).
     if not (check or print_colors or preview_colors) and _stdout_isatty():
         from raven.cli.onboard_commands import (
-            ensure_configured_or_onboard,
             _is_config_populated,
+            ensure_configured_or_onboard,
         )
 
         if not _is_config_populated():
@@ -883,8 +920,12 @@ def tui(
         )
         raise typer.Exit(code=1)
 
-    if not _UI_TUI_DIR.exists():
-        print(f"✗ TUI 资源缺失：{_UI_TUI_DIR}", file=sys.stderr)
+    # `--dev` runs tsx from the source tree, so it requires the ui-tui/ checkout.
+    # The production path resolves a packaged or source-built bundle separately
+    # (see resolve_dist_entry), so it must NOT hard-require the source tree —
+    # a wheel install legitimately has no ui-tui/ source directory.
+    if dev and not _UI_TUI_DIR.exists():
+        print(f"✗ TUI 源码缺失（--dev 需要源码树）：{_UI_TUI_DIR}", file=sys.stderr)
         raise typer.Exit(code=2)
 
     # Color override flows to the child via env (entry.tsx -> colorTier.ts).
@@ -956,23 +997,32 @@ def tui(
         else:
             exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR)
     else:
-        dist_entry = _UI_TUI_DIR / "dist" / "entry.js"
-        if not dist_entry.exists() and not check:
+        dist_entry = resolve_dist_entry()
+        if dist_entry is None and not check:
             print(
-                f"✗ TUI 构建产物缺失：{dist_entry}\n"
-                f"  请先运行：cd {_UI_TUI_DIR} && npm install && npm run build\n",
+                f"✗ TUI 构建产物缺失：{_PACKAGED_DIST_ENTRY}（或源码树 {_UI_TUI_DIR / 'dist' / 'entry.js'}）\n"
+                f"  开发者请运行：cd {_UI_TUI_DIR} && npm install && npm run build\n"
+                f"  用户请重新安装：curl -fsSL https://raven.evermind.ai/install.sh | sh\n",
                 file=sys.stderr,
             )
             raise typer.Exit(code=2)
+        # On the `--check` smoke path a missing bundle is tolerated (the test
+        # only proves Node was found and a child can spawn). Use the expected
+        # packaged path as the spawn target so the command stays well-formed.
+        if dist_entry is None:
+            dist_entry = _PACKAGED_DIST_ENTRY
+        # The self-contained bundle needs no node_modules; run it from its own
+        # directory so any relative resource resolution stays well-defined.
+        dist_cwd = dist_entry.parent
         # `--check` smoke path keeps the simple stdio-only spawn so the
         # bootstrap-era tests (which don't speak JSON-RPC) still pass; the
         # interactive run path opens the RPC pipes and enforces handshake.
         if no_rpc:
-            exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=_UI_TUI_DIR)
+            exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=dist_cwd)
         else:
-            exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=_UI_TUI_DIR)
+            exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=dist_cwd)
         if exit_code != 0 and exit_code != 130 and exit_code != _RPC_HANDSHAKE_EXIT_CODE:
-            _diagnose_crash(node_path, dist_entry)
+            _diagnose_crash(node_path, dist_entry, dist_cwd)
 
     if check:
         # --check passes when Node was found and child process spawned,
