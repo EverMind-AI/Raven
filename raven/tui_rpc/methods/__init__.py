@@ -34,6 +34,7 @@ from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
 from raven.tui_rpc.methods.confirm import register_confirm_methods
 from raven.tui_rpc.methods.question import register_question_methods
+from raven.tui_rpc.methods.model import register_model_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods
@@ -114,10 +115,14 @@ def register_aligned_methods_except_system(
     register_cli_methods(dispatcher, confirm_broker=confirm_broker)
     register_setup_methods(dispatcher)
     register_reload_methods(dispatcher)
-    register_config_methods(dispatcher)
+    register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
     register_stub_methods(dispatcher)
+    # model.{options,save_key,disconnect,add_model,remove_model}: real handlers
+    # must come AFTER register_stub_methods (Dispatcher.register raises on
+    # duplicate; the stub group no longer owns these names).
+    register_model_methods(dispatcher)
     # harness-command-catalog-dynamic: real ``commands.catalog`` handler;
     # MUST come after ``register_stub_methods`` because the stub list dropped
     # its ``commands.catalog`` entry, and ``Dispatcher.register`` raises on
@@ -167,6 +172,7 @@ __all__ = [
     "register_session_methods",
     "register_terminal_methods",
     "register_stub_methods",
+    "register_model_methods",
     "register_slash_routing_methods",
     "register_turn_methods",
     "register_confirm_methods",

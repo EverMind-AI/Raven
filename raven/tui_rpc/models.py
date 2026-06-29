@@ -93,15 +93,6 @@ class SkillInfo(_Strict):
     tags: list[str]
 
 
-class ModelInfo(_Strict):
-    """Metadata about an LLM model registered in the routing table."""
-
-    model_id: str = Field(..., description="e.g. 'claude-opus-4-7'")
-    provider: str = Field(..., description="e.g. 'anthropic' / 'openai'")
-    context_window: int
-    available: bool
-
-
 class UsageSnapshot(_Strict):
     """Token / cost usage reported at the end of a turn."""
 
@@ -527,30 +518,69 @@ class SkillUnpinResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
-class ModelListParams(_Strict):
-    pass
+class ModelOptionProvider(_Strict):
+    """One provider row in the ``/model`` picker."""
+
+    slug: str
+    name: str
+    authenticated: bool
+    is_current: bool
+    auth_type: str
+    key_env: str | None = None
+    models: list[str]
+    total_models: int
+    needs_api_base: bool
+    warning: str
 
 
-class ModelListResult(_Strict):
-    models: list[ModelInfo]
+class ModelOptionsParams(_Strict):
+    session_id: str | None = None
 
 
-class ModelCurrentParams(_Strict):
-    session_key: str | None = None
+class ModelOptionsResult(_Strict):
+    model: str
+    provider: str
+    providers: list[ModelOptionProvider]
 
 
-class ModelCurrentResult(_Strict):
-    model: ModelInfo
+class ModelSaveKeyParams(_Strict):
+    slug: str
+    api_key: str
+    api_base: str | None = None
+    session_id: str | None = None
 
 
-class ModelSwitchParams(_Strict):
-    session_key: str
-    model_id: str
+class ModelSaveKeyResult(_Strict):
+    provider: ModelOptionProvider
 
 
-class ModelSwitchResult(_Strict):
-    model: ModelInfo
-    applied_at: str = Field(..., description="ISO-8601 timestamp when switch was applied.")
+class ModelDisconnectParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelDisconnectResult(_Strict):
+    disconnected: bool
+
+
+class ModelAddModelParams(_Strict):
+    slug: str
+    model: str
+    session_id: str | None = None
+
+
+class ModelAddModelResult(_Strict):
+    provider: ModelOptionProvider
+
+
+class ModelRemoveModelParams(_Strict):
+    slug: str
+    model: str
+    session_id: str | None = None
+
+
+class ModelRemoveModelResult(_Strict):
+    provider: ModelOptionProvider
 
 
 # ---------------------------------------------------------------------------
@@ -831,9 +861,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "skill.pin": (SkillPinParams, SkillPinResult),
     "skill.unpin": (SkillUnpinParams, SkillUnpinResult),
     # model.*
-    "model.list": (ModelListParams, ModelListResult),
-    "model.current": (ModelCurrentParams, ModelCurrentResult),
-    "model.switch": (ModelSwitchParams, ModelSwitchResult),
+    "model.options": (ModelOptionsParams, ModelOptionsResult),
+    "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
+    "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
+    "model.add_model": (ModelAddModelParams, ModelAddModelResult),
+    "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
@@ -867,7 +899,7 @@ __all__ = [
     "McpServerInfo",
     "McpToolInfo",
     "SkillInfo",
-    "ModelInfo",
+    "ModelOptionProvider",
     "UsageSnapshot",
     "CliResult",
     "StubResult",

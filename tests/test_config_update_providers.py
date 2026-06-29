@@ -11,9 +11,11 @@ import httpx
 import pytest
 
 from raven.config.update_providers import (
+    add_provider_model,
     get_provider_config,
     list_providers,
     provider_field_specs,
+    remove_provider_model,
     reset_provider,
     set_provider_fields,
 )
@@ -465,3 +467,56 @@ def test_test_provider_oauth_missing_token_returns_oauth_token_missing(
 
     result = probe_provider("openai_codex", config_path=cfg_path)
     assert result["status"] == "oauth_token_missing"
+
+
+# ---------------------------------------------------------------------------
+# Manual model catalog (add_provider_model / remove_provider_model)
+# ---------------------------------------------------------------------------
+
+
+def test_provider_config_models_round_trips(cfg_path: Path) -> None:
+    set_provider_fields("openrouter", {"api_key": "sk-or-v1-x"}, config_path=cfg_path)
+    add_provider_model("openrouter", "anthropic/claude-sonnet-4-5", config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["models"] == ["anthropic/claude-sonnet-4-5"]
+    assert "anthropic/claude-sonnet-4-5" in get_provider_config(
+        "openrouter", config_path=cfg_path
+    ).get("models", [])
+
+
+def test_add_provider_model_is_idempotent(cfg_path: Path) -> None:
+    add_provider_model("openai", "gpt-4o", config_path=cfg_path)
+    models = add_provider_model("openai", "gpt-4o", config_path=cfg_path)
+
+    assert models == ["gpt-4o"]
+    assert _read(cfg_path)["providers"]["openai"]["models"] == ["gpt-4o"]
+
+
+def test_add_provider_model_appends_in_order(cfg_path: Path) -> None:
+    add_provider_model("openai", "gpt-4o", config_path=cfg_path)
+    models = add_provider_model("openai", "gpt-4o-mini", config_path=cfg_path)
+
+    assert models == ["gpt-4o", "gpt-4o-mini"]
+
+
+def test_remove_provider_model(cfg_path: Path) -> None:
+    add_provider_model("openai", "gpt-4o", config_path=cfg_path)
+    add_provider_model("openai", "gpt-4o-mini", config_path=cfg_path)
+
+    models = remove_provider_model("openai", "gpt-4o", config_path=cfg_path)
+
+    assert models == ["gpt-4o-mini"]
+    assert _read(cfg_path)["providers"]["openai"]["models"] == ["gpt-4o-mini"]
+
+
+def test_remove_absent_model_is_noop(cfg_path: Path) -> None:
+    add_provider_model("openai", "gpt-4o", config_path=cfg_path)
+    models = remove_provider_model("openai", "not-there", config_path=cfg_path)
+
+    assert models == ["gpt-4o"]
+
+
+def test_add_provider_model_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        add_provider_model("nonexistent_provider", "x", config_path=cfg_path)
