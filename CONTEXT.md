@@ -1,8 +1,7 @@
 # Raven Runtime
 
 > **Status: review baseline (2026-06-28).** Under team review via this PR — owners refine
-> their assigned terms by branching off this PR branch and merging back. The **Bus** cluster
-> below is known-stale and being revised to **Spine** (see the marker on that cluster).
+> their assigned terms by branching off this PR branch and merging back.
 
 The Python agent runtime: receives messages from chat channels, runs the agent loop
 against LLM providers, and hosts the feature engines (context, memory, proactive, eval)
@@ -35,21 +34,57 @@ _Avoid_: calling a single LLM round-trip a turn
 **Iteration**:
 One LLM call plus the tool executions that follow it, inside a turn.
 
-### Bus
+**Agent Loop** (`agent/loop/`):
+The turn orchestration engine: receives a `TurnRequest` from the Spine, assembles context,
+drives the LLM + tool-execution iterations, consolidates memory, and emits `Deliverable`
+events via the Spine `emit` callback. Exposed to the Spine via `AgentTurnRunner`.
+_Avoid_: calling a single LLM call the "agent loop" — the loop spans all Iterations of one turn.
 
-> ⚠ **Under revision → Spine.** This cluster is stale: the architecture moved to
-> `raven/spine/` (per-turn backbone, submit → lanes → emit; the old `raven/bus/` is
-> gone). Being rewritten as a **Spine** term under the current review.
+**Turn Runner**:
+The behavioural `Protocol` seam between Spine and an agent implementation:
+`async run(req, emit, drain) → TurnOutcome`. Spine never imports the agent side; the agent
+supplies `AgentTurnRunner` (wraps `AgentLoop`). Gateway and TUI variants also exist.
+_Avoid_: conflating with Agent Loop — Turn Runner is the Protocol; Agent Loop is one implementation.
 
-**Message Bus**:
-The point-to-point queue pair between channels and the agent
-(`InboundMessage` / `OutboundMessage`): exactly-once consumption, blocking delivery.
-Anything that must not be lost (user messages, Sentinel nudges) travels here.
+**Agent Hook** (`agent/hook/`):
+The turn-loop extension point: an `AgentHook` ABC with five async phases
+(`before_user_inbound`, `before_iteration`, `after_iteration`, `after_send`, `on_tool_call`).
+Multiple hooks chain via `CompositeHook`; the EvalEngine wires three concrete implementations.
+_Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
-**Event Bus**:
-The fire-and-forget broadcast plane for `BusEvent`s: best-effort, multi-subscriber,
-a failing subscriber never affects the publisher. Telemetry and observers travel here.
-_Avoid_: saying "the bus" without naming which plane
+**Subagent** (`agent/subagent/`):
+A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
+re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bounded by
+`max_concurrent` (default 4) and a per-session hourly rate limit.
+_Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
+
+**Spine** (`spine/`):
+The single backbone every turn flows through: one entry
+(`Scheduler.submit(TurnRequest) → TurnHandle.result()`) and one exit (`emit(Deliverable)`).
+Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
+not a broadcast bus — replaces the dormant `bus/` pub/sub.
+_Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
+
+**Lane**:
+The per-conversation serial execution domain inside the Scheduler: runs one turn at a time
+and is the unit of cancellation. A stalled Lane never blocks other Lanes.
+_Avoid_: conflating Lane with OriginPools — different dimensions (ordering vs. concurrency).
+
+**TurnRequest**:
+The single input to Spine: carries `origin`, `source`, `text`, `media`, and `busy` policy.
+Replaces the old `InboundMessage`.
+
+**Deliverable** (= `RunnerEvent`):
+The union of all content-type events a runner can emit: `Text | MediaOut | StreamDelta |
+Reasoning | Notice | ToolEvent`. Routed to delivery outlets by the `DeliveryHub`.
+Replaces the old `OutboundMessage`.
+_Avoid_: conflating Deliverable with lifecycle events (`TurnStarted`/`TurnFailed`/`TurnEnded`) —
+those are emitted by the Spine worker, not a runner.
+
+**OriginPools**:
+Per-origin concurrency gates: a `USER` pool and a `system` pool for proactive origins
+(`SENTINEL`, `CRON`, `HEARTBEAT`, `SUBAGENT`), sized independently with no borrowing.
+A user turn never waits on a proactive task's LLM slot.
 
 ### Proactivity
 
@@ -76,7 +111,7 @@ Foresight is the stored memory artifact.
 
 **Channel**:
 A platform adapter (a `BaseChannel` subclass: telegram, matrix, discord, …) that
-connects an external chat platform to the Message Bus; managed by the ChannelManager
+connects an external chat platform to the Runtime; managed by the ChannelManager
 in gateway mode.
 _Avoid_: calling the TUI a channel — `channel="tui"` on a message is a routing tag, not a Channel
 
@@ -90,7 +125,7 @@ configuration. Not a conversation front-end.
 _Avoid_: using "CLI" for the interactive REPL (retiring)
 
 **Routing Tag**:
-The `channel` field on a bus message; names the recipient — a Channel, or the TUI.
+The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
 
 ### Token Efficiency
 
@@ -114,7 +149,7 @@ _Avoid_: conflating provider (vendor) with model (a model name a provider serves
 The single transport between Runtime and TUI (stdio pipe / Unix socket), carrying two
 message kinds: Request/Response (TUI → Runtime method calls) and Notification
 (Runtime → TUI one-way events).
-_Avoid_: calling a Notification "the bus" or "broadcast" — bus planes never cross into the TUI
+_Avoid_: calling a Notification "the bus" or "broadcast" — Spine events never cross into the TUI directly
 
 **Turn Event**:
 A typed payload streamed to the TUI over Notifications while a turn runs
@@ -206,4 +241,6 @@ Network access control (e.g. `network.py`).
 Isolated command execution (microVM / boxlite); owns the debug server and VM lifecycle.
 
 **EvalEngine** (`eval_engine/`):
-The L3 evaluation engine — task judging / cognitive coordination.
+The L3 evaluation engine: task judging and cognitive coordination, implemented as three
+`AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`)
+wired into `AgentLoop` via `CompositeHook`.
