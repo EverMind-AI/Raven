@@ -531,8 +531,10 @@ class EverosBackend:
         self,
         session_id: str,
         messages: list[dict[str, Any]],
+        *,
+        force_flush: bool = False,
     ) -> None:
-        """Forward a turn's messages to EverOS for indexing.
+        """Forward a batch of messages to EverOS for indexing.
 
         EverOS partitions internally by message sender (user-track vs
         agent-track); we don't need to specify ``owner_type`` here. We
@@ -544,6 +546,13 @@ class EverosBackend:
         System messages are dropped — EverOS only accepts
         user/assistant/tool. Empty-text messages and empty payloads
         skip the adapter call entirely.
+
+        ``force_flush=True`` promotes accumulated raw messages to
+        episodes / cases / skills immediately, regardless of the
+        per-turn flush counter. The host's long-term consolidation
+        triggers (intra-day threshold, nightly run) pass this so a
+        batch is flushed to long-term in one shot rather than waiting
+        for the rolling ``_flush_every_turns`` boundary.
         """
         if not messages:
             return
@@ -554,7 +563,9 @@ class EverosBackend:
             return
         n = self._turn_counts.get(session_id, 0) + 1
         self._turn_counts[session_id] = n
-        is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
+        is_final = force_flush or (
+            self._flush_every_turns > 0 and n % self._flush_every_turns == 0
+        )
         try:
             await self._adapter.memorize(session_id, payload, is_final=is_final)
         except Exception as e:
