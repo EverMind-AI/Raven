@@ -184,13 +184,21 @@ retained; it is now a live module under the Memory Engine, not the old top-level
 A distilled event note the Consolidation step writes to `episodes.md`.
 
 **Profile**:
-The user-profile sections in `USER.md`, refreshed when their tags run hot.
+The user-profile sections in `user.md`, refreshed when their tags run hot.
 
 **Foresight**:
 A prediction the Memory Engine derives about the user's likely future behavior
 (each carries prediction / time-window / confidence), written by the consolidator.
 _Avoid_: conflating with the Proactive Engine's Predictor — Foresight is the stored
 memory artifact; the Predictor is the live proactive stage.
+
+**Consolidator** (`memory_engine/consolidate/`):
+The Memory Engine component (`MemoryConsolidator`) that performs Consolidation —
+under session-token pressure it annotates evicted message chunks into Episodes,
+refreshes hot Profile sections, and (opt-in) emits Foresight. The agent loop skips
+it when the Curator Context Engine is active.
+_Avoid_: conflating with the Curator — the Curator builds the context window
+losslessly; the Consolidator is the legacy lossy path that writes long-term memory.
 
 ### Security & Access
 
