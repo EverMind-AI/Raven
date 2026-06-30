@@ -58,6 +58,44 @@ re-enters the session as a `SUBAGENT`-origin `TurnRequest` via Spine submit. Bou
 `max_concurrent` (default 4) and a per-session hourly rate limit.
 _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and re-enters via Spine.
 
+**Tool** (`agent/tools/`):
+An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
+`execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,
+message, ask_user, spawn (Subagent), MCP, media generation, and skill read/use.
+_Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
+
+**Tool Registry** (`agent/tools/registry.py`):
+The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
+its `execute` under a timeout, returning the string result or a structured error.
+
+**Checkpoint** (`agent/loop/checkpoint.py`):
+A once-per-turn commit of the workspace into a shadow git repo (separate from the
+user's `.git`), so an interrupted or failed turn can be rolled back.
+_Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
+
+**Empty-Response Recovery** (`agent/loop/recovery.py`):
+The opt-in policy for when the model returns no text: re-feed its reasoning (PREFILL),
+inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
+`RecoveryLimits`; otherwise the turn COMPLETEs.
+_Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes.
+
+**Synthesis**:
+The tools-disabled final LLM call the Agent Loop makes when a turn hits `max_iterations`
+(default 40): it summarizes progress and returns partial results, and the turn ends with
+status `interrupted`.
+_Avoid_: "timeout" — Synthesis is iteration-bounded, not time-bounded.
+
+**Personalizer** (`agent/personalizer/`):
+The four-step preference flow wrapped around a turn: classify whether a preference
+question is needed, ask it, run the Agent Loop, then post-learn signals from the
+finished turn.
+
+**Context Builder** (`agent/context/`):
+The bootstrap/identity renderer (`ContextBuilder`) that loads Bootstrap Files and the
+runtime-context block, feeding the Context Engine's segments.
+_Avoid_: conflating with `ContextAssembler` — Context Builder renders identity pieces;
+the Context Engine assembles the whole window.
+
 **Spine** (`spine/`):
 The single backbone every turn flows through: one entry
 (`Scheduler.submit(TurnRequest) → TurnHandle.result()`) and one exit (`emit(Deliverable)`).
@@ -134,9 +172,29 @@ The cross-cutting token-efficiency layer: a set of independently toggled
 TokenStrategies, not a single module.
 
 **TokenStrategy**:
-One independently enable-able efficiency measure (usage tracking, cache
-optimization, smart routing, …).
+One independently enable-able efficiency measure, implemented as a `TokenStrategy` ABC
+with `before_llm_call` (may rewrite messages / tools / model) and `after_llm_call`
+(observes usage) hooks; e.g. usage tracking, cache optimization, smart routing.
 _Avoid_: bare "Strategy"
+
+**StrategyRegistry**:
+The ordered chain that wraps every Provider call, invoking each registered
+TokenStrategy's `before_llm_call` / `after_llm_call` hooks in registration order.
+`before` errors propagate (a bad request fails fast); `after` errors are logged and
+swallowed so telemetry never crashes the turn.
+
+**UsageTracker**:
+The shipped TokenStrategy (`"usage_tracker"`) that records each call's UsageSnapshot and
+rolls token counts and USD cost up into per-session, per-day, and lifetime aggregates.
+
+**CacheOptimizer**:
+The shipped TokenStrategy (`"cache_optimizer"`) that places Anthropic's ≤4 ephemeral
+`cache_control` breakpoints adaptively (tools tail + system tail + a rolling message-tail
+window). A Hermes-faithful `SystemAndTailCacheStrategy` ships alongside as an A/B reference.
+
+**UsageSnapshot**:
+The token/cost accounting unit for a single LLM call: input / output / cache-read /
+cache-write / reasoning tokens plus the estimated USD cost.
 
 **Provider**:
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
@@ -164,13 +222,37 @@ out, the turn pauses, one answering Request back.
 
 ### Context
 
-**Context Engine**:
-The pluggable layer that decides, each turn, which messages enter the LLM window.
-Two implementations: legacy (pass-through + Consolidation elsewhere) and Curator.
+**Context Engine** (`context_engine/`):
+The layer that assembles each turn's LLM window. One unified engine —
+`ContextAssembler` (`context_engine/assembler.py`) — runs an ordered pipeline of
+SegmentBuilders in two phases: Phase A builds the system prefix in parallel, Phase B
+budgets history serially against that fixed overhead. The historical
+`legacy` / `curator` / `default` engine split was collapsed into this one engine;
+`engine:` survives only as a backward-compat config alias.
+_Avoid_: describing "legacy" and "Curator" as two separate engines — there is one
+engine and the Curator is its Segment 6.
+
+**SegmentBuilder**:
+A pluggable contributor to the prompt; each builder produces one Segment for a fixed
+slot in the pipeline. Builders run in `order`, optionally flagged `needs_prefix` to
+defer into Phase B.
+
+**Segment**:
+A SegmentBuilder's uniform output: system-slot text, optional history (only the
+Curator sets this), and metadata merged into the assembled context.
+
+**Prompt Segments**:
+The ordered blocks `ContextAssembler` renders into the system prompt, one per
+SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
+(host `user.md` ⊕ EverOS recall), `# Active Skills` (always-on) and `# Skills`
+(SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
+(Segment 6).
+_Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
 **Curator**:
 An internal, bounded agent loop whose only job is to build the main agent's next
-context window. It never answers the user and never runs user-facing tools.
+context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
+user and never runs user-facing tools.
 _Avoid_: calling legacy's lossy summarization "curating"
 
 **Fast Path**:
@@ -179,7 +261,12 @@ full history passes through unchanged.
 
 **Slow Path**:
 Curator's small-model agent loop, run under context pressure: inspects the Manifest,
-archives/retrieves, and submits a context plan that a deterministic assembler validates.
+archives/retrieves, and submits a ContextPlan that a deterministic assembler validates.
+
+**ContextPlan**:
+The Curator's structured output that the deterministic assembler validates and applies:
+which message ids and archive refs to include, which to drop, plus memory sections and
+the Working State injection.
 
 **Fail-Safe**:
 The deterministic fallback when the Slow Path errors or produces no valid plan:
@@ -282,3 +369,39 @@ Isolated command execution (microVM / boxlite); owns the debug server and VM lif
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
 `AgentHook` instances (`BeforeIterationHook`, `AfterIterationHook`, `ToolAuditHook`)
 wired into `AgentLoop` via `CompositeHook`.
+
+**EvalJudge** (`eval_engine/judge/`):
+The single-call LLM judge behind the EvalEngine's task-completion check: it compares the
+turn's original user goal against the final response and returns a JudgeVerdict. Any error
+path returns `unknown`, so the judge can never crash the Agent Loop.
+_Avoid_: "task judge" as a class name — the class is `EvalJudge`.
+
+**JudgeVerdict**:
+The three-state outcome an EvalJudge returns: `completed` (goal addressed), `failed`
+(visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
+writes completed/failed (never unknown) into `HISTORY.md`.
+
+### Workspace & Onboarding
+
+**Workspace**:
+The per-agent filesystem tree (default `~/.raven/workspace`) holding the agent's and user's
+memory, skills, and root task files. Exactly one per running agent.
+_Avoid_: confusing the Workspace (the live instance) with the Workspace Template it is seeded from.
+
+**Workspace Template** (`templates/`):
+The bundled markdown seed files copied into a Workspace on first run by
+`sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
+`SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
+profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
+(tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
+under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
+`HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
+
+**Onboarding** (`raven onboard` → `run_wizard`):
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory) that also seeds the
+Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
+
+**Bootstrap Files**:
+The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —
+rendered by the Context Builder / bootstrap segment.
+_Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not bootstrap.
