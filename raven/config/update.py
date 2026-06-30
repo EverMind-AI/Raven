@@ -61,8 +61,7 @@ def update_cron_config(
     """
     if key not in CronConfig.model_fields:
         raise KeyError(
-            f"Unknown cron config key: {key!r}. "
-            f"Supported: {sorted(CronConfig.model_fields)}"
+            f"Unknown cron config key: {key!r}. Supported: {sorted(CronConfig.model_fields)}"
         )
     path = config_path or get_config_path()
     data = _load_raw(path)
@@ -168,6 +167,26 @@ def set_sentinel_nudge_quota(
         _write_atomic(path, data)
         logger.info("config/update: sentinel nudge quota patched {!r}", changed)
     return changed
+
+
+def set_language(
+    language: str,
+    *,
+    config_path: Path | None = None,
+) -> str | None:
+    """Patch the top-level ``language`` on the on-disk config. Returns previous value.
+
+    Set by the onboarding wizard's language screen. Read by the CLI/wizard copy
+    (via ``_t``) and injected into the agent's system prompt so replies use the
+    chosen language.
+    """
+    path = config_path or get_config_path()
+    data = _load_raw(path)
+    prev = data.get("language")
+    data["language"] = language
+    _write_atomic(path, data)
+    logger.info("config/update: language set to {!r} (was {!r})", language, prev)
+    return prev
 
 
 def set_default_model(
