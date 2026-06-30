@@ -17,30 +17,17 @@ import type {
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { topLevelSubagents } from '../lib/subagentTree.js'
 import { formatToolCall, stripAnsi } from '../lib/text.js'
-import { fromSkin } from '../theme.js'
 import type { Msg, SubagentProgress } from '../types.js'
 
 import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
 import type { GatewayEventHandlerContext } from './interfaces.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
-import { getUiState, patchUiState } from './uiStore.js'
+import { applySkinTheme, getUiState, patchUiState } from './uiStore.js'
 
 const NO_PROVIDER_RE = /\bNo (?:LLM|inference) provider configured\b/i
 
 const statusFromBusy = () => (getUiState().busy ? 'running…' : 'ready')
-
-const applySkin = (s: GatewaySkin) =>
-  patchUiState({
-    theme: fromSkin(
-      s.colors ?? {},
-      s.branding ?? {},
-      s.banner_logo ?? '',
-      s.banner_hero ?? '',
-      s.tool_prefix ?? '',
-      s.help_header ?? ''
-    )
-  })
 
 const dropBgTask = (taskId: string) =>
   patchUiState(state => {
@@ -192,7 +179,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
   const handleReady = (skin?: GatewaySkin) => {
     if (skin) {
-      applySkin(skin)
+      applySkinTheme(skin)
     }
 
     rpc<CommandsCatalogResponse>('commands.catalog', {})
@@ -277,7 +264,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
       case 'skin.changed':
         if (ev.payload) {
-          applySkin(ev.payload)
+          applySkinTheme(ev.payload)
         }
 
         return

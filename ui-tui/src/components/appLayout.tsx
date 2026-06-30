@@ -293,7 +293,7 @@ const ComposerPane = memo(function ComposerPane({
               </Box>
             ))}
 
-            <Text color={ui.theme.color.border}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
+            <Text color={ui.theme.color.primary}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
             <Box
               onMouseDown={captureInputDrag}
               onMouseDrag={dragFromPromptRow}
@@ -337,7 +337,7 @@ const ComposerPane = memo(function ComposerPane({
                 <GoodVibesHeart t={ui.theme} tick={status.goodVibesTick} />
               </Box>
             </Box>
-            <Text color={ui.theme.color.border}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
+            <Text color={ui.theme.color.primary}>{'─'.repeat(Math.max(1, composer.cols - 2))}</Text>
           </>
         )}
       </Box>
@@ -396,7 +396,6 @@ const StatusRulePane = memo(function StatusRulePane({
         t={ui.theme}
         turnStartedAt={status.turnStartedAt}
         usage={ui.usage}
-        voiceLabel={status.voiceLabel}
       />
     </Box>
   )

@@ -80,6 +80,86 @@ describe('LIGHT_THEME', () => {
   })
 })
 
+describe('brand yellow ramp (title-gradient-table.md)', () => {
+  // Truecolor order is [.50,.100,.300,.500,.600,.700,.900,.950,.990] — the
+  // extra .600 puts .700 at index 5 and .900 at index 6. The 256 tier keeps the
+  // 8-stop set ([.50,.100,.300,.500,.700,.900,.950,.990]) with .700 at index 4.
+  it('keeps the documented dark title bands', async () => {
+    const { DARK_THEME } = await importThemeWithCleanEnv()
+
+    expect(DARK_THEME.yellow[0]).toBe('#fff7c2') // .50
+    expect(DARK_THEME.yellow[2]).toBe('#FFE573') // .300
+    expect(DARK_THEME.yellow[3]).toBe('#fbe23f') // .500
+    expect(DARK_THEME.yellow[5]).toBe('#c8a900') // .700
+    expect(DARK_THEME.yellow[6]).toBe('#8a6d00') // .900
+  })
+
+  it('gives light its own gold ramp re-derived around #B87900, not the dark scale', async () => {
+    const { DARK_THEME, LIGHT_THEME } = await importThemeWithCleanEnv()
+
+    expect(LIGHT_THEME.yellow[0]).toBe('#F6DA8B') // .50
+    expect(LIGHT_THEME.yellow[2]).toBe('#D9A83A') // .300
+    expect(LIGHT_THEME.yellow[3]).toBe('#B87900') // .500
+    expect(LIGHT_THEME.yellow[5]).toBe('#935F00') // .700
+    expect(LIGHT_THEME.yellow[6]).toBe('#684300') // .900
+
+    expect(LIGHT_THEME.yellow).not.toEqual(DARK_THEME.yellow)
+  })
+
+  it('carries scheme-specific 256-color ramps for the documented title bands', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    const dark = resolveTheme('dark', 2).yellow
+    const light = resolveTheme('light', 2).yellow
+
+    // 256 is the 8-stop set: .50/.300/.500/.700/.900 → indices 0/2/3/4/5.
+    expect([dark[0], dark[2], dark[3], dark[4], dark[5]]).toEqual([
+      'ansi256(229)',
+      'ansi256(228)',
+      'ansi256(220)',
+      'ansi256(178)',
+      'ansi256(94)'
+    ])
+    // yellow.300 and yellow.500 must not collapse onto the same 256 index.
+    expect(dark[2]).not.toBe(dark[3])
+    expect([light[0], light[2], light[3], light[4], light[5]]).toEqual([
+      'ansi256(222)',
+      'ansi256(179)',
+      'ansi256(136)',
+      'ansi256(94)',
+      'ansi256(58)'
+    ])
+
+    expect(light).not.toEqual(dark)
+  })
+
+  it('keeps 16-color yellow for both schemes', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    expect(resolveTheme('light', 1).yellow).toEqual(resolveTheme('dark', 1).yellow)
+    expect(resolveTheme('light', 1).yellow[0]).toBe('ansi:yellow')
+  })
+})
+
+describe('cursorColorHex (OSC 12 hardware cursor)', () => {
+  it('returns a truecolor hex even when the theme tier is 256/16 (default dark)', async () => {
+    const { cursorColorHex, resolveTheme } = await importThemeWithCleanEnv()
+
+    // tiers 1/2 store ansi indices, but OSC 12 needs an RGB color.
+    expect(cursorColorHex(resolveTheme('dark', 3))).toBe('#fbe23f') // truecolor primary passed through
+    expect(cursorColorHex(resolveTheme('dark', 2))).toBe('#fbe23f')
+    expect(cursorColorHex(resolveTheme('dark', 1))).toBe('#fbe23f')
+  })
+
+  it('uses the light title color across all tiers when the scheme is light', async () => {
+    const { cursorColorHex, resolveTheme } = await importThemeWithEnv({ RAVEN_TUI_THEME: 'light' })
+
+    expect(cursorColorHex(resolveTheme('light', 3))).toBe('#B87900')
+    expect(cursorColorHex(resolveTheme('light', 2))).toBe('#B87900')
+    expect(cursorColorHex(resolveTheme('light', 1))).toBe('#B87900')
+  })
+})
+
 describe('DEFAULT_THEME aliasing', () => {
   it('defaults to DARK_THEME when nothing signals light', async () => {
     const { DEFAULT_THEME, DARK_THEME: DARK } = await importThemeWithCleanEnv()
@@ -95,10 +175,12 @@ describe('detectLightMode', () => {
     expect(detectLightMode({})).toBe(false)
   })
 
-  it('defaults Apple Terminal to light when no stronger signal is present', async () => {
+  it('stays dark on Apple Terminal when no stronger signal is present', async () => {
     const { detectLightMode } = await importThemeWithCleanEnv()
 
-    expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(true)
+    // TERM_PROGRAM alone is no longer a light signal: Terminal.app ships both
+    // light and dark profiles and emits no COLORFGBG, so it defaults to dark.
+    expect(detectLightMode({ TERM_PROGRAM: 'Apple_Terminal' })).toBe(false)
   })
 
   it('honors RAVEN_TUI_LIGHT on/off', async () => {
@@ -185,6 +267,50 @@ describe('detectLightMode', () => {
 
     // Dark COLORFGBG must beat the allow-list.
     expect(detectLightMode({ COLORFGBG: '15;0', TERM_PROGRAM: 'Apple_Terminal' }, allowList)).toBe(false)
+  })
+})
+
+describe('applyDetectedBackground (OSC 11 reply)', () => {
+  it('parses 16-bit rgb: replies and flips the scheme to light on a bright bg', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithCleanEnv()
+
+    expect(currentScheme()).toBe('dark')
+
+    const res = applyDetectedBackground('rgb:ffff/ffff/ffff')
+
+    expect(res).toEqual({ changed: true, scheme: 'light' })
+    expect(currentScheme()).toBe('light')
+  })
+
+  it('parses 8-bit rgb: and #rrggbb dark replies as dark', async () => {
+    const { applyDetectedBackground } = await importThemeWithCleanEnv()
+
+    expect(applyDetectedBackground('rgb:1e/1e/2e')).toEqual({ changed: false, scheme: 'dark' })
+    expect(applyDetectedBackground('#1e1e2e')).toEqual({ changed: false, scheme: 'dark' })
+  })
+
+  it('caches the measured color into RAVEN_TUI_BACKGROUND', async () => {
+    const { applyDetectedBackground } = await importThemeWithCleanEnv()
+
+    applyDetectedBackground('rgb:eaea/eaea/eaea')
+
+    expect(process.env.RAVEN_TUI_BACKGROUND).toBe('#eaeaea')
+  })
+
+  it('lets an explicit RAVEN_TUI_THEME override the measured background', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithEnv({ RAVEN_TUI_THEME: 'dark' })
+
+    // Bright measured bg, but the explicit dark override wins (precedence is
+    // reused from detectLightMode).
+    expect(applyDetectedBackground('rgb:ffff/ffff/ffff')).toEqual({ changed: false, scheme: 'dark' })
+    expect(currentScheme()).toBe('dark')
+  })
+
+  it('returns null and leaves the scheme untouched on an unparseable reply', async () => {
+    const { applyDetectedBackground, currentScheme } = await importThemeWithCleanEnv()
+
+    expect(applyDetectedBackground('not-a-color')).toBeNull()
+    expect(currentScheme()).toBe('dark')
   })
 })
 
