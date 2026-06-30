@@ -211,9 +211,23 @@ An external memory system ([EverMind-AI/EverOS](https://github.com/EverMind-AI/E
 installed as a built-in tool in Raven.
 
 **SkillForge** (`memory_engine/skill_forge/`):
-The skill self-evolution subsystem — detects reusable procedures from sessions,
-versions them, evolves them on feedback, and retires stale ones. The name is
-retained; it is now a live module under the Memory Engine, not the old top-level husk.
+A skill retrieval and injection subsystem — it fuses candidates from three sources
+(local BM25-indexed files, self-evolved skills recalled from the EverOS memory backend,
+and remote skills from the Skill Hub) via weighted RRF, with optional LLM gating and
+query rewriting before injecting them into the agent prompt. Skill distillation/evolution
+is handled by the embedded EverOS extraction pipeline (`skillForge.everos`), not by
+SkillForge itself — there is no feedback-driven evolution or versioning, and retirement is
+a confidence-floor soft-delete. The name is retained; it is now a live module under the
+Memory Engine, not the old top-level husk.
+
+**Skill Hub** (`skill_hub/`):
+A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
+`api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
+progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
+`install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
+candidates into the weighted RRF (weight 0.85, below Local 1.0 and Everos 0.9), and the
+`read_skill` / `use_skill` tools do on-demand body fetch / script materialization. Replaces
+the retired "Mass" source.
 
 **Episode**:
 A distilled event note the Consolidation step writes to `episodes.md`.
@@ -226,6 +240,22 @@ A prediction the Memory Engine derives about the user's likely future behavior
 (each carries prediction / time-window / confidence), written by the consolidator.
 _Avoid_: conflating with the Proactive Engine's Predictor — Foresight is the stored
 memory artifact; the Predictor is the live proactive stage.
+
+### Plugins
+
+**Plugin** (`plugin/`):
+A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
+`bundled` / `enabled_by_default`). It contributes capabilities via
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends` and `tools` — each naming
+a `factory` (`module:callable`). The host passes the user's `plugins.config["<id>"]` dict
+verbatim to the factory as `PluginContext.config`.
+
+**Plugin Registry** (`plugin/registry.py`):
+The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting
+`enabled_by_default`), resolves each `module:callable` factory by dynamic import, and registers
+contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
+(`PluginConflict` on collision). `build_memory_backend()` / `build_tool()` construct a
+contribution with a fresh `PluginContext`.
 
 ### Security & Access
 
