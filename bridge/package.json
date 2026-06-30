@@ -2,6 +2,7 @@
   "name": "raven-whatsapp-bridge",
   "version": "0.1.0",
   "description": "WhatsApp bridge for raven using Baileys",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

@@ -1,30 +1,30 @@
-## Change description
+## Summary
 
-> Description here
+<!-- What changed, and why? -->
 
-## Type of change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Document
-- [ ] Others
+## Type
 
-## Related issues (if there is)
+- [ ] Fix
+- [ ] Feature
+- [ ] Docs
+- [ ] CI / tooling
+- [ ] Refactor
+- [ ] Other
 
-> Fix [#1]()
+## Verification
 
-## Checklists
+<!-- List the exact commands you ran and the result. -->
 
-### Development
+- [ ] Relevant tests pass locally
+- [ ] Relevant lint / type checks pass locally
+- [ ] User-facing docs or screenshots are updated when needed
 
-- [ ] Lint rules pass locally
-- [ ] Application changes have been tested thoroughly
-- [ ] Automated tests covering modified code pass
+## Risk
 
-### Security
+- [ ] Security impact considered
+- [ ] Backward compatibility considered
+- [ ] Rollback path is clear for risky changes
 
-- [ ] Security impact of change has been considered
-- [ ] Code follows security best practices and guidelines
+## Related Issues
 
-### Code review
-
-- [ ] Pull request has a descriptive title and context useful to a reviewer. Screenshots or screencasts are attached as necessary
+<!-- Fixes #123, closes #123, or N/A -->
