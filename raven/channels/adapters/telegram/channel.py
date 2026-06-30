@@ -31,14 +31,25 @@ _ALBUM_WINDOW_S = 0.6
 
 # Telegram media APIs keyed by the kind we resolve from a file extension.
 _EXT_KIND = {
-    "jpg": "photo", "jpeg": "photo", "png": "photo", "gif": "photo", "webp": "photo",
+    "jpg": "photo",
+    "jpeg": "photo",
+    "png": "photo",
+    "gif": "photo",
+    "webp": "photo",
     "ogg": "voice",
-    "mp3": "audio", "m4a": "audio", "wav": "audio", "aac": "audio",
+    "mp3": "audio",
+    "m4a": "audio",
+    "wav": "audio",
+    "aac": "audio",
 }
 # Inbound: map a Telegram media object kind to the saved-file extension.
 _INBOUND_MIME_EXT = {
-    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
-    "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
 }
 _INBOUND_KIND_EXT = {"image": ".jpg", "voice": ".ogg", "audio": ".mp3"}
 
@@ -208,7 +219,7 @@ class TelegramChannel(ChannelBase):
             logger.error("Telegram bot token not configured")
             return
         self._running = True
-        self._stop_event = asyncio.Event()   # fresh per start (restart-safe)
+        self._stop_event = asyncio.Event()  # fresh per start (restart-safe)
 
         request = HTTPXRequest(
             connection_pool_size=16,
@@ -231,7 +242,13 @@ class TelegramChannel(ChannelBase):
             self._app.add_handler(CommandHandler(cmd, self._on_command))
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
+                (
+                    filters.TEXT
+                    | filters.PHOTO
+                    | filters.VOICE
+                    | filters.AUDIO
+                    | filters.Document.ALL
+                )
                 & ~filters.COMMAND,
                 self._on_message,
             )
@@ -332,7 +349,9 @@ class TelegramChannel(ChannelBase):
         try:
             step = max(len(text) // 8, 40)
             for cut in range(step, len(text), step):
-                await self._app.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text[:cut])
+                await self._app.bot.send_message_draft(
+                    chat_id=chat_id, draft_id=draft_id, text=text[:cut]
+                )
                 await asyncio.sleep(0.04)
             await self._app.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
             await asyncio.sleep(0.15)
@@ -353,7 +372,7 @@ class TelegramChannel(ChannelBase):
     async def _on_help(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
             await update.message.reply_text(
-                "🦞 Raven commands:\n"
+                "🐦‍⬛ Raven commands:\n"
                 "/new — Start a new conversation\n"
                 "/stop — Stop the current task\n"
                 "/help — Show available commands"
@@ -381,7 +400,7 @@ class TelegramChannel(ChannelBase):
         self._remember_thread(message)
         if not await self._addressed_to_bot(message):
             return
-        if not self.is_allowed(self._sender_id(user)):   # reject before media download / typing
+        if not self.is_allowed(self._sender_id(user)):  # reject before media download / typing
             return
 
         parts: list[str] = []
@@ -399,7 +418,9 @@ class TelegramChannel(ChannelBase):
             else:
                 media_paths.append(saved)
                 if kind in ("voice", "audio"):
-                    text = await transcribe_audio(saved, self.transcription_api_key, channel=self.name)
+                    text = await transcribe_audio(
+                        saved, self.transcription_api_key, channel=self.name
+                    )
                     parts.append(f"[transcription: {text}]" if text else f"[{kind}: {saved}]")
                 else:
                     parts.append(f"[{kind}: {saved}]")
@@ -503,7 +524,9 @@ class TelegramChannel(ChannelBase):
         if self._bot_username:
             if self._mentions_bot(message.text or "", getattr(message, "entities", None)):
                 return True
-            if self._mentions_bot(message.caption or "", getattr(message, "caption_entities", None)):
+            if self._mentions_bot(
+                message.caption or "", getattr(message, "caption_entities", None)
+            ):
                 return True
         replied = getattr(getattr(message, "reply_to_message", None), "from_user", None)
         return bool(self._bot_id and replied and replied.id == self._bot_id)
@@ -518,7 +541,11 @@ class TelegramChannel(ChannelBase):
                     return True
             elif etype == "mention":
                 off, length = getattr(entity, "offset", None), getattr(entity, "length", None)
-                if off is not None and length is not None and text[off : off + length].lower() == handle:
+                if (
+                    off is not None
+                    and length is not None
+                    and text[off : off + length].lower() == handle
+                ):
                     return True
         return handle in text.lower()
 

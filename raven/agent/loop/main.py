@@ -6,7 +6,6 @@ import asyncio
 import json
 import re
 import time
-import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -23,22 +22,22 @@ from raven.agent.loop.recovery import (
     classify_empty_response,
 )
 from raven.agent.subagent import SubagentManager
+from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
     ImageGenerateTool,
     SpeechGenerateTool,
     VideoGenerateTool,
 )
-from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -63,15 +62,15 @@ if TYPE_CHECKING:
         SkillForgeRouterConfig,
     )
     from raven.config.schema import ChannelsConfig, ExecToolConfig
-    from raven.context_engine import ContextEngine, TurnContext
+    from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
-    from raven.skill_hub import SkillHubClient
-    from raven.token_wise.base import UsageSnapshot
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.routing.router import ModelRouter
     from raven.sandbox.debug_server import SandboxDebugServer
+    from raven.skill_hub import SkillHubClient
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
+    from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
 
 
@@ -111,7 +110,7 @@ def _filter_qualified_ids(
         if not isinstance(qid, str):
             continue
         if qid.startswith(needle):
-            native = qid[len(needle):]
+            native = qid[len(needle) :]
             if native:
                 out.append(native)
     return out
@@ -157,7 +156,13 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # Failure markers a plain retry would likely clear — these must NOT count toward
 # the tool-failure-loop streak (nudging on a 429 that self-heals is just noise).
 _TRANSIENT_FAILURE_MARKERS = (
-    "429", "rate limit", "timed out", "timeout", "no healthy upstream", "502", "503",
+    "429",
+    "rate limit",
+    "timed out",
+    "timeout",
+    "no healthy upstream",
+    "502",
+    "503",
 )
 # Successful-but-empty results: the tool ran fine and just found nothing. A
 # repeated empty search is legitimate exploration, not a stuck dead call, so it
@@ -282,6 +287,7 @@ class AgentLoop:
         )
         from raven.config.schema import ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
+
         # Optional transform applied to the final assistant content right
         # before outbound delivery. Signature: (session_key, content) -> content.
         # Used by Sentinel's NudgeInjector to piggyback on the agent's reply,
@@ -312,6 +318,7 @@ class AgentLoop:
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         from raven.config.schema import MediaGenConfig
+
         self.media_config = media_config or MediaGenConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -367,8 +374,10 @@ class AgentLoop:
         # the import cycle with ``raven.agent.__init__``.
         if context_config is None:
             from raven.config.raven import ContextConfig
+
             context_config = ContextConfig()
         from raven.context_engine import build_context_engine
+
         self.context_config = context_config
 
         # Skill Hub client — built once and shared by the HubSkillSource
@@ -379,7 +388,8 @@ class AgentLoop:
         # Hub endpoint is configured — read_skill is then not registered and
         # use_skill serves local/everos only.
         self._skill_hub_client = self._build_skill_hub_client(
-            workspace, skill_forge_router_config,
+            workspace,
+            skill_forge_router_config,
         )
 
         self.context_engine: "ContextEngine" = build_context_engine(
@@ -405,15 +415,18 @@ class AgentLoop:
         # the gate is closed the loop is byte-identical to baseline.
         if runtime_config is None:
             from raven.config.raven import RuntimeConfig
+
             runtime_config = RuntimeConfig()
         self.runtime_config = runtime_config
         self.interactive = interactive
         self._checkpoint = None
         if self._checkpoint_active(runtime_config.checkpoint.policy, interactive):
             from raven.agent.loop.checkpoint import CheckpointService
+
             try:
                 self._checkpoint = CheckpointService(
-                    workspace, shadow_dir=runtime_config.checkpoint.shadow_dir,
+                    workspace,
+                    shadow_dir=runtime_config.checkpoint.shadow_dir,
                 )
             except ValueError as exc:
                 # Bad shadow_dir (e.g. ``../escape`` or absolute path) →
@@ -548,13 +561,15 @@ class AgentLoop:
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
-            timeout=self.exec_config.timeout,
-            restrict_to_workspace=self.restrict_to_workspace,
-            path_append=self.exec_config.path_append,
-            executor=self._executor,
-        ))
+        self.tools.register(
+            ExecTool(
+                working_dir=str(self.workspace),
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+                path_append=self.exec_config.path_append,
+                executor=self._executor,
+            )
+        )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
@@ -569,10 +584,14 @@ class AgentLoop:
         )
         for cls, tool_cfg in media_tools:
             if tool_cfg.api_key or tool_cfg.model:
-                self.tools.register(cls(
-                    tool_cfg, workspace=self.workspace,
-                    proxy=media.proxy, output_subdir=media.output_subdir,
-                ))
+                self.tools.register(
+                    cls(
+                        tool_cfg,
+                        workspace=self.workspace,
+                        proxy=media.proxy,
+                        output_subdir=media.output_subdir,
+                    )
+                )
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -600,7 +619,9 @@ class AgentLoop:
         # bodies (local/everos bodies already ride in context), so it
         # registers only when a Hub endpoint is configured.
         skill_registry = getattr(
-            getattr(self.context, "skills", None), "registry", None,
+            getattr(self.context, "skills", None),
+            "registry",
+            None,
         )
         if skill_registry is not None or self._skill_hub_client is not None:
             from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
@@ -611,7 +632,8 @@ class AgentLoop:
             if self._skill_hub_client is not None:
                 self.tools.register(
                     ReadSkillTool(
-                        client=self._skill_hub_client, registry=skill_registry,
+                        client=self._skill_hub_client,
+                        registry=skill_registry,
                     ),
                 )
 
@@ -656,9 +678,7 @@ class AgentLoop:
         )
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
-        system_tokens = estimate_prompt_tokens(
-            [{"role": "system", "content": system_prompt}]
-        )
+        system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
         available_history = max(
             0,
             self.context_window_tokens - reserved_output - tool_tokens - system_tokens,
@@ -709,6 +729,7 @@ class AgentLoop:
     ) -> list[dict[str, Any]]:
         """Ask the active context engine for the main-agent message window."""
         from raven.context_engine import TurnContext  # deferred — see module note
+
         # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
         # the engine. If ``engine.assemble`` raises partway, the next
         # caller falls back to the legacy ``_collect_injected_skill_ids``
@@ -888,7 +909,8 @@ class AgentLoop:
             )
 
     def _collect_injected_skill_ids(
-        self, selected: list[Any] | None,
+        self,
+        selected: list[Any] | None,
     ) -> list[str]:
         """Combine selector top-K + always-skills into a deduplicated id list.
 
@@ -940,7 +962,7 @@ class AgentLoop:
             for qid in self._last_injected_skill_ids:
                 _add_raw_id(qid)
         else:
-            for meta in (selected or []):
+            for meta in selected or []:
                 _add(meta)
         try:
             always = skills_svc.get_always_skills()
@@ -979,9 +1001,8 @@ class AgentLoop:
         try:
             from raven.config.paths import get_data_dir
             from raven.sandbox.debug_server import SandboxDebugServer
-            socket_path = SandboxDebugServer.resolve_socket_path(
-                cfg.debug.socket, get_data_dir()
-            )
+
+            socket_path = SandboxDebugServer.resolve_socket_path(cfg.debug.socket, get_data_dir())
             server = SandboxDebugServer(
                 socket_path=socket_path,
                 owned_ids=self._owned_ids,
@@ -1027,10 +1048,13 @@ class AgentLoop:
         try:
             await self._start_executor()  # ensure executor is live before MCP servers connect
             from raven.agent.tools.mcp import connect_mcp_servers
+
             self._mcp_stack = AsyncExitStack()
             await self._mcp_stack.__aenter__()
             await connect_mcp_servers(
-                self._mcp_servers, self.tools, self._mcp_stack,
+                self._mcp_servers,
+                self.tools,
+                self._mcp_stack,
                 executor=self._executor,
             )
             # Re-apply blacklist: MCP servers may register tool names that
@@ -1066,12 +1090,14 @@ class AgentLoop:
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:
         """Format tool calls as concise hint, e.g. 'web_search("query")'."""
+
         def _fmt(tc):
             args = (tc.arguments[0] if isinstance(tc.arguments, list) else tc.arguments) or {}
             val = next(iter(args.values()), None) if isinstance(args, dict) else None
             if not isinstance(val, str):
                 return tc.name
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
+
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
     @staticmethod
@@ -1143,7 +1169,9 @@ class AgentLoop:
         final_usage: dict[str, Any] | None = None
 
         async for delta in self.provider.chat_stream(
-            messages=messages, tools=tools, model=model,
+            messages=messages,
+            tools=tools,
+            model=model,
         ):
             reasoning_delta = getattr(delta, "reasoning_content", None)
             if reasoning_delta:
@@ -1156,7 +1184,8 @@ class AgentLoop:
                     await on_token_delta(delta.content)
             if delta.tool_call_delta:
                 _merge_tool_call_fragments(
-                    tool_call_slots, delta.tool_call_delta,
+                    tool_call_slots,
+                    delta.tool_call_delta,
                 )
             if delta.usage is not None:
                 final_usage = delta.usage
@@ -1221,9 +1250,7 @@ class AgentLoop:
         run_turn boundary only emits a closing ``Text`` when nothing streamed,
         so a non-streamed wrap-up after an already-streamed turn gets dropped.
         """
-        synth_messages = messages + [
-            {"role": "user", "content": _MAX_ITER_SYNTHESIS_PROMPT}
-        ]
+        synth_messages = messages + [{"role": "user", "content": _MAX_ITER_SYNTHESIS_PROMPT}]
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
@@ -1313,7 +1340,10 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
             logger.info(
-                "Iteration {}/{} model={}", iteration, self.max_iterations, effective_model,
+                "Iteration {}/{} model={}",
+                iteration,
+                self.max_iterations,
+                effective_model,
             )
 
             # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
@@ -1325,7 +1355,9 @@ class AgentLoop:
                     inj_paths = [m.path for m in inj.media]
                     if inj_paths:
                         prefix = inj_text + "\n" if inj_text else ""
-                        inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
+                        inj_text = (
+                            f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
+                        )
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
@@ -1335,7 +1367,9 @@ class AgentLoop:
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
             call_messages, call_tools, call_model = await self.strategies.before_llm_call(
-                messages, tool_defs, effective_model,
+                messages,
+                tool_defs,
+                effective_model,
             )
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
@@ -1356,7 +1390,11 @@ class AgentLoop:
             # usage tracking, budget enforcement, etc. Errors are swallowed.
             usage_snapshot = self._build_usage_snapshot(response, call_model, session_key)
             await self.strategies.after_llm_call(
-                {"content": response.content, "finish_reason": response.finish_reason, "usage": response.usage},
+                {
+                    "content": response.content,
+                    "finish_reason": response.finish_reason,
+                    "usage": response.usage,
+                },
                 usage_snapshot,
             )
             # tui-chat L2-A wire: stream caller (turn.* handler) may want the
@@ -1400,7 +1438,9 @@ class AgentLoop:
                     iteration -= 1  # the overflowed call did no work; don't bill it
                     logger.warning(
                         "Context overflow; elided {} old tool result(s), retrying ({}/{})",
-                        elided, compress_retries, self._MAX_COMPRESS_RETRIES,
+                        elided,
+                        compress_retries,
+                        self._MAX_COMPRESS_RETRIES,
                     )
                     continue
 
@@ -1411,12 +1451,11 @@ class AgentLoop:
                         await on_progress(thought)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
-                tool_call_dicts = [
-                    tc.to_openai_tool_call()
-                    for tc in response.tool_calls
-                ]
+                tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages,
+                    response.content,
+                    tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
@@ -1429,11 +1468,14 @@ class AgentLoop:
                     # second emit here would double it.
                     emit_tool_event = on_tool_event is not None and tool_call.name != "message"
                     if emit_tool_event:
-                        await on_tool_event("start", {
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "arguments": tool_call.arguments,
-                        })
+                        await on_tool_event(
+                            "start",
+                            {
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.name,
+                                "arguments": tool_call.arguments,
+                            },
+                        )
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -1441,14 +1483,19 @@ class AgentLoop:
                     preview = result_str.replace("\n", " ")[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
-                        tool_call.name, duration_ms, preview,
+                        tool_call.name,
+                        duration_ms,
+                        preview,
                     )
                     if emit_tool_event:
-                        await on_tool_event("complete", {
-                            "tool_call_id": tool_call.id,
-                            "result_preview": preview,
-                            "truncated": len(result_str) > 200,
-                        })
+                        await on_tool_event(
+                            "complete",
+                            {
+                                "tool_call_id": tool_call.id,
+                                "result_preview": preview,
+                                "truncated": len(result_str) > 200,
+                            },
+                        )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -1468,12 +1515,14 @@ class AgentLoop:
                 if (
                     loop_fail_streak >= self._LOOP_BREAK_THRESHOLD
                     and loop_nudges < self._LOOP_BREAK_MAX
-                    and messages and messages[-1].get("role") == "tool"
+                    and messages
+                    and messages[-1].get("role") == "tool"
                 ):
                     loop_nudges += 1
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
-                        + "\n\n" + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
+                        + "\n\n"
+                        + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 prev_had_tool_calls = True
@@ -1493,7 +1542,8 @@ class AgentLoop:
                 # marked ``_recovery_synthetic`` and stripped before persistence
                 # / extraction so it can't poison future context.
                 action = classify_empty_response(
-                    response, clean,
+                    response,
+                    clean,
                     prev_had_tool_calls=prev_had_tool_calls,
                     nudges_done=post_tool_nudges,
                     prefill_retries=prefill_retries,
@@ -1504,14 +1554,16 @@ class AgentLoop:
                     prefill_retries += 1
                     logger.warning(
                         "empty-recovery: thinking-only prefill {}/{}",
-                        prefill_retries, self._recovery_limits.thinking_prefill_max_retries,
+                        prefill_retries,
+                        self._recovery_limits.thinking_prefill_max_retries,
                     )
                     # Re-feed the model its own reasoning (not stripped) so it
                     # continues into the body. Marked synthetic → dropped before
                     # persistence/extraction; the reasoning fields are stripped
                     # from the wire request by the provider's key allowlist.
                     messages = self.context.add_assistant_message(
-                        messages, response.content,
+                        messages,
+                        response.content,
                         reasoning_content=response.reasoning_content,
                         thinking_blocks=response.thinking_blocks,
                     )
@@ -1534,20 +1586,25 @@ class AgentLoop:
                     empty_retries += 1
                     logger.warning(
                         "empty-recovery: plain empty retry {}/{}",
-                        empty_retries, self._recovery_limits.empty_content_max_retries,
+                        empty_retries,
+                        self._recovery_limits.empty_content_max_retries,
                     )
                     prev_had_tool_calls = False
                     continue
 
                 messages = self.context.add_assistant_message(
-                    messages, clean, reasoning_content=response.reasoning_content,
+                    messages,
+                    clean,
+                    reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
                 final_content = clean
                 break
 
         if final_content is None and iteration >= self.max_iterations:
-            logger.warning("Max iterations ({}) reached; synthesizing final answer", self.max_iterations)
+            logger.warning(
+                "Max iterations ({}) reached; synthesizing final answer", self.max_iterations
+            )
             # Exhaustion is two orthogonal facts, not an either/or:
             #   1. The turn did NOT complete — tag it ``interrupted`` so the
             #      shadow-git checkpoint commit is labelled and the next turn's
@@ -1559,7 +1616,9 @@ class AgentLoop:
             #      internally if the call fails, so the turn is never silent.
             status = "interrupted"
             final_content = await self._synthesize_final_on_exhaustion(
-                messages, effective_model, fallback_models,
+                messages,
+                effective_model,
+                fallback_models,
                 on_token_delta=on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
             )
@@ -1668,9 +1727,9 @@ class AgentLoop:
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
             self._mcp_stack = None
-        self._mcp_connected = False   # reset so _connect_mcp() can reconnect after close
+        self._mcp_connected = False  # reset so _connect_mcp() can reconnect after close
         self._mcp_connecting = False  # reset so a concurrent caller isn't permanently blocked
-        await self.close_executor()   # always runs, even when no MCP servers are configured
+        await self.close_executor()  # always runs, even when no MCP servers are configured
 
     def stop(self) -> None:
         """Stop the agent loop."""
@@ -1761,7 +1820,7 @@ class AgentLoop:
             return ("New session started.", [])
         if cmd == "/help":
             lines = [
-                "🦞 Raven commands:",
+                "🐦‍⬛ Raven commands:",
                 "/new — Start a new conversation",
                 "/stop — Stop the current task",
                 "/restart — Restart the bot",
@@ -1781,6 +1840,7 @@ class AgentLoop:
             from datetime import datetime as _dt
 
             from raven.agent.personalizer import Personalizer
+
             _personalizer = Personalizer(MemoryStore(self.workspace), self.provider, self.model)
 
             # ── Step 2 completion: user is answering a pending clarification ──
@@ -1799,7 +1859,9 @@ class AgentLoop:
                     # User started a new request; discard the old pending state and re-classify.
                     session.pending_clarification = None
                     self.sessions.save(session)
-                    logger.info("Personalization: new request detected, discarding old pending_clarification")
+                    logger.info(
+                        "Personalization: new request detected, discarding old pending_clarification"
+                    )
 
                     _question = await _personalizer.generate_question(
                         content,
@@ -1807,15 +1869,20 @@ class AgentLoop:
                     )
                     if _question:
                         _ts = _dt.now().isoformat()
-                        session.record({"role": "user",      "content": content, "timestamp": _ts})
-                        session.record({"role": "assistant", "content": _question,   "timestamp": _ts})
+                        session.record({"role": "user", "content": content, "timestamp": _ts})
+                        session.record(
+                            {"role": "assistant", "content": _question, "timestamp": _ts}
+                        )
                         session.pending_clarification = {
                             "original_message": content,
-                            "question":         _question,
-                            "domain":           _recheck.get("domain", ""),
+                            "question": _question,
+                            "domain": _recheck.get("domain", ""),
                         }
                         self.sessions.save(session)
-                        logger.info("Personalization: asked clarification for new request, session {}", session.key)
+                        logger.info(
+                            "Personalization: asked clarification for new request, session {}",
+                            session.key,
+                        )
                         return (_question, [])
                     # Clear pending state and proceed normally when question generation fails.
                     session.pending_clarification = None
@@ -1831,6 +1898,7 @@ class AgentLoop:
                             question=_pending["question"],
                             answer=content,
                         )
+
                     _t = asyncio.create_task(_extract())
                     self._consolidation_tasks.add(_t)
                     _t.add_done_callback(self._consolidation_tasks.discard)
@@ -1851,18 +1919,22 @@ class AgentLoop:
                     if _question:
                         # Write the original request and the clarifying question into history to keep the conversation coherent.
                         _ts = _dt.now().isoformat()
-                        session.record({"role": "user",      "content": content, "timestamp": _ts})
-                        session.record({"role": "assistant", "content": _question,   "timestamp": _ts})
+                        session.record({"role": "user", "content": content, "timestamp": _ts})
+                        session.record(
+                            {"role": "assistant", "content": _question, "timestamp": _ts}
+                        )
 
                         # Save the pending state so the next message can resume it.
                         session.pending_clarification = {
                             "original_message": content,
-                            "question":         _question,
-                            "domain":           _classification.get("domain", ""),
+                            "question": _question,
+                            "domain": _classification.get("domain", ""),
                         }
                         self.sessions.save(session)
 
-                        logger.info("Personalization: asked clarification for session {}", session.key)
+                        logger.info(
+                            "Personalization: asked clarification for session {}", session.key
+                        )
                         return (_question, [])
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
@@ -1882,7 +1954,8 @@ class AgentLoop:
         # Phase B-3: routed via ``_select_skills_for_turn`` so the new
         # ``default`` engine short-circuits selection here.
         selected_skills = await self._select_skills_for_turn(
-            content, context_messages,
+            content,
+            context_messages,
         )
         initial_messages = await self._assemble_context_messages(
             session=session,
@@ -1953,13 +2026,15 @@ class AgentLoop:
         )
         # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
         await self._dispatch_backend_store(
-            key, all_msgs[turn_start_idx:],
+            key,
+            all_msgs[turn_start_idx:],
         )
         # FB-1: forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.
         await self._dispatch_backend_feedback(
-            key, self._collect_injected_skill_ids(selected_skills),
+            key,
+            self._collect_injected_skill_ids(selected_skills),
         )
         if not self.context_engine.owns_compaction:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
@@ -1969,6 +2044,7 @@ class AgentLoop:
         # its content is a system-generated announce, not user input to learn from.
         if self.enable_personalization and origin is not Origin.SUBAGENT:
             from raven.agent.personalizer import Personalizer
+
             _p4 = Personalizer(MemoryStore(self.workspace), self.provider, self.model)
 
             async def _post_learn():
@@ -1986,12 +2062,12 @@ class AgentLoop:
             # the would-be response so future investigations have a trail
             # parallel to "Response to ..." below.
             if final_content:
-                preview = (
-                    final_content[:120] + "..." if len(final_content) > 120 else final_content
-                )
+                preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
                 logger.info(
                     "MessageTool sent in turn for {}:{}: {}",
-                    channel, sender_id, preview,
+                    channel,
+                    sender_id,
+                    preview,
                 )
             return None
 
@@ -2008,10 +2084,16 @@ class AgentLoop:
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            if (
+                role == "tool"
+                and isinstance(content, str)
+                and len(content) > self._TOOL_RESULT_MAX_CHARS
+            ):
+                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                if isinstance(content, str) and content.startswith(
+                    ContextBuilder._RUNTIME_CONTEXT_TAG
+                ):
                     # Strip the runtime-context prefix, keep only the user text.
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
@@ -2021,10 +2103,15 @@ class AgentLoop:
                 if isinstance(content, list):
                     filtered = []
                     for c in content:
-                        if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                        if (
+                            c.get("type") == "text"
+                            and isinstance(c.get("text"), str)
+                            and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
+                        ):
                             continue  # Strip runtime context from multimodal messages
-                        if (c.get("type") == "image_url"
-                                and c.get("image_url", {}).get("url", "").startswith("data:image/")):
+                        if c.get("type") == "image_url" and c.get("image_url", {}).get(
+                            "url", ""
+                        ).startswith("data:image/"):
                             filtered.append({"type": "text", "text": "[image]"})
                         else:
                             filtered.append(c)
@@ -2078,6 +2165,7 @@ class AgentLoop:
         ``drain`` pulls user messages injected mid-turn (BusyPolicy.INJECT); it
         is threaded into the agent loop and consumed at the top of each iteration.
         """
+        from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
             MediaOut,
             Notice,
@@ -2089,7 +2177,6 @@ class AgentLoop:
             ToolPhase,
             Usage,
         )
-        from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.message import Media
         from raven.spine.runner import TurnOutcome
 
@@ -2145,8 +2232,7 @@ class AgentLoop:
             await emit(
                 MediaOut(
                     media=tuple(
-                        Media(path=p, mime="application/octet-stream", kind="file")
-                        for p in paths
+                        Media(path=p, mime="application/octet-stream", kind="file") for p in paths
                     )
                 )
             )
@@ -2275,9 +2361,11 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             args = {"_raw_arguments": args_text}
-        result.append(ToolCallRequest(
-            id=slot["id"] or "",
-            name=name,
-            arguments=args,
-        ))
+        result.append(
+            ToolCallRequest(
+                id=slot["id"] or "",
+                name=name,
+                arguments=args,
+            )
+        )
     return result

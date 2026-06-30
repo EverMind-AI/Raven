@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.memory_engine.skill_local.types import SkillMeta
 from raven.memory_engine.skill_forge import LocalSkillCatalog
+from raven.memory_engine.skill_local.types import SkillMeta
 from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import build_assistant_message, detect_image_mime
 
@@ -88,7 +88,8 @@ class ContextBuilder:
             cfg = getattr(self.skills, "_config", None)
             always_max = getattr(cfg, "always_max", 5) or 5
             always_content = self.skills.load_skills_for_context(
-                always_skills, max_inject=always_max,
+                always_skills,
+                max_inject=always_max,
             )
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
@@ -118,27 +119,37 @@ class ContextBuilder:
             # (used by claweval / PinchBench A/B to attribute scores to
             # specific skills the agent saw inline).
             try:
-                import json as _json, time as _time
+                import json as _json
+                import time as _time
+
                 injected_meta = []
-                for _m in (only[:inject_max] if inject_max else only):
-                    injected_meta.append({
-                        "name": getattr(_m, "name", None),
-                        "id": str(getattr(_m, "id", "")),
-                        "source": getattr(_m, "source", None),
-                        "body_len": len(getattr(_m, "content", "") or ""),
-                    })
+                for _m in only[:inject_max] if inject_max else only:
+                    injected_meta.append(
+                        {
+                            "name": getattr(_m, "name", None),
+                            "id": str(getattr(_m, "id", "")),
+                            "source": getattr(_m, "source", None),
+                            "body_len": len(getattr(_m, "content", "") or ""),
+                        }
+                    )
                 _path = self.workspace / "skill_injections.jsonl"
                 with open(_path, "a") as _f:
-                    _f.write(_json.dumps({
-                        "ts": _time.time(),
-                        "mode": "full_body",
-                        "inject_max": inject_max,
-                        "skills": injected_meta,
-                    }) + "\n")
+                    _f.write(
+                        _json.dumps(
+                            {
+                                "ts": _time.time(),
+                                "mode": "full_body",
+                                "inject_max": inject_max,
+                                "skills": injected_meta,
+                            }
+                        )
+                        + "\n"
+                    )
             except Exception:
                 pass  # never break agent on telemetry failure
             ctx = self.skills.load_skills_for_context(
-                only, max_inject=inject_max,
+                only,
+                max_inject=inject_max,
             )
             if ctx:
                 parts.append(f"""# Skills
@@ -182,7 +193,7 @@ Skills with available="false" need dependencies installed first - you can try in
 - Use file tools when they are simpler or more reliable than shell commands.
 """
 
-        return f"""# Raven 🦞
+        return f"""# Raven 🐦‍⬛
 
 You are Raven, a helpful AI assistant.
 
@@ -253,9 +264,13 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(
-                selected_skills, current_message=current_message,
-            )},
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    selected_skills,
+                    current_message=current_message,
+                ),
+            },
             *history,
             {"role": "user", "content": merged},
         ]
@@ -283,8 +298,11 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         return images + [{"type": "text", "text": text}]
 
     def add_tool_result(
-        self, messages: list[dict[str, Any]],
-        tool_call_id: str, tool_name: str, result: str,
+        self,
+        messages: list[dict[str, Any]],
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
@@ -293,21 +311,26 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         reaches the model — every tool result funnels through here.
         """
         content = wrap_untrusted(result, source=tool_name)
-        messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
+        messages.append(
+            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content}
+        )
         return messages
 
     def add_assistant_message(
-        self, messages: list[dict[str, Any]],
+        self,
+        messages: list[dict[str, Any]],
         content: str | None,
         tool_calls: list[dict[str, Any]] | None = None,
         reasoning_content: str | None = None,
         thinking_blocks: list[dict] | None = None,
     ) -> list[dict[str, Any]]:
         """Add an assistant message to the message list."""
-        messages.append(build_assistant_message(
-            content,
-            tool_calls=tool_calls,
-            reasoning_content=reasoning_content,
-            thinking_blocks=thinking_blocks,
-        ))
+        messages.append(
+            build_assistant_message(
+                content,
+                tool_calls=tool_calls,
+                reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks,
+            )
+        )
         return messages

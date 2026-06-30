@@ -63,6 +63,7 @@ _SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
 # Helpers (private to this module)
 # ---------------------------------------------------------------------------
 
+
 def _stdout_isatty() -> bool:
     """Whether stdout is an interactive TTY (seam for the onboarding gate test;
     CliRunner swaps ``sys.stdout`` for a non-TTY buffer)."""
@@ -120,10 +121,6 @@ def _is_exit_command(command: str) -> bool:
     return command.lower() in EXIT_COMMANDS
 
 
-
-
-
-
 async def _read_interactive_input_async() -> str:
     """Read user input using prompt_toolkit (handles paste, history, display).
 
@@ -154,6 +151,7 @@ async def _read_interactive_input_async() -> str:
 
 def register(app: typer.Typer) -> None:
     """Attach the ``agent`` command to ``app``."""
+
     @app.command()
     def agent(
         message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
@@ -167,8 +165,12 @@ def register(app: typer.Typer) -> None:
                 "'direct' session remains reachable via --resume direct."
             ),
         ),
-        continue_: bool = typer.Option(False, "--continue", "-c", help="Continue the most recent cli session"),
-        resume: str | None = typer.Option(None, "--resume", "-r", help="Resume session by bare id or unique prefix"),
+        continue_: bool = typer.Option(
+            False, "--continue", "-c", help="Continue the most recent cli session"
+        ),
+        resume: str | None = typer.Option(
+            None, "--resume", "-r", help="Resume session by bare id or unique prefix"
+        ),
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", help="Config file path"),
         markdown: bool = typer.Option(
@@ -219,9 +221,7 @@ def register(app: typer.Typer) -> None:
     ):
         """Interact with the agent directly."""
         if sum((session_id is not None, continue_, resume is not None)) > 1:
-            raise typer.BadParameter(
-                "--session, --continue and --resume are mutually exclusive"
-            )
+            raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
 
         # Startup gate: when the required config (a provider key + default
         # model) is missing, run the onboarding wizard first. Only on an
@@ -244,8 +244,8 @@ def register(app: typer.Typer) -> None:
             attach_sentinel_spawn,
             build_sentinel_stack,
         )
-        from raven.config.raven import load_raven_config
         from raven.config.paths import get_cron_dir
+        from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.session.manager import SessionManager, new_chat_id
 
@@ -266,6 +266,7 @@ def register(app: typer.Typer) -> None:
         # New-session-by-default: independent one-shots don't bleed into each other.
         if resume is not None:
             from raven.cli.session_commands import resolve_session
+
             session_id = resolve_session(session_manager, resume)
         elif continue_:
             recent = session_manager.find_most_recent_chat_id("cli")
@@ -277,6 +278,7 @@ def register(app: typer.Typer) -> None:
             session_id = f"cli:{new_chat_id()}"
         else:
             from raven.cli.session_commands import resolve_session_cross_channel
+
             session_id = resolve_session_cross_channel(session_manager, session_id)
 
         # Create cron service (callback set below once the agent exists).
@@ -285,7 +287,8 @@ def register(app: typer.Typer) -> None:
         # gateway which has the real channel adapters wired up.
         cron_store_path = get_cron_dir() / "jobs.json"
         cron = CronService(
-            cron_store_path, allowed_channels={"cli"},
+            cron_store_path,
+            allowed_channels={"cli"},
             now_fn=parse_fake_now(fake_now),
         )
 
@@ -294,10 +297,15 @@ def register(app: typer.Typer) -> None:
         # triggers are dispatcher-side: only the gateway has real channel
         # adapters, so REPL must NOT drain them or feishu/slack triggers get
         # consumed without delivery.
-        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
-            config, sentinel_cfg, session_manager, provider,
-            now_fn=parse_fake_now(fake_now),
-            include_discover_triggers=False,
+        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = (
+            build_sentinel_stack(
+                config,
+                sentinel_cfg,
+                session_manager,
+                provider,
+                now_fn=parse_fake_now(fake_now),
+                include_discover_triggers=False,
+            )
         )
 
         if logs:
@@ -316,10 +324,14 @@ def register(app: typer.Typer) -> None:
         # runs a single time.
         plugin_registry = build_plugin_registry(ec_config)
         backend = maybe_build_memory_backend(
-            config.workspace_path, ec_config, registry=plugin_registry,
+            config.workspace_path,
+            ec_config,
+            registry=plugin_registry,
         )
         plugin_tools = build_plugin_tools(
-            config.workspace_path, ec_config, registry=plugin_registry,
+            config.workspace_path,
+            ec_config,
+            registry=plugin_registry,
         )
 
         agent_loop = AgentLoop(
@@ -367,6 +379,7 @@ def register(app: typer.Typer) -> None:
         # shim goes to the sentinel runner so anticipatory (sentinel:direct)
         # nudges resolve to the terminal instead of being dropped.
         from types import SimpleNamespace
+
         cli_shim = SimpleNamespace(enabled_channels=["cli"])
         if sentinel_runner is not None:
             sentinel_runner.set_channel_manager(cli_shim)
@@ -399,8 +412,7 @@ def register(app: typer.Typer) -> None:
                         await backend.start()
                     except Exception:
                         logger.exception(
-                            "memory backend start failed; continuing with "
-                            "legacy memory path",
+                            "memory backend start failed; continuing with legacy memory path",
                         )
                 try:
                     # Build inside the running loop: Scheduler pins its home loop in
@@ -509,13 +521,13 @@ def register(app: typer.Typer) -> None:
                         await backend.start()
                     except Exception:
                         logger.exception(
-                            "memory backend start failed; continuing with "
-                            "legacy memory path",
+                            "memory backend start failed; continuing with legacy memory path",
                         )
                 # agent_loop.run() is now a lifecycle keep-alive (executor /
                 # debug server / MCP up, then idle); all turns go through the
                 # spine. Gathered on teardown.
                 runtime_task = asyncio.create_task(agent_loop.run())
+
                 # Build the spine before starting cron: cron jobs submit CRON
                 # turns through this scheduler, and on_job must be wired
                 # before cron.start() so an immediately-firing job has its
@@ -523,7 +535,7 @@ def register(app: typer.Typer) -> None:
                 # async) — it must not move to the sync prologue.
                 def _render_nudge_marker() -> None:
                     console.print()
-                    console.print("[bold magenta]🦞 [主动][/bold magenta]")
+                    console.print("[bold magenta]🐦‍⬛ [主动][/bold magenta]")
 
                 scheduler, hub, teardown = build_repl(
                     agent_loop,
@@ -538,7 +550,8 @@ def register(app: typer.Typer) -> None:
                 # legacy bus path). readback_texts/system_events stay unset: the
                 # REPL has no heartbeat, so the handler no-ops them.
                 cron.on_job = make_on_cron_job(
-                    agent_loop, hub,
+                    agent_loop,
+                    hub,
                     submit=scheduler.submit,
                     channel_manager=cli_shim,
                     session_manager=session_manager,
@@ -553,7 +566,7 @@ def register(app: typer.Typer) -> None:
                 # never started its tick loop, so jobs just sat in jobs.json.
                 await cron.start()
                 # Start Sentinel if enabled so anticipatory nudges reach the REPL.
-                # Nudges ride the spine hub -> CliOutlet (which renders the 🦞
+                # Nudges ride the spine hub -> CliOutlet (which renders the 🐦‍⬛
                 # proactive marker for _sentinel_origin); no bus consumer here.
                 if sentinel_runner is not None:
                     await sentinel_runner.start()
@@ -584,7 +597,9 @@ def register(app: typer.Typer) -> None:
                         await sentinel_runner.stop()
                     cron.stop()
                     agent_loop.stop()
-                    await teardown()  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
+                    await (
+                        teardown()
+                    )  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
                     await asyncio.gather(runtime_task, return_exceptions=True)
                     if wait_skill_extract or flush_skill_buffer:
                         # ``exit`` is not a natural boundary; without a
@@ -596,8 +611,7 @@ def register(app: typer.Typer) -> None:
                         # resulting (and any other in-flight) task.
                         await agent_loop.await_pending_extractions(
                             flush_session_id=(
-                                f"{cli_channel}:{cli_chat_id}"
-                                if flush_skill_buffer else None
+                                f"{cli_channel}:{cli_chat_id}" if flush_skill_buffer else None
                             ),
                             wait=wait_skill_extract,
                         )

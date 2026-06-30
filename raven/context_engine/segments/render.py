@@ -34,6 +34,28 @@ BOOTSTRAP_FILES = [
 RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
 
+def _language_directive() -> str:
+    """A reply-language line for the system prompt, driven by ``config.language``.
+
+    Empty for English (default behaviour unchanged); for Chinese it tells the
+    model to answer in Simplified Chinese unless the user writes otherwise.
+    Reads config lazily and never raises — a config problem must not break
+    prompt assembly.
+    """
+    try:
+        from raven.config.loader import load_config
+
+        lang = load_config().language
+    except Exception:
+        return ""
+    if lang == "zh":
+        return (
+            "\nAlways respond in Simplified Chinese (简体中文), "
+            "unless the user explicitly writes in another language.\n"
+        )
+    return ""
+
+
 def identity_text(workspace: Path) -> str:
     """Segment 1 — the core identity / runtime block."""
     workspace_path = str(workspace.expanduser().resolve())
@@ -52,10 +74,10 @@ def identity_text(workspace: Path) -> str:
 - Use file tools when they are simpler or more reliable than shell commands.
 """
 
-    return f"""# Raven 🦞
+    return f"""# Raven 🐦‍⬛
 
 You are Raven, a helpful AI assistant.
-
+{_language_directive()}
 ## Runtime
 {runtime}
 

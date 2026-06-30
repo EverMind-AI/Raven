@@ -57,7 +57,14 @@ def ensure_bridge_dir() -> Path:
         raise RuntimeError("npm not found. Please install Node.js >= 18.")
 
     here = Path(__file__).resolve()
-    candidates = [here.parent.parent.parent / "bridge", here.parent.parent.parent.parent / "bridge"]
+    # here = raven/channels/adapters/whatsapp/bridge.py. The bridge source lives
+    # at <package>/bridge in a built wheel (parents[3]) but at the repo root's
+    # ./bridge when running from an editable / source checkout (parents[4]).
+    candidates = [
+        here.parents[2] / "bridge",  # raven/channels/bridge (legacy)
+        here.parents[3] / "bridge",  # raven/bridge (packaged wheel)
+        here.parents[4] / "bridge",  # <repo-root>/bridge (editable / source)
+    ]
     source = next((c for c in candidates if (c / "package.json").exists()), None)
     if not source:
         raise RuntimeError(

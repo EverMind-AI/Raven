@@ -38,7 +38,7 @@ class CliOutlet:
 
     ``render_marker`` is opt-in: a Text whose ``source.extras._sentinel_origin``
     is set renders this proactive marker before its content (the interactive
-    REPL passes the 🦞 marker the old bus consumer printed). Left None elsewhere,
+    REPL passes the 🐦‍⬛ marker the old bus consumer printed). Left None elsewhere,
     so a normal turn reply renders unchanged."""
 
     def __init__(
@@ -153,7 +153,9 @@ async def run_repl_loop(
             handle = submit(
                 TurnRequest(
                     origin=Origin.USER,
-                    source=Source(channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM),
+                    source=Source(
+                        channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM
+                    ),
                     text=user_input,
                     conversation=f"{channel}:{chat_id}",
                 )
