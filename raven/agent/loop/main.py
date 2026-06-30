@@ -252,6 +252,7 @@ class AgentLoop:
         interactive: bool = True,
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 4,
+        max_subagent_spawns_per_hour: int = 30,
         media_config: Any = None,
         disabled_tools: list[str] | None = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
@@ -438,6 +439,7 @@ class AgentLoop:
             sandbox_config=sandbox_config,
             owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
+            max_spawns_per_hour=max_subagent_spawns_per_hour,
         )
 
         # Executor: synchronous construction only; VM starts in _start_executor()

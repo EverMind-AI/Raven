@@ -550,6 +550,64 @@ def reset_provider(
     logger.info("update_providers: {} reset to defaults", name)
 
 
+def _load_provider_models(name: str, data: dict[str, Any]) -> tuple[type, list[str]]:
+    cls = _provider_schema_cls(name)
+    section = (data.get("providers") or {}).get(name) or {}
+    try:
+        instance = cls.model_validate(section)
+    except ValidationError:
+        instance = cls()
+    return cls, list(getattr(instance, "models", []) or [])
+
+
+def add_provider_model(
+    name: str,
+    model: str,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Append ``model`` to a provider's curated ``models`` list (idempotent).
+
+    Returns the new model list. Raises KeyError for an unknown provider.
+    """
+    path = config_path or get_config_path()
+    data = _load_raw(path)
+    cls, models = _load_provider_models(name, data)
+    if model not in models:
+        models.append(model)
+        section = (data.get("providers") or {}).get(name) or {}
+        section["models"] = models
+        validated = cls.model_validate(section)
+        data.setdefault("providers", {})
+        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_atomic(path, data)
+    return models
+
+
+def remove_provider_model(
+    name: str,
+    model: str,
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Remove ``model`` from a provider's curated ``models`` list (no-op if absent).
+
+    Returns the new model list. Raises KeyError for an unknown provider.
+    """
+    path = config_path or get_config_path()
+    data = _load_raw(path)
+    cls, models = _load_provider_models(name, data)
+    if model in models:
+        models = [m for m in models if m != model]
+        section = (data.get("providers") or {}).get(name) or {}
+        section["models"] = models
+        validated = cls.model_validate(section)
+        data.setdefault("providers", {})
+        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_atomic(path, data)
+    return models
+
+
 # ---------------------------------------------------------------------------
 # Public API: credential health check
 # ---------------------------------------------------------------------------

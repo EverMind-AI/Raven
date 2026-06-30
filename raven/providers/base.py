@@ -4,6 +4,7 @@ import asyncio
 import json
 import random
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -206,6 +207,56 @@ class LLMProvider(ABC):
             LLMResponse with content and/or tool calls.
         """
         pass
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamDelta]:
+        """Non-streaming fallback: emit the full ``chat()`` response as a single
+        terminal delta.
+
+        The TUI agent loop drives turns via ``chat_stream``; providers without a
+        real streaming implementation (custom-bespoke / azure / codex) would
+        otherwise ``AttributeError`` there. This default makes any provider that
+        implements ``chat`` usable in the streaming path — without token-level
+        streaming. ``LiteLLMProvider`` overrides this with true streaming.
+        """
+        response = await self.chat(
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
+        )
+        tool_call_delta: dict[str, Any] | None = None
+        if response.tool_calls:
+            tool_call_delta = {
+                "tool_calls": [
+                    {
+                        "index": i,
+                        "id": tc.id,
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments, ensure_ascii=False),
+                        },
+                    }
+                    for i, tc in enumerate(response.tool_calls)
+                ]
+            }
+        yield StreamDelta(
+            content=response.content,
+            tool_call_delta=tool_call_delta,
+            usage=response.usage or None,
+            reasoning_content=response.reasoning_content,
+        )
 
     @staticmethod
     def _extract_status_code(exc: BaseException | None) -> int | None:

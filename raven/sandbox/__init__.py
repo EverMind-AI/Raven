@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
+
 from raven.sandbox.config import SandboxConfig
 from raven.sandbox.direct_executor import DirectExecutor
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
+
+# Warn once per process: many executors (AgentLoop + each subagent) are built
+# over a process lifetime, but the "no sandbox" caveat only needs saying once.
+_warned_no_sandbox = False
 
 __all__ = [
     "ExecResult",
@@ -45,6 +51,15 @@ def build_executor(
     backend = sandbox_cfg.backend if sandbox_cfg else "none"
 
     if backend == "none":
+        global _warned_no_sandbox
+        if not _warned_no_sandbox:
+            _warned_no_sandbox = True
+            logger.warning(
+                "Sandbox backend is 'none' — agent commands run directly on the "
+                "host with no isolation. Prompt-injected commands execute with "
+                "full host privileges. Set tools.sandbox.backend to 'auto' or "
+                "'boxlite' to contain them."
+            )
         return DirectExecutor()
 
     if backend in ("auto", "boxlite"):

@@ -8,6 +8,8 @@ stubbed so the test never touches network or disk.
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -80,3 +82,28 @@ def test_send_probe_timeout_raises(
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
         send_probe(timeout_s=1)
+
+
+# ---------------------------------------------------------------------------
+# make_provider — custom routes through LiteLLM (so it gets streaming)
+# ---------------------------------------------------------------------------
+
+
+def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+                "providers": {
+                    "custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _helpers.make_provider(load_config(p))
+    assert isinstance(provider, LiteLLMProvider)

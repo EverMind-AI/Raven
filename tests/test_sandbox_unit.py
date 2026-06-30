@@ -219,6 +219,21 @@ class TestDirectExecutor:
         result = await e.exec("echo $MY_VAR", env={"MY_VAR": "sandwich"})
         assert "sandwich" in result.stdout
 
+    async def test_host_env_not_inherited(self, monkeypatch):
+        """A sensitive host env var must not leak to executed commands."""
+        monkeypatch.setenv("RAVEN_TEST_SECRET", "leak-me")
+        e = DirectExecutor()
+        result = await e.exec("echo secret=[$RAVEN_TEST_SECRET]")
+        assert "leak-me" not in result.stdout
+        assert "secret=[]" in result.stdout
+
+    async def test_path_still_present(self):
+        """PATH must survive the allowlist or every command breaks."""
+        e = DirectExecutor()
+        result = await e.exec("echo $PATH")
+        assert result.stdout.strip()
+        assert result.exit_code == 0
+
     async def test_is_sandboxed_false(self):
         assert DirectExecutor().is_sandboxed is False
 
@@ -289,6 +304,9 @@ class TestExecToolWithMockExecutor:
         call = executor.calls[0]
         assert call["env"] is not None
         assert "/custom/bin" in call["env"]["PATH"]
+        # Only PATH is passed — not a copy of the full host environment (which
+        # would leak host secrets past DirectExecutor's baseline allowlist).
+        assert set(call["env"]) == {"PATH"}
         # command unchanged
         assert "export PATH" not in call["command"]
 
@@ -1115,3 +1133,19 @@ class TestSubagentSandboxLifecycle:
         assert req.source.sender_id == "subagent"
         assert req.conversation == "weixin:u1"
         assert handle.result_awaited is False  # fire-and-forget
+
+
+def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
+    """Running unsandboxed must surface a loud warning (it's silent otherwise)."""
+    import raven.sandbox as sandbox_mod
+    from loguru import logger
+    from raven.sandbox import SandboxConfig, build_executor
+
+    monkeypatch.setattr(sandbox_mod, "_warned_no_sandbox", False)
+    msgs: list[str] = []
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    try:
+        build_executor(SandboxConfig(backend="none"), tmp_path)
+    finally:
+        logger.remove(sink)
+    assert any("no isolation" in m for m in msgs)
