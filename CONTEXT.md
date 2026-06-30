@@ -293,9 +293,13 @@ and injects into the main agent's system prompt so evicted facts stay present.
 
 ### Memory
 
-**EverOS**:
-An external memory system ([EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS))
-installed as a built-in tool in Raven.
+**EverOS** (`raven/plugin/memory/everos/`):
+Raven's default bundled memory-backend plugin (`everos-memory`; ships enabled, works
+out of the box). Provides dual-track semantic recall — the user track (episodes/profiles,
+injected into the `# Memory` segment) and the agent track (skills/cases, one of
+SkillForge's three sources at RRF weight 0.9). The name refers to the external package
+[EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
+adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
