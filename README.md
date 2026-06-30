@@ -37,15 +37,14 @@
 
 ## Why Raven
 
-Raven is a native command line agent, not a chat box wrapped around a shell.
-Built by EverMind, Raven is the first memory-first, self-improving agent OS:
-its model, code, modules, and policy are decoupled so it can improve across the
-whole stack, not just the skills layer. Layered memory and 100,000 built-in
-skills let Raven serve personal agents, cloud fleets, and reusable digital
-workers that get better with every session. It is built for users who already
-think in terminals, repos, logs, scripts, sessions, and long-running workflows.
-The goal is simple: give your terminal an agent that can remember, act, use
-tools, manage context, and improve its own procedural skills over time.
+Raven is a **memory-first**, self-improving agent OS built by EverMind on top
+of [EverOS](https://github.com/EverMind-AI/EverOS), the memory layer that gives
+Raven durable agent memory, user memory, and world knowledge across sessions.
+Unlike a chat box wrapped around a shell, Raven is a native command line agent
+whose model, code, modules, and policy are decoupled so it can improve across
+the whole stack, not just the skills layer. With 100,000 built-in skills, Raven
+serves personal agents, cloud fleets, and reusable digital workers that get
+better every time you use them.
 
 Most agent CLIs stop at "LLM + tools + loop." That works for demos, but it
 breaks down when the agent becomes part of your daily environment:
