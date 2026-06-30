@@ -294,7 +294,6 @@ export function StatusRule({
   sessionStartedAt,
   showCost,
   turnStartedAt,
-  voiceLabel,
   t
 }: StatusRuleProps) {
   const pct = usage.context_percent
@@ -342,16 +341,6 @@ export function StatusRule({
             </Text>
           ) : null}
           <SpawnHud t={t} />
-          {voiceLabel ? (
-            <Text
-              color={
-                voiceLabel.startsWith('●') ? t.color.error : voiceLabel.startsWith('◉') ? t.color.warn : t.color.muted
-              }
-            >
-              {'   '}
-              {voiceLabel}
-            </Text>
-          ) : null}
           {bgCount > 0 ? <Text color={t.color.muted}> {" "} {bgCount} bg</Text> : null}
           {showCost && typeof usage.cost_usd === 'number' ? (
             <Text color={t.color.muted}> {" "} ${usage.cost_usd.toFixed(4)}</Text>
@@ -478,7 +467,6 @@ interface StatusRuleProps {
   t: Theme
   turnStartedAt?: null | number
   usage: Usage
-  voiceLabel?: string
 }
 
 interface StickyPromptTrackerProps {
