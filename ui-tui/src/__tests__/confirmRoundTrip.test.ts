@@ -5,12 +5,13 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Msg } from '../types.js'
+
 import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { buildConfirmRespond, tickCountdown } from '../lib/confirmCountdown.js'
-import type { Msg } from '../types.js'
 
 const ref = <T>(current: T) => ({ current })
 
@@ -82,21 +83,22 @@ describe('confirm round-trip', () => {
   describe('answerConfirm round-trip', () => {
     // answerConfirm (useMainApp) builds {request_id, answer} via buildConfirmRespond
     // and clears the overlay on a truthy RPC result.  Drive that exact contract.
-    const answerConfirm = (rpc: (m: string, p: Record<string, unknown>) => Promise<unknown>) => async (answer: boolean) => {
-      const confirm = getOverlayState().confirm
+    const answerConfirm =
+      (rpc: (m: string, p: Record<string, unknown>) => Promise<unknown>) => async (answer: boolean) => {
+        const confirm = getOverlayState().confirm
 
-      if (!confirm?.requestId) {
-        return
+        if (!confirm?.requestId) {
+          return
+        }
+
+        const r = await rpc('confirm.respond', buildConfirmRespond(confirm.requestId, answer))
+
+        if (r) {
+          // Mirrors useMainApp.answerConfirm's done callback exactly.
+          patchOverlayState({ confirm: null })
+          patchUiState({ status: 'running…' })
+        }
       }
-
-      const r = await rpc('confirm.respond', buildConfirmRespond(confirm.requestId, answer))
-
-      if (r) {
-        // Mirrors useMainApp.answerConfirm's done callback exactly.
-        patchOverlayState({ confirm: null })
-        patchUiState({ status: 'running…' })
-      }
-    }
 
     it('sends confirm.respond {request_id, answer:true} and clears the overlay', async () => {
       patchOverlayState({ confirm: { defaultAnswer: false, prompt: 'Continue?', requestId: 'r1' } as any })

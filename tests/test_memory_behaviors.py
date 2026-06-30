@@ -73,12 +73,9 @@ def test_round_trip_single_event() -> None:
 
 def test_round_trip_multi_day_multi_event() -> None:
     events = [
-        _event(id="evt_a", day="2026-05-28", start="09:00", end="09:10",
-               topic="api", tools=["Read"]),
-        _event(id="evt_b", day="2026-05-29", start="14:00", end="14:30",
-               intent="design", outcome="open"),
-        _event(id="evt_c", day="2026-05-29", start="16:00", end="16:05",
-               session="telegram:user42", tools=[]),
+        _event(id="evt_a", day="2026-05-28", start="09:00", end="09:10", topic="api", tools=["Read"]),
+        _event(id="evt_b", day="2026-05-29", start="14:00", end="14:30", intent="design", outcome="open"),
+        _event(id="evt_c", day="2026-05-29", start="16:00", end="16:05", session="telegram:user42", tools=[]),
     ]
     text = render_append_block(events)
     parsed = parse_behaviors(text)
@@ -133,20 +130,24 @@ def test_round_trip_preserves_tools_order() -> None:
 
 
 def test_slice_after_day_returns_suffix_from_first_matching_h2() -> None:
-    text = render_append_block([
-        _event(id="evt_old", day="2026-05-20", start="09:00", end="09:10"),
-        _event(id="evt_mid", day="2026-05-25", start="09:00", end="09:10"),
-        _event(id="evt_new", day="2026-05-30", start="09:00", end="09:10"),
-    ])
+    text = render_append_block(
+        [
+            _event(id="evt_old", day="2026-05-20", start="09:00", end="09:10"),
+            _event(id="evt_mid", day="2026-05-25", start="09:00", end="09:10"),
+            _event(id="evt_new", day="2026-05-30", start="09:00", end="09:10"),
+        ]
+    )
     sliced = slice_after_day(text, "2026-05-25")
     parsed = parse_behaviors(sliced)
     assert [e.id for e in parsed] == ["evt_mid", "evt_new"]
 
 
 def test_slice_after_day_empty_when_no_h2_reaches_window() -> None:
-    text = render_append_block([
-        _event(id="evt_old", day="2026-05-20", start="09:00", end="09:10"),
-    ])
+    text = render_append_block(
+        [
+            _event(id="evt_old", day="2026-05-20", start="09:00", end="09:10"),
+        ]
+    )
     assert slice_after_day(text, "2026-06-01") == ""
 
 

@@ -24,7 +24,6 @@ from typing import Iterator
 
 from loguru import logger
 
-
 _STORE_VERSION = 1
 
 
@@ -80,25 +79,29 @@ class DiscoverTriggerStore:
             data = json.loads(self.store_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(
-                "DiscoverTriggerStore: failed to parse {}: {}: {} — "
-                "treating as empty",
-                self.store_path, type(exc).__name__, exc,
+                "DiscoverTriggerStore: failed to parse {}: {}: {} — treating as empty",
+                self.store_path,
+                type(exc).__name__,
+                exc,
             )
             return []
         triggers: list[DiscoverTrigger] = []
         for raw in data.get("triggers", []):
             try:
-                triggers.append(DiscoverTrigger(
-                    id=raw["id"],
-                    channel=raw["channel"],
-                    to=raw["to"],
-                    queued_at_ms=int(raw.get("queuedAtMs", 0)),
-                ))
+                triggers.append(
+                    DiscoverTrigger(
+                        id=raw["id"],
+                        channel=raw["channel"],
+                        to=raw["to"],
+                        queued_at_ms=int(raw.get("queuedAtMs", 0)),
+                    )
+                )
             except (KeyError, TypeError, ValueError) as exc:
                 logger.warning(
-                    "DiscoverTriggerStore: skipping malformed entry "
-                    "{}: {}: {}",
-                    raw, type(exc).__name__, exc,
+                    "DiscoverTriggerStore: skipping malformed entry {}: {}: {}",
+                    raw,
+                    type(exc).__name__,
+                    exc,
                 )
         return triggers
 
@@ -119,7 +122,8 @@ class DiscoverTriggerStore:
         }
         tmp = self.store_path.with_suffix(self.store_path.suffix + ".tmp")
         tmp.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8",
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
         )
         os.replace(tmp, self.store_path)
 

@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 _PLACEHOLDER = "[earlier tool output elided to fit the context window]"
 
@@ -29,6 +29,7 @@ def workspace():
 # --------------------------------------------------------------------------- #
 # unit: _emergency_shrink                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def test_emergency_shrink_elides_all_but_recent_tool_results():
     msgs: list[dict] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
@@ -55,6 +56,7 @@ def test_emergency_shrink_noop_when_few_tool_results():
 # loop level: overflow -> shrink -> recover                                    #
 # --------------------------------------------------------------------------- #
 
+
 class _OverflowThenAnswerProvider(LLMProvider):
     """Accumulates tool results, overflows once, then answers after the shrink."""
 
@@ -64,8 +66,16 @@ class _OverflowThenAnswerProvider(LLMProvider):
         self._overflowed = False
         self.seen_messages: list[list[dict]] = []
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.seen_messages.append([dict(m) for m in messages])
         n_tool = sum(1 for m in messages if m.get("role") == "tool")
         if n_tool < self._tool_rounds:
@@ -90,8 +100,11 @@ class _OverflowThenAnswerProvider(LLMProvider):
 async def test_overflow_shrinks_and_recovers(workspace):
     provider = _OverflowThenAnswerProvider(tool_rounds=5)
     agent = AgentLoop(
-        provider=provider, workspace=workspace,
-        model="stub", max_iterations=12, restrict_to_workspace=True,
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=12,
+        restrict_to_workspace=True,
     )
 
     out = await agent._process_message(
@@ -104,7 +117,7 @@ async def test_overflow_shrinks_and_recovers(workspace):
     )
 
     assert out is not None
-    assert out[0] == "answer after compaction"          # recovered, not the error
+    assert out[0] == "answer after compaction"  # recovered, not the error
     assert provider._overflowed is True
     # the post-overflow (recovery) call saw elided placeholders, not 5 full results
     recovery_call = provider.seen_messages[-1]

@@ -26,8 +26,10 @@ from raven.config.schema import MochatConfig
 # notify.* events the socket subscribes to; inbox.append is session-routed,
 # the message.* family is panel-routed.
 _NOTIFY_EVENTS = (
-    "notify:chat.inbox.append", "notify:chat.message.add",
-    "notify:chat.message.update", "notify:chat.message.recall",
+    "notify:chat.inbox.append",
+    "notify:chat.message.add",
+    "notify:chat.message.update",
+    "notify:chat.message.recall",
     "notify:chat.message.delete",
 )
 
@@ -156,6 +158,7 @@ class MochatChannel(ChannelBase):
                 await self._on_inbox_append(payload)
             else:
                 await self._on_panel_notify(payload)
+
         return handler
 
     # ── subscription ──────────────────────────────────────────────────
@@ -171,9 +174,14 @@ class MochatChannel(ChannelBase):
         if not session_ids:
             return True
         self._cold_sessions.update(s for s in session_ids if s not in self._cursors)
-        ack = await self._transport.request("com.claw.im.subscribeSessions", {
-            "sessionIds": session_ids, "cursors": self._cursors.snapshot(), "limit": self.config.watch_limit,
-        })
+        ack = await self._transport.request(
+            "com.claw.im.subscribeSessions",
+            {
+                "sessionIds": session_ids,
+                "cursors": self._cursors.snapshot(),
+                "limit": self.config.watch_limit,
+            },
+        )
         if not ack.get("result"):
             logger.error("Mochat subscribeSessions failed: {}", ack.get("message", "unknown error"))
             return False
@@ -306,8 +314,10 @@ class MochatChannel(ChannelBase):
         while self._running and self._fallback_mode:
             try:
                 payload = await self._api.watch_session(
-                    session_id, self._cursors.get(session_id),
-                    self.config.watch_timeout_ms, self.config.watch_limit,
+                    session_id,
+                    self._cursors.get(session_id),
+                    self.config.watch_timeout_ms,
+                    self.config.watch_limit,
                 )
                 await self._handle_watch_payload(payload, "session")
             except asyncio.CancelledError:
@@ -325,10 +335,14 @@ class MochatChannel(ChannelBase):
                     if not isinstance(message, dict):
                         continue
                     event = mp.make_synthetic_event(
-                        message_id=str(message.get("messageId") or ""), author=str(message.get("author") or ""),
-                        content=message.get("content"), meta=message.get("meta"),
-                        group_id=str(response.get("groupId") or ""), converse_id=panel_id,
-                        timestamp=message.get("createdAt"), author_info=message.get("authorInfo"),
+                        message_id=str(message.get("messageId") or ""),
+                        author=str(message.get("author") or ""),
+                        content=message.get("content"),
+                        meta=message.get("meta"),
+                        group_id=str(response.get("groupId") or ""),
+                        converse_id=panel_id,
+                        timestamp=message.get("createdAt"),
+                        author_info=message.get("authorInfo"),
                     )
                     await self._process_inbound_event(panel_id, event, "panel")
             except asyncio.CancelledError:
@@ -404,20 +418,26 @@ class MochatChannel(ChannelBase):
         else:
             await self._delays.enqueue(seen_key, target_id, target_kind, entry)
 
-    async def _dispatch_entries(self, target_id: str, target_kind: str,
-                                entries: list[mp.MochatBufferedEntry], was_mentioned: bool) -> None:
+    async def _dispatch_entries(
+        self, target_id: str, target_kind: str, entries: list[mp.MochatBufferedEntry], was_mentioned: bool
+    ) -> None:
         if not entries:
             return
         last = entries[-1]
         is_group = bool(last.group_id)
         await self.intake.publish(
-            sender_id=last.author, chat_id=target_id,
+            sender_id=last.author,
+            chat_id=target_id,
             content=mp.build_buffered_body(entries, is_group) or "[empty message]",
             metadata={
-                "message_id": last.message_id, "timestamp": last.timestamp,
-                "is_group": is_group, "group_id": last.group_id,
-                "sender_name": last.sender_name, "sender_username": last.sender_username,
-                "target_kind": target_kind, "was_mentioned": was_mentioned,
+                "message_id": last.message_id,
+                "timestamp": last.timestamp,
+                "is_group": is_group,
+                "group_id": last.group_id,
+                "sender_name": last.sender_name,
+                "sender_username": last.sender_username,
+                "target_kind": target_kind,
+                "was_mentioned": was_mentioned,
                 "buffered_count": len(entries),
             },
         )
@@ -435,9 +455,13 @@ class MochatChannel(ChannelBase):
             return
         event = mp.make_synthetic_event(
             message_id=str(payload.get("_id") or payload.get("messageId") or ""),
-            author=str(payload.get("author") or ""), content=payload.get("content"),
-            meta=payload.get("meta"), group_id=group_id, converse_id=panel_id,
-            timestamp=payload.get("createdAt"), author_info=payload.get("authorInfo"),
+            author=str(payload.get("author") or ""),
+            content=payload.get("content"),
+            meta=payload.get("meta"),
+            group_id=group_id,
+            converse_id=panel_id,
+            timestamp=payload.get("createdAt"),
+            author_info=payload.get("authorInfo"),
         )
         await self._process_inbound_event(panel_id, event, "panel")
 
@@ -458,7 +482,9 @@ class MochatChannel(ChannelBase):
             author=str(detail.get("messageAuthor") or ""),
             content=str(detail.get("messagePlainContent") or detail.get("messageSnippet") or ""),
             meta={"source": "notify:chat.inbox.append", "converseId": converse_id},
-            group_id="", converse_id=converse_id, timestamp=payload.get("createdAt"),
+            group_id="",
+            converse_id=converse_id,
+            timestamp=payload.get("createdAt"),
         )
         await self._process_inbound_event(session_id, event, "session")
 

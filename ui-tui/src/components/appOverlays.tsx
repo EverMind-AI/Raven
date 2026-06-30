@@ -6,11 +6,11 @@
 import { Box, Text } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 
-import { useGateway } from '../app/gatewayContext.js'
 import type { AppOverlaysProps } from '../app/interfaces.js'
+
+import { useGateway } from '../app/gatewayContext.js'
 import { $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
-
 import { FloatBox } from './appChrome.js'
 import { MaskedPrompt } from './maskedPrompt.js'
 import { ModelPicker } from './modelPicker.js'
@@ -123,7 +123,10 @@ export function FloatingOverlays({
   onPickerDeleteActive,
   onPickerSelect,
   pagerPageSize
-}: Pick<AppOverlaysProps, 'cols' | 'compIdx' | 'completions' | 'onModelSelect' | 'onPickerDeleteActive' | 'onPickerSelect' | 'pagerPageSize'>) {
+}: Pick<
+  AppOverlaysProps,
+  'cols' | 'compIdx' | 'completions' | 'onModelSelect' | 'onPickerDeleteActive' | 'onPickerSelect' | 'pagerPageSize'
+>) {
   const { gw } = useGateway()
   const overlay = useStore($overlayState)
   const sid = useStore($uiSessionId)

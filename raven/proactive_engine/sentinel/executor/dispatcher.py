@@ -31,9 +31,9 @@ class ExecutionResult:
     """Outcome of dispatching one PlannerDecision. Returned by every executor."""
 
     delivered: bool
-    reason: str                          # short code for logs
+    reason: str  # short code for logs
     delivery_time: datetime | None = None
-    defer_id: str | None = None          # set only by DeferManager for deferred decisions
+    defer_id: str | None = None  # set only by DeferManager for deferred decisions
     details: dict[str, Any] | None = None
 
 
@@ -75,7 +75,9 @@ class NudgeDispatcher:
         self._post = post
 
     async def dispatch(
-        self, decision: PlannerDecision, targets: list[tuple[str, str]],
+        self,
+        decision: PlannerDecision,
+        targets: list[tuple[str, str]],
     ) -> ExecutionResult:
         """Post a plain nudge as a Text to each ``(channel, chat_id)`` in
         ``targets`` via the hub. Caller owns policy.check and target resolution
@@ -103,22 +105,26 @@ class NudgeDispatcher:
         }
         delivered: list[str] = []
         for channel, chat_id in targets:
-            await self._post(Text(
-                content=decision.nudge_message,
-                source=Source(
-                    channel=channel,
-                    chat_id=chat_id,
-                    sender_id="sentinel",
-                    chat_type=ChatType.DM,
-                    extras=dict(extras),
-                ),
-            ))
+            await self._post(
+                Text(
+                    content=decision.nudge_message,
+                    source=Source(
+                        channel=channel,
+                        chat_id=chat_id,
+                        sender_id="sentinel",
+                        chat_type=ChatType.DM,
+                        extras=dict(extras),
+                    ),
+                )
+            )
             delivered.append(f"{channel}:{chat_id}")
 
         now = self._now_fn()
         logger.info(
             "nudge_dispatched action=nudge targets={} priority={} score={:.2f} content={!r}",
-            delivered, decision.priority, decision.proactivity_score,
+            delivered,
+            decision.priority,
+            decision.proactivity_score,
             decision.nudge_message[:80],
         )
 
@@ -129,9 +135,7 @@ class NudgeDispatcher:
             details={"targets": delivered, "priority": decision.priority},
         )
 
-    async def dispatch_options(
-        self, decision: PendingDecision
-    ) -> ExecutionResult:
+    async def dispatch_options(self, decision: PendingDecision) -> ExecutionResult:
         """Render a PendingDecision as a markdown menu and post it to the
         spine DeliveryHub (self._post / hub.post). The user replies with a
         number (or '/pick N' / a
@@ -177,9 +181,10 @@ class NudgeDispatcher:
         await self._post(msg)
 
         logger.info(
-            "discovery_menu dispatched decision_id={} channel={} to={} "
-            "options={}",
-            decision.decision_id, decision.channel, decision.to,
+            "discovery_menu dispatched decision_id={} channel={} to={} options={}",
+            decision.decision_id,
+            decision.channel,
+            decision.to,
             [o.id for o in decision.options],
         )
 
@@ -214,7 +219,7 @@ def render_menu_markdown(decision: PendingDecision) -> str:
         if opt.why:
             lines.append(f"   — {opt.why}")
     lines.append("")
-    lines.append("回复数字选择，或回复 \"跳过\"。")
+    lines.append('回复数字选择，或回复 "跳过"。')
     return "\n".join(lines)
 
 

@@ -76,8 +76,7 @@ class DelayBuffer:
     def _state(self, key: str, target_id: str, target_kind: str) -> _DelayState:
         return self._states.setdefault(key, _DelayState(target_id, target_kind))
 
-    async def enqueue(self, key: str, target_id: str, target_kind: str,
-                      entry: MochatBufferedEntry) -> None:
+    async def enqueue(self, key: str, target_id: str, target_kind: str, entry: MochatBufferedEntry) -> None:
         state = self._state(key, target_id, target_kind)
         async with state.lock:
             state.entries.append(entry)
@@ -89,15 +88,13 @@ class DelayBuffer:
         await asyncio.sleep(max(0, self._delay_ms()) / 1000.0)
         await self._flush(key, was_mentioned=False, entry=None)
 
-    async def flush_now(self, key: str, target_id: str, target_kind: str,
-                        entry: MochatBufferedEntry) -> None:
+    async def flush_now(self, key: str, target_id: str, target_kind: str, entry: MochatBufferedEntry) -> None:
         """Drain buffered entries plus the triggering *entry* immediately
         (the mention path), cancelling any pending timer."""
         self._state(key, target_id, target_kind)
         await self._flush(key, was_mentioned=True, entry=entry)
 
-    async def _flush(self, key: str, *, was_mentioned: bool,
-                     entry: MochatBufferedEntry | None) -> None:
+    async def _flush(self, key: str, *, was_mentioned: bool, entry: MochatBufferedEntry | None) -> None:
         state = self._states[key]
         async with state.lock:
             if entry:

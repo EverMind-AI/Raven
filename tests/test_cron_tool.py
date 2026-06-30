@@ -23,9 +23,7 @@ def _tool() -> tuple[CronTool, MagicMock]:
 
 async def test_add_every_with_tz_is_tolerated_and_dropped() -> None:
     tool, cron = _tool()
-    result = await tool.execute(
-        action="add", message="drink water", every_seconds=60, tz="Asia/Shanghai"
-    )
+    result = await tool.execute(action="add", message="drink water", every_seconds=60, tz="Asia/Shanghai")
     assert result.startswith("Created job")  # not an error
     schedule = cron.add_job.call_args.kwargs["schedule"]
     assert schedule.kind == "every"
@@ -39,15 +37,11 @@ async def test_add_naive_at_with_tz_anchors_to_that_zone() -> None:
     from zoneinfo import ZoneInfo
 
     tool, cron = _tool()
-    result = await tool.execute(
-        action="add", message="ping", at="2026-06-24T15:00:00", tz="Asia/Shanghai"
-    )
+    result = await tool.execute(action="add", message="ping", at="2026-06-24T15:00:00", tz="Asia/Shanghai")
     assert result.startswith("Created job")
     schedule = cron.add_job.call_args.kwargs["schedule"]
     assert schedule.kind == "at"
-    expected_ms = int(
-        datetime(2026, 6, 24, 15, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000
-    )
+    expected_ms = int(datetime(2026, 6, 24, 15, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000)
     assert schedule.at_ms == expected_ms
 
 
@@ -56,9 +50,7 @@ async def test_add_offset_aware_at_ignores_tz_param() -> None:
     from datetime import datetime
 
     tool, cron = _tool()
-    await tool.execute(
-        action="add", message="ping", at="2026-06-24T15:00:00+09:00", tz="Asia/Shanghai"
-    )
+    await tool.execute(action="add", message="ping", at="2026-06-24T15:00:00+09:00", tz="Asia/Shanghai")
     schedule = cron.add_job.call_args.kwargs["schedule"]
     expected_ms = int(datetime.fromisoformat("2026-06-24T15:00:00+09:00").timestamp() * 1000)
     assert schedule.at_ms == expected_ms
@@ -75,9 +67,7 @@ async def test_non_runnable_schedule_surfaces_service_error() -> None:
 
 async def test_add_cron_expr_with_valid_tz_uses_it() -> None:
     tool, cron = _tool()
-    result = await tool.execute(
-        action="add", message="daily standup", cron_expr="0 9 * * *", tz="Asia/Shanghai"
-    )
+    result = await tool.execute(action="add", message="daily standup", cron_expr="0 9 * * *", tz="Asia/Shanghai")
     assert result.startswith("Created job")
     schedule = cron.add_job.call_args.kwargs["schedule"]
     assert schedule.kind == "cron" and schedule.tz == "Asia/Shanghai"
@@ -85,8 +75,6 @@ async def test_add_cron_expr_with_valid_tz_uses_it() -> None:
 
 async def test_add_cron_expr_with_bad_tz_still_errors() -> None:
     tool, cron = _tool()
-    result = await tool.execute(
-        action="add", message="daily", cron_expr="0 9 * * *", tz="Not/AZone"
-    )
+    result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz="Not/AZone")
     assert "unknown timezone" in result
     cron.add_job.assert_not_called()

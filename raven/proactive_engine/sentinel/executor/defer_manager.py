@@ -52,9 +52,7 @@ class _PendingDefer:
     target_session: str = field(compare=False)
     queued_at: datetime = field(compare=False)
     max_wait_until: datetime = field(compare=False)
-    on_dispatch: Callable[[ExecutionResult], Awaitable[None]] | None = field(
-        default=None, compare=False
-    )
+    on_dispatch: Callable[[ExecutionResult], Awaitable[None]] | None = field(default=None, compare=False)
 
 
 # Async session lookup surface. Keeping this a narrow Protocol so
@@ -109,7 +107,8 @@ class DeferManager:
             self._reload_from_store()
 
     def set_target_resolver(
-        self, resolver: Callable[[str], list[tuple[str, str]]],
+        self,
+        resolver: Callable[[str], list[tuple[str, str]]],
     ) -> None:
         """Inject the nudge target resolver (see ``_resolve_targets``)."""
         self._resolve_targets = resolver
@@ -152,7 +151,9 @@ class DeferManager:
         self._by_id[defer_id] = entry
         logger.info(
             "defer_registered id={} session={} first_check_in={}s max_wait={}s",
-            defer_id, target_session, int(self.idle_threshold.total_seconds()),
+            defer_id,
+            target_session,
+            int(self.idle_threshold.total_seconds()),
             int(mw.total_seconds()),
         )
         self._persist()
@@ -205,7 +206,8 @@ class DeferManager:
                 except Exception as exc:
                     logger.warning(
                         "defer on_dispatch callback raised {}: {}",
-                        type(exc).__name__, exc,
+                        type(exc).__name__,
+                        exc,
                     )
         if mutated:
             self._persist()
@@ -217,7 +219,8 @@ class DeferManager:
             self._by_id.pop(entry.defer_id, None)
             logger.info(
                 "defer_expired id={} session={} waited={}s",
-                entry.defer_id, entry.target_session,
+                entry.defer_id,
+                entry.target_session,
                 int((now - entry.queued_at).total_seconds()),
             )
             return ExecutionResult(
@@ -246,7 +249,9 @@ class DeferManager:
         heapq.heappush(self._heap, entry)
         logger.debug(
             "defer_not_settled id={} session={} idle={}s next_check_in={}s",
-            entry.defer_id, entry.target_session, int(idle_s),
+            entry.defer_id,
+            entry.target_session,
+            int(idle_s),
             int((next_check - now).total_seconds()),
         )
         return ExecutionResult(
@@ -271,20 +276,26 @@ class DeferManager:
         )
         if self._resolve_targets is None:
             logger.warning(
-                "defer_fire id={} session={} — no target resolver wired, "
-                "dropping", entry.defer_id, entry.target_session,
+                "defer_fire id={} session={} — no target resolver wired, dropping",
+                entry.defer_id,
+                entry.target_session,
             )
             return ExecutionResult(
-                delivered=False, reason="no_resolver", defer_id=entry.defer_id,
+                delivered=False,
+                reason="no_resolver",
+                defer_id=entry.defer_id,
             )
         targets = self._resolve_targets(entry.target_session)
         if not targets:
             logger.warning(
                 "defer_fire id={} session={} — no delivery target, dropping",
-                entry.defer_id, entry.target_session,
+                entry.defer_id,
+                entry.target_session,
             )
             return ExecutionResult(
-                delivered=False, reason="no_delivery_target", defer_id=entry.defer_id,
+                delivered=False,
+                reason="no_delivery_target",
+                defer_id=entry.defer_id,
             )
         result = await self.dispatcher.dispatch(plain, targets)
         result.defer_id = entry.defer_id
@@ -295,7 +306,9 @@ class DeferManager:
         result.details["defer_wait_s"] = int((now - entry.queued_at).total_seconds())
         logger.info(
             "defer_fired id={} session={} reason={} wait={}s",
-            entry.defer_id, entry.target_session, reason_code,
+            entry.defer_id,
+            entry.target_session,
+            reason_code,
             int((now - entry.queued_at).total_seconds()),
         )
         return result
@@ -330,9 +343,7 @@ class DeferManager:
             if entry.defer_id in self._by_id:
                 next_deadline = entry.next_check_at
                 break
-        sleep_s = self.default_sleep if next_deadline is None else max(
-            0.0, (next_deadline - now).total_seconds()
-        )
+        sleep_s = self.default_sleep if next_deadline is None else max(0.0, (next_deadline - now).total_seconds())
         try:
             assert self._wakeup is not None
             await asyncio.wait_for(self._wakeup.wait(), timeout=sleep_s)

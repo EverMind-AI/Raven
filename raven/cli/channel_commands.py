@@ -44,9 +44,7 @@ console = Console()
 
 def _help_requested(extra_args: list[str]) -> bool:
     """Detect ``--help`` / ``-h`` inside a free-form ``ctx.args`` list."""
-    return any(
-        t in ("--help", "-h") or t.startswith("--help=") for t in extra_args
-    )
+    return any(t in ("--help", "-h") or t.startswith("--help=") for t in extra_args)
 
 
 def _print_schema_table(name: str) -> None:
@@ -96,10 +94,7 @@ def _warn_empty_credentials(name: str) -> None:
 
     specs = channel_field_specs(name)
     cfg = get_channel_config(name, redact_secrets=False)
-    empty = [
-        k for k, s in specs.items()
-        if s["is_secret"] and cfg.get(k) in ("", None, [])
-    ]
+    empty = [k for k, s in specs.items() if s["is_secret"] and cfg.get(k) in ("", None, [])]
     if empty:
         flags = ", ".join("--" + k.replace("_", "-") for k in empty)
         console.print(f"  [yellow]⚠ Empty credential fields:[/yellow] {flags}")
@@ -155,8 +150,7 @@ def _parse_channel_flags(extra_args: list[str], channel_name: str) -> dict:
             key = _normalize(flag[3:])
             if key not in specs:
                 raise typer.BadParameter(
-                    f"Unknown field '--no-{flag[3:]}'. "
-                    f"Run 'raven channels show {channel_name}' for available flags."
+                    f"Unknown field '--no-{flag[3:]}'. Run 'raven channels show {channel_name}' for available flags."
                 )
             out[key] = False
             continue
@@ -197,10 +191,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
 
     base_help = channels_app.info.help or "Manage channels"
     if "channels list" not in base_help:
-        channels_app.info.help = (
-            f"{base_help}\n\n"
-            f"Run 'raven channels list' to see available channels."
-        )
+        channels_app.info.help = f"{base_help}\n\nRun 'raven channels list' to see available channels."
 
     @channels_app.command(
         "enable",
@@ -228,9 +219,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         fields = _parse_channel_flags(ctx.args, name)
         if not fields:
             _print_schema_table(name)
-            console.print(
-                "  [dim]Tip: re-run with one or more --flag value pairs to enable + configure.[/dim]"
-            )
+            console.print("  [dim]Tip: re-run with one or more --flag value pairs to enable + configure.[/dim]")
             raise typer.Exit(0)
 
         try:
@@ -289,9 +278,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
         fields = _parse_channel_flags(ctx.args, name)
         if not fields:
             _print_schema_table(name)
-            console.print(
-                "  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]"
-            )
+            console.print("  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]")
             raise typer.Exit(0)
         try:
             prev = set_channel_fields(name, fields)
@@ -307,9 +294,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
     @channels_app.command("get")
     def channels_get_cmd(
         name: str = typer.Argument(..., help="Channel name"),
-        show_secrets: bool = typer.Option(
-            False, "--show-secrets", help="Show secret values in plaintext (dangerous)"
-        ),
+        show_secrets: bool = typer.Option(False, "--show-secrets", help="Show secret values in plaintext (dangerous)"),
     ):
         """Print current configuration for a channel. Secrets redacted by default."""
         from raven.config.update_channels import get_channel_config
@@ -335,9 +320,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
     @channels_app.command("reset")
     def channels_reset_cmd(
         name: str = typer.Argument(..., help="Channel name"),
-        yes: bool = typer.Option(
-            False, "--yes", "-y", help="Skip confirmation prompt"
-        ),
+        yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     ):
         """Reset all fields of a channel to schema defaults. Key preserved.
 
@@ -351,28 +334,20 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
 
-        non_default = [
-            k for k, v in current.items() if v not in (False, "", None, [], {})
-        ]
+        non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
 
         if not yes:
-            console.print(
-                f"This will reset [cyan]{name}[/cyan] to schema defaults."
-            )
+            console.print(f"This will reset [cyan]{name}[/cyan] to schema defaults.")
             if non_default:
                 preview = ", ".join(non_default[:5])
                 more = f" (+{len(non_default) - 5} more)" if len(non_default) > 5 else ""
-                console.print(
-                    f"  Currently non-default: [yellow]{preview}{more}[/yellow]"
-                )
+                console.print(f"  Currently non-default: [yellow]{preview}{more}[/yellow]")
             if not typer.confirm("Continue?", default=False):
                 console.print("[yellow]Aborted.[/yellow]")
                 raise typer.Exit(0)
 
         reset_channel(name)
-        console.print(
-            f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)"
-        )
+        console.print(f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)")
         console.print("  [dim]Restart gateway to apply.[/dim]")
 
     @channels_app.command("show")
@@ -480,10 +455,7 @@ def channels_login(
 
     specs = discover_specs()
     if channel_name not in specs:
-        console.print(
-            f"[red]Unknown channel: {channel_name}[/red]  "
-            f"Available: {', '.join(sorted(specs))}"
-        )
+        console.print(f"[red]Unknown channel: {channel_name}[/red]  Available: {', '.join(sorted(specs))}")
         raise typer.Exit(1)
 
     config = load_config()

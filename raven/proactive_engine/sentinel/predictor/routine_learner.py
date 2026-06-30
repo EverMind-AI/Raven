@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -47,15 +47,77 @@ DEFAULT_DECAY_HALF_LIFE_DAYS = 14
 # we want domain words to survive.
 _STOPWORDS = {
     # English
-    "the", "a", "an", "of", "and", "or", "to", "in", "on", "at", "for",
-    "with", "by", "from", "is", "was", "are", "were", "be", "been",
-    "this", "that", "these", "those", "it", "its", "they", "them",
-    "user", "users", "do", "did", "does", "can", "will", "has", "have",
-    "had", "not", "no", "yes", "just", "about", "as", "if", "then",
+    "the",
+    "a",
+    "an",
+    "of",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "by",
+    "from",
+    "is",
+    "was",
+    "are",
+    "were",
+    "be",
+    "been",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "they",
+    "them",
+    "user",
+    "users",
+    "do",
+    "did",
+    "does",
+    "can",
+    "will",
+    "has",
+    "have",
+    "had",
+    "not",
+    "no",
+    "yes",
+    "just",
+    "about",
+    "as",
+    "if",
+    "then",
     # Chinese (common functional words)
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都",
-    "一", "也", "要", "去", "会", "着", "到", "上", "下", "说",
-    "用户", "他", "她",
+    "的",
+    "了",
+    "在",
+    "是",
+    "我",
+    "有",
+    "和",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "也",
+    "要",
+    "去",
+    "会",
+    "着",
+    "到",
+    "上",
+    "下",
+    "说",
+    "用户",
+    "他",
+    "她",
 }
 
 # Patterns we recognize at the start of a HISTORY.md line.
@@ -147,7 +209,7 @@ def _extract_keywords(content: str, max_keywords: int = 5) -> list[str]:
 
 @dataclass
 class _Bin:
-    day_of_week: int          # 0=Monday ... 6=Sunday
+    day_of_week: int  # 0=Monday ... 6=Sunday
     hour_slot: tuple[int, int]  # (start_hour, end_hour) exclusive; typical 3h slot
     entries: list[_Entry]
 
@@ -171,7 +233,7 @@ class RoutineLearner:
         self,
         *,
         min_occurrences: int = 3,
-        hour_slot_size: int = 3,          # 24 / 3 = 8 slots per day
+        hour_slot_size: int = 3,  # 24 / 3 = 8 slots per day
         learning_window_days: int = 60,
         min_history_entries: int = 0,
         now_fn: Callable[[], datetime] | None = None,
@@ -208,17 +270,19 @@ class RoutineLearner:
             keywords = self._keywords_across(b.entries)
             pattern = self._format_pattern(b, keywords)
             rid = self._routine_id(b, keywords)
-            routines.append(Routine(
-                id=rid,
-                pattern=pattern,
-                keywords=keywords,
-                day_of_week=b.day_of_week,
-                time_slot=b.hour_slot,
-                status="candidate",
-                occurrence_count=b.occurrence_count,
-                last_triggered=(b.last_ts.isoformat() if b.last_ts else None),
-                user_confirmed=False,
-            ))
+            routines.append(
+                Routine(
+                    id=rid,
+                    pattern=pattern,
+                    keywords=keywords,
+                    day_of_week=b.day_of_week,
+                    time_slot=b.hour_slot,
+                    status="candidate",
+                    occurrence_count=b.occurrence_count,
+                    last_triggered=(b.last_ts.isoformat() if b.last_ts else None),
+                    user_confirmed=False,
+                )
+            )
         # Most frequent first, then most recent — stable ordering.
         routines.sort(
             key=lambda r: (r.occurrence_count, r.last_triggered or ""),
@@ -227,7 +291,8 @@ class RoutineLearner:
         log_fn = logger.debug if routines else logger.trace
         log_fn(
             "RoutineLearner produced {} candidate routines from {} history entries",
-            len(routines), len(entries),
+            len(routines),
+            len(entries),
         )
         return routines
 
@@ -286,26 +351,28 @@ class RoutineLearner:
             if b.occurrence_count < self.min_occurrences:
                 continue
             keywords = self._tfidf_keywords(
-                bin_term_freqs[key], df, n_bins, top_k=5,
+                bin_term_freqs[key],
+                df,
+                n_bins,
+                top_k=5,
             )
             pattern = self._format_pattern(b, keywords)
             rid = self._routine_id(b, keywords)
-            weight = sum(
-                _decay_factor(now=now, ts=e.ts, half_life_days=half_life_days)
-                for e in b.entries
+            weight = sum(_decay_factor(now=now, ts=e.ts, half_life_days=half_life_days) for e in b.entries)
+            routines.append(
+                Routine(
+                    id=rid,
+                    pattern=pattern,
+                    keywords=keywords,
+                    day_of_week=b.day_of_week,
+                    time_slot=b.hour_slot,
+                    status="candidate",
+                    occurrence_count=b.occurrence_count,
+                    last_triggered=(b.last_ts.isoformat() if b.last_ts else None),
+                    user_confirmed=False,
+                    weight=weight,
+                )
             )
-            routines.append(Routine(
-                id=rid,
-                pattern=pattern,
-                keywords=keywords,
-                day_of_week=b.day_of_week,
-                time_slot=b.hour_slot,
-                status="candidate",
-                occurrence_count=b.occurrence_count,
-                last_triggered=(b.last_ts.isoformat() if b.last_ts else None),
-                user_confirmed=False,
-                weight=weight,
-            ))
         # Fresh-and-frequent first.
         routines.sort(
             key=lambda r: (r.weight, r.occurrence_count, r.last_triggered or ""),
@@ -313,9 +380,11 @@ class RoutineLearner:
         )
         log_fn = logger.debug if routines else logger.trace
         log_fn(
-            "RoutineLearner.learn_with_decay produced {} candidates "
-            "(half_life={}d) from {} entries across {} bins",
-            len(routines), half_life_days, len(entries), n_bins,
+            "RoutineLearner.learn_with_decay produced {} candidates (half_life={}d) from {} entries across {} bins",
+            len(routines),
+            half_life_days,
+            len(entries),
+            n_bins,
         )
         return routines
 
@@ -376,8 +445,7 @@ class RoutineLearner:
 
     @staticmethod
     def _format_pattern(b: _Bin, keywords: list[str]) -> str:
-        dow_names = ("Monday", "Tuesday", "Wednesday", "Thursday",
-                     "Friday", "Saturday", "Sunday")
+        dow_names = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
         slot = f"{b.hour_slot[0]:02d}:00-{b.hour_slot[1]:02d}:00"
         kw_part = " · ".join(keywords) if keywords else "(no dominant keywords)"
         return f"{dow_names[b.day_of_week]} {slot} — {kw_part}"

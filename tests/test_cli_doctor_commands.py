@@ -71,10 +71,7 @@ def test_doctor_default_healthy_exit0(healthy_config: Path) -> None:
     assert r.exit_code == 0, r.stdout
     # Routing section should mention the resolved provider name
     assert "anthropic" in r.stdout.lower()
-    assert (
-        "Configuration looks healthy" in r.stdout
-        or "All checks passed" in r.stdout
-    )
+    assert "Configuration looks healthy" in r.stdout or "All checks passed" in r.stdout
 
 
 def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
@@ -85,18 +82,13 @@ def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
     save_config(cfg)
     r = runner.invoke(app, ["doctor"])
     assert r.exit_code == 1, r.stdout
-    assert (
-        "unresolved" in r.stdout.lower()
-        or "could not be routed" in r.stdout
-    )
+    assert "unresolved" in r.stdout.lower() or "could not be routed" in r.stdout
 
 
 # --------------------------------------------------------------------------- gateway status
 
 
-def test_doctor_shows_gateway_running(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_shows_gateway_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A held instance lock surfaces as ``running (pid …)`` in the Gateway section."""
     from raven.cli import _gateway_lock
 
@@ -112,9 +104,7 @@ def test_doctor_shows_gateway_running(
     assert "999" in r.stdout
 
 
-def test_doctor_shows_gateway_not_running(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_shows_gateway_not_running(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from raven.cli import _gateway_lock
 
     monkeypatch.setattr(_gateway_lock, "read_status", lambda now: None)
@@ -126,9 +116,7 @@ def test_doctor_shows_gateway_not_running(
 # --------------------------------------------------------------------------- --probe
 
 
-def test_doctor_probe_success(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_probe_success(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--probe`` invokes send_probe → exit 0, response shown in output."""
     monkeypatch.setattr(
         doctor_commands,
@@ -141,9 +129,7 @@ def test_doctor_probe_success(
     assert "42 tokens" in r.stdout
 
 
-def test_doctor_probe_failure_exit2(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_probe_failure_exit2(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Static checks pass but probe raises → exit 2."""
 
     def _boom(**_):
@@ -155,9 +141,7 @@ def test_doctor_probe_failure_exit2(
     assert "auth failed" in r.stdout
 
 
-def test_doctor_timeout_flag_passed_through(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_timeout_flag_passed_through(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--timeout 3`` reaches ``send_probe`` as ``timeout_s=3``."""
     captured: dict = {}
 
@@ -187,9 +171,7 @@ def test_doctor_json_default_structure(healthy_config: Path) -> None:
     assert data["probe"] is None
 
 
-def test_doctor_json_with_probe_structure(
-    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--json --probe`` populates the probe key with the result fields."""
     monkeypatch.setattr(
         doctor_commands,

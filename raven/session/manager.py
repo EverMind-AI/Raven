@@ -87,7 +87,7 @@ class Session:
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a user turn."""
-        unconsolidated = self.messages[self.last_consolidated:]
+        unconsolidated = self.messages[self.last_consolidated :]
         sliced = unconsolidated[-max_messages:]
 
         # Drop leading non-user messages to avoid orphaned tool_result blocks
@@ -124,10 +124,7 @@ class Session:
         if n < 1:
             return 0
         start = self.last_consolidated
-        user_starts = [
-            i for i in range(start, len(self.messages))
-            if self.messages[i].get("role") == "user"
-        ]
+        user_starts = [i for i in range(start, len(self.messages)) if self.messages[i].get("role") == "user"]
         if not user_starts:
             return 0
         cut_index = user_starts[-n] if n <= len(user_starts) else user_starts[0]
@@ -185,13 +182,9 @@ class SessionManager:
             return SessionResolution("resolved", key=value)
         sessions = self.list_sessions(channel=None)
         exact = [s for s in sessions if s["key"].partition(":")[2] == value]
-        matches = exact or [
-            s for s in sessions if s["key"].partition(":")[2].startswith(value)
-        ]
+        matches = exact or [s for s in sessions if s["key"].partition(":")[2].startswith(value)]
         if len(matches) > 1:
-            return SessionResolution(
-                "ambiguous", candidates=tuple(s["key"] for s in matches)
-            )
+            return SessionResolution("ambiguous", candidates=tuple(s["key"] for s in matches))
         if matches:
             return SessionResolution("resolved", key=matches[0]["key"])
         return SessionResolution("not_found")
@@ -354,23 +347,26 @@ class SessionManager:
         }
         session.metadata = {**reserved, **session.metadata}
 
-        metadata_line = json.dumps({
-            "_type": "metadata",
-            "key": session.key,
-            "created_at": session.created_at.isoformat(),
-            "updated_at": session.updated_at.isoformat(),
-            "metadata": session.metadata,
-            "last_consolidated": session.last_consolidated,
-            # Personalization: persist clarification wait-state across restarts
-            "pending_clarification": session.pending_clarification,
-        }, ensure_ascii=False)
+        metadata_line = json.dumps(
+            {
+                "_type": "metadata",
+                "key": session.key,
+                "created_at": session.created_at.isoformat(),
+                "updated_at": session.updated_at.isoformat(),
+                "metadata": session.metadata,
+                "last_consolidated": session.last_consolidated,
+                # Personalization: persist clarification wait-state across restarts
+                "pending_clarification": session.pending_clarification,
+            },
+            ensure_ascii=False,
+        )
 
         if len(session.messages) < session._persisted_count:
             lines = [metadata_line]
             lines += [json.dumps(m, ensure_ascii=False) for m in session.messages]
             atomic_replace(path, "".join(line + "\n" for line in lines))
         else:
-            new_messages = session.messages[session._persisted_count:]
+            new_messages = session.messages[session._persisted_count :]
             lines = [metadata_line]
             lines += [json.dumps(m, ensure_ascii=False) for m in new_messages]
             locked_append(path, lines)
@@ -480,13 +476,15 @@ class SessionManager:
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
-            sessions.append({
-                "key": key,
-                "created_at": data.get("created_at"),
-                "updated_at": data.get("updated_at"),
-                "path": str(path),
-                "message_count": message_count,
-                "metadata": data.get("metadata", {}),
-            })
+            sessions.append(
+                {
+                    "key": key,
+                    "created_at": data.get("created_at"),
+                    "updated_at": data.get("updated_at"),
+                    "path": str(path),
+                    "message_count": message_count,
+                    "metadata": data.get("metadata", {}),
+                }
+            )
 
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)

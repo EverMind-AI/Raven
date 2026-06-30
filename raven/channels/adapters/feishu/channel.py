@@ -28,8 +28,15 @@ _MSG_TYPE_LABEL = {"image": "[image]", "audio": "[audio]", "file": "[file]", "st
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif"}
 _PLAYABLE_EXTS = {".opus", ".mp4", ".mov", ".avi"}
 _FILE_TYPE = {
-    ".opus": "opus", ".mp4": "mp4", ".pdf": "pdf", ".doc": "doc", ".docx": "doc",
-    ".xls": "xls", ".xlsx": "xls", ".ppt": "ppt", ".pptx": "ppt",
+    ".opus": "opus",
+    ".mp4": "mp4",
+    ".pdf": "pdf",
+    ".doc": "doc",
+    ".docx": "doc",
+    ".xls": "xls",
+    ".xlsx": "xls",
+    ".ppt": "ppt",
+    ".pptx": "ppt",
 }
 _DEDUP_CAP = 1000
 
@@ -151,6 +158,7 @@ class FeishuChannel(ChannelBase):
             CreateMessageReactionRequestBody,
             Emoji,
         )
+
         try:
             request = (
                 CreateMessageReactionRequest.builder()
@@ -215,12 +223,11 @@ class FeishuChannel(ChannelBase):
         await self._post_raw(loop, receive_id_type, chat_id, msg_type, json.dumps(body, ensure_ascii=False))
 
     async def _post_raw(self, loop, receive_id_type, chat_id, msg_type, content_json: str) -> None:
-        await loop.run_in_executor(
-            None, self._send_message_sync, receive_id_type, chat_id, msg_type, content_json
-        )
+        await loop.run_in_executor(None, self._send_message_sync, receive_id_type, chat_id, msg_type, content_json)
 
     def _send_message_sync(self, receive_id_type: str, receive_id: str, msg_type: str, content_json: str) -> bool:
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+
         try:
             request = (
                 CreateMessageRequest.builder()
@@ -238,7 +245,10 @@ class FeishuChannel(ChannelBase):
             if not response.success():
                 logger.error(
                     "Failed to send Feishu {} message: code={}, msg={}, log_id={}",
-                    msg_type, response.code, response.msg, response.get_log_id(),
+                    msg_type,
+                    response.code,
+                    response.msg,
+                    response.get_log_id(),
                 )
                 return False
             return True
@@ -250,6 +260,7 @@ class FeishuChannel(ChannelBase):
 
     def _upload_image_sync(self, path: str) -> str | None:
         from lark_oapi.api.im.v1 import CreateImageRequest, CreateImageRequestBody
+
         try:
             with open(path, "rb") as f:
                 request = (
@@ -267,6 +278,7 @@ class FeishuChannel(ChannelBase):
 
     def _upload_file_sync(self, path: str) -> str | None:
         from lark_oapi.api.im.v1 import CreateFileRequest, CreateFileRequestBody
+
         ext = os.path.splitext(path)[1].lower()
         try:
             with open(path, "rb") as f:
@@ -289,14 +301,16 @@ class FeishuChannel(ChannelBase):
             logger.error("Error uploading file {}: {}", path, e)
         return None
 
-    def _download_resource_sync(self, message_id: str, file_key: str, resource_type: str) -> tuple[bytes | None, str | None]:
+    def _download_resource_sync(
+        self, message_id: str, file_key: str, resource_type: str
+    ) -> tuple[bytes | None, str | None]:
         from lark_oapi.api.im.v1 import GetMessageResourceRequest
+
         # Feishu only accepts 'image' or 'file'; audio rides the file endpoint.
         api_type = "file" if resource_type == "audio" else resource_type
         try:
             request = (
-                GetMessageResourceRequest.builder()
-                .message_id(message_id).file_key(file_key).type(api_type).build()
+                GetMessageResourceRequest.builder().message_id(message_id).file_key(file_key).type(api_type).build()
             )
             response = self._client.im.v1.message_resource.get(request)
             if response.success():
@@ -307,18 +321,24 @@ class FeishuChannel(ChannelBase):
             logger.exception("Error downloading {} {}", resource_type, file_key)
         return None, None
 
-    async def _download_media(self, msg_type: str, content_json: dict, message_id: str | None) -> tuple[str | None, str]:
+    async def _download_media(
+        self, msg_type: str, content_json: dict, message_id: str | None
+    ) -> tuple[str | None, str]:
         loop = asyncio.get_running_loop()
         data = filename = None
         if msg_type == "image":
             key = content_json.get("image_key")
             if key and message_id:
-                data, filename = await loop.run_in_executor(None, self._download_resource_sync, message_id, key, "image")
+                data, filename = await loop.run_in_executor(
+                    None, self._download_resource_sync, message_id, key, "image"
+                )
                 filename = filename or f"{key[:16]}.jpg"
         elif msg_type in ("audio", "file", "media"):
             key = content_json.get("file_key")
             if key and message_id:
-                data, filename = await loop.run_in_executor(None, self._download_resource_sync, message_id, key, msg_type)
+                data, filename = await loop.run_in_executor(
+                    None, self._download_resource_sync, message_id, key, msg_type
+                )
                 filename = filename or key[:16]
                 if msg_type == "audio" and not filename.endswith(".opus"):
                     filename = f"{filename}.opus"
@@ -353,6 +373,7 @@ class FeishuChannel(ChannelBase):
             FileRecognizeSpeechRequestBody,
             Speech,
         )
+
         try:
             audio_b64 = base64.b64encode(Path(path).read_bytes()).decode()
             request = (
@@ -361,11 +382,7 @@ class FeishuChannel(ChannelBase):
                     FileRecognizeSpeechRequestBody.builder()
                     .speech(Speech.builder().speech(audio_b64).build())
                     .config(
-                        FileConfig.builder()
-                        .format("opus")
-                        .engine_type("16k_auto")
-                        .file_id(uuid.uuid4().hex)
-                        .build()
+                        FileConfig.builder().format("opus").engine_type("16k_auto").file_id(uuid.uuid4().hex).build()
                     )
                     .build()
                 )
@@ -410,9 +427,7 @@ class FeishuChannel(ChannelBase):
                 msg,
             )
         else:
-            logger.warning(
-                "Feishu native STT disabled (code={}, msg={}); using Whisper.", code, msg
-            )
+            logger.warning("Feishu native STT disabled (code={}, msg={}); using Whisper.", code, msg)
 
     # ── inbound ───────────────────────────────────────────────────────
 
@@ -444,7 +459,7 @@ class FeishuChannel(ChannelBase):
             msg_type = message.message_type
             if chat_type == "group" and not self._addressed_to_bot(message):
                 return
-            if not self.is_allowed(sender_id):   # reject before react / media download
+            if not self.is_allowed(sender_id):  # reject before react / media download
                 return
 
             await self._react(message_id, self.config.react_emoji)

@@ -32,9 +32,9 @@ if TYPE_CHECKING:
 class AgentOutcome:
     """Uniform result type returned by every backend."""
 
-    status: str                         # "ok" | "skip" | "timeout" | "exception" | "subprocess_error" | "empty"
+    status: str  # "ok" | "skip" | "timeout" | "exception" | "subprocess_error" | "empty"
     elapsed_s: float
-    text: str | None = None             # raw response text (None for pure-structured backends)
+    text: str | None = None  # raw response text (None for pure-structured backends)
     error: str | None = None
     decision: dict[str, Any] | None = None  # pre-parsed: {should_help, proposed_task, reason, parse_ok, ...}
     meta: dict[str, Any] = field(default_factory=dict)  # backend-specific extras

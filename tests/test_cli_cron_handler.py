@@ -27,13 +27,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.cli._cron_handler import make_on_cron_job
-from raven.spine import Origin, Text
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
     CronJobState,
     CronPayload,
     CronSchedule,
 )
+from raven.spine import Origin, Text
 
 
 def _make_job(
@@ -491,9 +491,7 @@ async def test_silent_job_on_non_ephemeral_channel_warns(
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(
-    fake_hub, patch_cron_config
-):
+async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(fake_hub, patch_cron_config):
     from raven.cli._repl_spine import build_repl
     from raven.spine import Text, TurnOutcome, Usage
 

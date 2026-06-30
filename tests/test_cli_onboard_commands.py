@@ -479,9 +479,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
 # --------------------------------------------------------------------------- unit-level
 
 
-def test_step1_writes_via_ops_lib(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify
-) -> None:
+def test_step1_writes_via_ops_lib(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify) -> None:
     """Step 1's write path must go through ``set_provider_fields``."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -544,9 +542,7 @@ def test_step1_model_flag_overrides_picker(tmp_env: Path, stub_verify, stub_step
     assert data["agents"]["defaults"]["model"] == "openrouter/openai/gpt-4o"
 
 
-def test_step1_falls_back_to_spec_default_in_non_interactive(
-    tmp_env: Path, stub_verify, stub_step3
-) -> None:
+def test_step1_falls_back_to_spec_default_in_non_interactive(tmp_env: Path, stub_verify, stub_step3) -> None:
     """Without --model + non-interactive → write whatever ProviderSpec says."""
     r = runner.invoke(
         app,
@@ -566,9 +562,7 @@ def test_step1_falls_back_to_spec_default_in_non_interactive(
     assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
 
 
-def test_step1_picker_uses_catalog_when_available(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_step3
-) -> None:
+def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_step3) -> None:
     """When ``/v1/models`` returns a list and we're interactive, the picker
     feeds that list to ``questionary.autocomplete`` and writes the choice."""
 
@@ -641,22 +635,14 @@ def test_format_model_for_provider_prefix_rules() -> None:
     )
     # Already prefixed by us → idempotent
     assert (
-        onboard_commands._format_model_for_provider(
-            openrouter, "openrouter/anthropic/claude-sonnet-4-5"
-        )
+        onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Direct provider with empty prefix → pass-through
     assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "gpt-4o-mini"
     # skip_prefixes match → no double-prefix
-    assert (
-        onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat")
-        == "deepseek/deepseek-chat"
-    )
-    assert (
-        onboard_commands._format_model_for_provider(deepseek, "deepseek-chat")
-        == "deepseek/deepseek-chat"
-    )
+    assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
+    assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
 
 
 def test_model_routes_to_provider_heuristic() -> None:
@@ -668,13 +654,9 @@ def test_model_routes_to_provider_heuristic() -> None:
     openai = find_by_name("openai")
 
     # Prefix match (most explicit)
-    assert onboard_commands._model_routes_to_provider(
-        "openrouter/anthropic/claude-sonnet-4-5", openrouter
-    )
+    assert onboard_commands._model_routes_to_provider("openrouter/anthropic/claude-sonnet-4-5", openrouter)
     # Wrong prefix → no match for anthropic (even though "claude" is in the string)
-    assert not onboard_commands._model_routes_to_provider(
-        "openrouter/anthropic/claude-sonnet-4-5", anthropic
-    )
+    assert not onboard_commands._model_routes_to_provider("openrouter/anthropic/claude-sonnet-4-5", anthropic)
     # Bare model: keyword match
     assert onboard_commands._model_routes_to_provider("claude-sonnet-4-5", anthropic)
     assert onboard_commands._model_routes_to_provider("gpt-4o-mini", openai)
@@ -716,9 +698,7 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return cfg
 
 
-def _seed_provider(
-    provider: str = "openai", key: str = "sk-seed", model: str = "openai/gpt-4o-mini"
-) -> None:
+def _seed_provider(provider: str = "openai", key: str = "sk-seed", model: str = "openai/gpt-4o-mini") -> None:
     """Write a minimal populated config via the ops layer."""
     from raven.config.update import set_default_model
     from raven.config.update_providers import set_provider_fields
@@ -745,9 +725,7 @@ def test_is_config_populated_requires_provider_and_model(tmp_env: Path) -> None:
     assert onboard_commands._is_config_populated() is True
 
 
-def test_ensure_configured_short_circuits_when_complete(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate returns True (no wizard) when config is already complete."""
     _seed_provider()
     ran: list[bool] = []
@@ -756,9 +734,7 @@ def test_ensure_configured_short_circuits_when_complete(
     assert ran == []  # wizard never invoked
 
 
-def test_ensure_configured_runs_wizard_when_missing(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_ensure_configured_runs_wizard_when_missing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate runs the wizard when the required config is missing."""
     ran: list[bool] = []
     monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
@@ -903,9 +879,7 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
-def test_sandbox_boxlite_probe_failure_falls_back(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Boxlite probe failure → submenu → fall back to host."""
     import questionary
 
@@ -921,9 +895,7 @@ def test_sandbox_boxlite_probe_failure_falls_back(
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
     monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
     # Failure submenu picks "fall back to host".
-    monkeypatch.setattr(
-        onboard_commands, "_failure_choice", lambda options, *, non_interactive: "host"
-    )
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "host")
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
     data = json.loads(tmp_env.read_text())
     assert data["tools"]["sandbox"]["backend"] == "none"
@@ -966,9 +938,7 @@ def test_memory_disable_sets_backend_null(
             return "off"
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(
-        skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
-    )
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
     data = json.loads(tmp_env.read_text())
     assert data["memory"]["backend"] is None
     assert not everos_isolated.exists()
@@ -1161,9 +1131,7 @@ def test_custom_model_reuse_is_compatible(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_main",)))
     monkeypatch.setattr(onboard_commands, "_probe_everos_endpoint", lambda *a, **kw: (True, "ok"))
-    onboard_commands._config_everos_role(
-        section="llm", main_model="qwen-max", non_interactive=False, warnings=[]
-    )
+    onboard_commands._config_everos_role(section="llm", main_model="qwen-max", non_interactive=False, warnings=[])
     with everos_isolated.open("rb") as fh:
         everos = tomllib.load(fh)
     assert everos["llm"] == {
@@ -1200,9 +1168,7 @@ def test_channel_order_overseas_common_before_domestic() -> None:
             assert names.index(domestic) < names.index(tail)
 
 
-def test_scancode_login_success_enables_channel(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_scancode_login_success_enables_channel(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A successful scancode login enables the channel and asks no schema fields."""
     # Stub the adapter's async login to succeed.
     monkeypatch.setattr(
@@ -1210,9 +1176,7 @@ def test_scancode_login_success_enables_channel(
         _async_return(True),
     )
     # Guard: the reflected-schema prompt must NOT be used for scancode channels.
-    monkeypatch.setattr(
-        onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields")
-    )
+    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
 
     onboard_commands._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
@@ -1262,9 +1226,7 @@ def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(onboard_commands, "_select_channel", lambda: "weixin")
     routed: list[str] = []
     monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c: routed.append(c))
-    monkeypatch.setattr(
-        onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields")
-    )
+    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
     onboard_commands._add_one_channel()
     assert routed == ["weixin"]
 
@@ -1295,9 +1257,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
     assert not any("qr" in lbl.lower() for lbl in captured["labels"])
 
 
-def test_scancode_login_node_missing_retry_then_present(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Node-missing → 'retry' re-checks; once npm appears, login runs."""
     missing = iter([True, False])  # first check missing, then present
     monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda c: next(missing))
@@ -1459,14 +1419,10 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     # Picker returns anthropic first (fails), then openai (succeeds on switch).
     picks = iter(["anthropic", "openai"])
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
-    monkeypatch.setattr(
-        onboard_commands, "_prompt_api_key", lambda provider, **kw: f"sk-{provider}"
-    )
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: f"sk-{provider}")
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
     # On the failure submenu, choose "switch".
-    monkeypatch.setattr(
-        onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch"
-    )
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
@@ -1479,9 +1435,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o-mini"
 
 
-def test_add_provider_keeps_existing(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3
-) -> None:
+def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3) -> None:
     """Adding a second provider in the existing-config entry doesn't drop the first."""
     _seed_provider("openai", "sk-first", "openai/gpt-4o-mini")
 
@@ -1515,9 +1469,7 @@ def test_add_provider_keeps_existing(
     assert data["providers"]["anthropic"]["apiKey"] == "sk-second"
 
 
-def test_skip_memory_disables_backend_effective(
-    tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3
-) -> None:
+def test_skip_memory_disables_backend_effective(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
     """BUG-3 regression: --skip-memory leaves effective memory.backend=None
     (schema default is 'everos', which would activate EverOS without models)."""
     r = runner.invoke(
@@ -1552,9 +1504,7 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_seeds_extension_blocks(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fresh_bootstrap_seeds_extension_blocks(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Bootstrap materializes the memory / plugins / skillForge safe subset so a
     fresh config exposes the knobs without writing optional service endpoints
     or bearer tokens into the user's plaintext config."""
@@ -1572,9 +1522,7 @@ def test_fresh_bootstrap_seeds_extension_blocks(
         assert leaked not in data["skillForge"]
 
 
-def test_bootstrap_backfills_preexisting_config(
-    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_bootstrap_backfills_preexisting_config(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config that predates the extension blocks gets them backfilled on the
     next onboard — without clobbering values the user already set."""
     # Simulate an older config: populated, memory.backend set, but no plugins

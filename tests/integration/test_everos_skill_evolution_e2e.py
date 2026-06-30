@@ -56,13 +56,13 @@ _CITIES = [
 
 
 def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
-    be = EverosBackend(PluginContext(
-        config={"mode": "embedded", "agent_id": agent_id},
-        services=ServiceLocator(workspace=tmp_path),
-    ))
-    assert isinstance(be._adapter, _RealEverosAdapter), (
-        "embedded backend did not bind the real everos adapter"
+    be = EverosBackend(
+        PluginContext(
+            config={"mode": "embedded", "agent_id": agent_id},
+            services=ServiceLocator(workspace=tmp_path),
+        )
     )
+    assert isinstance(be._adapter, _RealEverosAdapter), "embedded backend did not bind the real everos adapter"
     return be
 
 
@@ -73,27 +73,43 @@ def _weather_session(city: str, temp: str, cond: str, user_id: str) -> list[dict
     cluster the per-session cases into one reusable weather skill.
     """
     return [
-        {"role": "user", "sender_id": user_id,
-         "content": f"What's the weather in {city} right now?"},
-        {"role": "assistant",
-         "content": f"Checking {city} — I'll query wttr.in for a one-line summary.",
-         "tool_calls": [{"id": f"{city}-1", "type": "function", "function": {
-             "name": "exec",
-             "arguments": f'{{"command": "curl -s wttr.in/{city}?format=3"}}'}}]},
+        {"role": "user", "sender_id": user_id, "content": f"What's the weather in {city} right now?"},
+        {
+            "role": "assistant",
+            "content": f"Checking {city} — I'll query wttr.in for a one-line summary.",
+            "tool_calls": [
+                {
+                    "id": f"{city}-1",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": f'{{"command": "curl -s wttr.in/{city}?format=3"}}'},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": f"{city}-1", "content": f"{city}: {cond} {temp}"},
-        {"role": "assistant",
-         "content": "Re-querying condition+temp+wind to verify before reporting.",
-         "tool_calls": [{"id": f"{city}-2", "type": "function", "function": {
-             "name": "exec",
-             "arguments": f'{{"command": "curl -s wttr.in/{city}?format=%C+%t+%w"}}'}}]},
+        {
+            "role": "assistant",
+            "content": "Re-querying condition+temp+wind to verify before reporting.",
+            "tool_calls": [
+                {
+                    "id": f"{city}-2",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": f'{{"command": "curl -s wttr.in/{city}?format=%C+%t+%w"}}',
+                    },
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": f"{city}-2", "content": f"{cond} {temp} 11km/h"},
-        {"role": "assistant",
-         "content": (
-             f"It's {cond.lower()} and {temp} in {city}. Procedure: query "
-             "wttr.in/<city>?format=3 for a quick summary, then re-query "
-             "wttr.in/<city>?format=%C+%t+%w to confirm condition, temperature "
-             "and wind before reporting. Always verify with the second query."
-         )},
+        {
+            "role": "assistant",
+            "content": (
+                f"It's {cond.lower()} and {temp} in {city}. Procedure: query "
+                "wttr.in/<city>?format=3 for a quick summary, then re-query "
+                "wttr.in/<city>?format=%C+%t+%w to confirm condition, temperature "
+                "and wind before reporting. Always verify with the second query."
+            ),
+        },
     ]
 
 
@@ -106,14 +122,18 @@ async def _memorize_weather(user_id: str, agent_id: str) -> None:
             as_everos_payload(
                 f"weather-{city.lower()}-{i}",
                 _weather_session(city, temp, cond, user_id),
-                user_id=user_id, agent_id=agent_id,
+                user_id=user_id,
+                agent_id=agent_id,
             ),
             is_final=True,
         )
 
 
 async def test_weather_skill_evolves_and_is_recallable(
-    everos_env: Any, ids: Any, tmp_path: Path, pipeline_drain: Any,
+    everos_env: Any,
+    ids: Any,
+    tmp_path: Path,
+    pipeline_drain: Any,
 ) -> None:
     # 1) Drive the channel weather conversations (boundary flushed each turn).
     await _memorize_weather(ids.user_id, ids.agent_id)
@@ -123,8 +143,7 @@ async def test_weather_skill_evolves_and_is_recallable(
     from everos.memory.search.dto import SearchRequest
     from everos.service.search import search
 
-    data = (await search(SearchRequest(
-        agent_id=ids.agent_id, query=_RECALL_QUERY, top_k=10))).data
+    data = (await search(SearchRequest(agent_id=ids.agent_id, query=_RECALL_QUERY, top_k=10))).data
     assert data.agent_skills, (
         "expected >=1 clustered agent_skill from the weather demonstrations; "
         "none extracted (prompt/model regression, or clustering changed)"
@@ -135,8 +154,7 @@ async def test_weather_skill_evolves_and_is_recallable(
     assert skill.source_case_ids, "skill should reference the cases it clustered from"
     blob = f"{skill.name}\n{skill.description}\n{skill.content}".lower()
     assert any(k in blob for k in _EXPECT_KEYWORDS), (
-        f"extracted skill not weather-related; got name={skill.name!r} "
-        f"desc={skill.description[:160]!r}"
+        f"extracted skill not weather-related; got name={skill.name!r} desc={skill.description[:160]!r}"
     )
 
     # 3) Retrieve through the production recall path (what EverosSkillSource
@@ -161,6 +179,4 @@ async def test_weather_skill_evolves_and_is_recallable(
         f"(only cases came back: {[h.text[:50] for h in hits]})"
     )
     recalled = " ".join(h.text for h in skill_hits).lower()
-    assert any(k in recalled for k in _EXPECT_KEYWORDS), (
-        f"recalled skill not weather-related; got:\n{recalled[:400]}"
-    )
+    assert any(k in recalled for k in _EXPECT_KEYWORDS), f"recalled skill not weather-related; got:\n{recalled[:400]}"

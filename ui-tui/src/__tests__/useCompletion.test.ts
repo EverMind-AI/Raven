@@ -2,9 +2,10 @@ import { render } from 'ink-testing-library'
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SLASH_COMMANDS } from '../app/slash/registry.js'
 import type { SlashCommand } from '../app/slash/types.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
+
+import { SLASH_COMMANDS } from '../app/slash/registry.js'
 import { completionRequestForInput, slashCompletions, useCompletion } from '../hooks/useCompletion.js'
 
 describe('completionRequestForInput', () => {
@@ -57,9 +58,7 @@ describe('slashCompletions', () => {
   })
 
   it('/model behaves like any command: matches on name, closes on args', () => {
-    const reg: SlashCommand[] = [
-      { name: 'model', help: 'change or show model', run: vi.fn() }
-    ]
+    const reg: SlashCommand[] = [{ name: 'model', help: 'change or show model', run: vi.fn() }]
     expect(slashCompletions('/model', reg).map(i => i.display)).toEqual(['/model'])
     // close-on-args still applies once a space (argument) is typed.
     expect(slashCompletions('/model ', reg)).toEqual([])
@@ -191,19 +190,62 @@ describe('slashCompletions supported filter', () => {
 
   // The owner-reviewed curation: 34 drop commands hidden, 19 keep shown.
   const DROP_NAMES = [
-    'redraw', 'fortune', 'terminal-setup', 'save', 'statusbar', 'queue', 'steer',
-    'background', 'image', 'personality', 'compress', 'voice', 'skin', 'indicator',
-    'yolo', 'reasoning', 'fast', 'busy', 'verbose', 'usage',
-    'stop', 'reload-mcp', 'reload', 'browser', 'rollback', 'agents', 'replay',
-    'replay-diff', 'reload-skills', 'skills', 'tools',
+    'redraw',
+    'fortune',
+    'terminal-setup',
+    'save',
+    'statusbar',
+    'queue',
+    'steer',
+    'background',
+    'image',
+    'personality',
+    'compress',
+    'voice',
+    'skin',
+    'indicator',
+    'yolo',
+    'reasoning',
+    'fast',
+    'busy',
+    'verbose',
+    'usage',
+    'stop',
+    'reload-mcp',
+    'reload',
+    'browser',
+    'rollback',
+    'agents',
+    'replay',
+    'replay-diff',
+    'reload-skills',
+    'skills',
+    'tools',
     'setup',
-    'heapdump', 'mem'
+    'heapdump',
+    'mem'
   ]
 
   const KEEP_NAMES = [
-    'help', 'quit', 'mouse', 'new', 'status', 'resume', 'title', 'compact',
-    'details', 'copy', 'paste', 'logs', 'history', 'undo', 'retry',
-    'sessions', 'branch', 'export', 'model'
+    'help',
+    'quit',
+    'mouse',
+    'new',
+    'status',
+    'resume',
+    'title',
+    'compact',
+    'details',
+    'copy',
+    'paste',
+    'logs',
+    'history',
+    'undo',
+    'retry',
+    'sessions',
+    'branch',
+    'export',
+    'model'
   ]
 
   it('hides every drop command from the real registry (bare /)', () => {
@@ -223,7 +265,12 @@ describe('slashCompletions supported filter', () => {
   })
 })
 
-function HookSpy({ input, blocked, gw, out }: {
+function HookSpy({
+  input,
+  blocked,
+  gw,
+  out
+}: {
   input: string
   blocked: boolean
   gw: GatewayClient
@@ -238,8 +285,12 @@ function HookSpy({ input, blocked, gw, out }: {
 }
 
 describe('useCompletion slash branch — no complete.slash RPC', () => {
-  beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => { vi.useRealTimers() })
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
 
   it('slash input populates completions without calling gw.request', async () => {
     const gw = { request: vi.fn(() => Promise.resolve(null)), getLogTail: vi.fn(() => '') } as unknown as GatewayClient
@@ -258,7 +309,9 @@ describe('useCompletion slash branch — no complete.slash RPC', () => {
 
   it('path-like input calls gw.request("complete.path", ...) after the debounce', async () => {
     const gw = {
-      request: vi.fn(() => Promise.resolve({ items: [{ text: 'src/foo.ts', display: 'src/foo.ts' }], replace_from: 2 })),
+      request: vi.fn(() =>
+        Promise.resolve({ items: [{ text: 'src/foo.ts', display: 'src/foo.ts' }], replace_from: 2 })
+      ),
       getLogTail: vi.fn(() => '')
     } as unknown as GatewayClient
     const out = { completions: [] as { display: string }[], gwCallCount: 0 }

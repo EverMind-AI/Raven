@@ -31,14 +31,10 @@ def test_chat_cli_qwen_round_trip(harness):
     harness.spawn("uv run raven chat")
     # Wait for chat REPL prompt; the exact glyph may vary but ❯ is the
     # prompt-toolkit-style indicator we saw during spike.
-    assert harness.wait(r"❯|>", timeout=15.0), (
-        f"chat REPL prompt not ready in 15s; screen=\n{harness.screen()}"
-    )
+    assert harness.wait(r"❯|>", timeout=15.0), f"chat REPL prompt not ready in 15s; screen=\n{harness.screen()}"
     harness.type("What's your model's name?")
     harness.press("enter")
-    assert harness.wait(r"Qwen", timeout=60.0), (
-        f"Qwen model did not respond within 60s; screen=\n{harness.screen()}"
-    )
+    assert harness.wait(r"Qwen", timeout=60.0), f"Qwen model did not respond within 60s; screen=\n{harness.screen()}"
     harness.press("ctrl+c")
     assert harness.expect_exit(0, timeout=10.0), (
         f"chat CLI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"

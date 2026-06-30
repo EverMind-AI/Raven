@@ -18,14 +18,67 @@ from raven.proactive_engine.sentinel.types import PlannerContext, PlannerDecisio
 # Words to drop when deriving an auto topic_tag from nudge_message — common
 # Chinese/English stopwords + sentinel-specific filler that adds no
 # topic signal.
-_AUTO_TAG_STOPWORDS = frozenset({
-    "你", "我", "的", "了", "是", "和", "或", "在", "有", "要", "对", "也",
-    "都", "就", "但", "可以", "可能", "应该", "需要", "还是", "如果", "因为",
-    "所以", "提醒", "记得", "建议", "注意", "另外", "顺便", "另", "今天",
-    "明天", "昨天", "最近", "马上", "the", "a", "an", "is", "are", "to",
-    "of", "and", "or", "in", "on", "for", "with", "you", "your", "i",
-    "me", "my", "be", "this", "that", "it",
-})
+_AUTO_TAG_STOPWORDS = frozenset(
+    {
+        "你",
+        "我",
+        "的",
+        "了",
+        "是",
+        "和",
+        "或",
+        "在",
+        "有",
+        "要",
+        "对",
+        "也",
+        "都",
+        "就",
+        "但",
+        "可以",
+        "可能",
+        "应该",
+        "需要",
+        "还是",
+        "如果",
+        "因为",
+        "所以",
+        "提醒",
+        "记得",
+        "建议",
+        "注意",
+        "另外",
+        "顺便",
+        "另",
+        "今天",
+        "明天",
+        "昨天",
+        "最近",
+        "马上",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "to",
+        "of",
+        "and",
+        "or",
+        "in",
+        "on",
+        "for",
+        "with",
+        "you",
+        "your",
+        "i",
+        "me",
+        "my",
+        "be",
+        "this",
+        "that",
+        "it",
+    }
+)
 
 
 def _derive_auto_tag(message: str | None, action: str) -> str:
@@ -56,13 +109,20 @@ def _derive_auto_tag(message: str | None, action: str) -> str:
     stem = "_".join(keep) if keep else f"hash_{hashlib.md5(base.encode()).hexdigest()[:6]}"
     return f"auto_{stem}"[:64]
 
+
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
 
 
-_VALID_ACTIONS = frozenset({
-    "skip", "nudge", "nudge_inject", "nudge_defer", "spawn_agent",
-})
+_VALID_ACTIONS = frozenset(
+    {
+        "skip",
+        "nudge",
+        "nudge_inject",
+        "nudge_defer",
+        "spawn_agent",
+    }
+)
 _VALID_PRIORITIES = frozenset({"low", "medium", "high"})
 _NUDGE_ACTIONS = frozenset({"nudge", "nudge_inject", "nudge_defer"})
 
@@ -172,14 +232,14 @@ class ProactivePlanner:
         # engage instead of being silently bypassed by ``if topic_tag:``.
         raw_tag = args.get("topic_tag")
         topic_tag: str | None = (
-            str(raw_tag).strip().lower()[:64]
-            if isinstance(raw_tag, str) and raw_tag.strip() else None
+            str(raw_tag).strip().lower()[:64] if isinstance(raw_tag, str) and raw_tag.strip() else None
         )
         if action != "skip" and not topic_tag:
             topic_tag = _derive_auto_tag(args.get("nudge_message") or args.get("spawn_task"), action)
             logger.warning(
                 "Planner omitted topic_tag for action={}; auto-derived {!r}",
-                action, topic_tag,
+                action,
+                topic_tag,
             )
 
         # The schema only requires action/reason/proactivity_score, so an
@@ -189,7 +249,8 @@ class ProactivePlanner:
         if action in _NUDGE_ACTIONS and not nudge_message:
             logger.warning(
                 "Planner chose {} without nudge_message; downgrading to skip. reason={}",
-                action, reason[:120],
+                action,
+                reason[:120],
             )
             return PlannerDecision(
                 action="skip",

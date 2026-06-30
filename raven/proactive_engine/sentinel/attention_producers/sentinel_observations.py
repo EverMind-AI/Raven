@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timedelta
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from raven.proactive_engine.sentinel.attention_producers._base import (
     AttentionProducer,
@@ -56,6 +56,7 @@ class SentinelObservationsProducer(AttentionProducer):
         # full pydantic schema into the producer's module-load path.
         if config is None:
             from raven.config.raven import SentinelObservationsConfig
+
             config = SentinelObservationsConfig()
         self._memory_store = memory_store
         self._feedback = feedback
@@ -122,7 +123,8 @@ class SentinelObservationsProducer(AttentionProducer):
         for nid, tag in id_to_topic.items():
             signals = id_signals.get(nid, set())
             s = topic_stats.setdefault(
-                tag, {"dispatched": 0, "accepted": 0, "dismissed": 0},
+                tag,
+                {"dispatched": 0, "accepted": 0, "dismissed": 0},
             )
             s["dispatched"] += 1
             if "accepted" in signals:
@@ -137,17 +139,16 @@ class SentinelObservationsProducer(AttentionProducer):
                 key=lambda kv: (-kv[1]["dispatched"], kv[0]),
             )[:10]
             for tag, s in ordered:
-                d = s["dispatched"]; a = s["accepted"]; x = s["dismissed"]
+                d = s["dispatched"]
+                a = s["accepted"]
+                x = s["dismissed"]
                 rate = (a / d * 100) if d else 0
                 hint = ""
                 if d >= 3 and x / d >= 0.6:
                     hint = "  ⚠ high-dismiss → de-prioritize"
                 elif d >= 3 and a / d >= 0.7:
                     hint = "  ✓ well-received"
-                lines.append(
-                    f"- `{tag}` × {d} (accept {a}, dismiss {x}, "
-                    f"accept_rate {rate:.0f}%){hint}"
-                )
+                lines.append(f"- `{tag}` × {d} (accept {a}, dismiss {x}, accept_rate {rate:.0f}%){hint}")
         else:
             topic_counts: Counter[str] = Counter()
             for tag, dq in (self._policy._topic_fired_at or {}).items():
@@ -182,9 +183,7 @@ class SentinelObservationsProducer(AttentionProducer):
         if dismiss_hours:
             for h, n in sorted(dismiss_hours.items()):
                 if n >= 1:
-                    lines.append(
-                        f"- {h:02d}:00-{(h+1)%24:02d}:00 dismissed {n} times"
-                    )
+                    lines.append(f"- {h:02d}:00-{(h + 1) % 24:02d}:00 dismissed {n} times")
         else:
             lines.append("- (no dismissals in window)")
         lines.append("")
@@ -193,10 +192,7 @@ class SentinelObservationsProducer(AttentionProducer):
         lines.append("### Adaptive tuning")
         mult = getattr(self._policy, "_hour_quota_multiplier", 1.0)
         if mult < 0.99:
-            lines.append(
-                f"- hour_quota_multiplier: {mult:.2f} "
-                f"(tightened due to dismiss rate)"
-            )
+            lines.append(f"- hour_quota_multiplier: {mult:.2f} (tightened due to dismiss rate)")
         else:
             lines.append("- hour_quota_multiplier: 1.00 (no tightening)")
         return "\n".join(lines)
@@ -205,9 +201,7 @@ class SentinelObservationsProducer(AttentionProducer):
 
     def _has_enough_feedback(self) -> bool:
         recent = self._feedback.recent(n=200)
-        dispatched_count = sum(
-            1 for r in recent if r.get("signal") == "dispatched"
-        )
+        dispatched_count = sum(1 for r in recent if r.get("signal") == "dispatched")
         return dispatched_count >= self._config.min_feedback
 
     def _recently_updated(self, now: datetime) -> bool:

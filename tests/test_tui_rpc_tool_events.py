@@ -35,8 +35,16 @@ class _ScriptedProvider(LLMProvider):
         super().__init__(api_key="test")
         self._responses = responses
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return self._responses.pop(0)
 
     def get_default_model(self) -> str:
@@ -103,7 +111,8 @@ async def test_tool_start_and_complete_emitted(workspace) -> None:
         events.append((phase, info))
 
     final, tools_used, _, _ = await agent._run_agent_loop(
-        [{"role": "user", "content": "ls"}], on_tool_event=on_tool_event,
+        [{"role": "user", "content": "ls"}],
+        on_tool_event=on_tool_event,
     )
 
     assert final == "final"
@@ -128,7 +137,8 @@ async def test_tool_complete_truncated_flag(workspace) -> None:
         events.append((phase, info))
 
     await agent._run_agent_loop(
-        [{"role": "user", "content": "go"}], on_tool_event=on_tool_event,
+        [{"role": "user", "content": "go"}],
+        on_tool_event=on_tool_event,
     )
     complete = [i for p, i in events if p == "complete"][0]
     assert complete["truncated"] is True
@@ -150,7 +160,8 @@ async def test_n_plus_1_each_tool_emits_events(workspace, tool_name) -> None:
         events.append((phase, info))
 
     await agent._run_agent_loop(
-        [{"role": "user", "content": "x"}], on_tool_event=on_tool_event,
+        [{"role": "user", "content": "x"}],
+        on_tool_event=on_tool_event,
     )
     assert [p for p, _ in events] == ["start", "complete"]
     assert all(i["tool_call_id"] == f"c-{tool_name}" for _, i in events)
@@ -165,7 +176,8 @@ async def test_n_plus_1_plain_text_emits_no_tool_events(workspace) -> None:
         events.append((phase, info))
 
     final, tools_used, _, _ = await agent._run_agent_loop(
-        [{"role": "user", "content": "hi"}], on_tool_event=on_tool_event,
+        [{"role": "user", "content": "hi"}],
+        on_tool_event=on_tool_event,
     )
     assert final == "hi"
     assert events == []
@@ -201,7 +213,8 @@ async def test_message_tool_skipped_by_general_path(workspace) -> None:
         events.append((phase, info))
 
     _, tools_used, _, _ = await agent._run_agent_loop(
-        [{"role": "user", "content": "hi"}], on_tool_event=on_tool_event,
+        [{"role": "user", "content": "hi"}],
+        on_tool_event=on_tool_event,
     )
     assert "message" in tools_used
     # turn.py owns the message tool's tool.complete; the general path skips it

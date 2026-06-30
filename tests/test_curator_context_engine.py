@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
 from raven.config import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.memory_engine.base import TokenBudget
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.spine.message import ChatType, Source
+from raven.spine.turn import Origin, TurnRequest
 
 
 class CuratorScriptProvider(LLMProvider):
@@ -31,11 +31,7 @@ class CuratorScriptProvider(LLMProvider):
         reasoning_effort=None,
         tool_choice=None,
     ):
-        tool_names = {
-            tool.get("function", {}).get("name")
-            for tool in (tools or [])
-            if isinstance(tool, dict)
-        }
+        tool_names = {tool.get("function", {}).get("name") for tool in (tools or []) if isinstance(tool, dict)}
         if "curator_build_context" in tool_names:
             self.curator_calls += 1
             if self.curator_mode == "fallback":
@@ -83,7 +79,11 @@ def _session_messages() -> list[dict]:
         {"role": "user", "content": "Initial project rule: preserve exact config.", "timestamp": "2026-05-12T10:00:00"},
         {"role": "assistant", "content": "Noted the config preservation rule.", "timestamp": "2026-05-12T10:01:00"},
         {"role": "user", "content": "Now design curator context management.", "timestamp": "2026-05-12T11:00:00"},
-        {"role": "assistant", "content": "We should use manifest plus selective retrieval.", "timestamp": "2026-05-12T11:01:00"},
+        {
+            "role": "assistant",
+            "content": "We should use manifest plus selective retrieval.",
+            "timestamp": "2026-05-12T11:01:00",
+        },
     ]
 
 
@@ -179,7 +179,9 @@ async def test_process_message_records_main_and_curator_trajectories(tmp_path: P
         TurnRequest(
             origin=Origin.USER,
             source=Source(
-                channel="cli", chat_id="trace-test", sender_id="user",
+                channel="cli",
+                chat_id="trace-test",
+                sender_id="user",
                 chat_type=ChatType.DM,
             ),
             text="Use the curator trajectory and answer.",

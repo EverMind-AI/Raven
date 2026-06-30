@@ -51,12 +51,12 @@ def test_channel_spec_fields_and_factory():
         capabilities=Capabilities(interactive_login=True),
     )
     assert spec.display_name == "WeChat" and spec.capabilities.interactive_login is True
-    assert isinstance(spec.factory("cfg", "bus"), _Min)   # factory builds a channel
+    assert isinstance(spec.factory("cfg", "bus"), _Min)  # factory builds a channel
 
 
 def test_channel_spec_capabilities_default_empty():
     spec = ChannelSpec(display_name="X", factory=lambda cfg, bus: _Min())
-    assert spec.capabilities == Capabilities()   # omitted -> all-False
+    assert spec.capabilities == Capabilities()  # omitted -> all-False
 
 
 # ── runtime-checkable protocols ───────────────────────────────────────
@@ -99,9 +99,11 @@ def test_capability_violations_implemented_but_undeclared():
     class _SneakyLogin(_Min):
         async def login(self, force: bool = False) -> bool:
             return True
+
     assert any("SupportsLogin" in m for m in capability_violations(_SneakyLogin()))
 
     # symmetric: implements streaming but forgot to declare streaming
     class _SneakyStream(_Min):
         async def send_stream_chunk(self, chat_id, stream_id, delta, *, done=False) -> None: ...
+
     assert any("SupportsStreaming" in m for m in capability_violations(_SneakyStream()))

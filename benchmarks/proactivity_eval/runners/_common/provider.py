@@ -45,12 +45,7 @@ def make_provider(cfg: dict[str, Any], model_override: str | None = None):
     # OPENROUTER_API_KEY may carry a comma-separated rotation list for OC;
     # single-key consumers (simulator, planner) take the first.
     or_key = or_key_raw.split(",", 1)[0].strip() if or_key_raw else ""
-    api_key = (
-        or_key
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("ANTHROPIC_API_KEY")
-        or ""
-    )
+    api_key = or_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or ""
 
     if provider_name and provider_name.lower() == "openrouter":
         if "/" in model and not model.startswith("openrouter/"):

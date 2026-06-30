@@ -29,7 +29,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -63,17 +62,18 @@ def _runtime_ready() -> bool:
         return False
     load_settings.cache_clear()
     s = load_settings()
-    return s.llm.api_key is not None and bool(s.embedding.model) \
-        and s.embedding.api_key is not None
+    return s.llm.api_key is not None and bool(s.embedding.model) and s.embedding.api_key is not None
 
 
 def _run_agent(message: str, session: str, root: Path) -> str:
     """Send one message through the real agent CLI (mock channel)."""
     env = {**os.environ, "EVEROS_MEMORY__ROOT": str(root)}
     proc = subprocess.run(
-        [str(_RAVEN), "agent", "-m", message, "-s", session,
-         "--wait-skill-extract", "--no-markdown", "--logs"],
-        env=env, capture_output=True, text=True, timeout=300,
+        [str(_RAVEN), "agent", "-m", message, "-s", session, "--wait-skill-extract", "--no-markdown", "--logs"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     return proc.stdout + proc.stderr
 
@@ -106,25 +106,19 @@ def test_channel_e2e_writes_memory_markdown(tmp_path: Path) -> None:
 
     episodes = [p for p in all_md if _has(p, "episodes")]
     profiles = [p for p in all_md if p.name == "user.md" or "profile" in p.name.lower()]
-    cases = [p for p in all_md if _has(p, ".cases") or _has(p, "cases")
-             or "agent_case" in p.name]
-    skills = [p for p in all_md if _has(p, ".skills") or _has(p, "skills")
-              or "skill" in p.name.lower()]
+    cases = [p for p in all_md if _has(p, ".cases") or _has(p, "cases") or "agent_case" in p.name]
+    skills = [p for p in all_md if _has(p, ".skills") or _has(p, "skills") or "skill" in p.name.lower()]
 
     # ── User-track memory markdown must exist ───────────────────────
-    assert episodes, (
-        "no user episode markdown written under users/*/episodes/; "
-        f"tree:\n{_tree(root)}"
-    )
-    ep_text = "\n".join(p.read_text(encoding='utf-8', errors='ignore') for p in episodes)
+    assert episodes, f"no user episode markdown written under users/*/episodes/; tree:\n{_tree(root)}"
+    ep_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in episodes)
     assert any(k in ep_text.lower() for k in ("backup", "diff", "verify", ".conf")), (
         f"episode markdown didn't capture the task; got:\n{ep_text[:500]}"
     )
 
     # ── Agent-track: cases should appear; skill is best-effort ──────
     # Report what landed (visible in -s / -rA output).
-    print(f"\n[channel-e2e] episodes={len(episodes)} profiles={len(profiles)} "
-          f"cases={len(cases)} skills={len(skills)}")
+    print(f"\n[channel-e2e] episodes={len(episodes)} profiles={len(profiles)} cases={len(cases)} skills={len(skills)}")
     print(_tree(root))
 
     if not cases and not skills:
@@ -134,16 +128,12 @@ def test_channel_e2e_writes_memory_markdown(tmp_path: Path) -> None:
             "test_everos_extraction_real_llm for the authoritative skill test."
         )
     if skills:
-        skill_text = "\n".join(
-            p.read_text(encoding='utf-8', errors='ignore') for p in skills
-        ).lower()
+        skill_text = "\n".join(p.read_text(encoding="utf-8", errors="ignore") for p in skills).lower()
         assert any(k in skill_text for k in ("backup", "diff", "verify", "copy")), (
             f"skill markdown didn't relate to the task; got:\n{skill_text[:500]}"
         )
 
 
 def _tree(root: Path) -> str:
-    md = sorted(
-        str(p.relative_to(root)) for p in root.glob("**/*.md")
-    )
+    md = sorted(str(p.relative_to(root)) for p in root.glob("**/*.md"))
     return "  md files:\n    " + "\n    ".join(md) if md else "  (no .md files)"

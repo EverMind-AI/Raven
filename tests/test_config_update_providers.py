@@ -110,16 +110,12 @@ def test_set_empty_fields_returns_empty_dict(cfg_path: Path) -> None:
 
 def test_set_returns_previous_values(cfg_path: Path) -> None:
     set_provider_fields("openrouter", {"api_key": "old"}, config_path=cfg_path)
-    prev = set_provider_fields(
-        "openrouter", {"api_key": "new"}, config_path=cfg_path
-    )
+    prev = set_provider_fields("openrouter", {"api_key": "new"}, config_path=cfg_path)
     assert prev == {"api_key": "old"}
 
 
 def test_set_camelcase_round_trip(cfg_path: Path) -> None:
-    set_provider_fields(
-        "openrouter", {"api_key": "K", "api_base": "https://x"}, config_path=cfg_path
-    )
+    set_provider_fields("openrouter", {"api_key": "K", "api_base": "https://x"}, config_path=cfg_path)
     section = _read(cfg_path)["providers"]["openrouter"]
     assert "apiKey" in section and "apiBase" in section
     assert "api_key" not in section and "api_base" not in section
@@ -139,9 +135,7 @@ def test_get_redacts_api_key(cfg_path: Path) -> None:
 
 def test_get_with_redact_false_returns_plaintext(cfg_path: Path) -> None:
     set_provider_fields("openrouter", {"api_key": "secret"}, config_path=cfg_path)
-    cfg = get_provider_config(
-        "openrouter", redact_secrets=False, config_path=cfg_path
-    )
+    cfg = get_provider_config("openrouter", redact_secrets=False, config_path=cfg_path)
     assert cfg["api_key"] == "secret"
 
 
@@ -213,9 +207,7 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json")
-    )
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
     reset_provider("openai_codex", config_path=cfg_path)
 
 
@@ -277,13 +269,9 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers.get("Authorization") == "Bearer sk-test"
         assert request.url.path.endswith("/v1/models")
-        return httpx.Response(
-            200, json={"data": [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]}
-        )
+        return httpx.Response(200, json={"data": [{"id": "m1"}, {"id": "m2"}, {"id": "m3"}]})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is True
     assert result["status"] == "valid"
     assert result["models_count"] == 3
@@ -305,9 +293,7 @@ def test_test_provider_200_extracts_model_ids(cfg_path: Path) -> None:
             },
         )
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["model_ids"] == [
         "claude-haiku-4-5",
         "claude-sonnet-4-5",
@@ -321,9 +307,7 @@ def test_test_provider_200_empty_data_returns_empty_model_ids(cfg_path: Path) ->
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": []})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is True
     assert result["models_count"] == 0
     assert result["model_ids"] == []
@@ -338,9 +322,7 @@ def test_test_provider_200_falls_back_to_name_field(cfg_path: Path) -> None:
             json={"data": [{"id": "with-id"}, {"name": "name-only"}, {}]},
         )
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["model_ids"] == ["with-id", "name-only"]
 
 
@@ -350,9 +332,7 @@ def test_test_provider_failure_paths_have_none_model_ids(cfg_path: Path) -> None
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key"})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is False
     assert result["model_ids"] is None
 
@@ -363,9 +343,7 @@ def test_test_provider_network_error_has_none_model_ids(cfg_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("offline", request=request)
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["status"] == "network_error"
     assert result["model_ids"] is None
 
@@ -376,9 +354,7 @@ def test_test_provider_401_returns_invalid_key(cfg_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key"})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is False
     assert result["status"] == "invalid_key"
 
@@ -389,9 +365,7 @@ def test_test_provider_402_returns_no_credits(cfg_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(402, json={"error": "no credit"})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["status"] == "no_credits"
 
 
@@ -401,9 +375,7 @@ def test_test_provider_429_returns_rate_limited(cfg_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(429, json={"error": "slow down"})
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["status"] == "rate_limited"
 
 
@@ -413,9 +385,7 @@ def test_test_provider_network_error_returns_network_error(cfg_path: Path) -> No
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("nope", request=request)
 
-    result = probe_provider(
-        "openrouter", config_path=cfg_path, transport=_mock_transport(handler)
-    )
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is False
     assert result["status"] == "network_error"
     assert "nope" in (result["error"] or "")
@@ -460,9 +430,7 @@ def test_test_provider_oauth_missing_token_returns_oauth_token_missing(
 ) -> None:
     import sys
 
-    fake_module = SimpleNamespace(
-        get_token=lambda: SimpleNamespace(access=None, account_id=None)
-    )
+    fake_module = SimpleNamespace(get_token=lambda: SimpleNamespace(access=None, account_id=None))
     monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
 
     result = probe_provider("openai_codex", config_path=cfg_path)
@@ -480,9 +448,7 @@ def test_provider_config_models_round_trips(cfg_path: Path) -> None:
 
     section = _read(cfg_path)["providers"]["openrouter"]
     assert section["models"] == ["anthropic/claude-sonnet-4-5"]
-    assert "anthropic/claude-sonnet-4-5" in get_provider_config(
-        "openrouter", config_path=cfg_path
-    ).get("models", [])
+    assert "anthropic/claude-sonnet-4-5" in get_provider_config("openrouter", config_path=cfg_path).get("models", [])
 
 
 def test_add_provider_model_is_idempotent(cfg_path: Path) -> None:

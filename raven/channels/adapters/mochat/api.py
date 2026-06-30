@@ -63,9 +63,15 @@ class MochatAPI:
         return await self.post("/api/claw/groups/get", {})
 
     async def watch_session(self, session_id: str, cursor: int, timeout_ms: int, limit: int) -> dict[str, Any]:
-        return await self.post("/api/claw/sessions/watch", {
-            "sessionId": session_id, "cursor": cursor, "timeoutMs": timeout_ms, "limit": limit,
-        })
+        return await self.post(
+            "/api/claw/sessions/watch",
+            {
+                "sessionId": session_id,
+                "cursor": cursor,
+                "timeoutMs": timeout_ms,
+                "limit": limit,
+            },
+        )
 
     async def panel_messages(self, panel_id: str, limit: int) -> dict[str, Any]:
         return await self.post("/api/claw/groups/panels/messages", {"panelId": panel_id, "limit": limit})
@@ -76,8 +82,9 @@ class MochatAPI:
             body["replyTo"] = reply_to
         return await self.post("/api/claw/sessions/send", body)
 
-    async def send_panel(self, panel_id: str, content: str, reply_to: str | None = None,
-                         group_id: str | None = None) -> dict[str, Any]:
+    async def send_panel(
+        self, panel_id: str, content: str, reply_to: str | None = None, group_id: str | None = None
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {"panelId": panel_id, "content": content}
         if reply_to:
             body["replyTo"] = reply_to

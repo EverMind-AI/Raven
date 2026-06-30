@@ -14,16 +14,18 @@
 import './lib/colorTier.js'
 
 import type { FrameEvent } from '@hermes/ink'
+
 import { activeColorTier } from '@hermes/ink'
 
-import { GatewayClientCompat } from './gatewayClientCompat.js'
-import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
-import { DEFAULT_THEME } from './theme.js'
 import type { GatewayClient } from './gatewayClientStub.js'
+
+import { GatewayClientCompat } from './gatewayClientCompat.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
 import { formatBytes, type HeapDumpResult, performHeapDump } from './lib/memory.js'
 import { type MemorySnapshot, startMemoryMonitor } from './lib/memoryMonitor.js'
+import { renderColorPreview, renderColorSwatches } from './lib/printColors.js'
 import { resetTerminalModes } from './lib/terminalModes.js'
+import { DEFAULT_THEME } from './theme.js'
 
 // `raven tui --print-colors` is a no-IPC diagnostic: dump the resolved
 // palette as swatches and exit. Runs before the TTY guard so it works when
@@ -66,9 +68,7 @@ if (process.env.RAVEN_TUI_CHECK === '1') {
 const socketPath = process.env.RAVEN_RPC_SOCKET
 
 if (!socketPath) {
-  process.stderr.write(
-    'raven-tui: RAVEN_RPC_SOCKET env var required; spawn via `raven tui` parent\n'
-  )
+  process.stderr.write('raven-tui: RAVEN_RPC_SOCKET env var required; spawn via `raven tui` parent\n')
   process.exit(2)
 }
 

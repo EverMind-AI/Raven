@@ -33,10 +33,18 @@ if str(_REPO_ROOT) not in sys.path:
 from raven.skill_forge.store import SqliteStore
 from raven.skill_forge.types import SkillMeta
 
-
 _CATEGORIES = [
-    "DOC", "CODING", "DATA", "DEVOPS", "TESTING", "SECURITY",
-    "FRONTEND", "BACKEND", "DOMAIN", "META", "SCIENCE",
+    "DOC",
+    "CODING",
+    "DATA",
+    "DEVOPS",
+    "TESTING",
+    "SECURITY",
+    "FRONTEND",
+    "BACKEND",
+    "DOMAIN",
+    "META",
+    "SCIENCE",
 ]
 _VERBS = ["generate", "parse", "render", "analyze", "transform", "fetch"]
 _NOUNS = ["pdf", "csv", "report", "image", "text", "config", "graph"]
@@ -62,18 +70,18 @@ def _fake_skill(rng: random.Random, idx: int) -> SkillMeta:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", type=Path, required=True,
-                    help="Output SQLite file (will be created/overwritten).")
-    ap.add_argument("--count", type=int, default=100,
-                    help="Number of fake skills to generate. (default: 100)")
-    ap.add_argument("--dim", type=int, default=1024,
-                    help="Embedding dimension. (default: 1024)")
-    ap.add_argument("--model", type=str, default="fake-test-model",
-                    help="String written into ``embedding_model`` column. "
-                         "Must match RetrievalConfig.embedding_model when "
-                         "SkillService loads the DB.")
-    ap.add_argument("--seed", type=int, default=42,
-                    help="Random seed for reproducibility. (default: 42)")
+    ap.add_argument("--db", type=Path, required=True, help="Output SQLite file (will be created/overwritten).")
+    ap.add_argument("--count", type=int, default=100, help="Number of fake skills to generate. (default: 100)")
+    ap.add_argument("--dim", type=int, default=1024, help="Embedding dimension. (default: 1024)")
+    ap.add_argument(
+        "--model",
+        type=str,
+        default="fake-test-model",
+        help="String written into ``embedding_model`` column. "
+        "Must match RetrievalConfig.embedding_model when "
+        "SkillService loads the DB.",
+    )
+    ap.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility. (default: 42)")
     args = ap.parse_args(argv)
 
     if args.db.exists():
@@ -89,13 +97,19 @@ def main(argv: list[str] | None = None) -> int:
             v /= np.linalg.norm(v) + 1e-9
             store.upsert(meta)
             store.set_embedding(
-                meta.name, meta.source, v.tobytes(), args.model,
-                args.dim, "float32",
+                meta.name,
+                meta.source,
+                v.tobytes(),
+                args.model,
+                args.dim,
+                "float32",
             )
 
     print(f"Wrote {args.count} skills × {args.dim}-dim embeddings to {args.db}")
-    print(f"Set ``skill_forge.mass_library_db = '{args.db}'`` and "
-          f"``skill_forge.embedding_model = '{args.model}'`` in your config.")
+    print(
+        f"Set ``skill_forge.mass_library_db = '{args.db}'`` and "
+        f"``skill_forge.embedding_model = '{args.model}'`` in your config."
+    )
     return 0
 
 

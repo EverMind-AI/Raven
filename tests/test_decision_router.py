@@ -12,7 +12,6 @@ from raven.proactive_engine.sentinel.executor.decision_router import DecisionRou
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
 
-
 _NOW = datetime(2026, 5, 8, 8, 30)
 _NOW_MS = int(_NOW.timestamp() * 1000)
 
@@ -23,11 +22,15 @@ _NOW_MS = int(_NOW.timestamp() * 1000)
 class _StubProvider:
     """Stub LLM provider returning a canned classifier response."""
 
-    def __init__(self, intent: str | None, *,
-                 option_index: int | None = None,
-                 confidence: float = 0.95,
-                 has_tool_calls: bool = True,
-                 raw_args: str | None = None):
+    def __init__(
+        self,
+        intent: str | None,
+        *,
+        option_index: int | None = None,
+        confidence: float = 0.95,
+        has_tool_calls: bool = True,
+        raw_args: str | None = None,
+    ):
         if has_tool_calls:
             payload = {"intent": intent, "confidence": confidence}
             if option_index is not None:
@@ -44,8 +47,10 @@ class _StubProvider:
             self._resp.has_tool_calls = True
             self._resp.tool_calls = [_Call()]
         else:
+
             class _Resp:
                 pass
+
             self._resp = _Resp()
             self._resp.has_tool_calls = False
             self._resp.tool_calls = []
@@ -56,12 +61,16 @@ class _StubProvider:
         return self._resp
 
 
-def _decision(decision_id: str = "dec_test", channel: str = "feishu",
-              to: str = "ou_xxx", n_options: int = 3) -> PendingDecision:
+def _decision(
+    decision_id: str = "dec_test", channel: str = "feishu", to: str = "ou_xxx", n_options: int = 3
+) -> PendingDecision:
     options = [
         TaskOption(
-            id=f"opt_{i}", title=f"option {i}", why=f"why {i}",
-            type="ad_hoc", exec_kind="reply",
+            id=f"opt_{i}",
+            title=f"option {i}",
+            why=f"why {i}",
+            type="ad_hoc",
+            exec_kind="reply",
             exec_payload={"prompt": f"do {i}"},
             created_at_ms=_NOW_MS,
         )
@@ -88,9 +97,7 @@ def pending_store(tmp_path: Path) -> PendingDecisionStore:
 @pytest.mark.asyncio
 async def test_no_pending_decision_returns_consumed_false(pending_store):
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="hello"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="hello")
     assert result.consumed is False
 
 
@@ -98,9 +105,7 @@ async def test_no_pending_decision_returns_consumed_false(pending_store):
 async def test_empty_content_returns_consumed_false(pending_store):
     pending_store.put(_decision())
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="   "
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="   ")
     assert result.consumed is False
 
 
@@ -112,9 +117,7 @@ async def test_pick_regex_consumes_with_confidence_one(pending_store):
     pending_store.put(_decision())
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
 
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="/pick 2"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="/pick 2")
     assert result.consumed is True
     assert result.option is not None
     assert result.option.id == "opt_2"
@@ -128,11 +131,8 @@ async def test_pick_regex_case_insensitive_and_whitespace(pending_store):
     pending_store.put(_decision())
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
 
-    for variant in ("/pick 1", "/PICK 1", "  /pick   1  ",
-                    "/Pick 1\n"):
-        result = await router.maybe_consume(
-            channel="feishu", to="ou_xxx", content=variant
-        )
+    for variant in ("/pick 1", "/PICK 1", "  /pick   1  ", "/Pick 1\n"):
+        result = await router.maybe_consume(channel="feishu", to="ou_xxx", content=variant)
         assert result.consumed is True, f"failed for {variant!r}"
         assert result.option.id == "opt_1"
 
@@ -142,9 +142,7 @@ async def test_pick_regex_out_of_range_falls_through_to_no_match(pending_store):
     pending_store.put(_decision(n_options=3))
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
 
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="/pick 99"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="/pick 99")
     # Decision is still live; we just don't consume it
     assert result.consumed is False
 
@@ -155,10 +153,7 @@ async def test_pick_inside_sentence_does_not_match_regex(pending_store):
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
     # No LLM provider — only deterministic path. "I want to /pick 2 of these"
     # is anchored-regex-rejected → consumed=False.
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx",
-        content="I want to /pick 2 of these"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="I want to /pick 2 of these")
     assert result.consumed is False
 
 
@@ -167,9 +162,7 @@ async def test_no_provider_means_only_pick_n_works(pending_store):
     pending_store.put(_decision())
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
     # Plain "1" without /pick prefix → no match (no LLM available)
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="1"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="1")
     assert result.consumed is False
 
 
@@ -182,13 +175,12 @@ async def test_llm_classifier_pick_consumes(pending_store):
     provider = _StubProvider(intent="pick", option_index=2, confidence=0.92)
     router = DecisionRouter(
         pending_store=pending_store,
-        provider=provider, model="qwen3.5-27B",
+        provider=provider,
+        model="qwen3.5-27B",
         now_fn=lambda: _NOW,
     )
 
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="选第二个"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="选第二个")
     assert result.consumed is True
     assert result.option.id == "opt_2"
     assert result.confidence == 0.92
@@ -200,13 +192,13 @@ async def test_llm_classifier_skip_returns_no_option(pending_store):
     pending_store.put(_decision())
     provider = _StubProvider(intent="skip", confidence=0.9)
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider,
-        model="x", now_fn=lambda: _NOW,
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
+        now_fn=lambda: _NOW,
     )
 
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="跳过"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="跳过")
     assert result.consumed is True
     assert result.option is None
     assert result.confidence == 0.9
@@ -217,12 +209,13 @@ async def test_llm_low_confidence_treats_as_other(pending_store):
     pending_store.put(_decision())
     provider = _StubProvider(intent="pick", option_index=2, confidence=0.55)
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider, model="x",
-        confidence_threshold=0.7, now_fn=lambda: _NOW,
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
+        confidence_threshold=0.7,
+        now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="都行你随便"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="都行你随便")
     assert result.consumed is False
     assert result.confidence == 0.55
     assert result.raw_match_method == "llm_classifier"
@@ -233,12 +226,12 @@ async def test_llm_intent_other_returns_consumed_false(pending_store):
     pending_store.put(_decision())
     provider = _StubProvider(intent="other", confidence=0.95)
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider, model="x",
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
         now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="今天天气不错"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="今天天气不错")
     assert result.consumed is False
     assert result.confidence == 0.95
 
@@ -248,12 +241,12 @@ async def test_llm_pick_with_out_of_range_index_falls_through(pending_store):
     pending_store.put(_decision(n_options=3))
     provider = _StubProvider(intent="pick", option_index=5, confidence=0.99)
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider, model="x",
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
         now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="选第五个"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="选第五个")
     # Out-of-range from confident LLM → no consume (better safe than
     # executing a hallucinated option)
     assert result.consumed is False
@@ -264,27 +257,26 @@ async def test_llm_no_tool_call_returns_consumed_false(pending_store):
     pending_store.put(_decision())
     provider = _StubProvider(intent=None, has_tool_calls=False)
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider, model="x",
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
         now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="不知道"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="不知道")
     assert result.consumed is False
 
 
 @pytest.mark.asyncio
 async def test_llm_malformed_args_returns_consumed_false(pending_store):
     pending_store.put(_decision())
-    provider = _StubProvider(intent=None, has_tool_calls=True,
-                             raw_args="not json at all")
+    provider = _StubProvider(intent=None, has_tool_calls=True, raw_args="not json at all")
     router = DecisionRouter(
-        pending_store=pending_store, provider=provider, model="x",
+        pending_store=pending_store,
+        provider=provider,
+        model="x",
         now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="something"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="something")
     assert result.consumed is False
 
 
@@ -298,12 +290,12 @@ async def test_provider_exception_does_not_propagate(pending_store):
             raise RuntimeError("oh no")
 
     router = DecisionRouter(
-        pending_store=pending_store, provider=_Boom(), model="x",
+        pending_store=pending_store,
+        provider=_Boom(),
+        model="x",
         now_fn=lambda: _NOW,
     )
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="选第一个"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="选第一个")
     assert result.consumed is False
 
 
@@ -318,9 +310,7 @@ async def test_expired_decision_is_skipped_by_get_recent(pending_store):
     decision.created_at_ms = _NOW_MS - 24 * 60 * 60_000  # 24h ago
     pending_store.put(decision)
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
-    result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="/pick 1"
-    )
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="/pick 1")
     assert result.consumed is False
 
 
@@ -328,7 +318,5 @@ async def test_expired_decision_is_skipped_by_get_recent(pending_store):
 async def test_other_channel_does_not_consume(pending_store):
     pending_store.put(_decision(channel="feishu", to="ou_xxx"))
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
-    result = await router.maybe_consume(
-        channel="cli", to="ou_xxx", content="/pick 1"
-    )
+    result = await router.maybe_consume(channel="cli", to="ou_xxx", content="/pick 1")
     assert result.consumed is False

@@ -67,9 +67,7 @@ def ensure_bridge_dir() -> Path:
     ]
     source = next((c for c in candidates if (c / "package.json").exists()), None)
     if not source:
-        raise RuntimeError(
-            "WhatsApp bridge source not found. Try reinstalling: pip install --force-reinstall raven"
-        )
+        raise RuntimeError("WhatsApp bridge source not found. Try reinstalling: pip install --force-reinstall raven")
 
     logger.info("Setting up WhatsApp bridge...")
     install_dir.parent.mkdir(parents=True, exist_ok=True)

@@ -88,7 +88,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         default_api_base="http://localhost:8000/v1",
     ),
-
     # === Azure OpenAI (direct API calls with API version 2024-10-21) =====
     ProviderSpec(
         name="azure_openai",
@@ -435,9 +434,7 @@ def find_by_model(model: str) -> ProviderSpec | None:
             return spec
 
     for spec in std_specs:
-        if any(
-            kw in model_lower or kw.replace("-", "_") in model_normalized for kw in spec.keywords
-        ):
+        if any(kw in model_lower or kw.replace("-", "_") in model_normalized for kw in spec.keywords):
             return spec
     return None
 

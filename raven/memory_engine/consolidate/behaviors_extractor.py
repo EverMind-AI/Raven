@@ -27,11 +27,10 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
     from raven.config.raven import BehaviorsExtractConfig
     from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.providers.base import LLMProvider
-    from raven.session.manager import Session
 
 
 _EXTRACT_TOOL_NAME = "emit_behavior_events"
@@ -58,109 +56,105 @@ def build_extract_tool() -> list[dict[str, Any]]:
     12-field shape; we parse strict and drop malformed entries rather
     than reprompt — cost beats completeness for a once-a-day pipeline.
     """
-    return [{
-        "type": "function",
-        "function": {
-            "name": _EXTRACT_TOOL_NAME,
-            "description": (
-                "Extract distinct user-agent interactions from the recent "
-                "session messages into structured BehaviorEvent records. "
-                "Emit ONE event per substantive interaction (debug session, "
-                "design discussion, deferred decision, etc.). Skip "
-                "small-talk and short clarifications. Empty array is "
-                "acceptable when the chunk produced nothing memorable."
-            ),
-            "parameters": {
-                "type": "object",
-                "required": ["events"],
-                "properties": {
-                    "events": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": [
-                                "start", "end", "intent", "outcome",
-                                "topic", "summary",
-                            ],
-                            "properties": {
-                                "start": {
-                                    "type": "string",
-                                    "description": "HH:MM start (local).",
-                                },
-                                "end": {
-                                    "type": "string",
-                                    "description": "HH:MM end (local).",
-                                },
-                                "intent": {
-                                    "type": "string",
-                                    "description": (
-                                        "What user was trying to do. "
-                                        "Examples: debug, design, ask, "
-                                        "plan, refactor, review."
-                                    ),
-                                },
-                                "outcome": {
-                                    "type": "string",
-                                    "description": (
-                                        "How it ended. Examples: "
-                                        "resolved, open, deferred, "
-                                        "blocked, abandoned, followup."
-                                    ),
-                                },
-                                "topic": {
-                                    "type": "string",
-                                    "description": (
-                                        "Short topic slug (kebab-case)."
-                                    ),
-                                },
-                                "project": {
-                                    "type": "string",
-                                    "description": (
-                                        "Project name or empty if N/A."
-                                    ),
-                                },
-                                "source": {
-                                    "type": "string",
-                                    "description": (
-                                        "Who initiated: 'user-asked', "
-                                        "'agent-proposed', 'cron-fire', "
-                                        "'nudge'."
-                                    ),
-                                },
-                                "owner": {
-                                    "type": "string",
-                                    "description": "'user' or 'agent'.",
-                                },
-                                "tools": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": (
-                                        "Tools the agent used in this "
-                                        "interaction (Bash / Edit / "
-                                        "Read / WebFetch / etc.)."
-                                    ),
-                                },
-                                "turns": {
-                                    "type": "integer",
-                                    "description": (
-                                        "Round-trip count between user "
-                                        "and agent in this interaction."
-                                    ),
-                                },
-                                "summary": {
-                                    "type": "string",
-                                    "description": (
-                                        "One-line summary, ≤120 chars, "
-                                        "concrete identifiers preferred."
-                                    ),
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": _EXTRACT_TOOL_NAME,
+                "description": (
+                    "Extract distinct user-agent interactions from the recent "
+                    "session messages into structured BehaviorEvent records. "
+                    "Emit ONE event per substantive interaction (debug session, "
+                    "design discussion, deferred decision, etc.). Skip "
+                    "small-talk and short clarifications. Empty array is "
+                    "acceptable when the chunk produced nothing memorable."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "required": ["events"],
+                    "properties": {
+                        "events": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "start",
+                                    "end",
+                                    "intent",
+                                    "outcome",
+                                    "topic",
+                                    "summary",
+                                ],
+                                "properties": {
+                                    "start": {
+                                        "type": "string",
+                                        "description": "HH:MM start (local).",
+                                    },
+                                    "end": {
+                                        "type": "string",
+                                        "description": "HH:MM end (local).",
+                                    },
+                                    "intent": {
+                                        "type": "string",
+                                        "description": (
+                                            "What user was trying to do. "
+                                            "Examples: debug, design, ask, "
+                                            "plan, refactor, review."
+                                        ),
+                                    },
+                                    "outcome": {
+                                        "type": "string",
+                                        "description": (
+                                            "How it ended. Examples: "
+                                            "resolved, open, deferred, "
+                                            "blocked, abandoned, followup."
+                                        ),
+                                    },
+                                    "topic": {
+                                        "type": "string",
+                                        "description": ("Short topic slug (kebab-case)."),
+                                    },
+                                    "project": {
+                                        "type": "string",
+                                        "description": ("Project name or empty if N/A."),
+                                    },
+                                    "source": {
+                                        "type": "string",
+                                        "description": (
+                                            "Who initiated: 'user-asked', 'agent-proposed', 'cron-fire', 'nudge'."
+                                        ),
+                                    },
+                                    "owner": {
+                                        "type": "string",
+                                        "description": "'user' or 'agent'.",
+                                    },
+                                    "tools": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": (
+                                            "Tools the agent used in this "
+                                            "interaction (Bash / Edit / "
+                                            "Read / WebFetch / etc.)."
+                                        ),
+                                    },
+                                    "turns": {
+                                        "type": "integer",
+                                        "description": ("Round-trip count between user and agent in this interaction."),
+                                    },
+                                    "summary": {
+                                        "type": "string",
+                                        "description": (
+                                            "One-line summary, ≤120 chars, concrete identifiers preferred."
+                                        ),
+                                    },
                                 },
                             },
                         },
                     },
                 },
             },
-        },
-    }]
+        }
+    ]
 
 
 _SYSTEM_PROMPT = """\
@@ -225,11 +219,7 @@ class BehaviorsOffsets:
             return cls(path=path)
         if not isinstance(raw, dict):
             return cls(path=path)
-        offsets = {
-            k: _SessionOffset.from_dict(v)
-            for k, v in raw.get("offsets", {}).items()
-            if isinstance(v, dict)
-        }
+        offsets = {k: _SessionOffset.from_dict(v) for k, v in raw.get("offsets", {}).items() if isinstance(v, dict)}
         return cls(
             path=path,
             offsets=offsets,
@@ -304,7 +294,8 @@ class BehaviorsExtractor:
         if idle_seconds_observed < self.config.idle_seconds:
             logger.debug(
                 "BehaviorsExtractor: idle gate not passed ({}s < {}s)",
-                idle_seconds_observed, self.config.idle_seconds,
+                idle_seconds_observed,
+                self.config.idle_seconds,
             )
             return 0
         offsets = BehaviorsOffsets.load(self.memory_store.behaviors_offsets_path)
@@ -314,8 +305,7 @@ class BehaviorsExtractor:
             if elapsed < timedelta(hours=self.config.cooldown_hours):
                 remaining = timedelta(hours=self.config.cooldown_hours) - elapsed
                 logger.debug(
-                    "BehaviorsExtractor: cooldown active "
-                    "(last_run={}, elapsed={}, remaining={})",
+                    "BehaviorsExtractor: cooldown active (last_run={}, elapsed={}, remaining={})",
                     last.isoformat(timespec="seconds"),
                     str(elapsed).split(".")[0],
                     str(remaining).split(".")[0],
@@ -332,7 +322,8 @@ class BehaviorsExtractor:
     # ── Internals ───────────────────────────────────────────────────
 
     async def _extract_all_internal(
-        self, offsets: BehaviorsOffsets,
+        self,
+        offsets: BehaviorsOffsets,
     ) -> int:
         sessions_dir = self.session_manager.sessions_dir
         if not sessions_dir.is_dir():
@@ -341,12 +332,14 @@ class BehaviorsExtractor:
         for session_path in sorted(sessions_dir.rglob("*.jsonl")):
             try:
                 added = await self._extract_one_session(
-                    session_path, offsets,
+                    session_path,
+                    offsets,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "BehaviorsExtractor: session {} failed: {}",
-                    session_path.name, exc,
+                    session_path.name,
+                    exc,
                 )
                 continue
             total_new += added
@@ -355,12 +348,14 @@ class BehaviorsExtractor:
         return total_new
 
     async def _extract_one_session(
-        self, session_path: Path, offsets: BehaviorsOffsets,
+        self,
+        session_path: Path,
+        offsets: BehaviorsOffsets,
     ) -> int:
         session_key = _session_key_from_path(session_path)
         messages = _load_session_messages(session_path)
         offset = offsets.get(session_key)
-        tail = messages[offset.processed_until_msg_idx:]
+        tail = messages[offset.processed_until_msg_idx :]
         if len(tail) < self.config.min_segment_messages:
             return 0
 
@@ -373,7 +368,7 @@ class BehaviorsExtractor:
         cap = self.config.max_messages_per_call
         idx = 0
         while idx < len(tail):
-            chunk = tail[idx:idx + cap]
+            chunk = tail[idx : idx + cap]
             if len(chunk) < self.config.min_segment_messages:
                 break
             events = await self._llm_extract(chunk, session_key)
@@ -382,10 +377,13 @@ class BehaviorsExtractor:
                 added += len(events)
             new_msg_idx = offset.processed_until_msg_idx + idx + len(chunk)
             last_ts = _last_ts(chunk) or offset.processed_until_ts
-            offsets.set(session_key, _SessionOffset(
-                processed_until_msg_idx=new_msg_idx,
-                processed_until_ts=last_ts,
-            ))
+            offsets.set(
+                session_key,
+                _SessionOffset(
+                    processed_until_msg_idx=new_msg_idx,
+                    processed_until_ts=last_ts,
+                ),
+            )
             offsets.save()  # Persist after each chunk (best-effort idempotency).
             idx += cap
         return added
@@ -396,7 +394,8 @@ class BehaviorsExtractor:
             return
         with self.memory_store.locked_behaviors():
             self.memory_store.behaviors_file.parent.mkdir(
-                parents=True, exist_ok=True,
+                parents=True,
+                exist_ok=True,
             )
             existing = (
                 self.memory_store.behaviors_file.read_text(encoding="utf-8")
@@ -405,11 +404,14 @@ class BehaviorsExtractor:
             )
             sep = "" if not existing or existing.endswith("\n") else "\n"
             self.memory_store.behaviors_file.write_text(
-                existing + sep + text, encoding="utf-8",
+                existing + sep + text,
+                encoding="utf-8",
             )
 
     async def _llm_extract(
-        self, chunk: list[dict[str, Any]], session_key: str,
+        self,
+        chunk: list[dict[str, Any]],
+        session_key: str,
     ) -> list[BehaviorEvent]:
         rendered = _render_chunk_for_llm(chunk)
         if not rendered:
@@ -418,10 +420,7 @@ class BehaviorsExtractor:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": (
-                    f"Session: {session_key}\n\n"
-                    f"Messages:\n{rendered}"
-                ),
+                "content": (f"Session: {session_key}\n\nMessages:\n{rendered}"),
             },
         ]
         response = await self.provider.chat_with_retry(
@@ -551,11 +550,7 @@ def _render_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
         ts_short = str(ts)[:16] if isinstance(ts, str) else ""
         content = msg.get("content")
         if isinstance(content, list):
-            text_parts = [
-                blk.get("text", "")
-                for blk in content
-                if isinstance(blk, dict) and blk.get("type") == "text"
-            ]
+            text_parts = [blk.get("text", "") for blk in content if isinstance(blk, dict) and blk.get("type") == "text"]
             content_text = " ".join(t for t in text_parts if t)
         else:
             content_text = str(content or "")
@@ -567,9 +562,7 @@ def _render_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
             for t in tools:
                 if isinstance(t, dict):
                     names.append(
-                        t.get("name")
-                        or (t.get("function") or {}).get("name")
-                        or "",
+                        t.get("name") or (t.get("function") or {}).get("name") or "",
                     )
                 else:
                     names.append(str(t))
@@ -581,7 +574,9 @@ def _render_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
 
 
 def _parse_events(
-    raw_events: list[Any], session_key: str, default_day: str,
+    raw_events: list[Any],
+    session_key: str,
+    default_day: str,
 ) -> list[BehaviorEvent]:
     out: list[BehaviorEvent] = []
     for raw in raw_events:
@@ -601,22 +596,24 @@ def _parse_events(
         if not isinstance(tools_raw, list):
             tools_raw = []
         tools = [str(t).strip() for t in tools_raw if str(t).strip()]
-        out.append(BehaviorEvent(
-            id=f"evt_{uuid.uuid4().hex[:8]}",
-            day=default_day,
-            start=start,
-            end=end,
-            session=session_key,
-            turns=int(raw.get("turns") or 0) or 0,
-            intent=str(raw.get("intent") or "").strip(),
-            outcome=str(raw.get("outcome") or "").strip(),
-            topic=str(raw.get("topic") or "").strip(),
-            project=str(raw.get("project") or "").strip(),
-            source=str(raw.get("source") or "").strip(),
-            owner=str(raw.get("owner") or "user").strip(),
-            tools=tools,
-            summary=summary,
-        ))
+        out.append(
+            BehaviorEvent(
+                id=f"evt_{uuid.uuid4().hex[:8]}",
+                day=default_day,
+                start=start,
+                end=end,
+                session=session_key,
+                turns=int(raw.get("turns") or 0) or 0,
+                intent=str(raw.get("intent") or "").strip(),
+                outcome=str(raw.get("outcome") or "").strip(),
+                topic=str(raw.get("topic") or "").strip(),
+                project=str(raw.get("project") or "").strip(),
+                source=str(raw.get("source") or "").strip(),
+                owner=str(raw.get("owner") or "user").strip(),
+                tools=tools,
+                summary=summary,
+            )
+        )
     return out
 
 

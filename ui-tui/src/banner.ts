@@ -94,9 +94,7 @@ const bandColor = (ramp: readonly string[], row: number) =>
 // Title (wordmark): one ramp colour per LOGO_ROWS_PER_BAND rows, top → bottom,
 // using the first ceil(rows / band) ramp entries (the 8-row art → ramp[0..3]).
 export const ravenLogo = (ramp: readonly string[], customLogo?: string): Line[] =>
-  customLogo
-    ? parseRichMarkup(customLogo)
-    : RAVEN_LOGO_ART.map((text, i) => [bandColor(ramp, i), text])
+  customLogo ? parseRichMarkup(customLogo) : RAVEN_LOGO_ART.map((text, i) => [bandColor(ramp, i), text])
 
 // Drop columns that are blank in every row so a sliced word sits flush-left.
 const leftAlign = (rows: readonly string[]): string[] => {
@@ -158,6 +156,13 @@ export const artWidth = (lines: Line[]) => lines.reduce((m, [, t]) => Math.max(m
 
 // Width of a segmented art (hero): max over rows of the summed segment widths.
 export const rowsWidth = (rows: Line[][]) =>
-  rows.reduce((m, segs) => Math.max(m, segs.reduce((a, [, t]) => a + [...t].length, 0)), 0)
+  rows.reduce(
+    (m, segs) =>
+      Math.max(
+        m,
+        segs.reduce((a, [, t]) => a + [...t].length, 0)
+      ),
+    0
+  )
 
 type Line = [string, string]

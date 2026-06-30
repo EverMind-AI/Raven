@@ -9,8 +9,6 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-
 from raven.config.raven import NudgePolicyConfig
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy, _hours_covered
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
@@ -18,8 +16,8 @@ from raven.proactive_engine.sentinel.trigger_policy.prefs import (
     ProactivityPreferencesReader,
 )
 
-
 # ── Reader parsing ──────────────────────────────────────────────────────────
+
 
 def _mk_reader(text: str) -> ProactivityPreferencesReader:
     return ProactivityPreferencesReader(read_fn=lambda: text)
@@ -35,47 +33,31 @@ def test_missing_section_returns_empty():
 
 
 def test_parse_quiet_hours_simple_range():
-    memory = (
-        "## Proactivity Preferences\n"
-        "- User quiet hours: 22-07\n"
-    )
+    memory = "## Proactivity Preferences\n- User quiet hours: 22-07\n"
     ov = _mk_reader(memory).read()
     assert ov.quiet_hours == (22, 7)
 
 
 def test_parse_quiet_hours_hhmm_format():
-    memory = (
-        "## Proactivity Preferences\n"
-        "- User quiet hours: 22:00-07:30 (no notifications)\n"
-    )
+    memory = "## Proactivity Preferences\n- User quiet hours: 22:00-07:30 (no notifications)\n"
     ov = _mk_reader(memory).read()
     assert ov.quiet_hours == (22, 7)
 
 
 def test_parse_quiet_hours_chinese_keyword():
-    memory = (
-        "## Proactivity Preferences\n"
-        "- 安静时段: 20-09\n"
-    )
+    memory = "## Proactivity Preferences\n- 安静时段: 20-09\n"
     ov = _mk_reader(memory).read()
     assert ov.quiet_hours == (20, 9)
 
 
 def test_parse_quiet_hours_dnd_english():
-    memory = (
-        "## Proactivity Preferences\n"
-        "- User DND: 21-08\n"
-    )
+    memory = "## Proactivity Preferences\n- User DND: 21-08\n"
     ov = _mk_reader(memory).read()
     assert ov.quiet_hours == (21, 8)
 
 
 def test_facts_without_range_are_ignored():
-    memory = (
-        "## Proactivity Preferences\n"
-        "- User quiet hours: never\n"
-        "- User only wants high priority notifications\n"
-    )
+    memory = "## Proactivity Preferences\n- User quiet hours: never\n- User only wants high priority notifications\n"
     ov = _mk_reader(memory).read()
     # First fact has no numeric range; no quiet hour is inferred.
     assert ov.quiet_hours is None
@@ -112,11 +94,13 @@ def test_read_from_missing_file_returns_empty(tmp_path: Path):
 def test_read_fn_exception_returns_empty():
     def boom():
         raise OSError("disk gone")
+
     reader = ProactivityPreferencesReader(read_fn=boom)
     assert reader.read().is_empty()
 
 
 # ── _hours_covered math ──────────────────────────────────────────────────────
+
 
 def test_hours_covered_simple():
     assert _hours_covered((9, 17)) == 8
@@ -132,19 +116,25 @@ def test_hours_covered_equal_means_none():
 
 # ── NudgePolicy effective_quiet_hours merge rule ─────────────────────────────
 
-def _mk_policy(config_quiet: tuple[int, int],
-               override: tuple[int, int] | None) -> NudgePolicy:
+
+def _mk_policy(config_quiet: tuple[int, int], override: tuple[int, int] | None) -> NudgePolicy:
     config = NudgePolicyConfig(
-        max_nudges_per_hour=10, max_nudges_per_day=100,
-        min_interval_seconds=0, quiet_hours=config_quiet,
-        cooldown_on_dismiss_seconds=0, high_priority_bypasses_limits=True,
+        max_nudges_per_hour=10,
+        max_nudges_per_day=100,
+        min_interval_seconds=0,
+        quiet_hours=config_quiet,
+        cooldown_on_dismiss_seconds=0,
+        high_priority_bypasses_limits=True,
         dedup_window_seconds=0,
-        inject_ttl_seconds=1800, inject_max_pending_per_session=3,
-        defer_idle_threshold_seconds=300, defer_max_wait_seconds=86400,
+        inject_ttl_seconds=1800,
+        inject_max_pending_per_session=3,
+        defer_idle_threshold_seconds=300,
+        defer_max_wait_seconds=86400,
     )
     ov = PersonalizedOverrides(quiet_hours=override) if override else None
     return NudgePolicy(
-        config, now_fn=lambda: datetime(2026, 4, 22, 23, 0),
+        config,
+        now_fn=lambda: datetime(2026, 4, 22, 23, 0),
         overrides_fn=(lambda ov=ov: ov) if ov is not None else None,
     )
 
@@ -168,12 +158,17 @@ def test_override_none_uses_config():
 
 def test_override_errors_fall_back_to_config():
     config = NudgePolicyConfig(
-        max_nudges_per_hour=10, max_nudges_per_day=100,
-        min_interval_seconds=0, quiet_hours=(22, 7),
-        cooldown_on_dismiss_seconds=0, high_priority_bypasses_limits=True,
+        max_nudges_per_hour=10,
+        max_nudges_per_day=100,
+        min_interval_seconds=0,
+        quiet_hours=(22, 7),
+        cooldown_on_dismiss_seconds=0,
+        high_priority_bypasses_limits=True,
         dedup_window_seconds=0,
-        inject_ttl_seconds=1800, inject_max_pending_per_session=3,
-        defer_idle_threshold_seconds=300, defer_max_wait_seconds=86400,
+        inject_ttl_seconds=1800,
+        inject_max_pending_per_session=3,
+        defer_idle_threshold_seconds=300,
+        defer_max_wait_seconds=86400,
     )
 
     def bad():

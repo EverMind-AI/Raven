@@ -35,6 +35,7 @@ def timestamp() -> str:
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*]')
 
+
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
     return _UNSAFE_CHARS.sub("_", name).strip()
@@ -62,9 +63,9 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
             break
         cut = content[:max_len]
         # Try to break at newline first, then space, then hard break
-        pos = cut.rfind('\n')
+        pos = cut.rfind("\n")
         if pos <= 0:
-            pos = cut.rfind(' ')
+            pos = cut.rfind(" ")
         if pos <= 0:
             pos = max_len
         chunks.append(content[:pos])
@@ -189,6 +190,7 @@ def estimate_prompt_tokens_chain(
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
+
     try:
         tpl = pkg_files("raven") / "templates"
     except Exception:
@@ -225,44 +227,37 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     # Step 1 — migrate legacy workspace files into the L4 layout. Each
     # rule fires only when the legacy file exists and the L4 target is
     # still missing, so user edits made directly to L4 paths win.
-    _migrate(workspace / "memory" / "MEMORY.md",
-             workspace / "user_memory" / "profile" / "user.md")
-    _migrate(workspace / "memory" / "HISTORY.md",
-             workspace / "user_memory" / "episodic" / "episodes.md")
-    _migrate(workspace / "SOUL.md",
-             workspace / "agent_memory" / "profile" / "soul.md")
-    _migrate(workspace / "AGENTS.md",
-             workspace / "agent_memory" / "profile" / "agent.md")
-    _migrate(workspace / "USER.md",
-             workspace / "user_memory" / "profile" / "user.md")
+    _migrate(workspace / "memory" / "MEMORY.md", workspace / "user_memory" / "profile" / "user.md")
+    _migrate(workspace / "memory" / "HISTORY.md", workspace / "user_memory" / "episodic" / "episodes.md")
+    _migrate(workspace / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
+    _migrate(workspace / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
+    _migrate(workspace / "USER.md", workspace / "user_memory" / "profile" / "user.md")
     # feat/auto attention + behaviors content lived at workspace root.
     # Sentinel rewrites attention.md from its own producers each tick, so
     # the migrated file mostly serves as a head-start for the next refresh.
-    _migrate(workspace / "ATTENTION.md",
-             workspace / "user_memory" / "attention.md")
-    _migrate(workspace / "BEHAVIORS.md",
-             workspace / "user_memory" / "behaviors.md")
-    _migrate(workspace / "BEHAVIOR.md",
-             workspace / "user_memory" / "behaviors.md")
+    _migrate(workspace / "ATTENTION.md", workspace / "user_memory" / "attention.md")
+    _migrate(workspace / "BEHAVIORS.md", workspace / "user_memory" / "behaviors.md")
+    _migrate(workspace / "BEHAVIOR.md", workspace / "user_memory" / "behaviors.md")
 
     # Step 2 — fall back to bundled templates for anything still missing.
     # L4 pillar files first; root-level files (TOOLS / HEARTBEAT) stay put.
-    _write(tpl / "SOUL.md",   workspace / "agent_memory" / "profile" / "soul.md")
+    _write(tpl / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
     _write(tpl / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
-    _write(tpl / "USER.md",   workspace / "user_memory" / "profile" / "user.md")
-    _write(None,              workspace / "user_memory" / "episodic" / "episodes.md")
+    _write(tpl / "USER.md", workspace / "user_memory" / "profile" / "user.md")
+    _write(None, workspace / "user_memory" / "episodic" / "episodes.md")
     # Files L4 specifies but the legacy layout had no source for —
     # empty stubs; populated later by Sentinel / eval engine.
     _write(None, workspace / "agent_memory" / "procedural" / "skills.md")
     _write(None, workspace / "agent_memory" / "procedural" / "case.md")
     _write(None, workspace / "user_memory" / "attention.md")
     _write(None, workspace / "user_memory" / "behaviors.md")
-    _write(tpl / "TOOLS.md",     workspace / "TOOLS.md")
+    _write(tpl / "TOOLS.md", workspace / "TOOLS.md")
     _write(tpl / "HEARTBEAT.md", workspace / "HEARTBEAT.md")
     (workspace / "skills").mkdir(exist_ok=True)
 
     if added and not silent:
         from rich.console import Console
+
         _c = Console(stderr=True)
         for name in added:
             _c.print(f"  [dim]Created {name}[/dim]")

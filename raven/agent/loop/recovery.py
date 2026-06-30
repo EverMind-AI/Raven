@@ -45,9 +45,9 @@ class RecoveryAction(Enum):
     """What the loop should do about an empty assistant response."""
 
     COMPLETE = auto()  # visible text present, or budgets spent → finish the turn
-    PREFILL = auto()   # thinking-only → re-feed reasoning, re-request
-    NUDGE = auto()     # post-tool empty → inject (empty) + user nudge, re-request
-    RETRY = auto()     # plain empty → re-request as-is
+    PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
+    NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
+    RETRY = auto()  # plain empty → re-request as-is
 
 
 @dataclass(frozen=True)
@@ -81,11 +81,7 @@ def has_inline_thinking(content: str | None) -> bool:
 
 def has_thinking(response: LLMResponse) -> bool:
     """True when the response produced reasoning in any form (structured or inline)."""
-    return bool(
-        response.reasoning_content
-        or response.thinking_blocks
-        or has_inline_thinking(response.content)
-    )
+    return bool(response.reasoning_content or response.thinking_blocks or has_inline_thinking(response.content))
 
 
 def classify_empty_response(
@@ -118,11 +114,7 @@ def classify_empty_response(
         return RecoveryAction.PREFILL
 
     # post-tool empty nudge — exclude thinking-only (handled above).
-    if (
-        prev_had_tool_calls
-        and not thinking
-        and nudges_done < limits.post_tool_empty_max_nudges
-    ):
+    if prev_had_tool_calls and not thinking and nudges_done < limits.post_tool_empty_max_nudges:
         return RecoveryAction.NUDGE
 
     # Fallback plain retry. The ``prefill_exhausted`` clause is load-bearing:

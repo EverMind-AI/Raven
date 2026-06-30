@@ -23,7 +23,6 @@ from raven.memory_engine.consolidate.consolidator import (
     _score_section_relevance,
 )
 
-
 SEEDED = (
     "# Long-term Memory\n"
     "\n"
@@ -55,7 +54,10 @@ class TestParseUserMdSections:
     def test_splits_into_h2_blocks_in_file_order(self):
         sections = _parse_user_md_sections(SEEDED)
         assert list(sections.keys()) == [
-            "## Projects", "## Habits", "## Preferences", "## Notes",
+            "## Projects",
+            "## Habits",
+            "## Preferences",
+            "## Notes",
         ]
 
     def test_body_includes_h3_subheadings(self):
@@ -77,10 +79,14 @@ class TestScoreSectionRelevance:
     def test_heading_match_weighs_more_than_body(self):
         # 1 heading token match (3x) vs 1 body token match (1x).
         s_heading = _score_section_relevance(
-            "tell me about habits", "## Habits", "irrelevant body",
+            "tell me about habits",
+            "## Habits",
+            "irrelevant body",
         )
         s_body = _score_section_relevance(
-            "tell me about habits", "## Other", "habits show up in body",
+            "tell me about habits",
+            "## Other",
+            "habits show up in body",
         )
         assert s_heading > s_body
 
@@ -90,7 +96,9 @@ class TestScoreSectionRelevance:
     def test_chinese_tokens_match_as_runs(self):
         # "怎么写" is one multi-char token; should match itself in body.
         score = _score_section_relevance(
-            "mutex 怎么写", "## Random", "mutex 怎么写 看这里",
+            "mutex 怎么写",
+            "## Random",
+            "mutex 怎么写 看这里",
         )
         assert score >= 2  # both 'mutex' and '怎么写' overlap
 
@@ -134,7 +142,8 @@ class TestGetMemoryContextSelective:
         assert "## Projects" not in out
 
     def test_query_that_matches_nothing_still_returns_notes(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ):
         # All scores near zero; top-K picks something, but Notes always wins
         # the catchall slot.

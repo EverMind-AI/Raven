@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 
 from raven.memory_engine.consolidate.behaviors import (
-    BehaviorEvent, render_append_block,
+    BehaviorEvent,
+    render_append_block,
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.predictor.context_assembler import (
@@ -58,22 +59,30 @@ def _seed_attention(store: MemoryStore, text: str) -> None:
 
 
 def _seed_behaviors_events(
-    store: MemoryStore, events: list[BehaviorEvent],
+    store: MemoryStore,
+    events: list[BehaviorEvent],
 ) -> None:
     store.behaviors_file.parent.mkdir(parents=True, exist_ok=True)
     store.behaviors_file.write_text(
-        render_append_block(events), encoding="utf-8",
+        render_append_block(events),
+        encoding="utf-8",
     )
 
 
 def _event(**overrides) -> BehaviorEvent:
     defaults = dict(
         id="evt_a1b2c3d4",
-        day="2026-05-29", start="14:00", end="14:30",
-        session="cli:default", turns=8,
-        intent="debug", outcome="resolved",
-        topic="memory-engine", project="raven",
-        source="user-asked", owner="user",
+        day="2026-05-29",
+        start="14:00",
+        end="14:30",
+        session="cli:default",
+        turns=8,
+        intent="debug",
+        outcome="resolved",
+        topic="memory-engine",
+        project="raven",
+        source="user-asked",
+        owner="user",
         tools=["Bash", "Edit"],
         summary="debugged memory_engine session split",
     )
@@ -92,13 +101,15 @@ class TestAttentionForPlanner:
         assert ctx.attention_md == ""
 
     def test_keeps_only_configured_sections(self, store, clock) -> None:
-        _seed_attention(store,
+        _seed_attention(
+            store,
             "## Pending proposals\n- prop_42\n\n"
             "## Active threads\n- routine_x\n\n"
             "## Currently focused on\n- session cli:default\n",
         )
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
             attention_planner_sections=[
                 "## Pending proposals",
                 "## Currently focused on",
@@ -113,30 +124,30 @@ class TestAttentionForPlanner:
         assert "routine_x" not in ctx.attention_md
 
     def test_section_order_follows_config(self, store, clock) -> None:
-        _seed_attention(store,
-            "## Currently focused on\n- focus body\n\n"
-            "## Pending proposals\n- prop body\n",
+        _seed_attention(
+            store,
+            "## Currently focused on\n- focus body\n\n## Pending proposals\n- prop body\n",
         )
         # Config order: Pending first, Currently second
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
             attention_planner_sections=[
                 "## Pending proposals",
                 "## Currently focused on",
             ],
         )
         ctx = assembler.assemble()
-        assert ctx.attention_md.index("Pending proposals") < (
-            ctx.attention_md.index("Currently focused on")
-        )
+        assert ctx.attention_md.index("Pending proposals") < (ctx.attention_md.index("Currently focused on"))
 
     def test_empty_section_bodies_dropped(self, store, clock) -> None:
-        _seed_attention(store,
-            "## Pending proposals\n\n"
-            "## Currently focused on\n- focus body\n",
+        _seed_attention(
+            store,
+            "## Pending proposals\n\n## Currently focused on\n- focus body\n",
         )
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
             attention_planner_sections=[
                 "## Pending proposals",
                 "## Currently focused on",
@@ -158,14 +169,25 @@ class TestBehaviorsForPlanner:
         assert ctx.behaviors_recent == ""
 
     def test_folds_to_single_lines(self, store, clock) -> None:
-        _seed_behaviors_events(store, [
-            _event(day="2026-05-28", start="09:00", end="09:30",
-                   intent="design", outcome="open",
-                   topic="api", project="raven", turns=4,
-                   summary="drafted API surface"),
-        ])
+        _seed_behaviors_events(
+            store,
+            [
+                _event(
+                    day="2026-05-28",
+                    start="09:00",
+                    end="09:30",
+                    intent="design",
+                    outcome="open",
+                    topic="api",
+                    project="raven",
+                    turns=4,
+                    summary="drafted API surface",
+                ),
+            ],
+        )
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
         )
         ctx = assembler.assemble()
         # Folded single-line format
@@ -179,14 +201,16 @@ class TestBehaviorsForPlanner:
 
     def test_skips_events_outside_window(self, store, clock) -> None:
         now = clock()
-        _seed_behaviors_events(store, [
-            _event(id="evt_old", day=(now - timedelta(days=30)).date().isoformat(),
-                   summary="ancient"),
-            _event(id="evt_fresh", day=now.date().isoformat(),
-                   summary="recent"),
-        ])
+        _seed_behaviors_events(
+            store,
+            [
+                _event(id="evt_old", day=(now - timedelta(days=30)).date().isoformat(), summary="ancient"),
+                _event(id="evt_fresh", day=now.date().isoformat(), summary="recent"),
+            ],
+        )
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
             behaviors_planner_window_days=14,
         )
         ctx = assembler.assemble()
@@ -195,14 +219,13 @@ class TestBehaviorsForPlanner:
 
     def test_caps_at_max_events(self, store, clock) -> None:
         events = [
-            _event(id=f"evt_{i:03d}", day="2026-05-29",
-                   start=f"{i:02d}:00", end=f"{i:02d}:10",
-                   summary=f"item {i}")
+            _event(id=f"evt_{i:03d}", day="2026-05-29", start=f"{i:02d}:00", end=f"{i:02d}:10", summary=f"item {i}")
             for i in range(10)
         ]
         _seed_behaviors_events(store, events)
         assembler = ContextAssembler(
-            memory_store=store, now_fn=clock,
+            memory_store=store,
+            now_fn=clock,
             behaviors_planner_max_events=3,
         )
         ctx = assembler.assemble()
@@ -213,18 +236,17 @@ class TestBehaviorsForPlanner:
         assert "item 0" not in ctx.behaviors_recent
 
     def test_order_is_oldest_first_within_window(self, store, clock) -> None:
-        _seed_behaviors_events(store, [
-            _event(id="evt_a", day="2026-05-28", start="14:00", end="14:30",
-                   summary="first"),
-            _event(id="evt_b", day="2026-05-29", start="09:00", end="09:30",
-                   summary="second"),
-        ])
+        _seed_behaviors_events(
+            store,
+            [
+                _event(id="evt_a", day="2026-05-28", start="14:00", end="14:30", summary="first"),
+                _event(id="evt_b", day="2026-05-29", start="09:00", end="09:30", summary="second"),
+            ],
+        )
         assembler = ContextAssembler(memory_store=store, now_fn=clock)
         ctx = assembler.assemble()
         # Most recent at the bottom — matches "scroll-down to see latest"
-        assert ctx.behaviors_recent.index("first") < (
-            ctx.behaviors_recent.index("second")
-        )
+        assert ctx.behaviors_recent.index("first") < (ctx.behaviors_recent.index("second"))
 
 
 # ===========================================================================
@@ -234,9 +256,12 @@ class TestBehaviorsForPlanner:
 
 class TestDefaults:
     def test_default_attention_sections_include_fire_plan(
-        self, store, clock,
+        self,
+        store,
+        clock,
     ) -> None:
-        _seed_attention(store,
+        _seed_attention(
+            store,
             "## Pending proposals\n- p1\n\n"
             "## Rejected proposals (cooldown)\n- r1\n\n"
             "## Recent stance log (30d)\n- s1\n\n"

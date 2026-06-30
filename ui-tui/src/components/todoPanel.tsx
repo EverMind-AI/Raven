@@ -6,10 +6,11 @@
 import { Box, Text } from '@hermes/ink'
 import { memo, useState } from 'react'
 
-import { countPendingTodos } from '../lib/liveProgress.js'
-import { todoGlyph, todoTone } from '../lib/todo.js'
 import type { Theme } from '../theme.js'
 import type { TodoItem } from '../types.js'
+
+import { countPendingTodos } from '../lib/liveProgress.js'
+import { todoGlyph, todoTone } from '../lib/todo.js'
 
 const rowColor = (t: Theme, status: TodoItem['status']) => {
   const tone = todoTone(status)

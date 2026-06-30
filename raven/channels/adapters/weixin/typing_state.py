@@ -47,25 +47,35 @@ class TypingIndicator:
         if entry and now < float(entry.get("next_fetch_at", 0)):
             return str(entry.get("ticket", "") or "")
 
-        data = await self._post("ilink/bot/getconfig", {
-            "ilink_user_id": user_id, "context_token": context_token or None,
-        })
+        data = await self._post(
+            "ilink/bot/getconfig",
+            {
+                "ilink_user_id": user_id,
+                "context_token": context_token or None,
+            },
+        )
         if data.get("ret", 0) == 0:
             ticket = str(data.get("typing_ticket", "") or "")
             self._tickets[user_id] = {
-                "ticket": ticket, "ever_succeeded": True,
+                "ticket": ticket,
+                "ever_succeeded": True,
                 "next_fetch_at": now + random.random() * p.TYPING_TICKET_TTL_S,
                 "retry_delay_s": p.CONFIG_CACHE_INITIAL_RETRY_S,
             }
             return ticket
 
-        prev = float(entry.get("retry_delay_s", p.CONFIG_CACHE_INITIAL_RETRY_S)) if entry else p.CONFIG_CACHE_INITIAL_RETRY_S
+        prev = (
+            float(entry.get("retry_delay_s", p.CONFIG_CACHE_INITIAL_RETRY_S))
+            if entry
+            else p.CONFIG_CACHE_INITIAL_RETRY_S
+        )
         delay = min(prev * 2, p.CONFIG_CACHE_MAX_RETRY_S)
         if entry:
             entry.update(next_fetch_at=now + delay, retry_delay_s=delay)
             return str(entry.get("ticket", "") or "")
         self._tickets[user_id] = {
-            "ticket": "", "ever_succeeded": False,
+            "ticket": "",
+            "ever_succeeded": False,
             "next_fetch_at": now + p.CONFIG_CACHE_INITIAL_RETRY_S,
             "retry_delay_s": p.CONFIG_CACHE_INITIAL_RETRY_S,
         }
@@ -75,9 +85,14 @@ class TypingIndicator:
 
     async def _send(self, user_id: str, ticket: str, status: int) -> None:
         if ticket:
-            await self._post("ilink/bot/sendtyping", {
-                "ilink_user_id": user_id, "typing_ticket": ticket, "status": status,
-            })
+            await self._post(
+                "ilink/bot/sendtyping",
+                {
+                    "ilink_user_id": user_id,
+                    "typing_ticket": ticket,
+                    "status": status,
+                },
+            )
 
     async def _keepalive(self, user_id: str, ticket: str) -> None:
         # Cancellation is the only exit: the old stop Event was always set

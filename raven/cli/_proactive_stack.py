@@ -14,6 +14,7 @@ from raven.config.paths import get_sentinel_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
+
     from raven.agent.loop import AgentLoop
     from raven.config.raven import SentinelConfig
     from raven.config.schema import Config
@@ -45,10 +46,14 @@ def build_attention_path(
     is None when ``sentinel_cfg.behaviors_extract.enabled`` is False.
     """
     from raven.proactive_engine.sentinel.attention_producers import (
-        ActiveThreadsProducer, ArchivedPatternsProducer,
-        CurrentlyFocusedProducer, PendingProposalsProducer,
-        ProjectRhythmProducer, RecentProactiveDecisionsProducer,
-        RecentlyAbandonedProducer, RejectedCooldownProducer,
+        ActiveThreadsProducer,
+        ArchivedPatternsProducer,
+        CurrentlyFocusedProducer,
+        PendingProposalsProducer,
+        ProjectRhythmProducer,
+        RecentlyAbandonedProducer,
+        RecentProactiveDecisionsProducer,
+        RejectedCooldownProducer,
         SentinelObservationsProducer,
     )
     from raven.proactive_engine.sentinel.attention_updater import (
@@ -71,20 +76,25 @@ def build_attention_path(
         CurrentlyFocusedProducer(memory_store, session_manager),
     ]
     if sentinel_cfg.write_observations_to_memory:
-        producers.append(SentinelObservationsProducer(
-            memory_store=memory_store,
-            feedback=feedback,
-            policy=policy,
-            config=sentinel_cfg.sentinel_observations,
-            **_kw,
-        ))
+        producers.append(
+            SentinelObservationsProducer(
+                memory_store=memory_store,
+                feedback=feedback,
+                policy=policy,
+                config=sentinel_cfg.sentinel_observations,
+                **_kw,
+            )
+        )
     if sentinel_cfg.daily_analysis.enabled:
         from raven.proactive_engine.sentinel.attention_producers import (
-            BehaviorPatternsProducer, Predicted3DProducer, StanceLogProducer,
+            BehaviorPatternsProducer,
+            Predicted3DProducer,
+            StanceLogProducer,
         )
         from raven.proactive_engine.sentinel.predictor.daily_analysis import (
             DailyAnalysisService,
         )
+
         daily_analysis = DailyAnalysisService(
             memory_store=memory_store,
             routine_store=routine_store,
@@ -94,15 +104,17 @@ def build_attention_path(
             model=sentinel_cfg.daily_analysis.model or model,
             **_kw,
         )
-        producers.extend([
-            StanceLogProducer(
-                analysis=daily_analysis,
-                memory_store=memory_store,
-                config=sentinel_cfg.daily_analysis,
-            ),
-            Predicted3DProducer(analysis=daily_analysis),
-            BehaviorPatternsProducer(analysis=daily_analysis),
-        ])
+        producers.extend(
+            [
+                StanceLogProducer(
+                    analysis=daily_analysis,
+                    memory_store=memory_store,
+                    config=sentinel_cfg.daily_analysis,
+                ),
+                Predicted3DProducer(analysis=daily_analysis),
+                BehaviorPatternsProducer(analysis=daily_analysis),
+            ]
+        )
     # DailyPlanProducer is independent of DailyAnalysisService — runs
     # against the same LLM provider but produces a today-scoped fire
     # schedule. Skips silently when no provider is configured (cold
@@ -111,13 +123,16 @@ def build_attention_path(
         from raven.proactive_engine.sentinel.attention_producers import (
             DailyPlanProducer,
         )
-        producers.append(DailyPlanProducer(
-            memory_store=memory_store,
-            provider=provider,
-            policy=policy,
-            model=sentinel_cfg.daily_analysis.model or model,
-            **_kw,
-        ))
+
+        producers.append(
+            DailyPlanProducer(
+                memory_store=memory_store,
+                provider=provider,
+                policy=policy,
+                model=sentinel_cfg.daily_analysis.model or model,
+                **_kw,
+            )
+        )
     attention_updater = AttentionUpdater(
         memory_store=memory_store,
         producers=producers,
@@ -129,6 +144,7 @@ def build_attention_path(
         from raven.memory_engine.consolidate.behaviors_extractor import (
             BehaviorsExtractor,
         )
+
         behaviors_extractor = BehaviorsExtractor(
             memory_store=memory_store,
             session_manager=session_manager,
@@ -196,9 +212,15 @@ def build_sentinel_stack(
     # (memory store, routine learner); skip the cost when disabled.
     from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.proactive_engine.sentinel import (
-        ContextAssembler, DeferManager, NudgeDispatcher,
-        NudgeFeedbackTracker, NudgeInjector, NudgePolicy,
-        ProactivePlanner, RoutineLearner, SentinelRunner,
+        ContextAssembler,
+        DeferManager,
+        NudgeDispatcher,
+        NudgeFeedbackTracker,
+        NudgeInjector,
+        NudgePolicy,
+        ProactivePlanner,
+        RoutineLearner,
+        SentinelRunner,
     )
     from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
 
@@ -209,19 +231,29 @@ def build_sentinel_stack(
     # routes through this callable. Defaults to real wall.
     _kwargs = {"now_fn": now_fn} if now_fn is not None else {}
     policy = NudgePolicy(sentinel_cfg.nudge_policy, store=store, **_kwargs)
-    injector = NudgeInjector(
-        ttl_seconds=sentinel_cfg.nudge_policy.inject_ttl_seconds,
-        max_pending_per_session=sentinel_cfg.nudge_policy.inject_max_pending_per_session,
-        store=store, **_kwargs,
-    ) if sentinel_cfg.inject_enabled else None
+    injector = (
+        NudgeInjector(
+            ttl_seconds=sentinel_cfg.nudge_policy.inject_ttl_seconds,
+            max_pending_per_session=sentinel_cfg.nudge_policy.inject_max_pending_per_session,
+            store=store,
+            **_kwargs,
+        )
+        if sentinel_cfg.inject_enabled
+        else None
+    )
     dispatcher = NudgeDispatcher(**_kwargs)
-    defer_mgr = DeferManager(
-        dispatcher,
-        lambda k: session_manager.get_or_create(k) if k else None,
-        idle_threshold_seconds=sentinel_cfg.nudge_policy.defer_idle_threshold_seconds,
-        max_wait_seconds=sentinel_cfg.nudge_policy.defer_max_wait_seconds,
-        store=store, **_kwargs,
-    ) if sentinel_cfg.defer_enabled else None
+    defer_mgr = (
+        DeferManager(
+            dispatcher,
+            lambda k: session_manager.get_or_create(k) if k else None,
+            idle_threshold_seconds=sentinel_cfg.nudge_policy.defer_idle_threshold_seconds,
+            max_wait_seconds=sentinel_cfg.nudge_policy.defer_max_wait_seconds,
+            store=store,
+            **_kwargs,
+        )
+        if sentinel_cfg.defer_enabled
+        else None
+    )
 
     memory_store = MemoryStore(config.workspace_path)
     learner = RoutineLearner(
@@ -243,20 +275,18 @@ def build_sentinel_stack(
     #      provider just for the Planner (e.g. route Planner to OpenRouter
     #      while Agent stays on local qwen)
     #   3. Fall through to the Agent's main provider
-    effective_planner_model = (
-        planner_model
-        or sentinel_cfg.evaluator_model
-        or config.agents.defaults.model
-    )
+    effective_planner_model = planner_model or sentinel_cfg.evaluator_model or config.agents.defaults.model
     if planner_provider is None and sentinel_cfg.evaluator_base_url:
         import os as _os
+
         from raven.providers.litellm_provider import LiteLLMProvider
+
         api_key = _os.environ.get(sentinel_cfg.evaluator_api_key_env or "")
         if not api_key:
             from loguru import logger as _logger
+
             _logger.warning(
-                "sentinel.evaluator_base_url set but env {!r} is empty — "
-                "Planner will fall back to default provider",
+                "sentinel.evaluator_base_url set but env {!r} is empty — Planner will fall back to default provider",
                 sentinel_cfg.evaluator_api_key_env,
             )
         else:
@@ -286,15 +316,10 @@ def build_sentinel_stack(
     # (they just render empty in that case).
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
-    pending_store_path = (
-        (state_path.parent if state_path else get_sentinel_dir())
-        / "pending_decisions.json"
-    )
+
+    pending_store_path = (state_path.parent if state_path else get_sentinel_dir()) / "pending_decisions.json"
     pending_store = PendingDecisionStore(pending_store_path)
-    routine_store_path = (
-        (state_path.parent if state_path else get_sentinel_dir())
-        / "routines.json"
-    )
+    routine_store_path = (state_path.parent if state_path else get_sentinel_dir()) / "routines.json"
     routine_store = RoutineStore(routine_store_path)
 
     routine_aggregator = None
@@ -313,6 +338,7 @@ def build_sentinel_stack(
     # Empty or whitespace-only entries are skipped with a warning so
     # a config typo doesn't kill the whole stack.
     from loguru import logger as _logger
+
     for raw in sentinel_cfg.task_discovery_targets:
         entry = raw.strip()
         if not entry:
@@ -327,8 +353,7 @@ def build_sentinel_stack(
             ch, chat_id = entry.split(":", 1)
             if not ch or not chat_id:
                 _logger.warning(
-                    "Sentinel: task_discovery_target {!r} missing channel "
-                    "or chat_id around ':' — skipping",
+                    "Sentinel: task_discovery_target {!r} missing channel or chat_id around ':' — skipping",
                     raw,
                 )
                 continue
@@ -339,6 +364,7 @@ def build_sentinel_stack(
     if sentinel_cfg.task_discovery_enabled:
         from raven.proactive_engine.sentinel.predictor.routine_aggregator import RoutineAggregator
         from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
+
         routine_aggregator = RoutineAggregator(
             provider=planner_provider or provider,
             model=effective_planner_model,
@@ -347,6 +373,7 @@ def build_sentinel_stack(
         routine_validator = None
         if sentinel_cfg.routine_validation_enabled:
             from raven.proactive_engine.sentinel.predictor.routine_validator import RoutineValidator
+
             routine_validator = RoutineValidator(
                 provider=planner_provider or provider,
                 model=sentinel_cfg.routine_validation_model or effective_planner_model,
@@ -363,7 +390,7 @@ def build_sentinel_stack(
             routine_aggregator=routine_aggregator,
             routine_validator=routine_validator,
             feedback=feedback,
-            policy=policy,    # share NudgePolicy w/ reactive nudges
+            policy=policy,  # share NudgePolicy w/ reactive nudges
             routine_half_life_days=sentinel_cfg.routine_recency_half_life_days,
             max_options=sentinel_cfg.task_discovery_max_options,
             decision_ttl_min=sentinel_cfg.task_discovery_decision_ttl_min,
@@ -393,9 +420,9 @@ def build_sentinel_stack(
         from raven.proactive_engine.sentinel.discover_triggers import (
             DiscoverTriggerStore,
         )
+
         discover_trigger_store = DiscoverTriggerStore(
-            (state_path.parent if state_path else get_sentinel_dir())
-            / "discover_triggers.json"
+            (state_path.parent if state_path else get_sentinel_dir()) / "discover_triggers.json"
         )
     else:
         discover_trigger_store = None
@@ -424,11 +451,11 @@ def build_sentinel_stack(
     )
     # Stash these for the post-AgentLoop attach step. Stored on the
     # runner so callers don't have to thread them through manually.
-    runner._phase4_pending_store = pending_store      # type: ignore[attr-defined]
-    runner._phase4_routine_store = routine_store      # type: ignore[attr-defined]
+    runner._phase4_pending_store = pending_store  # type: ignore[attr-defined]
+    runner._phase4_routine_store = routine_store  # type: ignore[attr-defined]
     runner._phase4_planner_provider = planner_provider or provider  # type: ignore[attr-defined]
-    runner._phase4_planner_model = effective_planner_model           # type: ignore[attr-defined]
-    runner._phase4_now_fn = now_fn                    # type: ignore[attr-defined]
+    runner._phase4_planner_model = effective_planner_model  # type: ignore[attr-defined]
+    runner._phase4_now_fn = now_fn  # type: ignore[attr-defined]
 
     response_modifier: Callable[[str, str], str] | None = injector
     on_user_inbound = runner.on_user_inbound
@@ -440,11 +467,15 @@ def attach_sentinel_spawn(runner, agent: "AgentLoop") -> None:
     if runner is None:
         return
     from raven.proactive_engine.sentinel import ProactiveSpawn
+
     runner.spawn = ProactiveSpawn(agent.subagents, runner.policy)
 
 
 def attach_sentinel_decision_consumer(
-    runner, agent: "AgentLoop", *, sentinel_cfg: "SentinelConfig",
+    runner,
+    agent: "AgentLoop",
+    *,
+    sentinel_cfg: "SentinelConfig",
 ) -> None:
     """Wire DecisionRouter + ActionExecutor + DecisionConsumer once
     AgentLoop exists. Sets ``agent.decision_consumer`` so AgentLoop's
@@ -460,6 +491,7 @@ def attach_sentinel_decision_consumer(
         return  # build_sentinel_stack didn't run / pending store not wired
 
     from loguru import logger as _logger
+
     from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
     from raven.proactive_engine.sentinel.executor.decision_consumer import DecisionConsumer
     from raven.proactive_engine.sentinel.executor.decision_router import DecisionRouter
@@ -474,8 +506,7 @@ def attach_sentinel_decision_consumer(
     # works for clear yes/no ("yes" / "confirm" / "/cancel") via regex
     # but ambiguous replies fall through silently (decision stays
     # awaiting until TTL). Surface this so operators know.
-    if (sentinel_cfg.task_discovery_require_confirm
-            and (planner_provider is None or planner_model is None)):
+    if sentinel_cfg.task_discovery_require_confirm and (planner_provider is None or planner_model is None):
         _logger.warning(
             "Sentinel: task_discovery_require_confirm=True but no LLM "
             "provider/model configured for DecisionRouter — only "
@@ -501,7 +532,9 @@ def attach_sentinel_decision_consumer(
         **_kwargs,
     )
     consumer = DecisionConsumer(
-        router=router, executor=executor, pending_store=pending_store,
+        router=router,
+        executor=executor,
+        pending_store=pending_store,
         feedback=runner.feedback,
         require_confirm=sentinel_cfg.task_discovery_require_confirm,
         **_kwargs,
@@ -519,6 +552,7 @@ def attach_sentinel_decision_consumer(
     # would run the menu pipeline twice per user inbound and fire
     # ActionExecutor for every pick a second time.
     from raven.agent.hook.adapters import DecisionConsumerAdapter
+
     if not any(isinstance(h, DecisionConsumerAdapter) for h in agent.hooks):
         agent.hooks.append(DecisionConsumerAdapter(consumer))
 
@@ -537,7 +571,9 @@ def attach_sentinel_feedback_tool(runner, agent: "AgentLoop") -> None:
     if runner is None:
         return
     from raven.agent.hook.base import (
-        AgentHook, AgentHookContext, HookDecision,
+        AgentHook,
+        AgentHookContext,
+        HookDecision,
     )
     from raven.proactive_engine.sentinel.tools import NudgeFeedbackTool
 

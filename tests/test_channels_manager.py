@@ -64,7 +64,7 @@ def test_init_builds_enabled_channel_and_sets_groq_key(monkeypatch):
         _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
     )
     assert mgr.enabled_channels == ["fake"]
-    assert mgr.channels["fake"].transcription_api_key == "gk"   # set by manager
+    assert mgr.channels["fake"].transcription_api_key == "gk"  # set by manager
 
 
 def test_init_skips_disabled_channel(monkeypatch):
@@ -78,6 +78,7 @@ def test_init_skips_disabled_channel(monkeypatch):
 
 def test_init_disables_channel_on_missing_dependency(monkeypatch):
     """A channel whose factory can't import its SDK is disabled, not fatal."""
+
     def boom(config):
         raise ImportError("No module named 'botpy'")
 
@@ -86,7 +87,7 @@ def test_init_disables_channel_on_missing_dependency(monkeypatch):
         {"fake": _spec(boom)},
         _config({"fake": SimpleNamespace(enabled=True, allow_from=["*"])}),
     )
-    assert "fake" not in mgr.channels   # disabled, construction did not raise
+    assert "fake" not in mgr.channels  # disabled, construction did not raise
 
 
 def test_validate_allow_from_rejects_empty(monkeypatch):

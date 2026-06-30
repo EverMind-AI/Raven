@@ -37,7 +37,6 @@ from dataclasses import replace
 
 from raven.memory_engine.skill_forge.types import RouterHit
 
-
 # The "60" in classic RRF — dampens rank effects so a #1 at one source
 # doesn't always crowd out top-3 from another. Standard value, kept as
 # a module constant so the rare experiment that wants to tune it can.
@@ -88,7 +87,9 @@ def rrf_merge_weighted(
     # so insertion order (= dedup_key encounter order) breaks ties
     # deterministically.
     ranked = sorted(
-        rrf_scores.items(), key=lambda kv: kv[1], reverse=True,
+        rrf_scores.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
     )
 
     out: list[RouterHit] = []

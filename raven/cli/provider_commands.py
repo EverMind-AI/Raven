@@ -52,9 +52,7 @@ def _register_login(name: str):
 
 @provider_app.command("login")
 def provider_login(
-    provider: str = typer.Argument(
-        ..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"
-    ),
+    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
 ):
     """Authenticate with an OAuth provider."""
     from raven.providers.registry import PROVIDERS
@@ -94,9 +92,7 @@ def _login_openai_codex() -> None:
         if not (token and token.access):
             console.print("[red]✗ Authentication failed[/red]")
             raise typer.Exit(1)
-        console.print(
-            f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
-        )
+        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
         raise typer.Exit(1)
@@ -213,8 +209,7 @@ def _parse_provider_flags(extra_args: list[str], provider_name: str) -> dict[str
             key = _normalize(flag[3:])
             if key not in specs:
                 raise typer.BadParameter(
-                    f"Unknown field '--no-{flag[3:]}'. "
-                    f"Run 'raven provider show {provider_name}' for available flags."
+                    f"Unknown field '--no-{flag[3:]}'. Run 'raven provider show {provider_name}' for available flags."
                 )
             out[key] = False
             continue
@@ -261,11 +256,7 @@ def _register_config_commands(app: typer.Typer) -> None:
                 type_str = "Gateway"
             else:
                 type_str = "API Key"
-            status = (
-                "[green]✓ configured[/green]"
-                if p["configured"]
-                else "[dim]not set[/dim]"
-            )
+            status = "[green]✓ configured[/green]" if p["configured"] else "[dim]not set[/dim]"
             table.add_row(
                 p["name"],
                 p["display_name"],
@@ -284,9 +275,7 @@ def _register_config_commands(app: typer.Typer) -> None:
     @app.command("get")
     def provider_get_cmd(
         name: str = typer.Argument(..., help="Provider name (e.g. openrouter)"),
-        show_secrets: bool = typer.Option(
-            False, "--show-secrets", help="Show secret values in plaintext (dangerous)"
-        ),
+        show_secrets: bool = typer.Option(False, "--show-secrets", help="Show secret values in plaintext (dangerous)"),
     ):
         """Print current configuration for a provider. Secrets redacted by default."""
         from raven.config.update_providers import get_provider_config
@@ -336,9 +325,7 @@ def _register_config_commands(app: typer.Typer) -> None:
         fields = _parse_provider_flags(ctx.args, name)
         if not fields:
             _print_schema_table(name)
-            console.print(
-                "  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]"
-            )
+            console.print("  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]")
             raise typer.Exit(0)
 
         try:
@@ -354,9 +341,7 @@ def _register_config_commands(app: typer.Typer) -> None:
             raise typer.Exit(1)
 
         console.print(f"[green]✓[/green] {name} updated: {', '.join(prev)}")
-        console.print(
-            f"  [dim]Run 'raven provider test {name}' to verify the credentials.[/dim]"
-        )
+        console.print(f"  [dim]Run 'raven provider test {name}' to verify the credentials.[/dim]")
 
     @app.command("test")
     def provider_test_cmd(
@@ -391,9 +376,7 @@ def _register_config_commands(app: typer.Typer) -> None:
             "invalid_key": f"Run: raven provider set {name} --api-key <NEW-KEY>",
             "no_credits": "Fund your account at the provider's billing page",
             "rate_limited": "Wait a few minutes and retry, or switch provider",
-            "oauth_token_missing": (
-                f"Run: raven provider login {name.replace('_', '-')}"
-            ),
+            "oauth_token_missing": (f"Run: raven provider login {name.replace('_', '-')}"),
             "network_error": "Check network / firewall / VPN settings",
         }
         hint = hints.get(result["status"], "")
@@ -407,9 +390,7 @@ def _register_config_commands(app: typer.Typer) -> None:
     @app.command("reset")
     def provider_reset_cmd(
         name: str = typer.Argument(..., help="Provider name"),
-        yes: bool = typer.Option(
-            False, "--yes", "-y", help="Skip confirmation prompt"
-        ),
+        yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
     ):
         """Restore a provider to schema defaults. Key preserved, values reset.
 
@@ -428,31 +409,20 @@ def _register_config_commands(app: typer.Typer) -> None:
             console.print(f"[red]✗[/red] {exc}")
             raise typer.Exit(1)
 
-        non_default = [
-            k for k, v in current.items() if v not in (False, "", None, [], {})
-        ]
+        non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
 
         if not yes:
             console.print(f"This will reset [cyan]{name}[/cyan] to schema defaults.")
             if non_default:
                 preview = ", ".join(non_default[:5])
-                more = (
-                    f" (+{len(non_default) - 5} more)"
-                    if len(non_default) > 5
-                    else ""
-                )
-                console.print(
-                    f"  Currently non-default: [yellow]{preview}{more}[/yellow]"
-                )
+                more = f" (+{len(non_default) - 5} more)" if len(non_default) > 5 else ""
+                console.print(f"  Currently non-default: [yellow]{preview}{more}[/yellow]")
             if not typer.confirm("Continue?", default=False):
                 console.print("[yellow]Aborted.[/yellow]")
                 raise typer.Exit(0)
 
         reset_provider(name)
-        console.print(
-            f"[green]✓[/green] {name} reset to defaults "
-            f"(key preserved, values cleared)"
-        )
+        console.print(f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)")
 
     @app.command("show")
     def provider_show_cmd(

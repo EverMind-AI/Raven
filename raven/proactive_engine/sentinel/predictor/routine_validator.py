@@ -71,16 +71,12 @@ VALIDATOR_TOOL: dict = {
                     "minimum": 0,
                     "maximum": 1,
                     "description": (
-                        "Your certainty in the is_routine verdict, 0 = "
-                        "totally unsure, 1 = clearly correct."
+                        "Your certainty in the is_routine verdict, 0 = totally unsure, 1 = clearly correct."
                     ),
                 },
                 "reason": {
                     "type": "string",
-                    "description": (
-                        "Short rationale (<= 300 chars) — what in the "
-                        "history led you to this verdict."
-                    ),
+                    "description": ("Short rationale (<= 300 chars) — what in the history led you to this verdict."),
                 },
             },
             "required": ["is_routine", "confidence", "reason"],
@@ -171,20 +167,24 @@ class RoutineValidator:
             )
         except Exception as exc:
             logger.warning(
-                "RoutineValidator LLM call raised for {}: {}", routine.id, exc,
+                "RoutineValidator LLM call raised for {}: {}",
+                routine.id,
+                exc,
             )
             return None
 
         if response.finish_reason == "error":
             logger.warning(
                 "RoutineValidator LLM error for {}: {}",
-                routine.id, (response.content or "")[:200],
+                routine.id,
+                (response.content or "")[:200],
             )
             return None
         if not response.has_tool_calls:
             logger.warning(
                 "RoutineValidator got no tool call for {}; content={!r}",
-                routine.id, (response.content or "")[:120],
+                routine.id,
+                (response.content or "")[:120],
             )
             return None
 
@@ -192,7 +192,8 @@ class RoutineValidator:
         if not isinstance(args, dict):
             logger.warning(
                 "RoutineValidator tool args not a dict for {}: {!r}",
-                routine.id, args,
+                routine.id,
+                args,
             )
             return None
 
@@ -202,7 +203,9 @@ class RoutineValidator:
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning(
                 "RoutineValidator could not parse args for {}: {} args={!r}",
-                routine.id, exc, args,
+                routine.id,
+                exc,
+                args,
             )
             return None
 

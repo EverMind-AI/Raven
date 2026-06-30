@@ -5,9 +5,6 @@
 
 import { type MutableRefObject, useCallback, useEffect, useRef } from 'react'
 
-import { TYPING_IDLE_MS } from '../config/timing.js'
-import { attachedImageNotice } from '../domain/messages.js'
-import { looksLikeSlashCommand } from '../domain/slash.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type {
   InputDetectDropResponse,
@@ -15,12 +12,15 @@ import type {
   SessionSteerResponse,
   ShellExecResponse
 } from '../gatewayTypes.js'
+import type { Msg } from '../types.js'
+import type { ComposerActions, ComposerRefs, ComposerState, PasteSnippet } from './interfaces.js'
+
+import { TYPING_IDLE_MS } from '../config/timing.js'
+import { attachedImageNotice } from '../domain/messages.js'
+import { looksLikeSlashCommand } from '../domain/slash.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
 import { PASTE_SNIPPET_RE } from '../protocol/paste.js'
-import type { Msg } from '../types.js'
-
-import type { ComposerActions, ComposerRefs, ComposerState, PasteSnippet } from './interfaces.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
 

@@ -5,9 +5,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatStreamRpcClient } from '../app/chatStream.js'
+
 import { createSlashHandler } from '../app/createSlashHandler.js'
-import { findSlashCommand } from '../app/slash/registry.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
+import { findSlashCommand } from '../app/slash/registry.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { buildChatStreamHandle } from '../app/useMainApp.js'
 
@@ -65,15 +66,17 @@ const buildVoice = () => ({
 
 const buildCtx = (overrides: Partial<ReturnType<typeof buildCtxFull>> = {}) => buildCtxFull(overrides)
 
-const buildCtxFull = (overrides: Partial<{
-  slashFlightRef: { current: number }
-  composer: ReturnType<typeof buildComposer>
-  gateway: ReturnType<typeof buildGateway>
-  local: ReturnType<typeof buildLocal>
-  session: ReturnType<typeof buildSession>
-  transcript: ReturnType<typeof buildTranscript>
-  voice: ReturnType<typeof buildVoice>
-}> = {}) => ({
+const buildCtxFull = (
+  overrides: Partial<{
+    slashFlightRef: { current: number }
+    composer: ReturnType<typeof buildComposer>
+    gateway: ReturnType<typeof buildGateway>
+    local: ReturnType<typeof buildLocal>
+    session: ReturnType<typeof buildSession>
+    transcript: ReturnType<typeof buildTranscript>
+    voice: ReturnType<typeof buildVoice>
+  }> = {}
+) => ({
   slashFlightRef: overrides.slashFlightRef ?? { current: 0 },
   composer: { ...buildComposer(), ...overrides.composer },
   gateway: { ...buildGateway(), ...overrides.gateway },

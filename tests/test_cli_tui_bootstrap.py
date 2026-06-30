@@ -348,8 +348,7 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     # production. These are the ones the dogfood bug surfaced.
     for required in ("slash.exec", "session.status", "complete.slash", "complete.path"):
         assert required in production_methods, (
-            f"{required} missing from production dispatcher — "
-            f"`raven tui` will return -32601 for it"
+            f"{required} missing from production dispatcher — `raven tui` will return -32601 for it"
         )
 
 

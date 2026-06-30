@@ -38,10 +38,10 @@ class JudgeVerdict(str, Enum):
     adapter.
     """
 
-    completed = "completed"      # User goal addressed; turn ended cleanly.
-    failed = "failed"            # Visible error / refusal / missed objective.
-    unknown = "unknown"          # Indeterminate (timeout, parse failure,
-                                  # judge disabled, ambiguous turn).
+    completed = "completed"  # User goal addressed; turn ended cleanly.
+    failed = "failed"  # Visible error / refusal / missed objective.
+    unknown = "unknown"  # Indeterminate (timeout, parse failure,
+    # judge disabled, ambiguous turn).
 
 
 class EvalJudge:

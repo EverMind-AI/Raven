@@ -4,6 +4,7 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import type { ScrollBoxHandle } from '@hermes/ink'
+
 import {
   type RefObject,
   useCallback,

@@ -90,9 +90,7 @@ async def connect_mcp_servers(
             if cfg.command:
                 transport_type = "stdio"
             elif cfg.url:
-                transport_type = (
-                    "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
-                )
+                transport_type = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
             else:
                 logger.warning("MCP server '{}': no command or url configured, skipping", name)
                 continue
@@ -120,15 +118,12 @@ async def connect_mcp_servers(
 
             if transport_type == "stdio":
                 if executor is not None and executor.supports_process_spawning:
-                    read, write = await executor.start_process(
-                        cfg.command, cfg.args, env=cfg.env or None
-                    )
+                    read, write = await executor.start_process(cfg.command, cfg.args, env=cfg.env or None)
                 else:
-                    params = StdioServerParameters(
-                        command=cfg.command, args=cfg.args, env=cfg.env or None
-                    )
+                    params = StdioServerParameters(command=cfg.command, args=cfg.args, env=cfg.env or None)
                     read, write = await stack.enter_async_context(stdio_client(params))
             elif transport_type == "sse":
+
                 def httpx_client_factory(
                     headers: dict[str, str] | None = None,
                     timeout: httpx.Timeout | None = None,

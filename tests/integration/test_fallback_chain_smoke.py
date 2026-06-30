@@ -36,8 +36,16 @@ class _FlakyProvider(LLMProvider):
         self._failing = failing_models
         self.calls: list[str | None] = []
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.calls.append(model)
         if model in self._failing:
             raise ConnectionError("Connection refused by upstream")
@@ -54,6 +62,7 @@ def _router_with_models(fallback_model: str | None = None) -> ModelRouter:
     priciest), so the real selector ranks A > B > C under any non-negative
     profile weights — deterministic primary/fallback order.
     """
+
     def _bench(model: str, provider: str, score: float, cost: float) -> ModelBenchmark:
         return ModelBenchmark(
             model=model,
@@ -121,6 +130,4 @@ async def test_routed_chain_walks_to_second_fallback_with_configured_tail():
 
     assert resp.finish_reason == "stop"
     assert resp.content == "answer from google/model-c"
-    assert provider.calls == (
-        ["anthropic/model-a"] * 4 + ["openai/model-b"] * 4 + ["google/model-c"]
-    )
+    assert provider.calls == (["anthropic/model-a"] * 4 + ["openai/model-b"] * 4 + ["google/model-c"])

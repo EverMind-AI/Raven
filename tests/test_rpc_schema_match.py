@@ -120,8 +120,7 @@ def _normalize_oas_type(
     if node.get("type") == "object":
         if "properties" in node:
             out["properties"] = {
-                pname: _normalize_oas_type(psub, schema, _seen)
-                for pname, psub in node["properties"].items()
+                pname: _normalize_oas_type(psub, schema, _seen) for pname, psub in node["properties"].items()
             }
             out["required"] = sorted(node.get("required", []))
         if "additionalProperties" in node:
@@ -210,9 +209,7 @@ def _normalize_pyd_type(
     return out
 
 
-def _oas_params_to_canonical(
-    method: dict[str, Any], schema: dict[str, Any]
-) -> dict[str, dict[str, Any]]:
+def _oas_params_to_canonical(method: dict[str, Any], schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Return ``{param_name → {required: bool, schema: normalized}}``."""
     out: dict[str, dict[str, Any]] = {}
     for p in method.get("params", []):
@@ -305,8 +302,7 @@ def _check_params_drift(method_name: str, method: dict[str, Any], schema: dict[s
     oas = _oas_params_to_canonical(method, schema)
     pyd = _pyd_params_to_canonical(params_model)
     assert set(oas.keys()) == set(pyd.keys()), (
-        f"drift in {method_name}.params: schema params {sorted(oas)} vs "
-        f"pydantic fields {sorted(pyd)}"
+        f"drift in {method_name}.params: schema params {sorted(oas)} vs pydantic fields {sorted(pyd)}"
     )
     for name in oas:
         assert oas[name]["required"] == pyd[name]["required"], (
@@ -325,17 +321,14 @@ def _check_result_drift(method_name: str, method: dict[str, Any], schema: dict[s
     oas_props, oas_required = _oas_object_properties(result_schema_node, schema)
     pyd_props, pyd_required = _pyd_object_properties(result_model)
     assert set(oas_props.keys()) == set(pyd_props.keys()), (
-        f"drift in {method_name}.result: schema properties {sorted(oas_props)} vs "
-        f"pydantic fields {sorted(pyd_props)}"
+        f"drift in {method_name}.result: schema properties {sorted(oas_props)} vs pydantic fields {sorted(pyd_props)}"
     )
     assert oas_required == pyd_required, (
-        f"drift in {method_name}.result.required: "
-        f"schema={sorted(oas_required)} vs pydantic={sorted(pyd_required)}"
+        f"drift in {method_name}.result.required: schema={sorted(oas_required)} vs pydantic={sorted(pyd_required)}"
     )
     for name in oas_props:
         assert oas_props[name] == pyd_props[name], (
-            f"drift in {method_name}.result.{name}: "
-            f"schema={oas_props[name]} vs pydantic={pyd_props[name]}"
+            f"drift in {method_name}.result.{name}: schema={oas_props[name]} vs pydantic={pyd_props[name]}"
         )
 
 
@@ -344,17 +337,13 @@ def _check_result_drift(method_name: str, method: dict[str, Any], schema: dict[s
 # regresses.
 
 
-def test_schema_match_cli_dispatch(
-    methods_by_name: dict[str, dict[str, Any]], schema: dict[str, Any]
-) -> None:
+def test_schema_match_cli_dispatch(methods_by_name: dict[str, dict[str, Any]], schema: dict[str, Any]) -> None:
     method = methods_by_name["cli.dispatch"]
     _check_params_drift("cli.dispatch", method, schema)
     _check_result_drift("cli.dispatch", method, schema)
 
 
-def test_schema_match_session_create(
-    methods_by_name: dict[str, dict[str, Any]], schema: dict[str, Any]
-) -> None:
+def test_schema_match_session_create(methods_by_name: dict[str, dict[str, Any]], schema: dict[str, Any]) -> None:
     method = methods_by_name["session.create"]
     _check_params_drift("session.create", method, schema)
     _check_result_drift("session.create", method, schema)
@@ -378,17 +367,13 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     assert pyd.get("discriminator", {}).get("propertyName") == "type"
     pyd_refs = sorted(sub["$ref"].split("/")[-1] for sub in pyd["oneOf"])
 
-    assert oas_refs == pyd_refs, (
-        f"TurnEvent variant set drift: schema={oas_refs} vs pydantic={pyd_refs}"
-    )
+    assert oas_refs == pyd_refs, f"TurnEvent variant set drift: schema={oas_refs} vs pydantic={pyd_refs}"
     # Mapping (type-literal → variant name) must align as well.
     oas_mapping = oas["discriminator"]["mapping"]
     pyd_mapping = pyd["discriminator"]["mapping"]
     oas_normal = {k: v.split("/")[-1] for k, v in oas_mapping.items()}
     pyd_normal = {k: v.split("/")[-1] for k, v in pyd_mapping.items()}
-    assert oas_normal == pyd_normal, (
-        f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
-    )
+    assert oas_normal == pyd_normal, f"TurnEvent discriminator mapping drift: schema={oas_normal} vs pyd={pyd_normal}"
 
 
 # Parametrized full-suite sweep — one test instance per method.  This is the

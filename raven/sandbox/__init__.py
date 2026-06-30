@@ -9,6 +9,7 @@ Public API (import everything from here, not from sub-modules):
     DirectExecutor     — host-process fallback (no isolation)
     build_executor()   — factory: SandboxConfig → SandboxExecutor
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -65,11 +66,11 @@ def build_executor(
     if backend in ("auto", "boxlite"):
         try:
             import boxlite as _  # noqa: F401 — probe availability before constructing executor
+
             from raven.sandbox.boxlite_executor import BoxliteExecutor
         except ImportError as exc:
             raise SandboxInitError(
-                f"No sandbox backend available: {exc}\n"
-                "  • Install: pip install raven[sandbox]"
+                f"No sandbox backend available: {exc}\n  • Install: pip install raven[sandbox]"
             ) from exc
         return BoxliteExecutor(
             image=sandbox_cfg.image,
@@ -85,7 +86,4 @@ def build_executor(
             owned_ids=owned_ids,
         )
 
-    raise SandboxInitError(
-        f"Unknown sandbox backend: {backend!r}. "
-        f"Valid values: 'none', 'auto', 'boxlite'."
-    )
+    raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'auto', 'boxlite'.")

@@ -1,4 +1,5 @@
 """Unit tests for SandboxDebugServer — all run without boxlite or KVM."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +16,6 @@ import pytest
 from raven.sandbox.debug_server import (
     SandboxDebugServer,
     SandboxDebugServerError,
-    _send,
 )
 
 
@@ -35,6 +35,7 @@ def sock_dir():
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _client(path: Path, request: dict) -> dict:
     """Connect, send one request, receive one response, close."""
     reader, writer = await asyncio.open_unix_connection(str(path))
@@ -49,6 +50,7 @@ async def _client(path: Path, request: dict) -> dict:
 # ---------------------------------------------------------------------------
 # resolve_socket_path
 # ---------------------------------------------------------------------------
+
 
 class TestResolveSocketPath:
     def test_relative_resolved_against_data_dir(self, tmp_path: Path) -> None:
@@ -68,6 +70,7 @@ class TestResolveSocketPath:
 # ---------------------------------------------------------------------------
 # Server lifecycle
 # ---------------------------------------------------------------------------
+
 
 class TestServerLifecycle:
     @pytest.mark.asyncio
@@ -122,6 +125,7 @@ class TestServerLifecycle:
 # ---------------------------------------------------------------------------
 # Framing error handling
 # ---------------------------------------------------------------------------
+
 
 class TestFraming:
     @pytest.mark.asyncio
@@ -203,6 +207,7 @@ class TestFraming:
 # list handler
 # ---------------------------------------------------------------------------
 
+
 def _make_box_info(
     id: str = "box1",
     name: str | None = None,
@@ -272,6 +277,7 @@ class TestListHandler:
         await server.start()
 
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -332,10 +338,10 @@ class TestListHandler:
         assert vm["memory_mib"] == 1024
 
 
-
 # ---------------------------------------------------------------------------
 # VM resolution (shared by exec and shell)
 # ---------------------------------------------------------------------------
+
 
 class TestVmResolution:
     """Tests for _resolve_vm via the exec command."""
@@ -436,6 +442,7 @@ class TestVmResolution:
         await server.start()
 
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -455,6 +462,7 @@ class TestVmResolution:
 # ---------------------------------------------------------------------------
 # exec handler streaming
 # ---------------------------------------------------------------------------
+
 
 class TestExecHandler:
     @pytest.mark.asyncio
@@ -486,7 +494,9 @@ class TestExecHandler:
         with patch("boxlite.Boxlite") as mock_cls:
             mock_cls.return_value = mock_runtime
             reader, writer = await asyncio.open_unix_connection(str(path))
-            writer.write((json.dumps({"cmd": "exec", "vm_ref": None, "program": "echo", "args": ["hello"]}) + "\n").encode())
+            writer.write(
+                (json.dumps({"cmd": "exec", "vm_ref": None, "program": "echo", "args": ["hello"]}) + "\n").encode()
+            )
             await writer.drain()
 
             messages = []
@@ -515,6 +525,7 @@ class TestExecHandler:
 # shell handler
 # ---------------------------------------------------------------------------
 
+
 class TestShellHandler:
     @pytest.mark.asyncio
     async def test_shell_empty_path_returns_error(self, sock_dir: Path) -> None:
@@ -534,7 +545,6 @@ class TestShellHandler:
 
     @pytest.mark.asyncio
     async def test_shell_sends_ready_then_exit(self, sock_dir: Path) -> None:
-        import base64
 
         path = sock_dir / "debug.sock"
         server = SandboxDebugServer(path, {"b1"})
@@ -566,9 +576,7 @@ class TestShellHandler:
             mock_cls.return_value = mock_runtime
 
             reader, writer = await asyncio.open_unix_connection(str(path))
-            writer.write((json.dumps({
-                "cmd": "shell", "vm_ref": None, "shell": "/bin/sh"
-            }) + "\n").encode())
+            writer.write((json.dumps({"cmd": "shell", "vm_ref": None, "shell": "/bin/sh"}) + "\n").encode())
             await writer.drain()
 
             messages = []
@@ -589,7 +597,6 @@ class TestShellHandler:
 
     @pytest.mark.asyncio
     async def test_shell_resize_forwarded(self, sock_dir: Path) -> None:
-        import base64
 
         path = sock_dir / "debug.sock"
         server = SandboxDebugServer(path, {"b1"})
@@ -631,9 +638,7 @@ class TestShellHandler:
             mock_cls.return_value = mock_runtime
 
             reader, writer = await asyncio.open_unix_connection(str(path))
-            writer.write((json.dumps({
-                "cmd": "shell", "vm_ref": None, "shell": "/bin/sh"
-            }) + "\n").encode())
+            writer.write((json.dumps({"cmd": "shell", "vm_ref": None, "shell": "/bin/sh"}) + "\n").encode())
             await writer.drain()
 
             # Read ready
@@ -684,9 +689,7 @@ class TestShellHandler:
             mock_cls.return_value = mock_runtime
 
             reader, writer = await asyncio.open_unix_connection(str(path))
-            writer.write((json.dumps({
-                "cmd": "shell", "vm_ref": None, "shell": "/bin/sh"
-            }) + "\n").encode())
+            writer.write((json.dumps({"cmd": "shell", "vm_ref": None, "shell": "/bin/sh"}) + "\n").encode())
             await writer.drain()
             await asyncio.wait_for(reader.readline(), timeout=2.0)  # ready
 
@@ -704,21 +707,26 @@ class TestShellHandler:
 # Connection lifecycle: P1 regression tests
 # ---------------------------------------------------------------------------
 
+
 def _async_iter(items):
     """Return an async iterator over a list of items."""
+
     async def _gen():
         for item in items:
             yield item
+
     return _gen()
 
 
 def _slow_async_iter(chunks, delay: float = 0.05):
     """Yield chunks with a short delay between them — used to simulate VM stdout
     that arrives in bursts after a process has exited."""
+
     async def _gen():
         for c in chunks:
             await asyncio.sleep(delay)
             yield c
+
     return _gen()
 
 
@@ -877,10 +885,19 @@ class TestExecDisconnectKillsExecution:
             with patch("boxlite.Boxlite") as cls:
                 cls.return_value = mock_runtime
                 reader, writer = await asyncio.open_unix_connection(str(path))
-                writer.write((json.dumps({
-                    "cmd": "exec", "vm_ref": None,
-                    "program": "sleep", "args": ["999"],
-                }) + "\n").encode())
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "cmd": "exec",
+                                "vm_ref": None,
+                                "program": "sleep",
+                                "args": ["999"],
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
 
                 # Wait until we've seen the first stdout chunk so the handler is
@@ -941,9 +958,19 @@ class TestExecHandlesFutureWait:
             with patch("boxlite.Boxlite") as cls:
                 cls.return_value = mock_runtime
                 reader, writer = await asyncio.open_unix_connection(str(path))
-                writer.write((json.dumps({
-                    "cmd": "exec", "vm_ref": None, "program": "echo", "args": ["hi"],
-                }) + "\n").encode())
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "cmd": "exec",
+                                "vm_ref": None,
+                                "program": "echo",
+                                "args": ["hi"],
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
 
                 messages = []
@@ -1011,9 +1038,18 @@ class TestShellDisconnectKillsExecution:
             with patch("boxlite.Boxlite") as cls:
                 cls.return_value = mock_runtime
                 reader, writer = await asyncio.open_unix_connection(str(path))
-                writer.write((json.dumps({
-                    "cmd": "shell", "vm_ref": None, "shell": "/bin/sh",
-                }) + "\n").encode())
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "cmd": "shell",
+                                "vm_ref": None,
+                                "shell": "/bin/sh",
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
                 first = json.loads(await asyncio.wait_for(reader.readline(), timeout=2.0))
                 assert first["type"] == "ready"
@@ -1068,9 +1104,18 @@ class TestShellDrainsStdoutBeforeExit:
             with patch("boxlite.Boxlite") as cls:
                 cls.return_value = mock_runtime
                 reader, writer = await asyncio.open_unix_connection(str(path))
-                writer.write((json.dumps({
-                    "cmd": "shell", "vm_ref": None, "shell": "/bin/sh",
-                }) + "\n").encode())
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "cmd": "shell",
+                                "vm_ref": None,
+                                "shell": "/bin/sh",
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
 
                 messages = []
@@ -1096,9 +1141,7 @@ class TestShellDrainsStdoutBeforeExit:
         # All three stdout chunks must appear strictly before the exit message.
         exit_idx = types.index("exit")
         stdout_indices = [i for i, t in enumerate(types) if t == "stdout"]
-        assert len(stdout_indices) == 3, (
-            f"expected 3 stdout chunks before exit, got types={types}"
-        )
+        assert len(stdout_indices) == 3, f"expected 3 stdout chunks before exit, got types={types}"
         assert all(i < exit_idx for i in stdout_indices), (
             f"stdout chunk arrived after exit — drain regressed. types={types}"
         )
@@ -1116,7 +1159,8 @@ class TestShellResizeTaskCleanup:
 
     @pytest.mark.asyncio
     async def test_pending_resize_is_cancelled_on_shutdown(
-        self, sock_dir: Path,
+        self,
+        sock_dir: Path,
     ) -> None:
         path = sock_dir / "debug.sock"
         server = SandboxDebugServer(path, {"b1"})
@@ -1175,9 +1219,18 @@ class TestShellResizeTaskCleanup:
                 cls.return_value = mock_runtime
 
                 reader, writer = await asyncio.open_unix_connection(str(path))
-                writer.write((json.dumps({
-                    "cmd": "shell", "vm_ref": None, "shell": "/bin/sh",
-                }) + "\n").encode())
+                writer.write(
+                    (
+                        json.dumps(
+                            {
+                                "cmd": "shell",
+                                "vm_ref": None,
+                                "shell": "/bin/sh",
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
                 await writer.drain()
                 first = json.loads(await asyncio.wait_for(reader.readline(), timeout=2.0))
                 assert first["type"] == "ready"

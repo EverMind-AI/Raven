@@ -12,23 +12,22 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from raven.memory_engine.consolidate.consolidator import (
+    _FORESIGHT_BULLET_RE,
+    _FORESIGHT_HEADING,
     MemoryStore,
     _ensure_foresight_at_end,
     _format_foresight_bullet,
-    _FORESIGHT_BULLET_RE,
-    _FORESIGHT_HEADING,
     _splice_h2_section_at_end,
 )
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
-
 # ---------------------------------------------------------------------------
 # Pure-helper tests.
+
 
 class TestForesightBulletFormat:
     def test_renders_all_fields_inline(self):
@@ -49,7 +48,8 @@ class TestForesightBulletFormat:
 
     def test_missing_fields_default_to_question_mark(self):
         s = _format_foresight_bullet(
-            {"prediction": "only prediction"}, generation_ts="2026-05-07 17:32",
+            {"prediction": "only prediction"},
+            generation_ts="2026-05-07 17:32",
         )
         assert "window: ?" in s
         assert "confidence: ?" in s
@@ -75,10 +75,12 @@ class TestForesightBulletFormat:
 # ---------------------------------------------------------------------------
 # MemoryStore.append_foresight.
 
+
 @pytest.fixture
 def store(tmp_path: Path) -> MemoryStore:
     return MemoryStore(
-        tmp_path, now_fn=lambda: datetime(2026, 5, 7, 17, 32),
+        tmp_path,
+        now_fn=lambda: datetime(2026, 5, 7, 17, 32),
     )
 
 
@@ -124,9 +126,9 @@ def test_dedupes_by_prediction_and_src_ts(store: MemoryStore):
     n1 = store.append_foresight([_FS_A])
     n2 = store.append_foresight([_FS_A])  # exact duplicate
     assert n1 == 1
-    assert n2 == 0   # nothing new written
+    assert n2 == 0  # nothing new written
     content = store.read_long_term()
-    assert content.count("Alex returns") == 1   # not 2
+    assert content.count("Alex returns") == 1  # not 2
 
 
 def test_semantic_dedup_collapses_reworded_repeat_emissions(store: MemoryStore):
@@ -171,17 +173,9 @@ def test_fifo_caps_at_max_keep(store: MemoryStore):
         "Plan quarterly retrospective meeting agenda",
         "Reply to editor feedback on chapter 3",
     ]
-    initial = [
-        dict(_FS_A, src_ts=f"2026-05-0{i+1} 10:00",
-             prediction=distinct_predictions[i])
-        for i in range(5)
-    ]
+    initial = [dict(_FS_A, src_ts=f"2026-05-0{i + 1} 10:00", prediction=distinct_predictions[i]) for i in range(5)]
     store.append_foresight(initial, max_keep=10)
-    new = [
-        dict(_FS_A, src_ts=f"2026-05-1{i} 10:00",
-             prediction=distinct_predictions[5 + i])
-        for i in range(3)
-    ]
+    new = [dict(_FS_A, src_ts=f"2026-05-1{i} 10:00", prediction=distinct_predictions[5 + i]) for i in range(3)]
     store.append_foresight(new, max_keep=5)
     content = store.read_long_term()
     # Earliest 3 of the original 5 should have been dropped.
@@ -206,7 +200,7 @@ def test_blank_prediction_is_skipped(store: MemoryStore):
     written = store.append_foresight([_FS_A, bad])
     assert written == 1
     content = store.read_long_term()
-    assert content.count("- ") == 1   # only the good one
+    assert content.count("- ") == 1  # only the good one
 
 
 class TestSpliceAtEndHelper:
@@ -221,7 +215,7 @@ class TestSpliceAtEndHelper:
         content = (
             "# Title\n\n"
             "## Projects\n\n- p\n\n"
-            "## Foresight\n\n- f-old\n\n"      # in the middle
+            "## Foresight\n\n- f-old\n\n"  # in the middle
             "## Habits\n\n- h\n"
         )
         out = _splice_h2_section_at_end(content, "## Foresight", "- f-new")
@@ -239,7 +233,7 @@ class TestSpliceAtEndHelper:
         content = (
             "# Title\n\n"
             "## Projects\n\n- p\n\n"
-            "## Foresight\n\n- f-old\n"        # already last
+            "## Foresight\n\n- f-old\n"  # already last
         )
         out = _splice_h2_section_at_end(content, "## Foresight", "- f-new")
         assert out.index("## Projects") < out.index("## Foresight")
@@ -257,12 +251,7 @@ class TestEnsureForesightAtEnd:
         assert _ensure_foresight_at_end(c) == c
 
     def test_moves_foresight_when_in_middle(self):
-        c = (
-            "# Title\n\n"
-            "## Foresight\n\n- f\n\n"
-            "## Projects\n\n- p\n\n"
-            "## Habits\n\n- h\n"
-        )
+        c = "# Title\n\n## Foresight\n\n- f\n\n## Projects\n\n- p\n\n## Habits\n\n- h\n"
         out = _ensure_foresight_at_end(c)
         # Now Foresight is after Habits
         assert out.index("## Habits") < out.index("## Foresight")
@@ -283,6 +272,7 @@ def test_foresight_section_lands_at_end_after_refresh_runs(tmp_path: Path):
     store.append_foresight([_FS_A])
     # Mimic refresh_section appending ## Projects via splicer.
     from raven.memory_engine.consolidate.consolidator import _splice_h2_section
+
     after_refresh = _splice_h2_section(
         store.read_long_term(),
         "## Projects",
@@ -326,10 +316,8 @@ def test_coexists_with_other_h2_sections(tmp_path: Path):
 # annotate() end-to-end persistence.
 
 CASE_06_MESSAGES = [
-    {"role": "user", "timestamp": "2026-05-07T09:30",
-     "content": "想优化 Project A 月报, 30 秒太慢"},
-    {"role": "user", "timestamp": "2026-05-07T10:30",
-     "content": "Project A 先放, 去修 Project B race condition"},
+    {"role": "user", "timestamp": "2026-05-07T09:30", "content": "想优化 Project A 月报, 30 秒太慢"},
+    {"role": "user", "timestamp": "2026-05-07T10:30", "content": "Project A 先放, 去修 Project B race condition"},
 ]
 
 
@@ -341,10 +329,13 @@ class _FakeProvider(LLMProvider):
     async def chat(self, **kwargs):
         return LLMResponse(
             content=None,
-            tool_calls=[ToolCallRequest(
-                id="call_0", name="annotate_conversation",
-                arguments=self._canned,
-            )],
+            tool_calls=[
+                ToolCallRequest(
+                    id="call_0",
+                    name="annotate_conversation",
+                    arguments=self._canned,
+                )
+            ],
         )
 
     def get_default_model(self):
@@ -371,8 +362,10 @@ CANNED_WITH_FORESIGHT = {
 async def test_annotate_enable_foresight_persists_to_user_md(tmp_path: Path):
     store = MemoryStore(tmp_path, now_fn=lambda: datetime(2026, 5, 7, 17, 32))
     ok = await store.annotate(
-        CASE_06_MESSAGES, _FakeProvider(CANNED_WITH_FORESIGHT),
-        "fake-model", enable_foresight=True,
+        CASE_06_MESSAGES,
+        _FakeProvider(CANNED_WITH_FORESIGHT),
+        "fake-model",
+        enable_foresight=True,
     )
     assert ok is True
     content = store.read_long_term()
@@ -389,8 +382,9 @@ async def test_annotate_default_off_does_not_create_section(tmp_path: Path):
     # Canned response WITHOUT foresight_hint (matches default tool schema)
     canned_no_foresight = {"episode_summary": CANNED_WITH_FORESIGHT["episode_summary"]}
     ok = await store.annotate(
-        CASE_06_MESSAGES, _FakeProvider(canned_no_foresight),
-        "fake-model",   # enable_foresight defaults to False
+        CASE_06_MESSAGES,
+        _FakeProvider(canned_no_foresight),
+        "fake-model",  # enable_foresight defaults to False
     )
     assert ok is True
-    assert store.read_long_term() == ""   # nothing persisted
+    assert store.read_long_term() == ""  # nothing persisted

@@ -24,9 +24,7 @@ def svc(tmp_path: Path) -> CronService:
 
 
 def _add(svc: CronService, schedule: CronSchedule, message: str = "m"):
-    return svc.add_job(
-        name="t", schedule=schedule, message=message, deliver=True, channel="cli", to="direct"
-    )
+    return svc.add_job(name="t", schedule=schedule, message=message, deliver=True, channel="cli", to="direct")
 
 
 def test_past_at_is_rejected(svc: CronService) -> None:

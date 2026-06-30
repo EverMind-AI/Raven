@@ -58,11 +58,7 @@ def _build_gateway_channels(config) -> set[str]:
     down; restoring "fire at origin, hand off only after the origin exits" is a
     deferred cron-delivery-ownership design, not this set.
     """
-    return {
-        name
-        for name in _GATEWAY_IM_CHANNELS
-        if getattr(getattr(config.channels, name, None), "enabled", False)
-    }
+    return {name for name in _GATEWAY_IM_CHANNELS if getattr(getattr(config.channels, name, None), "enabled", False)}
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -102,8 +98,8 @@ def register(app: typer.Typer) -> None:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.channels.manager import ChannelManager
-        from raven.config.raven import load_raven_config
         from raven.config.paths import get_cron_dir
+        from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
         from raven.session.manager import SessionManager
@@ -179,9 +175,7 @@ def register(app: typer.Typer) -> None:
                     fallback_model=config.agents.defaults.model,
                 )
             else:
-                console.print(
-                    "[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled"
-                )
+                console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
 
         # Build Sentinel stack (enabled iff sentinel.enabled).
         # NudgeInjector serves as the AgentLoop response_modifier;
@@ -193,14 +187,12 @@ def register(app: typer.Typer) -> None:
             build_sentinel_stack,
         )
 
-        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = (
-            build_sentinel_stack(
-                config,
-                sentinel_cfg,
-                session_manager,
-                provider,
-                now_fn=parse_fake_now(fake_now),
-            )
+        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
+            config,
+            sentinel_cfg,
+            session_manager,
+            provider,
+            now_fn=parse_fake_now(fake_now),
         )
 
         # Gateway-side memory-backend wiring. Mirrors the REPL
@@ -305,9 +297,7 @@ def register(app: typer.Typer) -> None:
         # turns through the gateway scheduler, which is built there).
 
         if channels.enabled_channels:
-            console.print(
-                f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}"
-            )
+            console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
         else:
             console.print("[yellow]Warning: No channels enabled[/yellow]")
 
@@ -351,15 +341,15 @@ def register(app: typer.Typer) -> None:
             # runs. ``backend`` is ``None`` when no plugin is wired;
             # the start / stop awaits are then skipped entirely.
             from loguru import logger as _logger  # local import: gateway
-                                                  # doesn't have a module-
-                                                  # level logger
+
+            # doesn't have a module-
+            # level logger
             if backend is not None:
                 try:
                     await backend.start()
                 except Exception:
                     _logger.exception(
-                        "memory backend start failed; continuing with "
-                        "legacy memory path",
+                        "memory backend start failed; continuing with legacy memory path",
                     )
             try:
                 # Spine assembly for the gateway's host sources (cron submits
@@ -429,9 +419,10 @@ def register(app: typer.Typer) -> None:
                     sentinel_runner.dispatcher.set_post(gw_hub.post)
                 if sentinel_runner is not None and sentinel_runner.task_discoverer is not None:
                     sentinel_runner.task_discoverer.set_submit(gw_scheduler.submit)
-                if agent.decision_consumer is not None and getattr(
-                    agent.decision_consumer, "executor", None
-                ) is not None:
+                if (
+                    agent.decision_consumer is not None
+                    and getattr(agent.decision_consumer, "executor", None) is not None
+                ):
                     agent.decision_consumer.executor.set_submit(gw_scheduler.submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(gw_scheduler.submit)
@@ -463,9 +454,7 @@ def register(app: typer.Typer) -> None:
                     await gw_hub.dispatch(_Text(content=body, source=source))
 
                 question_broker = QuestionBroker(send_frame=_question_to_channel)
-                if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(
-                    ask_tool, "set_broker"
-                ):
+                if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
                     ask_tool.set_broker(question_broker)
 
                 # Channel inbound runs through the spine: a permitted
@@ -523,8 +512,7 @@ def register(app: typer.Typer) -> None:
                     console.print(f"[green]✓[/green] Health: http://127.0.0.1:{port}/health")
                 except OSError as exc:
                     logger.warning(
-                        "health endpoint unavailable on 127.0.0.1:{} ({}); "
-                        "gateway continues without it",
+                        "health endpoint unavailable on 127.0.0.1:{} ({}); gateway continues without it",
                         port,
                         exc,
                     )

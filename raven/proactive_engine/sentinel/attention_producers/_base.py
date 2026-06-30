@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import ClassVar
 
-
 # Shared weekday tag used by producers rendering date / day-of-week
 # bullets (active_threads, currently_focused, predicted_3d, ...).
 # Centralized here so adding a new producer doesn't replicate the tuple.

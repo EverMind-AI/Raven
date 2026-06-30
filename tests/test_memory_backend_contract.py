@@ -18,7 +18,6 @@ from raven.memory_engine import (
     MemoryBackendContractTests,
 )
 
-
 # ---------------------------------------------------------------------------
 # Tiny in-memory backend — enough surface area to exercise the contract
 # ---------------------------------------------------------------------------

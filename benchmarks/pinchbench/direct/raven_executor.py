@@ -22,10 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Default OpenAI-compatible benchmark config.
 DEFAULT_API_KEY = (
-    os.environ.get("OPENROUTER_API_KEY")
-    or os.environ.get("DEEPSEEK_API_KEY")
-    or os.environ.get("OPENAI_API_KEY")
-    or ""
+    os.environ.get("OPENROUTER_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
 )
 DEFAULT_API_BASE = (
     os.environ.get("OPENROUTER_API_BASE")
@@ -36,9 +33,11 @@ DEFAULT_API_BASE = (
 DEFAULT_PROVIDER = os.environ.get("RAVEN_BENCH_PROVIDER", "custom")
 DEFAULT_MODEL = os.environ.get("RAVEN_BENCH_MODEL", "deepseek-v4-flash")
 
+
 async def _fetch_openrouter_model_ids(api_key: str) -> set[str]:
     """Fetch the set of valid model IDs from OpenRouter's /models endpoint."""
     import httpx
+
     url = "https://openrouter.ai/api/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
@@ -86,6 +85,7 @@ class _StandardModelRouter:
 
     def __init__(self, api_key: str, profile: str, fallback_model: str):
         from raven.routing.router import ModelRouter
+
         self._inner = ModelRouter(api_key=api_key, profile=profile, fallback_model=fallback_model)
         self._api_key = api_key
         self._fallback_model = fallback_model
@@ -107,8 +107,7 @@ class _StandardModelRouter:
                 # Keep models that are both in OpenRouter's live list AND have a
                 # standard lowercase provider name (double-gate against user namespaces).
                 self._inner._data = {
-                    k: v for k, v in self._inner._data.items()
-                    if k in self._valid_ids and _is_standard_model_id(k)
+                    k: v for k, v in self._inner._data.items() if k in self._valid_ids and _is_standard_model_id(k)
                 }
             else:
                 # Fallback when live fetch failed: require lowercase provider name.
@@ -118,15 +117,12 @@ class _StandardModelRouter:
                     "OpenRouter model list unavailable; filtering benchmark data "
                     "to standard lowercase-provider 'provider/model' entries only"
                 )
-                self._inner._data = {
-                    k: v for k, v in self._inner._data.items()
-                    if _is_standard_model_id(k)
-                }
+                self._inner._data = {k: v for k, v in self._inner._data.items() if _is_standard_model_id(k)}
             removed = before - len(self._inner._data)
             logger.info(
-                "Filtered %d unavailable model(s) from benchmark data "
-                "(%d OpenRouter-accessible models remain)",
-                removed, len(self._inner._data),
+                "Filtered %d unavailable model(s) from benchmark data (%d OpenRouter-accessible models remain)",
+                removed,
+                len(self._inner._data),
             )
 
     async def select_model_id(self, prompt: str) -> str | None:
@@ -139,6 +135,7 @@ class _StandardModelRouter:
 # ---------------------------------------------------------------------------
 # Usage-tracking provider wrapper (benchmark-only; does not touch loop.py)
 # ---------------------------------------------------------------------------
+
 
 class _UsageTrackingProvider:
     """Wraps any LLMProvider to accumulate token usage and track model calls.
@@ -155,7 +152,7 @@ class _UsageTrackingProvider:
             "completion_tokens": 0,
             "total_tokens": 0,
         }
-        self.model_calls: List[str] = []   # ordered list of models called
+        self.model_calls: List[str] = []  # ordered list of models called
         # per-model token breakdown: model -> {prompt_tokens, completion_tokens}
         self.per_model_usage: Dict[str, Dict[str, int]] = {}
 
@@ -189,9 +186,8 @@ class _UsageTrackingProvider:
 
 # ---------------------------------------------------------------------------
 
-def prepare_workspace(
-    task: Task, workspace: Path, assets_dir: Path
-) -> Path:
+
+def prepare_workspace(task: Task, workspace: Path, assets_dir: Path) -> Path:
     """Prepare an isolated workspace for a task, copying fixture files."""
     if workspace.exists():
         shutil.rmtree(workspace)
@@ -245,13 +241,15 @@ def _session_to_openclaw_transcript(
 
         if role == "user":
             text = content if isinstance(content, str) else str(content)
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "user",
-                    "content": [text],
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "user",
+                        "content": [text],
+                    },
+                }
+            )
 
         elif role == "assistant":
             items: List[Dict[str, Any]] = []
@@ -263,34 +261,41 @@ def _session_to_openclaw_transcript(
                 args = func.get("arguments", {})
                 if isinstance(args, str):
                     import json
+
                     try:
                         args = json.loads(args)
                     except (json.JSONDecodeError, TypeError):
                         args = {"raw": args}
 
-                items.append({
-                    "type": "toolCall",
-                    "name": func.get("name", ""),
-                    "arguments": args,
-                })
+                items.append(
+                    {
+                        "type": "toolCall",
+                        "name": func.get("name", ""),
+                        "arguments": args,
+                    }
+                )
 
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "assistant",
-                    "content": items,
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": items,
+                    },
+                }
+            )
 
         elif role == "tool":
             result_text = content if isinstance(content, str) else str(content)
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "toolResult",
-                    "content": [result_text],
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "toolResult",
+                        "content": [result_text],
+                    },
+                }
+            )
 
     return transcript
 
@@ -330,11 +335,12 @@ def _estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -
     # Manual fallback pricing ($/token) for models absent from LiteLLM's DB.
     # Source: OpenRouter model pages (as of 2026-03).
     _fallback_pricing: Dict[str, tuple[float, float]] = {
-        "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),   # $0.13/$0.85 per 1M tokens
+        "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M tokens
     }
 
     try:
         import litellm
+
         # LiteLLM expects "openrouter/<provider>/<model>" format for OpenRouter models.
         or_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
         prompt_cost, completion_cost = litellm.cost_per_token(
@@ -369,9 +375,7 @@ async def _run_turn_text(agent, message: str, *, session_key: str, chat_id: str)
     await agent.run_turn(
         TurnRequest(
             origin=Origin.USER,
-            source=Source(
-                channel="benchmark", chat_id=chat_id, sender_id="user", chat_type=ChatType.DM
-            ),
+            source=Source(channel="benchmark", chat_id=chat_id, sender_id="user", chat_type=ChatType.DM),
             text=message,
             conversation=session_key,
         ),
@@ -434,11 +438,12 @@ async def execute_task(
     # ``skill_forge_config=None`` → SkillService falls back to dataclass
     # defaults (e.g. injection_mode="summary"), regardless of user config.
     from raven.config.raven import load_raven_config
+
     _ec_cfg = load_raven_config()
     skill_forge_cfg = getattr(_ec_cfg, "skill_forge", None)
 
     agent = AgentLoop(
-        provider=tracked_provider,   # wrapped provider — transparent to AgentLoop
+        provider=tracked_provider,  # wrapped provider — transparent to AgentLoop
         workspace=task_workspace,
         model=model,
         max_iterations=40,
@@ -463,7 +468,9 @@ async def execute_task(
 
     logger.info(
         "Executing task %s (%s) — timeout %.0fs%s",
-        task.task_id, task.name, timeout_seconds,
+        task.task_id,
+        task.name,
+        timeout_seconds,
         f" [routing={routing_profile}]" if routing_profile else "",
     )
 
@@ -516,10 +523,12 @@ async def execute_task(
         logger.info("  Response: %s", (response[:500] + "...") if len(response) > 500 else response)
         logger.info("  Transcript entries: %d", len(transcript))
         logger.info("  Execution time: %.2fs", execution_time)
-        logger.info("  Tokens: prompt=%d  completion=%d  total=%d",
-                    usage.get("prompt_tokens", 0),
-                    usage.get("completion_tokens", 0),
-                    usage.get("total_tokens", 0))
+        logger.info(
+            "  Tokens: prompt=%d  completion=%d  total=%d",
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+            usage.get("total_tokens", 0),
+        )
         if cost_usd is not None:
             logger.info("  Estimated cost: $%.6f", cost_usd)
         logger.info("  Models called: %s", models_used)

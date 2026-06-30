@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -41,15 +40,12 @@ _ENV_SUB_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 def _expand(val: str) -> str:
     """Expand ~ and ${VAR} / $VAR inside a string."""
     out = os.path.expanduser(val)
-    out = _ENV_SUB_RE.sub(
-        lambda m: os.environ.get(m.group(1), m.group(0)), out
-    )
+    out = _ENV_SUB_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), out)
     return os.path.expandvars(out)
 
 
 def _looks_like_path(val: str) -> bool:
-    return ("/" in val or val.startswith(".") or val.startswith("~")
-            or val.startswith("$"))
+    return "/" in val or val.startswith(".") or val.startswith("~") or val.startswith("$")
 
 
 def _resolve_value(val: Any, base_dir: Path) -> Any:
@@ -96,9 +92,7 @@ def _candidate_paths(name: str, explicit: str | Path | None) -> list[Path]:
 _CACHE: dict[tuple[str, str | None], dict[str, Any]] = {}
 
 
-def get_benchmark_config(
-    name: str, explicit_path: str | Path | None = None
-) -> dict[str, Any]:
+def get_benchmark_config(name: str, explicit_path: str | Path | None = None) -> dict[str, Any]:
     """Return the resolved benchmark config dict.
 
     Merges tracked + local override, then resolves any path-looking value
@@ -116,8 +110,7 @@ def get_benchmark_config(
             break
     if primary is None:
         raise FileNotFoundError(
-            f"No benchmark config for '{name}'. Expected one of: "
-            + ", ".join(str(p) for p in candidates)
+            f"No benchmark config for '{name}'. Expected one of: " + ", ".join(str(p) for p in candidates)
         )
 
     def _load(p: Path) -> dict[str, Any]:

@@ -110,11 +110,7 @@ def _reasoning_text(msg: dict[str, Any]) -> str:
         return rc
     blocks = msg.get("thinking_blocks")
     if isinstance(blocks, list):
-        texts = [
-            b.get("thinking", "")
-            for b in blocks
-            if isinstance(b, dict) and b.get("thinking")
-        ]
+        texts = [b.get("thinking", "") for b in blocks if isinstance(b, dict) and b.get("thinking")]
         if texts:
             return "\n".join(texts)
     return ""

@@ -82,9 +82,7 @@ class UsageTracker(TokenStrategy):
     def snapshot(self, session_key: str | None = None) -> UsageSnapshot:
         """Return a *copy* of the session accumulator, or the lifetime total."""
         if session_key is not None:
-            src = self.per_session.get(session_key) or UsageSnapshot(
-                model="__empty__", session_key=session_key
-            )
+            src = self.per_session.get(session_key) or UsageSnapshot(model="__empty__", session_key=session_key)
         else:
             src = self.total
         return self._copy(src)

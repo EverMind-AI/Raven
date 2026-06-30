@@ -45,7 +45,7 @@ class WeixinChannel(ChannelBase):
     config: WeixinConfig
     name = "weixin"
     display_name = "WeChat"
-    capabilities = Capabilities(interactive_login=True)   # QR pairing via iLink
+    capabilities = Capabilities(interactive_login=True)  # QR pairing via iLink
 
     def __init__(self, config: WeixinConfig):
         super().__init__(config)
@@ -85,12 +85,14 @@ class WeixinChannel(ChannelBase):
         ctx = data.get("context_tokens", {})
         self._context_tokens = (
             {str(u): str(t) for u, t in ctx.items() if str(u).strip() and str(t).strip()}
-            if isinstance(ctx, dict) else {}
+            if isinstance(ctx, dict)
+            else {}
         )
         tickets = data.get("typing_tickets", {})
         self._typing.restore(
             {str(u): t for u, t in tickets.items() if str(u).strip() and isinstance(t, dict)}
-            if isinstance(tickets, dict) else {}
+            if isinstance(tickets, dict)
+            else {}
         )
         if data.get("base_url"):
             self.config.base_url = data["base_url"]
@@ -98,13 +100,18 @@ class WeixinChannel(ChannelBase):
 
     def _save_state(self) -> None:
         try:
-            (self._dir() / "account.json").write_text(json.dumps({
-                "token": self._token,
-                "get_updates_buf": self._updates_buf,
-                "context_tokens": self._context_tokens,
-                "typing_tickets": self._typing.snapshot(),
-                "base_url": self.config.base_url,
-            }, ensure_ascii=False))
+            (self._dir() / "account.json").write_text(
+                json.dumps(
+                    {
+                        "token": self._token,
+                        "get_updates_buf": self._updates_buf,
+                        "context_tokens": self._context_tokens,
+                        "typing_tickets": self._typing.snapshot(),
+                        "base_url": self.config.base_url,
+                    },
+                    ensure_ascii=False,
+                )
+            )
         except Exception as e:
             # A silent failure here means the auth token never hits disk and
             # the next start demands a fresh QR scan with no clue why.
@@ -115,7 +122,9 @@ class WeixinChannel(ChannelBase):
     def _headers(self, *, auth: bool = True) -> dict[str, str]:
         return p.build_headers(self._token if auth else "", self.config.route_tag)
 
-    async def _get(self, endpoint: str, params: dict | None = None, *, base_url: str | None = None, auth: bool = True) -> dict:
+    async def _get(
+        self, endpoint: str, params: dict | None = None, *, base_url: str | None = None, auth: bool = True
+    ) -> dict:
         assert self._client is not None
         url = f"{(base_url or self.config.base_url).rstrip('/')}/{endpoint}"
         resp = await self._client.get(url, params=params, headers=self._headers(auth=auth))
@@ -163,8 +172,10 @@ class WeixinChannel(ChannelBase):
             while self._running:
                 try:
                     status_data = await self._get(
-                        "ilink/bot/get_qrcode_status", params={"qrcode": qrcode_id},
-                        base_url=poll_base, auth=False,
+                        "ilink/bot/get_qrcode_status",
+                        params={"qrcode": qrcode_id},
+                        base_url=poll_base,
+                        auth=False,
                     )
                 except Exception as e:
                     if retryable_http(e):
@@ -187,7 +198,8 @@ class WeixinChannel(ChannelBase):
                     self._save_state()
                     logger.info(
                         "login successful (bot_id={} user_id={})",
-                        status_data.get("ilink_bot_id", ""), status_data.get("ilink_user_id", ""),
+                        status_data.get("ilink_bot_id", ""),
+                        status_data.get("ilink_user_id", ""),
                     )
                     return True
                 if status == "scaned_but_redirect":
@@ -318,7 +330,8 @@ class WeixinChannel(ChannelBase):
                 self._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
                 logger.warning(
                     "session expired (errcode {}). Pausing {} min.",
-                    errcode, max((self._session_remaining_s() + 59) // 60, 1),
+                    errcode,
+                    max((self._session_remaining_s() + 59) // 60, 1),
                 )
                 return
             raise RuntimeError(f"getUpdates failed: ret={ret} errcode={errcode} errmsg={data.get('errmsg', '')}")
@@ -382,14 +395,21 @@ class WeixinChannel(ChannelBase):
 
         await self._start_typing(from_user, msg.get("context_token", ""))
         await self.intake.publish(
-            sender_id=from_user, chat_id=from_user, content=content,
-            media=media or None, metadata={"message_id": msg_id},
+            sender_id=from_user,
+            chat_id=from_user,
+            content=content,
+            media=media or None,
+            metadata={"message_id": msg_id},
         )
 
     @staticmethod
     def _typed_item(item: dict, kind: int) -> dict:
-        key = {p.ITEM_IMAGE: "image_item", p.ITEM_VOICE: "voice_item",
-               p.ITEM_FILE: "file_item", p.ITEM_VIDEO: "video_item"}[kind]
+        key = {
+            p.ITEM_IMAGE: "image_item",
+            p.ITEM_VOICE: "voice_item",
+            p.ITEM_FILE: "file_item",
+            p.ITEM_VIDEO: "video_item",
+        }[kind]
         return item.get(key) or {}
 
     @staticmethod
@@ -418,8 +438,12 @@ class WeixinChannel(ChannelBase):
             cand = (item.get("ref_msg") or {}).get("message_item") or {}
             ckind = cand.get("type", 0)
             if ckind in (p.ITEM_IMAGE, p.ITEM_VOICE, p.ITEM_FILE, p.ITEM_VIDEO):
-                key = {p.ITEM_IMAGE: "image_item", p.ITEM_VOICE: "voice_item",
-                       p.ITEM_FILE: "file_item", p.ITEM_VIDEO: "video_item"}[ckind]
+                key = {
+                    p.ITEM_IMAGE: "image_item",
+                    p.ITEM_VOICE: "voice_item",
+                    p.ITEM_FILE: "file_item",
+                    p.ITEM_VIDEO: "video_item",
+                }[ckind]
                 return ckind, (cand.get(key) or {})
         return None
 
@@ -480,7 +504,8 @@ class WeixinChannel(ChannelBase):
                 candidates.append(("full_url", full_url))
             fallback = (
                 f"{self.config.cdn_base_url}/download?encrypted_query_param={quote(encrypt_param)}"
-                if encrypt_param else ""
+                if encrypt_param
+                else ""
             )
             if fallback and fallback != full_url:
                 candidates.append(("encrypt_query_param", fallback))
@@ -568,9 +593,11 @@ class WeixinChannel(ChannelBase):
 
     def _bot_msg(self, to_user: str, ctx_token: str, item_list: list[dict] | None = None) -> dict:
         msg: dict[str, Any] = {
-            "from_user_id": "", "to_user_id": to_user,
+            "from_user_id": "",
+            "to_user_id": to_user,
             "client_id": f"raven-{uuid.uuid4().hex[:12]}",
-            "message_type": p.MESSAGE_TYPE_BOT, "message_state": p.MESSAGE_STATE_FINISH,
+            "message_type": p.MESSAGE_TYPE_BOT,
+            "message_state": p.MESSAGE_STATE_FINISH,
         }
         if item_list:
             msg["item_list"] = item_list
@@ -581,7 +608,7 @@ class WeixinChannel(ChannelBase):
     async def _send_text(self, to_user: str, text: str, ctx_token: str) -> None:
         item_list = [{"type": p.ITEM_TEXT, "text_item": {"text": text}}] if text else []
         data = await self._post("ilink/bot/sendmessage", {"msg": self._bot_msg(to_user, ctx_token, item_list)})
-        if (errcode := data.get("errcode", 0)):
+        if errcode := data.get("errcode", 0):
             raise RuntimeError(f"WeChat send text error (code {errcode}): {data.get('errmsg', '')}")
 
     async def _send_media_file(self, to_user: str, media_path: str, ctx_token: str) -> None:
@@ -606,11 +633,19 @@ class WeixinChannel(ChannelBase):
         padded_size = ((len(raw) + 1 + 15) // 16) * 16  # aesEcbPaddedSize
         file_key = os.urandom(16).hex()
 
-        upload_resp = await self._post("ilink/bot/getuploadurl", {
-            "filekey": file_key, "media_type": upload_type, "to_user_id": to_user,
-            "rawsize": len(raw), "rawfilemd5": hashlib.md5(raw).hexdigest(),
-            "filesize": padded_size, "no_need_thumb": True, "aeskey": aes_key_hex,
-        })
+        upload_resp = await self._post(
+            "ilink/bot/getuploadurl",
+            {
+                "filekey": file_key,
+                "media_type": upload_type,
+                "to_user_id": to_user,
+                "rawsize": len(raw),
+                "rawfilemd5": hashlib.md5(raw).hexdigest(),
+                "filesize": padded_size,
+                "no_need_thumb": True,
+                "aeskey": aes_key_hex,
+            },
+        )
         upload_full_url = str(upload_resp.get("upload_full_url", "") or "").strip()
         upload_param = str(upload_resp.get("upload_param", "") or "")
         if not upload_full_url and not upload_param:
@@ -618,8 +653,7 @@ class WeixinChannel(ChannelBase):
 
         encrypted = crypto.encrypt(raw, base64.b64encode(aes_key_raw).decode())
         cdn_url = upload_full_url or (
-            f"{self.config.cdn_base_url}/upload"
-            f"?encrypted_query_param={quote(upload_param)}&filekey={quote(file_key)}"
+            f"{self.config.cdn_base_url}/upload?encrypted_query_param={quote(upload_param)}&filekey={quote(file_key)}"
         )
         assert self._client is not None
         cdn_resp = await self._client.post(
@@ -647,5 +681,5 @@ class WeixinChannel(ChannelBase):
 
         item_list = [{"type": item_type, item_key: media_item}]
         data = await self._post("ilink/bot/sendmessage", {"msg": self._bot_msg(to_user, ctx_token, item_list)})
-        if (errcode := data.get("errcode", 0)):
+        if errcode := data.get("errcode", 0):
             raise RuntimeError(f"WeChat send media error (code {errcode}): {data.get('errmsg', '')}")

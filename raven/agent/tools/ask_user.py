@@ -126,9 +126,7 @@ class AskUserTool(Tool):
             if answer:
                 results.append(f'User answered: "{question}" -> "{answer}".')
             else:
-                results.append(
-                    f'For "{question}": (user did not answer; proceed with best judgment).'
-                )
+                results.append(f'For "{question}": (user did not answer; proceed with best judgment).')
 
         if not results:
             return "Error: ask_user requires at least one non-empty question"

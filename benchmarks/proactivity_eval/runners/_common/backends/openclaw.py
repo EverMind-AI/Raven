@@ -12,9 +12,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from ..agents import get_agent_config
 from ..backend import AgentBackend, AgentOutcome, Sample
 from ..config import get_config
-from ..agents import get_agent_config
 from ..openclaw import build_openclaw_config, run_openclaw_one_shot
 
 
@@ -26,17 +26,11 @@ class OpenClawBackend(AgentBackend):
         agent_cfg = get_agent_config("openclaw")
         global_cfg = get_config()
         self.thinking = overrides.get("thinking") or agent_cfg.get("thinking") or "medium"
-        self.cli_timeout_s = int(
-            overrides.get("cli_timeout_s") or agent_cfg.get("cli_timeout_s") or 300
-        )
+        self.cli_timeout_s = int(overrides.get("cli_timeout_s") or agent_cfg.get("cli_timeout_s") or 300)
         self.subprocess_timeout_s = int(
             overrides.get("subprocess_timeout_s") or agent_cfg.get("subprocess_timeout_s") or 360
         )
-        self.openclaw_cmd = (
-            overrides.get("openclaw_cmd")
-            or agent_cfg.get("openclaw_cmd")
-            or global_cfg.openclaw_cmd
-        )
+        self.openclaw_cmd = overrides.get("openclaw_cmd") or agent_cfg.get("openclaw_cmd") or global_cfg.openclaw_cmd
         self.vllm_base_url = overrides.get("vllm_base_url") or agent_cfg.get("vllm_base_url")
         self.vllm_model_id = overrides.get("vllm_model_id") or agent_cfg.get("vllm_model_id")
         self.with_memory = bool(overrides.get("with_memory", False))
@@ -45,8 +39,9 @@ class OpenClawBackend(AgentBackend):
         # /home/node/.openclaw inside the container.
         self.docker_image = overrides.get("docker_image") or agent_cfg.get("docker_image")
 
-    async def run_one(self, sample: Sample, driver, *,
-                      session_id: str, ctx: dict[str, Any] | None = None) -> AgentOutcome:
+    async def run_one(
+        self, sample: Sample, driver, *, session_id: str, ctx: dict[str, Any] | None = None
+    ) -> AgentOutcome:
         prompt = driver.build_prompt(sample, ctx)
 
         # Pre-allocate the per-sample home so workspace files can live under
@@ -62,9 +57,7 @@ class OpenClawBackend(AgentBackend):
         # into the system prompt.
         ws_host = host_home / ".openclaw" / "workspace"
         ws_host.mkdir(parents=True, exist_ok=True)
-        workspace_arg: str | None = (
-            "/home/node/.openclaw/workspace" if self.docker_image else str(ws_host)
-        )
+        workspace_arg: str | None = "/home/node/.openclaw/workspace" if self.docker_image else str(ws_host)
         bootstrap_max = 1
         planted_paths: list[str] = []
         if self.with_memory and hasattr(driver, "workspace_files"):
@@ -80,8 +73,10 @@ class OpenClawBackend(AgentBackend):
                 pass
 
         config = build_openclaw_config(
-            model_id=self.vllm_model_id, base_url=self.vllm_base_url,
-            workspace=workspace_arg, bootstrap_max_chars=bootstrap_max,
+            model_id=self.vllm_model_id,
+            base_url=self.vllm_base_url,
+            workspace=workspace_arg,
+            bootstrap_max_chars=bootstrap_max,
         )
         # run_openclaw_one_shot is blocking subprocess.run — offload so we
         # don't block the event loop (matters when run.py gains parallelism).

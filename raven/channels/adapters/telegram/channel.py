@@ -138,9 +138,7 @@ def _markdown_to_html(text: str) -> str:
                 block.append(lines[i])
                 i += 1
             rendered = _table_to_text(block)
-            merged.append(
-                stash(f"<pre>{html.escape(rendered)}</pre>") if rendered else "\n".join(block)
-            )
+            merged.append(stash(f"<pre>{html.escape(rendered)}</pre>") if rendered else "\n".join(block))
         else:
             merged.append(lines[i])
             i += 1
@@ -228,13 +226,7 @@ class TelegramChannel(ChannelBase):
             read_timeout=30.0,
             proxy=self.config.proxy or None,
         )
-        self._app = (
-            Application.builder()
-            .token(self.config.token)
-            .request(request)
-            .get_updates_request(request)
-            .build()
-        )
+        self._app = Application.builder().token(self.config.token).request(request).get_updates_request(request).build()
         self._app.add_error_handler(self._on_error)
         self._app.add_handler(CommandHandler("start", self._on_start))
         self._app.add_handler(CommandHandler("help", self._on_help))
@@ -242,13 +234,7 @@ class TelegramChannel(ChannelBase):
             self._app.add_handler(CommandHandler(cmd, self._on_command))
         self._app.add_handler(
             MessageHandler(
-                (
-                    filters.TEXT
-                    | filters.PHOTO
-                    | filters.VOICE
-                    | filters.AUDIO
-                    | filters.Document.ALL
-                )
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
                 & ~filters.COMMAND,
                 self._on_message,
             )
@@ -266,9 +252,7 @@ class TelegramChannel(ChannelBase):
         except Exception as e:
             logger.warning("Failed to register bot commands: {}", e)
 
-        await self._app.updater.start_polling(
-            allowed_updates=["message"], drop_pending_updates=True
-        )
+        await self._app.updater.start_polling(allowed_updates=["message"], drop_pending_updates=True)
         await self._stop_event.wait()
 
     async def stop(self) -> None:
@@ -349,9 +333,7 @@ class TelegramChannel(ChannelBase):
         try:
             step = max(len(text) // 8, 40)
             for cut in range(step, len(text), step):
-                await self._app.bot.send_message_draft(
-                    chat_id=chat_id, draft_id=draft_id, text=text[:cut]
-                )
+                await self._app.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text[:cut])
                 await asyncio.sleep(0.04)
             await self._app.bot.send_message_draft(chat_id=chat_id, draft_id=draft_id, text=text)
             await asyncio.sleep(0.15)
@@ -418,9 +400,7 @@ class TelegramChannel(ChannelBase):
             else:
                 media_paths.append(saved)
                 if kind in ("voice", "audio"):
-                    text = await transcribe_audio(
-                        saved, self.transcription_api_key, channel=self.name
-                    )
+                    text = await transcribe_audio(saved, self.transcription_api_key, channel=self.name)
                     parts.append(f"[transcription: {text}]" if text else f"[{kind}: {saved}]")
                 else:
                     parts.append(f"[{kind}: {saved}]")
@@ -524,9 +504,7 @@ class TelegramChannel(ChannelBase):
         if self._bot_username:
             if self._mentions_bot(message.text or "", getattr(message, "entities", None)):
                 return True
-            if self._mentions_bot(
-                message.caption or "", getattr(message, "caption_entities", None)
-            ):
+            if self._mentions_bot(message.caption or "", getattr(message, "caption_entities", None)):
                 return True
         replied = getattr(getattr(message, "reply_to_message", None), "from_user", None)
         return bool(self._bot_id and replied and replied.id == self._bot_id)
@@ -541,11 +519,7 @@ class TelegramChannel(ChannelBase):
                     return True
             elif etype == "mention":
                 off, length = getattr(entity, "offset", None), getattr(entity, "length", None)
-                if (
-                    off is not None
-                    and length is not None
-                    and text[off : off + length].lower() == handle
-                ):
+                if off is not None and length is not None and text[off : off + length].lower() == handle:
                     return True
         return handle in text.lower()
 

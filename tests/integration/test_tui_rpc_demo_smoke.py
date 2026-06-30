@@ -128,9 +128,7 @@ def test_reload_mcp_noop_idempotent(log_path: Path) -> None:
     # Should fire 5 concurrent calls (Promise.all in the Ink mini-app); the
     # demo summary records this as method_call_count.
     request_count = log.count('"method": "reload.mcp"')
-    assert request_count >= 2, (
-        f"expected ≥2 reload.mcp requests for rapid-fire idempotency proof, got {request_count}"
-    )
+    assert request_count >= 2, f"expected ≥2 reload.mcp requests for rapid-fire idempotency proof, got {request_count}"
     # Every response must be the canonical no-op shape.
     assert '"ok": true' in log
     assert '"reloaded": 0' in log

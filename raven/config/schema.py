@@ -22,12 +22,8 @@ class WhatsAppConfig(Base):
     enabled: bool = False
     bridge_url: str = "ws://localhost:3001"
     bridge_token: str = ""  # Shared token for bridge auth (auto-generated when empty)
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed phone numbers; ['*'] = anyone
-    group_policy: Literal["open", "mention"] = (
-        "open"  # "open" responds to all, "mention" only when @mentioned
-    )
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed phone numbers; ['*'] = anyone
+    group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
 
 
 class TelegramConfig(Base):
@@ -35,12 +31,8 @@ class TelegramConfig(Base):
 
     enabled: bool = False
     token: str = ""  # Bot token from @BotFather
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed user IDs or usernames; ['*'] = anyone
-    proxy: str | None = (
-        None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    )
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs or usernames; ['*'] = anyone
+    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     reply_to_message: bool = False  # If true, bot replies quote the original message
     group_policy: Literal["open", "mention"] = (
         "mention"  # "mention" responds when @mentioned or replied to, "open" responds to all
@@ -55,15 +47,9 @@ class FeishuConfig(Base):
     app_secret: str = ""  # App Secret from Feishu Open Platform
     encrypt_key: str = ""  # Encrypt Key for event subscription (optional)
     verification_token: str = ""  # Verification Token for event subscription (optional)
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed user open_ids; ['*'] = anyone
-    react_emoji: str = (
-        "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
-    )
-    group_policy: Literal["open", "mention"] = (
-        "mention"  # "mention" responds when @mentioned, "open" responds to all
-    )
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user open_ids; ['*'] = anyone
+    react_emoji: str = "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
+    group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
 
 
 class DingTalkConfig(Base):
@@ -72,9 +58,7 @@ class DingTalkConfig(Base):
     enabled: bool = False
     client_id: str = ""  # AppKey
     client_secret: str = ""  # AppSecret
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed staff_ids; ['*'] = anyone
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
 
 
 class DiscordConfig(Base):
@@ -133,16 +117,12 @@ class EmailConfig(Base):
     from_address: str = ""
 
     # Behavior
-    auto_reply_enabled: bool = (
-        True  # If false, inbound email is read but no automatic reply is sent
-    )
+    auto_reply_enabled: bool = True  # If false, inbound email is read but no automatic reply is sent
     poll_interval_seconds: int = 30
     mark_seen: bool = True
     max_body_chars: int = 12000
     subject_prefix: str = "Re: "
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed sender email addresses; ['*'] = anyone
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed sender email addresses; ['*'] = anyone
 
 
 class MochatMentionConfig(Base):
@@ -217,9 +197,7 @@ class QQConfig(Base):
     enabled: bool = False
     app_id: str = ""  # bot AppID from q.qq.com
     secret: str = ""  # bot AppSecret from q.qq.com
-    allow_from: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Allowed user openids; ['*'] = public access
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
 
 
 class WecomConfig(Base):
@@ -269,9 +247,7 @@ class AgentDefaults(Base):
 
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
-    provider: str = (
-        "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    )
+    provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
@@ -296,16 +272,12 @@ class AgentDefaults(Base):
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
-    enable_personalization: bool = (
-        False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
-    )
+    enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:
         """Return True when old memoryWindow is present without contextWindowTokens."""
-        return (
-            self.memory_window is not None and "context_window_tokens" not in self.model_fields_set
-        )
+        return self.memory_window is not None and "context_window_tokens" not in self.model_fields_set
 
 
 class AgentsConfig(Base):
@@ -364,9 +336,7 @@ class GeminiProviderConfig(ProviderConfig):
         import itertools
 
         if not hasattr(self, "_key_cycle"):
-            keys = (
-                self.api_key_list if self.api_key_list else ([self.api_key] if self.api_key else [])
-            )
+            keys = self.api_key_list if self.api_key_list else ([self.api_key] if self.api_key else [])
             object.__setattr__(self, "_key_cycle", itertools.cycle(keys) if keys else None)
         cycle = getattr(self, "_key_cycle", None)
         if cycle is None:
@@ -392,22 +362,16 @@ class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # Azure OpenAI (model = deployment name)
+    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    dashscope: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # Alibaba Cloud Tongyi Qianwen
+    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    gemini: GeminiProviderConfig = Field(
-        default_factory=GeminiProviderConfig
-    )  # Google Gemini / Vertex AI
+    gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
@@ -484,9 +448,7 @@ class WebSearchConfig(Base):
 class WebToolsConfig(Base):
     """Web tools configuration."""
 
-    proxy: str | None = (
-        None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
-    )
+    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     jina_api_key: str = ""  # Jina Reader API key
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
@@ -593,9 +555,7 @@ class Config(BaseSettings):
                 tool.api_key = or_key
         return media
 
-    def _match_provider(
-        self, model: str | None = None
-    ) -> tuple["ProviderConfig | None", str | None]:
+    def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
         from raven.providers.registry import PROVIDERS
 

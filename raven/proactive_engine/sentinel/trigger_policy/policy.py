@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Literal
 
@@ -47,9 +47,20 @@ def _hours_covered(window: tuple[int, int]) -> int:
 # canonical event, preventing same-hour cluster fires that violate
 # per-1h C constraints.
 _CANONICAL_SUFFIXES = (
-    "_prep", "_outfit", "_check", "_today", "_followup", "_reminder",
-    "_v1", "_v2", "_clothes", "_sunscreen", "_leave_request",
-    "_outfit_check", "_status", "_progress",
+    "_prep",
+    "_outfit",
+    "_check",
+    "_today",
+    "_followup",
+    "_reminder",
+    "_v1",
+    "_v2",
+    "_clothes",
+    "_sunscreen",
+    "_leave_request",
+    "_outfit_check",
+    "_status",
+    "_progress",
 )
 
 
@@ -75,7 +86,9 @@ def _canonicalize_topic(tag: str) -> str:
 # subject to the weekend per-day cap so they don't pile up Sat/Sun and
 # tank the per-persona "weekend_*_ratio" C scores.
 _WEEKEND_WHITELIST_PREFIXES = (
-    "routine_", "medication_", "daily_",
+    "routine_",
+    "medication_",
+    "daily_",
 )
 
 
@@ -93,6 +106,7 @@ def _is_restricted_weekend_class(tag: str) -> bool:
     if tag.startswith("_anon_") or tag == "_untagged":
         return False
     return not any(tag.startswith(p) for p in _WEEKEND_WHITELIST_PREFIXES)
+
 
 Verdict = Literal["allow", "deny"]
 
@@ -229,12 +243,7 @@ class NudgePolicy:
         # acceptance loses its quiet-hours bypass. Hysteresis lives in
         # apply_adaptive_tuning(); the threshold here is a static floor.
         dnd_bypass = high_bypass
-        if (
-            dnd_bypass
-            and recent_acceptance is not None
-            and recent_dispatched >= 5
-            and recent_acceptance < 0.5
-        ):
+        if dnd_bypass and recent_acceptance is not None and recent_dispatched >= 5 and recent_acceptance < 0.5:
             dnd_bypass = False
 
         # Quiet hours — high priority can bypass per config, UNLESS recent
@@ -250,9 +259,7 @@ class NudgePolicy:
         # bypass semantics to ordinary DND windows.
         sw_match = self._matching_scorer_window_dnd(now)
         if sw_match is not None:
-            return CheckResult(
-                "deny", f"scorer_window ({sw_match})"
-            )
+            return CheckResult("deny", f"scorer_window ({sw_match})")
 
         # Per-day quota — CANNOT be bypassed even by high priority (hard ceiling).
         day_count = self._count_within(now, timedelta(days=1))
@@ -337,12 +344,7 @@ class NudgePolicy:
         # one-off reactive fires are exempt (see
         # ``_is_restricted_weekend_class``). High priority cannot bypass.
         wk_cap = getattr(self.config, "weekend_discretionary_cap", 0) or 0
-        if (
-            wk_cap > 0
-            and topic_tag
-            and now.weekday() >= 5
-            and _is_restricted_weekend_class(topic_tag)
-        ):
+        if wk_cap > 0 and topic_tag and now.weekday() >= 5 and _is_restricted_weekend_class(topic_tag):
             class_count = self._count_restricted_class_today(now)
             if class_count >= wk_cap:
                 return CheckResult(
@@ -427,7 +429,10 @@ class NudgePolicy:
         self._store.update(_mutate)
 
     def _record_topic_fire(
-        self, topic_tag: str | None, content: str, now: datetime,
+        self,
+        topic_tag: str | None,
+        content: str,
+        now: datetime,
     ) -> None:
         """Record a fire under the topic_tag and (if different) its
         canonical form. Storing under both lets sub-event variants share
@@ -474,8 +479,10 @@ class NudgePolicy:
             return
         self._user_override_dnd = list(windows)
         from loguru import logger
+
         logger.debug(
-            "user_override_dnd refreshed: {} windows", len(self._user_override_dnd),
+            "user_override_dnd refreshed: {} windows",
+            len(self._user_override_dnd),
         )
 
     def apply_adaptive_tuning(
@@ -532,16 +539,20 @@ class NudgePolicy:
                 new_set = {h for h, (rate, _n) in stats.items() if rate >= 0.5}
                 if new_set != self._dynamic_dnd_hours:
                     from loguru import logger
+
                     logger.info(
                         "dynamic DND hours updated: {} → {}",
-                        sorted(self._dynamic_dnd_hours), sorted(new_set),
+                        sorted(self._dynamic_dnd_hours),
+                        sorted(new_set),
                     )
                 self._dynamic_dnd_hours = new_set
             except Exception as exc:
                 from loguru import logger
+
                 logger.warning(
                     "by_hour_reject_rate failed: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
 
         if acceptance_rate is None or dispatched_count < min_volume:
@@ -565,12 +576,13 @@ class NudgePolicy:
             return
 
         from loguru import logger
+
         old_mult = self._hour_quota_multiplier
         self._hour_quota_multiplier = new_mult
         logger.info(
-            "adaptive policy: hour_quota multiplier {:.2f} → {:.2f} "
-            "(acceptance={}, dispatched={})",
-            old_mult, new_mult,
+            "adaptive policy: hour_quota multiplier {:.2f} → {:.2f} (acceptance={}, dispatched={})",
+            old_mult,
+            new_mult,
             f"{acceptance_rate:.1%}" if acceptance_rate is not None else "n/a",
             dispatched_count,
         )
@@ -578,12 +590,14 @@ class NudgePolicy:
         # Persist if a store is configured, so peer process sees the update
         # and restart doesn't lose the tuning.
         if self._store is not None:
+
             def _mutate(state: dict[str, Any]) -> dict[str, Any]:
                 # Preserve any peer-written fields under policy key.
                 self._hydrate_from_blob(state.get(self._STATE_KEY) or {})
                 self._hour_quota_multiplier = new_mult
                 state[self._STATE_KEY] = self._dump_to_blob()
                 return state
+
             self._store.update(_mutate)
 
     # ------------------------------------------------------------------
@@ -598,9 +612,7 @@ class NudgePolicy:
         return {
             "nudges_used_this_hour": self._count_within(now, timedelta(hours=1)),
             "nudges_used_today": self._count_within(now, timedelta(days=1)),
-            "remaining_today": max(
-                0, self.config.max_nudges_per_day - self._count_within(now, timedelta(days=1))
-            ),
+            "remaining_today": max(0, self.config.max_nudges_per_day - self._count_within(now, timedelta(days=1))),
             "in_quiet_hours": self._in_quiet_hours(now),
             "hour_quota_effective": hour_cap,
             "hour_quota_multiplier": self._hour_quota_multiplier,
@@ -624,7 +636,7 @@ class NudgePolicy:
         start, end = self._effective_quiet_hours()
         hour = now.hour
         minute = now.minute
-        at_end_boundary = (hour == end and minute == 0)
+        at_end_boundary = hour == end and minute == 0
         if start != end:
             if start < end:
                 if start <= hour < end or at_end_boundary:
@@ -690,7 +702,10 @@ class NudgePolicy:
         return sum(1 for t in self._fired_at if t >= threshold)
 
     def _count_topic_within(
-        self, topic_tag: str, now: datetime, window: timedelta,
+        self,
+        topic_tag: str,
+        now: datetime,
+        window: timedelta,
     ) -> int:
         threshold = now - window
         # Count fires for both the exact tag AND its canonical form so
@@ -699,11 +714,7 @@ class NudgePolicy:
         # tag IS canonical.
         canonical = _canonicalize_topic(topic_tag)
         tags = {topic_tag, canonical}
-        return sum(
-            1 for tag in tags
-            for t in (self._topic_fired_at.get(tag) or ())
-            if t >= threshold
-        )
+        return sum(1 for tag in tags for t in (self._topic_fired_at.get(tag) or ()) if t >= threshold)
 
     def recent_topic_tags(self, since: datetime) -> list[str]:
         """Distinct non-anonymous topic tags with at least one fire at or
@@ -722,10 +733,7 @@ class NudgePolicy:
         """True if ``tag`` has fired on ``now``'s calendar date. Public
         accessor over the private per-topic fire ledger."""
         today = now.date()
-        return any(
-            getattr(f, "date", lambda: None)() == today
-            for f in self._topic_fired_at.get(tag, ())
-        )
+        return any(getattr(f, "date", lambda: None)() == today for f in self._topic_fired_at.get(tag, ()))
 
     def _count_restricted_class_today(self, now: datetime) -> int:
         """Count today's fires of deadline_*/birthday_*/anniversary_* topics
@@ -800,16 +808,13 @@ class NudgePolicy:
             maxlen=10_000,
         )
         self._last_fired_per_session = {
-            k: _iso_to_dt(v) for k, v in (blob.get("last_fired_per_session") or {}).items()
-            if isinstance(v, str)
+            k: _iso_to_dt(v) for k, v in (blob.get("last_fired_per_session") or {}).items() if isinstance(v, str)
         }
         self._dismissed_at = {
-            k: _iso_to_dt(v) for k, v in (blob.get("dismissed_at") or {}).items()
-            if isinstance(v, str)
+            k: _iso_to_dt(v) for k, v in (blob.get("dismissed_at") or {}).items() if isinstance(v, str)
         }
         self._content_hashes = {
-            k: _iso_to_dt(v) for k, v in (blob.get("content_hashes") or {}).items()
-            if isinstance(v, str)
+            k: _iso_to_dt(v) for k, v in (blob.get("content_hashes") or {}).items() if isinstance(v, str)
         }
         topic_blob = blob.get("topic_fired_at") or {}
         self._topic_fired_at = {
@@ -822,32 +827,22 @@ class NudgePolicy:
         }
         # Adaptive tuning state (backward-compat: defaults 1.0 if missing)
         mult = blob.get("hour_quota_multiplier")
-        self._hour_quota_multiplier = (
-            float(mult) if isinstance(mult, (int, float)) else 1.0
-        )
+        self._hour_quota_multiplier = float(mult) if isinstance(mult, (int, float)) else 1.0
         # L2: dynamic DND hours (backward-compat: empty set if missing)
         ddh = blob.get("dynamic_dnd_hours")
         self._dynamic_dnd_hours = (
             {int(h) for h in ddh if isinstance(h, (int, float)) and 0 <= int(h) < 24}
-            if isinstance(ddh, list) else set()
+            if isinstance(ddh, list)
+            else set()
         )
 
     def _dump_to_blob(self) -> dict[str, Any]:
         return {
             "fired_at": [_dt_to_iso(t) for t in self._fired_at],
-            "last_fired_per_session": {
-                k: _dt_to_iso(v) for k, v in self._last_fired_per_session.items()
-            },
-            "dismissed_at": {
-                k: _dt_to_iso(v) for k, v in self._dismissed_at.items()
-            },
-            "content_hashes": {
-                k: _dt_to_iso(v) for k, v in self._content_hashes.items()
-            },
-            "topic_fired_at": {
-                tag: [_dt_to_iso(t) for t in dq]
-                for tag, dq in self._topic_fired_at.items()
-            },
+            "last_fired_per_session": {k: _dt_to_iso(v) for k, v in self._last_fired_per_session.items()},
+            "dismissed_at": {k: _dt_to_iso(v) for k, v in self._dismissed_at.items()},
+            "content_hashes": {k: _dt_to_iso(v) for k, v in self._content_hashes.items()},
+            "topic_fired_at": {tag: [_dt_to_iso(t) for t in dq] for tag, dq in self._topic_fired_at.items()},
             "hour_quota_multiplier": self._hour_quota_multiplier,
             "dynamic_dnd_hours": sorted(self._dynamic_dnd_hours),
         }

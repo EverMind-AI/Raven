@@ -148,9 +148,7 @@ def test_enable_unknown_channel_fails(tmp_config: Path) -> None:
 
 def test_set_invalid_value_fails(tmp_config: Path) -> None:
     runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
-    r = runner.invoke(
-        app, ["channels", "set", "telegram", "--group-policy", "not_a_real_value"]
-    )
+    r = runner.invoke(app, ["channels", "set", "telegram", "--group-policy", "not_a_real_value"])
     assert r.exit_code != 0
     combined = r.stdout + (r.output or "")
     assert "Validation" in combined or "validation" in combined.lower()
@@ -244,8 +242,20 @@ def test_channels_list_command(tmp_config: Path) -> None:
     r = runner.invoke(app, ["channels", "list"])
     assert r.exit_code == 0
     out = r.stdout
-    for c in ("telegram", "slack", "feishu", "mochat", "email", "matrix",
-              "discord", "dingtalk", "qq", "wecom", "weixin", "whatsapp"):
+    for c in (
+        "telegram",
+        "slack",
+        "feishu",
+        "mochat",
+        "email",
+        "matrix",
+        "discord",
+        "dingtalk",
+        "qq",
+        "wecom",
+        "weixin",
+        "whatsapp",
+    ):
         assert c in out, f"{c} missing from `channels list` output"
 
 
@@ -300,9 +310,7 @@ def test_enable_telegram_defaults_allow_from_to_wildcard(tmp_config: Path) -> No
     r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc"])
     assert r.exit_code == 0, r.stdout
     section = _read(tmp_config)["channels"]["telegram"]
-    assert section["allowFrom"] == ["*"], (
-        f"expected allowFrom=['*'] (schema default), got {section['allowFrom']!r}"
-    )
+    assert section["allowFrom"] == ["*"], f"expected allowFrom=['*'] (schema default), got {section['allowFrom']!r}"
 
 
 def test_all_channel_schemas_default_allow_from_to_wildcard() -> None:
@@ -314,13 +322,21 @@ def test_all_channel_schemas_default_allow_from_to_wildcard() -> None:
 
     channels_cfg = ChannelsConfig()
     for name in (
-        "whatsapp", "telegram", "discord", "feishu", "mochat",
-        "dingtalk", "email", "slack", "qq", "matrix", "wecom", "weixin",
+        "whatsapp",
+        "telegram",
+        "discord",
+        "feishu",
+        "mochat",
+        "dingtalk",
+        "email",
+        "slack",
+        "qq",
+        "matrix",
+        "wecom",
+        "weixin",
     ):
         channel = getattr(channels_cfg, name)
-        assert channel.allow_from == ["*"], (
-            f"{name}.allow_from default = {channel.allow_from!r}, expected ['*']"
-        )
+        assert channel.allow_from == ["*"], f"{name}.allow_from default = {channel.allow_from!r}, expected ['*']"
 
 
 def test_reset_aborts_without_confirm(tmp_config: Path) -> None:
@@ -374,10 +390,7 @@ def test_register_config_commands_double_register_raises() -> None:
     _register_config_commands(fresh_app)  # decorator side-effect appends duplicates
     cmd_names = [c.name for c in fresh_app.registered_commands]
     duplicates = [n for n in cmd_names if cmd_names.count(n) > 1]
-    assert duplicates, (
-        "Double-registering should surface duplicate command names; "
-        f"got commands: {cmd_names}"
-    )
+    assert duplicates, f"Double-registering should surface duplicate command names; got commands: {cmd_names}"
 
 
 # ============================================================================
@@ -415,9 +428,7 @@ def test_channels_login_unknown_channel_exits(tmp_config: Path) -> None:
     assert "telegram" in r.stdout  # at least one real channel listed
 
 
-def test_channels_login_dispatches_to_channel_login(
-    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_channels_login_dispatches_to_channel_login(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``channels login telegram`` instantiates the channel and awaits ``login(force=False)``."""
     calls = {"login_called": False, "force": None, "ctor_args": None}
 
@@ -442,9 +453,7 @@ def test_channels_login_dispatches_to_channel_login(
     assert calls["ctor_args"] is not None  # factory(config) — no bus
 
 
-def test_channels_login_force_flag_passes_through(
-    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_channels_login_force_flag_passes_through(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--force`` is forwarded to ``channel.login(force=True)``."""
     captured = {"force": None}
 
@@ -463,9 +472,7 @@ def test_channels_login_force_flag_passes_through(
     assert captured["force"] is True
 
 
-def test_channels_login_returns_false_exits_1(
-    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_channels_login_returns_false_exits_1(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``channel.login()`` returning False propagates to exit code 1."""
 
     class Fake(_FakeChannelBase):

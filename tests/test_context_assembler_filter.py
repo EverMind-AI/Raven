@@ -8,14 +8,11 @@ v4-v11 benchmarks remain byte-identical.
 
 from __future__ import annotations
 
-import pytest
-
 from raven.config.raven import NudgePolicyConfig
 from raven.proactive_engine.sentinel.predictor.context_assembler import (
     _filter_memory_md,
     _parse_h2_sections,
 )
-
 
 SAMPLE = """# Long-term Memory
 

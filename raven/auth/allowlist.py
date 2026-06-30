@@ -65,7 +65,8 @@ def _warn_empty_once(channel_name: str) -> None:
         return
     _warned_empty.add(channel_name)
     logger.warning(
-        "%s: allow_from is empty — all access denied", channel_name,
+        "%s: allow_from is empty — all access denied",
+        channel_name,
     )
 
 

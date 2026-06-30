@@ -7,8 +7,9 @@
 
 import { colorize } from '@hermes/ink'
 
-import { ravenLogo } from '../banner.js'
 import type { Theme, ThemeColors } from '../theme.js'
+
+import { ravenLogo } from '../banner.js'
 
 const TIER_NAMES: Record<number, string> = {
   0: 'none',

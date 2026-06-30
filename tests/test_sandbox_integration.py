@@ -4,6 +4,7 @@ Skipped automatically when /dev/kvm is unavailable (Linux) or on non-Apple-Silic
 macOS. Tests verify real VM execution: echo, timeout, cwd translation, volume mounts,
 and MCP stdio roundtrip.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -63,6 +64,7 @@ def pre_pull_images():
 @pytest.fixture
 async def executor(tmp_path):
     from raven.sandbox.boxlite_executor import BoxliteExecutor
+
     async with BoxliteExecutor(
         image="ubuntu:22.04",
         workspace=tmp_path,
@@ -97,6 +99,7 @@ class TestBoxliteExecutorIntegration:
 
     async def test_lifecycle_context_manager(self, tmp_path):
         from raven.sandbox.boxlite_executor import BoxliteExecutor
+
         async with BoxliteExecutor(
             image="ubuntu:22.04",
             workspace=tmp_path,
@@ -111,6 +114,7 @@ class TestBoxliteExecutorIntegration:
 async def node_executor(tmp_path):
     """Executor using a Node.js image — required for npx-based MCP server tests."""
     from raven.sandbox.boxlite_executor import BoxliteExecutor
+
     async with BoxliteExecutor(
         image="node:20-slim",
         workspace=tmp_path,

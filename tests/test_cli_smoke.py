@@ -36,8 +36,17 @@ def tmp_config(tmp_path: Path) -> Path:
 
 
 TOP_LEVEL_COMMANDS = [
-    "onboard", "gateway", "agent", "status", "doctor",
-    "channels", "cron", "provider", "sandbox", "sentinel", "skill",
+    "onboard",
+    "gateway",
+    "agent",
+    "status",
+    "doctor",
+    "channels",
+    "cron",
+    "provider",
+    "sandbox",
+    "sentinel",
+    "skill",
 ]
 
 
@@ -46,9 +55,7 @@ def test_top_level_command_help_does_not_crash(command: str) -> None:
     """Every top-level command's ``--help`` exits 0 with no leaked crash."""
     r = runner.invoke(app, [command, "--help"])
     assert r.exit_code == 0, f"{command} --help exited {r.exit_code}: {r.stdout}"
-    assert r.exception is None, (
-        f"{command} --help raised an unexpected exception: {r.exception!r}"
-    )
+    assert r.exception is None, f"{command} --help raised an unexpected exception: {r.exception!r}"
 
 
 def test_root_help_does_not_crash() -> None:
@@ -64,8 +71,15 @@ def test_root_help_does_not_crash() -> None:
 # subcommand-group modules.
 
 CHANNEL_SUBCOMMANDS = [
-    "status", "login",
-    "enable", "disable", "set", "get", "reset", "show", "list",
+    "status",
+    "login",
+    "enable",
+    "disable",
+    "set",
+    "get",
+    "reset",
+    "show",
+    "list",
 ]
 
 
@@ -89,8 +103,13 @@ def test_skill_subcommand_help_does_not_crash(subcmd: str) -> None:
 
 
 SENTINEL_SUBCOMMANDS = [
-    "status", "tick", "ticks", "nudges",
-    "decisions", "discover-now", "routines",
+    "status",
+    "tick",
+    "ticks",
+    "nudges",
+    "decisions",
+    "discover-now",
+    "routines",
 ]
 
 
@@ -103,6 +122,7 @@ def test_sentinel_subcommand_help_does_not_crash(subcmd: str) -> None:
 
 
 # Read-only command bodies that don't need network / LLM:
+
 
 def test_status_command_body_does_not_crash(tmp_config: Path) -> None:
     """``raven status`` reads config + prints rows without crashing."""

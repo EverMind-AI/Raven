@@ -6,6 +6,9 @@
 import { Ansi, Box, NoSelect, Text } from '@hermes/ink'
 import { memo, useState } from 'react'
 
+import type { Theme } from '../theme.js'
+import type { ActiveTool, DetailsMode, Msg, SectionVisibility } from '../types.js'
+
 import { LONG_MSG } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
 import { userDisplay } from '../domain/messages.js'
@@ -19,9 +22,6 @@ import {
   isPasteBackedText,
   stripAnsi
 } from '../lib/text.js'
-import type { Theme } from '../theme.js'
-import type { ActiveTool, DetailsMode, Msg, SectionVisibility } from '../types.js'
-
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { ToolTrail } from './thinking.js'

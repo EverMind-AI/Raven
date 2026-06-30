@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from raven.cli.sandbox_commands import sandbox_app
@@ -75,9 +74,7 @@ class TestListCommand:
     def test_empty_vm_list_shows_no_vms(self, tmp_path: Path) -> None:
         path = tmp_path / "debug.sock"
         path.touch()
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "vm_list", "vms": []}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "vm_list", "vms": []})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),
@@ -113,9 +110,7 @@ class TestListCommand:
             _make_vm(id="abc123", name="my-vm", owned=True, status="running"),
             _make_vm(id="def456", name=None, owned=False, status="stopped"),
         ]
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "vm_list", "vms": vms}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "vm_list", "vms": vms})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),
@@ -132,9 +127,7 @@ class TestListCommand:
         """Verify the client sends {"cmd": "list"} to the server."""
         path = tmp_path / "debug.sock"
         path.touch()
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "vm_list", "vms": []}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "vm_list", "vms": []})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),
@@ -171,9 +164,7 @@ class TestExecCommand:
     def test_server_error_exits_1(self, tmp_path: Path) -> None:
         path = tmp_path / "debug.sock"
         path.touch()
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "error", "message": "VM not found"}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "error", "message": "VM not found"})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),
@@ -216,9 +207,7 @@ class TestExecCommand:
     def test_exit_code_propagated(self, tmp_path: Path) -> None:
         path = tmp_path / "debug.sock"
         path.touch()
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "exit", "code": 42}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "exit", "code": 42})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),
@@ -246,9 +235,7 @@ class TestShellCommand:
         """If the server returns an error instead of ready, terminal must NOT enter raw mode."""
         path = tmp_path / "debug.sock"
         path.touch()
-        mock_connect, mock_send, mock_recv, mock_close = _mock_transport(
-            {"type": "error", "message": "VM not found"}
-        )
+        mock_connect, mock_send, mock_recv, mock_close = _mock_transport({"type": "error", "message": "VM not found"})
         with (
             patch("raven.cli.sandbox_commands._get_socket_path", return_value=path),
             patch("raven.cli.sandbox_commands._connect", mock_connect),

@@ -109,9 +109,7 @@ async def test_fanout_cron_delivered_multi_session(emitter_spy: MagicMock) -> No
     from raven.cli.tui_commands import _fanout_cron_delivered
 
     emitter_spy._by_session = {"sess_a": [object()], "sess_b": [object()]}
-    await _fanout_cron_delivered(
-        emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z"
-    )
+    await _fanout_cron_delivered(emitter_spy, job_id="j3", name="test", text="multi", fired_at="2026-06-04T12:00:00Z")
 
     assert emitter_spy.emit.await_count == 2
     keys_called = {c.args[0] for c in emitter_spy.emit.await_args_list}

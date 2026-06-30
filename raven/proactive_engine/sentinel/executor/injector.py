@@ -26,7 +26,7 @@ Invariants:
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -38,7 +38,7 @@ from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
 @dataclass
 class _PendingInject:
     message: str
-    source: str                  # free-text provenance (e.g., "planner_tick" / "feedback")
+    source: str  # free-text provenance (e.g., "planner_tick" / "feedback")
     queued_at: datetime
 
 
@@ -85,12 +85,17 @@ class NudgeInjector:
                 dropped = q.popleft()
                 logger.warning(
                     "inject queue full for {}; dropping oldest (source={}, age={}s)",
-                    session_key, dropped.source, int((now - dropped.queued_at).total_seconds()),
+                    session_key,
+                    dropped.source,
+                    int((now - dropped.queued_at).total_seconds()),
                 )
             q.append(_PendingInject(message=message, source=source, queued_at=now))
             logger.info(
                 "inject_queued session_key={} source={} pending={} msg={!r}",
-                session_key, source, len(q), message[:80],
+                session_key,
+                source,
+                len(q),
+                message[:80],
             )
             return
 
@@ -103,12 +108,17 @@ class NudgeInjector:
                 dropped = q.popleft()
                 logger.warning(
                     "inject queue full for {}; dropping oldest (source={}, age={}s)",
-                    session_key, dropped.source, int((now - dropped.queued_at).total_seconds()),
+                    session_key,
+                    dropped.source,
+                    int((now - dropped.queued_at).total_seconds()),
                 )
             q.append(_PendingInject(message=message, source=source, queued_at=now))
             logger.info(
                 "inject_queued session_key={} source={} pending={} msg={!r}",
-                session_key, source, len(q), message[:80],
+                session_key,
+                source,
+                len(q),
+                message[:80],
             )
             state[self._STATE_KEY] = self._dump_to_blob()
             return state
@@ -151,7 +161,8 @@ class NudgeInjector:
             if messages:
                 logger.info(
                     "inject_applied session_key={} count={}",
-                    session_key, len(messages),
+                    session_key,
+                    len(messages),
                 )
             return messages
 
@@ -170,7 +181,8 @@ class NudgeInjector:
         if captured:
             logger.info(
                 "inject_applied session_key={} count={}",
-                session_key, len(captured),
+                session_key,
+                len(captured),
             )
         return captured
 
@@ -185,7 +197,8 @@ class NudgeInjector:
             stale = q.popleft()
             logger.debug(
                 "inject_expired session_key={} source={} age={}s",
-                session_key, stale.source,
+                session_key,
+                stale.source,
                 int((now - stale.queued_at).total_seconds()),
             )
         if not q:
@@ -226,7 +239,8 @@ class NudgeInjector:
                     }
                     for p in q
                 ]
-                for key, q in self._pending.items() if q
+                for key, q in self._pending.items()
+                if q
             }
         }
 

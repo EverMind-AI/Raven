@@ -28,11 +28,11 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult, TaskOption
+from raven.proactive_engine.sentinel.types import PendingDecision, RouteResult
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+    from raven.providers.base import LLMProvider
 
 
 # Deterministic regex — recognized as command-grade input. Matches:
@@ -108,8 +108,7 @@ _CLASSIFIER_TOOL: dict[str, Any] = {
                     "type": "integer",
                     "minimum": 1,
                     "description": (
-                        "1-based index of the picked option. Required "
-                        "when intent='pick'; ignored otherwise."
+                        "1-based index of the picked option. Required when intent='pick'; ignored otherwise."
                     ),
                 },
                 "confidence": {
@@ -163,7 +162,9 @@ class DecisionRouter:
         so AgentLoop falls through to normal processing."""
         try:
             return await self._maybe_consume_inner(
-                channel=channel, to=to, content=content,
+                channel=channel,
+                to=to,
+                content=content,
             )
         except Exception as exc:
             logger.exception("DecisionRouter.maybe_consume raised: {}", exc)
@@ -200,8 +201,7 @@ class DecisionRouter:
         # Tier 1 — /pick N
         m = _PICK_RE.match(text)
         if m:
-            return self._resolve_pick_index(pending, int(m.group(1)),
-                                            method="regex_pick")
+            return self._resolve_pick_index(pending, int(m.group(1)), method="regex_pick")
 
         # Tier 2 — LLM classifier
         if self.provider is None or self.model is None:
@@ -222,12 +222,16 @@ class DecisionRouter:
         # Tier 1 — yes/no regex (deterministic, multilingual)
         if _CONFIRM_YES_RE.match(text):
             return self._build_confirm_result(
-                pending, intent="confirm", confidence=1.0,
+                pending,
+                intent="confirm",
+                confidence=1.0,
                 method="regex_yesno",
             )
         if _CONFIRM_NO_RE.match(text):
             return self._build_confirm_result(
-                pending, intent="cancel", confidence=1.0,
+                pending,
+                intent="cancel",
+                confidence=1.0,
                 method="regex_yesno",
             )
 
@@ -241,7 +245,9 @@ class DecisionRouter:
                 "DecisionRouter: confirm-mode classifier intent={} "
                 "confidence={:.2f} below threshold {:.2f}; decision {} "
                 "stays awaiting",
-                intent, conf, self.confidence_threshold,
+                intent,
+                conf,
+                self.confidence_threshold,
                 pending.decision_id,
             )
             return RouteResult(
@@ -251,11 +257,14 @@ class DecisionRouter:
             )
         if intent in ("confirm", "cancel"):
             return self._build_confirm_result(
-                pending, intent=intent, confidence=conf,
+                pending,
+                intent=intent,
+                confidence=conf,
                 method="llm_classifier",
             )
         return RouteResult(
-            consumed=False, confidence=conf,
+            consumed=False,
+            confidence=conf,
             raw_match_method="llm_classifier",
         )
 
@@ -282,7 +291,7 @@ class DecisionRouter:
             option=option,
             confidence=confidence,
             raw_match_method=method,  # type: ignore[arg-type]
-            confirm_intent=intent,    # type: ignore[arg-type]
+            confirm_intent=intent,  # type: ignore[arg-type]
         )
 
     async def _llm_classify_confirm(
@@ -370,9 +379,10 @@ class DecisionRouter:
     ) -> RouteResult:
         if index_1based < 1 or index_1based > len(pending.options):
             logger.info(
-                "DecisionRouter: /pick {} out of range for decision {} "
-                "(has {} options); treating as no-match",
-                index_1based, pending.decision_id, len(pending.options),
+                "DecisionRouter: /pick {} out of range for decision {} (has {} options); treating as no-match",
+                index_1based,
+                pending.decision_id,
+                len(pending.options),
             )
             return RouteResult(consumed=False)
         opt = pending.options[index_1based - 1]
@@ -402,7 +412,10 @@ class DecisionRouter:
                 "DecisionRouter: LLM classifier intent={} confidence={:.2f} "
                 "below threshold {:.2f}; treating as 'other' (decision {} "
                 "stays live)",
-                intent, conf, self.confidence_threshold, pending.decision_id,
+                intent,
+                conf,
+                self.confidence_threshold,
+                pending.decision_id,
             )
             return RouteResult(
                 consumed=False,
@@ -414,7 +427,7 @@ class DecisionRouter:
             return RouteResult(
                 consumed=True,
                 pending_decision_id=pending.decision_id,
-                option=None,                       # skip → no option picked
+                option=None,  # skip → no option picked
                 confidence=conf,
                 raw_match_method="llm_classifier",
             )
@@ -432,9 +445,9 @@ class DecisionRouter:
             # rather than crash. Better the menu stays live than executing
             # a hallucinated option.
             logger.warning(
-                "DecisionRouter: LLM picked option_index={} but only "
-                "{} options exist; falling back to no-match",
-                opt_idx, len(pending.options),
+                "DecisionRouter: LLM picked option_index={} but only {} options exist; falling back to no-match",
+                opt_idx,
+                len(pending.options),
             )
 
         # 'other', 'pick' without a valid index, or some other shape
@@ -445,15 +458,10 @@ class DecisionRouter:
         )
 
     @staticmethod
-    def _build_classifier_messages(
-        pending: PendingDecision, content: str
-    ) -> list[dict[str, Any]]:
+    def _build_classifier_messages(pending: PendingDecision, content: str) -> list[dict[str, Any]]:
         # Reproduce the menu the user saw so the LLM has the same options
         # in the same order — matters for "the second one" disambiguation.
-        opt_lines = [
-            f"  {i}. ({o.type}) {o.title} — {o.why}"
-            for i, o in enumerate(pending.options, start=1)
-        ]
+        opt_lines = [f"  {i}. ({o.type}) {o.title} — {o.why}" for i, o in enumerate(pending.options, start=1)]
         system = (
             "You classify user replies to a numbered task-suggestion menu. "
             "Call classify_menu_response with intent='pick' / 'skip' / "
@@ -463,9 +471,7 @@ class DecisionRouter:
             "it as a normal conversation message."
         )
         user = (
-            "User was shown this menu:\n"
-            + "\n".join(opt_lines)
-            + "\n\nUser replied:\n"
+            "User was shown this menu:\n" + "\n".join(opt_lines) + "\n\nUser replied:\n"
             f"  {content!r}\n"
             "\nWhich option, if any, did they pick?"
         )

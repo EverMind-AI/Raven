@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 import pytest
 
@@ -33,8 +33,16 @@ class StubProvider(LLMProvider):
         super().__init__(api_key="test")
         self._content = content
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return LLMResponse(content=self._content, finish_reason="stop")
 
     def get_default_model(self) -> str:
@@ -206,6 +214,7 @@ async def test_modifier_exception_preserves_content(workspace):
 # ---------------------------------------------------------------------------
 # on_user_inbound hook — Sentinel engagement tracking entry point
 
+
 @pytest.mark.asyncio
 async def test_on_user_inbound_called_for_user_message(workspace):
     received = []
@@ -237,9 +246,7 @@ async def test_on_user_inbound_skipped_for_sentinel_origin(workspace):
         on_user_inbound=lambda msg: received.append(msg),
         restrict_to_workspace=True,
     )
-    await agent._process_message(
-        _make_msg("sentinel-originated"), origin=Origin.SENTINEL
-    )
+    await agent._process_message(_make_msg("sentinel-originated"), origin=Origin.SENTINEL)
     assert received == []
 
 
@@ -259,5 +266,3 @@ async def test_on_user_inbound_exception_does_not_crash(workspace):
     out = await agent._process_message(_make_msg())
     assert out is not None
     assert out[0] == "stub response"
-
-

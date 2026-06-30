@@ -11,19 +11,13 @@ def test_paths_under_user_memory_root(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     assert store.attention_file == tmp_path / "user_memory" / "attention.md"
     assert store.behaviors_file == tmp_path / "user_memory" / "behaviors.md"
-    assert store.behaviors_offsets_path == (
-        tmp_path / "user_memory" / ".behaviors_offsets.json"
-    )
+    assert store.behaviors_offsets_path == (tmp_path / "user_memory" / ".behaviors_offsets.json")
 
 
 def test_lock_paths_are_siblings(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
-    assert store.attention_lock_path == store.attention_file.with_suffix(
-        ".md.lock"
-    )
-    assert store.behaviors_lock_path == store.behaviors_file.with_suffix(
-        ".md.lock"
-    )
+    assert store.attention_lock_path == store.attention_file.with_suffix(".md.lock")
+    assert store.behaviors_lock_path == store.behaviors_file.with_suffix(".md.lock")
 
 
 def test_locks_are_independent_of_memory_lock(tmp_path: Path) -> None:

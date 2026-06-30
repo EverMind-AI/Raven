@@ -13,7 +13,6 @@ import pytest
 
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 
-
 _NOW = datetime(2026, 5, 20, 21, 0)
 
 
@@ -49,9 +48,7 @@ def test_excludes_events_older_than_window(store: MemoryStore):
 
 def test_respects_limit_parameter(store: MemoryStore):
     for i in range(20):
-        store.append_history(
-            f"[2026-05-15 09:{i:02d}] event {i} #project-p{i:02d}"
-        )
+        store.append_history(f"[2026-05-15 09:{i:02d}] event {i} #project-p{i:02d}")
     out = store.recent_project_tags(days=14, limit=5)
     assert len(out) == 5
     # All have count 1; stable sort preserves insertion order on ties.
@@ -74,9 +71,7 @@ def test_handles_malformed_timestamp(store: MemoryStore):
 
 
 def test_multiple_project_tags_on_same_line_each_count(store: MemoryStore):
-    store.append_history(
-        "[2026-05-15 09:00] cross-project ep #project-foo #project-bar"
-    )
+    store.append_history("[2026-05-15 09:00] cross-project ep #project-foo #project-bar")
     out = store.recent_project_tags()
     assert ("project-foo", 1) in out
     assert ("project-bar", 1) in out

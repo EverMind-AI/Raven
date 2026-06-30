@@ -83,7 +83,8 @@ class DiscordChannel(ChannelBase):
                 if code in _FATAL_CLOSE_CODES:
                     logger.error(
                         "Discord gateway closed with fatal code {} ({}); not reconnecting",
-                        code, e.rcvd.reason if e.rcvd else "",
+                        code,
+                        e.rcvd.reason if e.rcvd else "",
                     )
                     self._running = False
                     break
@@ -147,7 +148,7 @@ class DiscordChannel(ChannelBase):
                 logger.info("Discord gateway requested reconnect; resuming")
                 break
             elif op == _OP_INVALID_SESSION:
-                if not payload:   # d=false: session unrecoverable, re-identify
+                if not payload:  # d=false: session unrecoverable, re-identify
                     self._reset_session()
                     # Per the docs: wait a random 1-5s before the fresh
                     # IDENTIFY to avoid identify storms (and 4008s).
@@ -167,25 +168,33 @@ class DiscordChannel(ChannelBase):
             # A fresh session: heartbeats must not carry the previous
             # session's sequence number.
             self._seq = None
-            await self._ws.send(json.dumps({
-                "op": _OP_IDENTIFY,
-                "d": {
-                    "token": self.config.token,
-                    "intents": self.config.intents,
-                    "properties": {"os": "raven", "browser": "raven", "device": "raven"},
-                },
-            }))
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "op": _OP_IDENTIFY,
+                        "d": {
+                            "token": self.config.token,
+                            "intents": self.config.intents,
+                            "properties": {"os": "raven", "browser": "raven", "device": "raven"},
+                        },
+                    }
+                )
+            )
 
     async def _resume(self) -> None:
         if self._ws:
-            await self._ws.send(json.dumps({
-                "op": _OP_RESUME,
-                "d": {
-                    "token": self.config.token,
-                    "session_id": self._session_id,
-                    "seq": self._seq,
-                },
-            }))
+            await self._ws.send(
+                json.dumps(
+                    {
+                        "op": _OP_RESUME,
+                        "d": {
+                            "token": self.config.token,
+                            "session_id": self._session_id,
+                            "seq": self._seq,
+                        },
+                    }
+                )
+            )
 
     async def _start_heartbeat(self, interval_s: float) -> None:
         if self._heartbeat_task:
@@ -282,7 +291,9 @@ class DiscordChannel(ChannelBase):
         if not mentioned:
             logger.debug(
                 "Discord group msg not addressed to bot (bot_id={}, mentions={}, content={!r}); ignoring",
-                self._bot_user_id, mention_ids, content[:120],
+                self._bot_user_id,
+                mention_ids,
+                content[:120],
             )
         return mentioned
 

@@ -76,11 +76,15 @@ def acquire(now: float):
         raise GatewayAlreadyRunningError(info)
     fd.seek(0)
     fd.truncate()
-    fd.write(json.dumps({
-        "pid": os.getpid(),
-        "started_at": now,
-        "config_path": str(get_config_path()),
-    }))
+    fd.write(
+        json.dumps(
+            {
+                "pid": os.getpid(),
+                "started_at": now,
+                "config_path": str(get_config_path()),
+            }
+        )
+    )
     fd.flush()
     return fd
 

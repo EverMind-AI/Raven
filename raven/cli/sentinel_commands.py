@@ -33,8 +33,6 @@ console = Console()
 from raven.cli._helpers import make_provider, parse_fake_now
 from raven.config.paths import get_sentinel_dir, get_workspace_path
 
-
-
 sentinel_app = typer.Typer(help="Inspect and drive the proactivity subsystem")
 
 
@@ -100,10 +98,7 @@ def sentinel_status():
     console.print(table)
 
     if not view.get("enabled"):
-        console.print(
-            "[dim]Sentinel is currently disabled. "
-            "Set sentinel.enabled=true in config to activate.[/dim]"
-        )
+        console.print("[dim]Sentinel is currently disabled. Set sentinel.enabled=true in config to activate.[/dim]")
 
 
 @sentinel_app.command("enable")
@@ -120,8 +115,7 @@ def sentinel_enable():
         console.print("[dim]Sentinel is already enabled.[/dim]")
         return
     console.print(
-        "[green]✓[/green] Sentinel enabled (sentinel.enabled=true). "
-        "Restart the agent/gateway to start the engine."
+        "[green]✓[/green] Sentinel enabled (sentinel.enabled=true). Restart the agent/gateway to start the engine."
     )
 
 
@@ -139,8 +133,7 @@ def sentinel_disable():
         console.print("[dim]Sentinel is already disabled.[/dim]")
         return
     console.print(
-        "[green]✓[/green] Sentinel disabled (sentinel.enabled=false). "
-        "Restart the agent/gateway to stop the engine."
+        "[green]✓[/green] Sentinel disabled (sentinel.enabled=false). Restart the agent/gateway to stop the engine."
     )
 
 
@@ -178,9 +171,9 @@ def sentinel_tick(
         NudgePolicy,
         ProactivePlanner,
     )
+    from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
     from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
     from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
-    from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
 
     ec_config = _load_sentinel_config()
     base_config = ec_config.base
@@ -223,6 +216,7 @@ def sentinel_tick(
         RoutineStore,
     )
     from raven.session.manager import SessionManager
+
     sentinel_dir = get_sentinel_dir()
     session_manager = SessionManager(ws)
     feedback = NudgeFeedbackTracker(sentinel_dir / "feedback.jsonl")
@@ -311,15 +305,19 @@ def sentinel_ticks(
     interval_seconds: int = typer.Option(1800, "--interval-seconds", help="Step between ticks (default 30 min)"),
     workspace: str = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
     config: str | None = typer.Option(
-        None, "--config",
+        None,
+        "--config",
         help="Override config file path. Redirects ALL runtime dirs (sentinel "
-             "state.json, cron jobs.json, etc.) to the config's parent dir — "
-             "the proactivity-eval parallel longrun uses this for per-persona "
-             "state isolation.",
+        "state.json, cron jobs.json, etc.) to the config's parent dir — "
+        "the proactivity-eval parallel longrun uses this for per-persona "
+        "state isolation.",
     ),
-    live: bool = typer.Option(False, "--live/--dry-run",
-                              help="--live wires the executor stack (dispatcher+injector+defer); "
-                                   "--dry-run (default) builds Planner only, no dispatch"),
+    live: bool = typer.Option(
+        False,
+        "--live/--dry-run",
+        help="--live wires the executor stack (dispatcher+injector+defer); "
+        "--dry-run (default) builds Planner only, no dispatch",
+    ),
 ):
     """Run a sequence of Sentinel ticks between ``--from`` and ``--to``.
 
@@ -336,7 +334,8 @@ def sentinel_ticks(
     """
     import asyncio as _asyncio
     import json as _json
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
 
     from raven.cli._proactive_stack import build_sentinel_stack
     from raven.session.manager import SessionManager
@@ -344,6 +343,7 @@ def sentinel_ticks(
     # ── Honor --config redirect (per-persona isolation for parallel eval) ──
     if config:
         from raven.config.loader import set_config_path
+
         cfg_path = Path(config).expanduser().resolve()
         if not cfg_path.exists():
             raise typer.BadParameter(f"--config file not found: {cfg_path}")
@@ -355,8 +355,7 @@ def sentinel_ticks(
         end = _dt.fromisoformat(to_iso)
     except ValueError as exc:
         raise typer.BadParameter(
-            f"--from and --to must be ISO-8601 (got from={from_iso!r}, "
-            f"to={to_iso!r}): {exc}"
+            f"--from and --to must be ISO-8601 (got from={from_iso!r}, to={to_iso!r}): {exc}"
         ) from exc
     if end < start:
         raise typer.BadParameter(f"--to ({to_iso}) must be >= --from ({from_iso})")
@@ -369,8 +368,13 @@ def sentinel_ticks(
     # the bound ``clock.get`` and threads it into every component's now_fn. ──
     class _MutableClock:
         __slots__ = ("now",)
-        def __init__(self, t: _dt): self.now = t
-        def get(self) -> _dt: return self.now
+
+        def __init__(self, t: _dt):
+            self.now = t
+
+        def get(self) -> _dt:
+            return self.now
+
     clock = _MutableClock(start)
 
     # ── Build the full Sentinel stack via the shared factory ──
@@ -385,23 +389,22 @@ def sentinel_ticks(
         # ``workspace_path`` is a derived property on Config; override the
         # backing field so build_sentinel_stack (which feeds it into
         # MemoryStore) and SessionManager both pick up the -w value.
-        base_config.agents.defaults.workspace = str(
-            Path(workspace).expanduser()
-        )
+        base_config.agents.defaults.workspace = str(Path(workspace).expanduser())
     provider = make_provider(base_config)
     if isinstance(provider, tuple):
         provider = provider[0]
 
     session_manager = SessionManager(base_config.workspace_path)
     runner, _resp_modifier, _on_inbound = build_sentinel_stack(
-        base_config, ec_config.sentinel,
-        session_manager, provider,
+        base_config,
+        ec_config.sentinel,
+        session_manager,
+        provider,
         now_fn=clock.get,
     )
     if runner is None:
         raise typer.BadParameter(
-            "sentinel.enabled=False in config — nothing to tick. "
-            "Set sentinel.enabled=true to use ``sentinel ticks``."
+            "sentinel.enabled=False in config — nothing to tick. Set sentinel.enabled=true to use ``sentinel ticks``."
         )
 
     # --dry-run: keep the Planner LLM path active (so the eval can score
@@ -545,15 +548,13 @@ def sentinel_nudges(
             counts[ev.get("signal", "?")] += 1
         if counts:
             console.print(
-                f"\n[bold]7-day signal counts[/bold]: "
-                + ", ".join(f"{k}={v}" for k, v in counts.most_common())
+                "\n[bold]7-day signal counts[/bold]: " + ", ".join(f"{k}={v}" for k, v in counts.most_common())
             )
             dispatched = counts.get("dispatched", 0)
             accepted = counts.get("accepted", 0)
             if dispatched:
                 console.print(
-                    f"  acceptance rate (last 7d): "
-                    f"{accepted}/{dispatched} = {100 * accepted / dispatched:.0f}%"
+                    f"  acceptance rate (last 7d): {accepted}/{dispatched} = {100 * accepted / dispatched:.0f}%"
                 )
 
     # --- NudgePolicy persisted state ----------------------------------
@@ -592,9 +593,7 @@ def sentinel_nudges(
             for tag, timestamps in topic_fired_at.items():
                 if isinstance(timestamps, list):
                     topic_recent[tag] = sum(
-                        1
-                        for t in timestamps
-                        if isinstance(t, (int, float)) and (now_ts - t) <= seven_days
+                        1 for t in timestamps if isinstance(t, (int, float)) and (now_ts - t) <= seven_days
                     )
             top = [(t, n) for t, n in topic_recent.most_common(8) if n > 0]
             if top:
@@ -656,7 +655,7 @@ def sentinel_decisions(
 
     for d in sorted(decisions, key=lambda d: -d.created_at_ms):
         if d.consumed:
-            state = f"[green]consumed[/green]" if d.picked_option_id else f"[red]cancelled[/red]"
+            state = "[green]consumed[/green]" if d.picked_option_id else "[red]cancelled[/red]"
         elif d.awaiting_confirm:
             state = "[yellow]awaiting_confirm[/yellow]"
         else:
@@ -679,9 +678,7 @@ def sentinel_decisions(
             console.print(f"\n[cyan]{d.decision_id}[/cyan] ({d.channel}:{d.to}) options:")
             for i, opt in enumerate(d.options, start=1):
                 marker = "✓" if d.picked_option_id == opt.id else " "
-                console.print(
-                    f"  {marker} [{i}] {opt.title}  [dim]({opt.type}/{opt.exec_kind})[/dim]"
-                )
+                console.print(f"  {marker} [{i}] {opt.title}  [dim]({opt.type}/{opt.exec_kind})[/dim]")
                 if opt.why:
                     console.print(f"      [dim]— {opt.why}[/dim]")
 
@@ -778,8 +775,7 @@ def sentinel_discover_now(
         raise typer.Exit(code=1)
     if not ec_config.sentinel.task_discovery_enabled:
         console.print(
-            "[red]sentinel.task_discovery_enabled is False — "
-            "discovery is opt-in. Enable it in config.json[/red]"
+            "[red]sentinel.task_discovery_enabled is False — discovery is opt-in. Enable it in config.json[/red]"
         )
         raise typer.Exit(code=1)
 
@@ -796,8 +792,10 @@ def sentinel_discover_now(
 
     if inproc:
         _sentinel_discover_now_inproc(
-            channel=channel, to=to,
-            workspace=workspace, fake_now=fake_now,
+            channel=channel,
+            to=to,
+            workspace=workspace,
+            fake_now=fake_now,
             ec_config=ec_config,
         )
         return
@@ -873,10 +871,7 @@ def _sentinel_discover_now_inproc(
         now_fn=parse_fake_now(fake_now),
     )
     if runner is None or runner.task_discoverer is None:
-        console.print(
-            "[red]TaskDiscoverer not wired (sentinel disabled or "
-            "task_discovery_enabled=False)[/red]"
-        )
+        console.print("[red]TaskDiscoverer not wired (sentinel disabled or task_discovery_enabled=False)[/red]")
         raise typer.Exit(code=1)
 
     target_label = channel if channel == "*" or not to else f"{channel}:{to}"
@@ -898,8 +893,7 @@ def _sentinel_discover_now_inproc(
     _asyncio.run(_run())
 
     console.print(
-        f"[green]✓[/green] discover_now invoked (inproc). Inspect with:\n"
-        f"  [cyan]raven sentinel decisions[/cyan]"
+        "[green]✓[/green] discover_now invoked (inproc). Inspect with:\n  [cyan]raven sentinel decisions[/cyan]"
     )
 
 
@@ -953,11 +947,11 @@ def sentinel_routines(
 
     for r in sorted(routines, key=lambda r: (r.status != "active", -r.weight, -r.occurrence_count)):
         status_styled = (
-            f"[green]active ✓[/green]"
+            "[green]active ✓[/green]"
             if r.status == "active"
-            else f"[yellow]candidate[/yellow]"
+            else "[yellow]candidate[/yellow]"
             if r.status == "candidate"
-            else f"[red]retired[/red]"
+            else "[red]retired[/red]"
             if r.status == "retired"
             else r.status
         )
@@ -986,11 +980,15 @@ def sentinel_routines(
 @sentinel_app.command("attention")
 def sentinel_attention(
     section: str = typer.Option(
-        None, "--section", "-s",
+        None,
+        "--section",
+        "-s",
         help="Filter to a single H2 (e.g. '## Pending proposals'). Omit for full file.",
     ),
     workspace: str = typer.Option(
-        None, "--workspace", "-w",
+        None,
+        "--workspace",
+        "-w",
         help="Override workspace path (defaults to active).",
     ),
 ):
@@ -1012,8 +1010,7 @@ def sentinel_attention(
         body = sections.get(section, "").strip()
         if not body:
             console.print(
-                f"[yellow]Section {section!r} absent or empty in "
-                f"{path}[/yellow]",
+                f"[yellow]Section {section!r} absent or empty in {path}[/yellow]",
             )
             raise typer.Exit(code=1)
         console.print(f"[bold cyan]{section}[/bold cyan]\n")
@@ -1026,19 +1023,24 @@ def sentinel_attention(
 @sentinel_app.command("behaviors")
 def sentinel_behaviors(
     since: str = typer.Option(
-        None, "--since",
+        None,
+        "--since",
         help="ISO date (YYYY-MM-DD) — only events ending on/after this date.",
     ),
     session_key: str = typer.Option(
-        None, "--session",
+        None,
+        "--session",
         help="Filter to a single ``channel:chat_id`` session.",
     ),
     folded: bool = typer.Option(
-        False, "--folded",
+        False,
+        "--folded",
         help="Render folded single-line view (matches PlannerContext format).",
     ),
     workspace: str = typer.Option(
-        None, "--workspace", "-w",
+        None,
+        "--workspace",
+        "-w",
         help="Override workspace path.",
     ),
 ):
@@ -1047,9 +1049,9 @@ def sentinel_behaviors(
     Without filters, prints the full markdown file. With ``--folded``,
     renders one line per event in the same compact format Planner sees.
     """
-    import json as _json
     from raven.memory_engine.consolidate.behaviors import (
-        parse_behaviors, render_folded_block,
+        parse_behaviors,
+        render_folded_block,
     )
 
     ws = Path(workspace) if workspace else get_workspace_path()
@@ -1067,11 +1069,9 @@ def sentinel_behaviors(
     if since:
         try:
             from datetime import date as _date
+
             since_date = _date.fromisoformat(since)
-            events = [
-                e for e in events
-                if e.day >= since_date.isoformat()
-            ]
+            events = [e for e in events if e.day >= since_date.isoformat()]
         except ValueError:
             console.print(
                 f"[red]Bad --since {since!r}, expected YYYY-MM-DD[/red]",
@@ -1105,11 +1105,14 @@ def sentinel_behaviors(
 @sentinel_app.command("behaviors-rebuild")
 def sentinel_behaviors_rebuild(
     session_key: str = typer.Option(
-        None, "--session",
+        None,
+        "--session",
         help="Restrict to a single ``channel:chat_id`` session.",
     ),
     workspace: str = typer.Option(
-        None, "--workspace", "-w",
+        None,
+        "--workspace",
+        "-w",
         help="Override workspace path.",
     ),
 ):
@@ -1137,15 +1140,8 @@ def sentinel_behaviors_rebuild(
             "rebuild will run but no future ticks will refresh.[/yellow]",
         )
     provider_pair = make_provider(cfg.base)
-    provider = (
-        provider_pair[0] if isinstance(provider_pair, tuple)
-        else provider_pair
-    )
-    model = (
-        cfg.sentinel.behaviors_extract.model
-        or cfg.sentinel.evaluator_model
-        or provider.get_default_model()
-    )
+    provider = provider_pair[0] if isinstance(provider_pair, tuple) else provider_pair
+    model = cfg.sentinel.behaviors_extract.model or cfg.sentinel.evaluator_model or provider.get_default_model()
     store = MemoryStore(ws)
     session_manager = SessionManager(ws)
     extractor = BehaviorsExtractor(
@@ -1162,6 +1158,7 @@ def sentinel_behaviors_rebuild(
         from raven.memory_engine.consolidate.behaviors_extractor import (
             BehaviorsOffsets,
         )
+
         offsets = BehaviorsOffsets.load(store.behaviors_offsets_path)
 
         async def _run_one() -> int:
@@ -1178,8 +1175,7 @@ def sentinel_behaviors_rebuild(
     else:
         added = asyncio.run(extractor.run_all())
     console.print(
-        f"[green]Rebuild appended {added} event(s) to "
-        f"{store.behaviors_file}[/green]",
+        f"[green]Rebuild appended {added} event(s) to {store.behaviors_file}[/green]",
     )
 
 
@@ -1196,13 +1192,14 @@ sentinel_app.add_typer(sentinel_config_app, name="config")
 @sentinel_config_app.command("set")
 def sentinel_config_set(
     max_nudges_per_hour: int | None = typer.Option(
-        None, "--max-nudges-per-hour",
+        None,
+        "--max-nudges-per-hour",
         help="Per-hour proactive-nudge quota (>= 1)",
     ),
     max_nudges_per_day: int | None = typer.Option(
-        None, "--max-nudges-per-day",
-        help="Per-day proactive-nudge quota — hard ceiling, even high "
-             "priority can't bypass (>= 1)",
+        None,
+        "--max-nudges-per-day",
+        help="Per-day proactive-nudge quota — hard ceiling, even high priority can't bypass (>= 1)",
     ),
 ):
     """Patch the sentinel nudge-policy quotas on-disk. At least one flag
@@ -1215,14 +1212,12 @@ def sentinel_config_set(
     from raven.config.update import set_sentinel_nudge_quota
 
     if max_nudges_per_hour is None and max_nudges_per_day is None:
-        console.print(
-            "[red]Specify at least one of --max-nudges-per-hour / "
-            "--max-nudges-per-day.[/red]"
-        )
+        console.print("[red]Specify at least one of --max-nudges-per-hour / --max-nudges-per-day.[/red]")
         raise typer.Exit(1)
     try:
         changed = set_sentinel_nudge_quota(
-            per_hour=max_nudges_per_hour, per_day=max_nudges_per_day,
+            per_hour=max_nudges_per_hour,
+            per_day=max_nudges_per_day,
         )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1233,14 +1228,8 @@ def sentinel_config_set(
         return
     for field, (prev, new) in changed.items():
         console.print(f"[green]✓[/green] sentinel.{field} → {new} (was {prev!r})")
-    if (
-        max_nudges_per_hour is not None
-        and max_nudges_per_day is not None
-        and max_nudges_per_hour > max_nudges_per_day
-    ):
-        console.print(
-            "[yellow]⚠ per-hour > per-day; the per-day ceiling will dominate.[/yellow]"
-        )
+    if max_nudges_per_hour is not None and max_nudges_per_day is not None and max_nudges_per_hour > max_nudges_per_day:
+        console.print("[yellow]⚠ per-hour > per-day; the per-day ceiling will dominate.[/yellow]")
     console.print("[dim]Effective on next agent/gateway start.[/dim]")
 
 

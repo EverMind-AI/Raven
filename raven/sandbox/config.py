@@ -1,4 +1,5 @@
 """Pydantic configuration model for the sandbox package."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -68,16 +69,9 @@ class SandboxConfig(BaseModel):
     def _validate_volumes(cls, v: list[list[str]]) -> list[list[str]]:
         for entry in v:
             if len(entry) != 3 or entry[2] not in ("ro", "rw"):
-                raise ValueError(
-                    f"Invalid volume entry {entry!r}; "
-                    "each entry must be [host_path, vm_path, 'ro'|'rw']"
-                )
+                raise ValueError(f"Invalid volume entry {entry!r}; each entry must be [host_path, vm_path, 'ro'|'rw']")
             if not Path(entry[0]).is_absolute():
-                raise ValueError(
-                    f"Volume host path must be absolute: {entry[0]!r}"
-                )
+                raise ValueError(f"Volume host path must be absolute: {entry[0]!r}")
             if not Path(entry[1]).is_absolute():
-                raise ValueError(
-                    f"Volume VM path must be absolute: {entry[1]!r}"
-                )
+                raise ValueError(f"Volume VM path must be absolute: {entry[1]!r}")
         return v

@@ -11,18 +11,17 @@ from pathlib import Path
 
 import pytest
 
-from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
 from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
 from raven.proactive_engine.sentinel.executor.decision_consumer import DecisionConsumer, MenuReply
 from raven.proactive_engine.sentinel.executor.decision_router import DecisionRouter
-from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.types import (
     PendingDecision,
     TaskOption,
 )
-
+from raven.spine.message import ChatType, Source
+from raven.spine.turn import Origin, TurnRequest
 
 _NOW = datetime(2026, 5, 8, 9, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
@@ -33,8 +32,11 @@ _NOW_MS = int(_NOW.timestamp() * 1000)
 
 def _option(oid: str = "opt_1", title: str = "草拟回复 X") -> TaskOption:
     return TaskOption(
-        id=oid, title=title, why="why",
-        type="ad_hoc", exec_kind="reply",
+        id=oid,
+        title=title,
+        why="why",
+        type="ad_hoc",
+        exec_kind="reply",
         exec_payload={"prompt": f"do the thing for {oid}"},
         created_at_ms=_NOW_MS,
     )
@@ -47,8 +49,7 @@ def _decision(*, options: list[TaskOption] | None = None) -> PendingDecision:
         to="ou_xxx",
         created_at_ms=_NOW_MS,
         ttl_min=60,
-        options=options or [_option("opt_1", "任务一"),
-                            _option("opt_2", "任务二")],
+        options=options or [_option("opt_1", "任务一"), _option("opt_2", "任务二")],
     )
 
 
@@ -56,7 +57,9 @@ def _msg(content: str) -> TurnRequest:
     return TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel="feishu", chat_id="ou_xxx", sender_id="user",
+            channel="feishu",
+            chat_id="ou_xxx",
+            sender_id="user",
             chat_type=ChatType.DM,
         ),
         text=content,
@@ -81,7 +84,8 @@ def feedback(workspace: Path) -> NudgeFeedbackTracker:
 
 
 def _make_consumer(
-    *, pending_store: PendingDecisionStore,
+    *,
+    pending_store: PendingDecisionStore,
     feedback: NudgeFeedbackTracker | None = None,
     router_provider=None,
 ) -> DecisionConsumer:
@@ -95,9 +99,11 @@ def _make_consumer(
     submitted: list = []
     executor.set_submit(submitted.append)
     consumer = DecisionConsumer(
-        router=router, executor=executor,
-        pending_store=pending_store, feedback=feedback,
-        require_confirm=True,         # ← THIS file's whole purpose
+        router=router,
+        executor=executor,
+        pending_store=pending_store,
+        feedback=feedback,
+        require_confirm=True,  # ← THIS file's whole purpose
         now_fn=lambda: _NOW,
     )
     consumer._submitted = submitted  # captured exec-reply TurnRequests
@@ -110,7 +116,9 @@ def _make_consumer(
 def test_mark_awaiting_confirm_sets_state(pending_store):
     pending_store.put(_decision())
     outcome = pending_store.mark_awaiting_confirm(
-        "dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS + 100,
+        "dec_x",
+        picked_option_id="opt_1",
+        picked_at_ms=_NOW_MS + 100,
     )
     assert outcome == PendingDecisionStore.AWAIT_OK
 
@@ -125,12 +133,13 @@ def test_mark_awaiting_confirm_idempotent_returns_already_second_time(
     pending_store,
 ):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
     # Second call returns AWAIT_ALREADY, distinct from AWAIT_NOT_FOUND
     # / AWAIT_CONSUMED — caller can decide whether to re-prompt.
     outcome = pending_store.mark_awaiting_confirm(
-        "dec_x", picked_option_id="opt_2", picked_at_ms=_NOW_MS + 100,
+        "dec_x",
+        picked_option_id="opt_2",
+        picked_at_ms=_NOW_MS + 100,
     )
     assert outcome == PendingDecisionStore.AWAIT_ALREADY
     raw = pending_store._store.load()["decisions"][0]
@@ -139,7 +148,9 @@ def test_mark_awaiting_confirm_idempotent_returns_already_second_time(
 
 def test_mark_awaiting_confirm_returns_not_found_for_missing(pending_store):
     outcome = pending_store.mark_awaiting_confirm(
-        "dec_missing", picked_option_id="opt_1", picked_at_ms=_NOW_MS,
+        "dec_missing",
+        picked_option_id="opt_1",
+        picked_at_ms=_NOW_MS,
     )
     assert outcome == PendingDecisionStore.AWAIT_NOT_FOUND
 
@@ -148,18 +159,18 @@ def test_mark_awaiting_confirm_returns_consumed_for_already_consumed(
     pending_store,
 ):
     pending_store.put(_decision())
-    pending_store.mark_consumed("dec_x", picked_option_id="opt_1",
-                                consumed_at_ms=_NOW_MS)
+    pending_store.mark_consumed("dec_x", picked_option_id="opt_1", consumed_at_ms=_NOW_MS)
     outcome = pending_store.mark_awaiting_confirm(
-        "dec_x", picked_option_id="opt_2", picked_at_ms=_NOW_MS + 100,
+        "dec_x",
+        picked_option_id="opt_2",
+        picked_at_ms=_NOW_MS + 100,
     )
     assert outcome == PendingDecisionStore.AWAIT_CONSUMED
 
 
 def test_cancel_confirm_marks_consumed_with_no_pick(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     ok = pending_store.cancel_confirm("dec_x", cancelled_at_ms=_NOW_MS + 200)
     assert ok is True
@@ -180,12 +191,10 @@ def test_cancel_confirm_returns_false_when_not_awaiting(pending_store):
 
 def test_get_recent_returns_awaiting_confirm_decision(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
     # Router needs to find decisions in AWAITING_CONFIRM state to parse
     # the second-leg yes/no reply.
-    fetched = pending_store.get_recent("feishu", "ou_xxx",
-                                       now_ms=_NOW_MS + 300)
+    fetched = pending_store.get_recent("feishu", "ou_xxx", now_ms=_NOW_MS + 300)
     assert fetched is not None
     assert fetched.awaiting_confirm is True
     assert fetched.picked_option_id == "opt_1"
@@ -197,15 +206,15 @@ def test_get_recent_returns_awaiting_confirm_decision(pending_store):
 @pytest.mark.asyncio
 async def test_router_yes_regex_in_confirm_mode(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
 
-    for variant in ("yes", "YES", "y", "是", "确认", "好", "ok", "嗯",
-                    "yes!", "  yes  "):
+    for variant in ("yes", "YES", "y", "是", "确认", "好", "ok", "嗯", "yes!", "  yes  "):
         result = await router.maybe_consume(
-            channel="feishu", to="ou_xxx", content=variant,
+            channel="feishu",
+            to="ou_xxx",
+            content=variant,
         )
         assert result.consumed is True, f"failed for {variant!r}"
         assert result.confirm_intent == "confirm"
@@ -217,14 +226,15 @@ async def test_router_yes_regex_in_confirm_mode(pending_store):
 @pytest.mark.asyncio
 async def test_router_no_regex_in_confirm_mode(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
 
     for variant in ("no", "NO", "n", "否", "取消", "不", "算了", "cancel"):
         result = await router.maybe_consume(
-            channel="feishu", to="ou_xxx", content=variant,
+            channel="feishu",
+            to="ou_xxx",
+            content=variant,
         )
         assert result.consumed is True, f"failed for {variant!r}"
         assert result.confirm_intent == "cancel"
@@ -235,12 +245,13 @@ async def test_router_pick_n_in_confirm_mode_falls_through(pending_store):
     """In awaiting_confirm state, /pick N is meaningless (the decision
     already has a picked option). Router should ignore it."""
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
     result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="/pick 2",
+        channel="feishu",
+        to="ou_xxx",
+        content="/pick 2",
     )
     assert result.consumed is False
 
@@ -248,26 +259,29 @@ async def test_router_pick_n_in_confirm_mode_falls_through(pending_store):
 @pytest.mark.asyncio
 async def test_router_llm_confirm_classifier_high_confidence(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     class _Provider:
         async def chat_with_retry(self, *, messages, tools, model, tool_choice):
             class _Call:
-                arguments = json.dumps({"intent": "confirm",
-                                        "confidence": 0.92})
+                arguments = json.dumps({"intent": "confirm", "confidence": 0.92})
+
             class _Resp:
                 has_tool_calls = True
                 tool_calls = [_Call()]
+
             return _Resp()
 
     router = DecisionRouter(
         pending_store=pending_store,
-        provider=_Provider(), model="x",
+        provider=_Provider(),
+        model="x",
         now_fn=lambda: _NOW,
     )
     result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="行吧那就这样",
+        channel="feishu",
+        to="ou_xxx",
+        content="行吧那就这样",
     )
     assert result.consumed is True
     assert result.confirm_intent == "confirm"
@@ -277,27 +291,30 @@ async def test_router_llm_confirm_classifier_high_confidence(pending_store):
 @pytest.mark.asyncio
 async def test_router_llm_confirm_low_confidence_falls_through(pending_store):
     pending_store.put(_decision())
-    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1",
-                                        picked_at_ms=_NOW_MS)
+    pending_store.mark_awaiting_confirm("dec_x", picked_option_id="opt_1", picked_at_ms=_NOW_MS)
 
     class _Provider:
         async def chat_with_retry(self, *, messages, tools, model, tool_choice):
             class _Call:
-                arguments = json.dumps({"intent": "other",
-                                        "confidence": 0.4})
+                arguments = json.dumps({"intent": "other", "confidence": 0.4})
+
             class _Resp:
                 has_tool_calls = True
                 tool_calls = [_Call()]
+
             return _Resp()
 
     router = DecisionRouter(
         pending_store=pending_store,
-        provider=_Provider(), model="x",
+        provider=_Provider(),
+        model="x",
         confidence_threshold=0.7,
         now_fn=lambda: _NOW,
     )
     result = await router.maybe_consume(
-        channel="feishu", to="ou_xxx", content="什么意思",
+        channel="feishu",
+        to="ou_xxx",
+        content="什么意思",
     )
     assert result.consumed is False
 
@@ -307,11 +324,13 @@ async def test_router_llm_confirm_low_confidence_falls_through(pending_store):
 
 @pytest.mark.asyncio
 async def test_first_leg_pick_emits_confirm_prompt_no_execute(
-    pending_store, feedback,
+    pending_store,
+    feedback,
 ):
     pending_store.put(_decision())
     consumer = _make_consumer(
-        pending_store=pending_store, feedback=feedback,
+        pending_store=pending_store,
+        feedback=feedback,
     )
 
     out = await consumer(_msg("/pick 2"))
@@ -337,11 +356,13 @@ async def test_first_leg_pick_emits_confirm_prompt_no_execute(
 
 @pytest.mark.asyncio
 async def test_second_leg_yes_executes_and_records_accepted(
-    pending_store, feedback,
+    pending_store,
+    feedback,
 ):
     pending_store.put(_decision())
     consumer = _make_consumer(
-        pending_store=pending_store, feedback=feedback,
+        pending_store=pending_store,
+        feedback=feedback,
     )
 
     # First leg
@@ -374,7 +395,8 @@ async def test_second_leg_yes_executes_and_records_accepted(
 async def test_second_leg_no_cancels_no_execute(pending_store, feedback):
     pending_store.put(_decision())
     consumer = _make_consumer(
-        pending_store=pending_store, feedback=feedback,
+        pending_store=pending_store,
+        feedback=feedback,
     )
 
     # First leg
@@ -401,17 +423,19 @@ async def test_second_leg_no_cancels_no_execute(pending_store, feedback):
 
 @pytest.mark.asyncio
 async def test_ambiguous_reply_during_awaiting_falls_through(
-    pending_store, feedback,
+    pending_store,
+    feedback,
 ):
     """If the user says something not yes/no (e.g. asks an unrelated
     question), router falls through (consumed=False) and the decision
     stays awaiting until they explicitly confirm/cancel or TTL expires."""
     pending_store.put(_decision())
     consumer = _make_consumer(
-        pending_store=pending_store, feedback=feedback,
+        pending_store=pending_store,
+        feedback=feedback,
     )
 
-    await consumer(_msg("/pick 1"))   # park awaiting_confirm
+    await consumer(_msg("/pick 1"))  # park awaiting_confirm
 
     # Ambiguous reply — no LLM provider configured, so confirm-mode
     # only matches yes/no regex; everything else falls through.
@@ -434,13 +458,16 @@ async def test_skip_does_not_use_confirm_path(pending_store, feedback):
         async def chat_with_retry(self, *, messages, tools, model, tool_choice):
             class _Call:
                 arguments = json.dumps({"intent": "skip", "confidence": 0.95})
+
             class _Resp:
                 has_tool_calls = True
                 tool_calls = [_Call()]
+
             return _Resp()
 
     consumer = _make_consumer(
-        pending_store=pending_store, feedback=feedback,
+        pending_store=pending_store,
+        feedback=feedback,
         router_provider=_SkipProvider(),
     )
 

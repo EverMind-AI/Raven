@@ -83,9 +83,7 @@ def _shape_blacklist_warning(command: str) -> dict[str, str]:
     }
 
 
-async def slash_exec(
-    params: dict[str, Any], *, confirm_broker: "ConfirmBroker | None" = None
-) -> dict[str, Any]:
+async def slash_exec(params: dict[str, Any], *, confirm_broker: "ConfirmBroker | None" = None) -> dict[str, Any]:
     """Route an unknown hermes slash to ``cli.dispatch``.
 
     Hermes UI invokes us with ``{command: "channels status", session_id: ...}``
@@ -210,9 +208,7 @@ async def complete_path(params: dict[str, Any]) -> dict[str, Any]:
     return {"items": []}
 
 
-def register_slash_routing_methods(
-    dispatcher: "Dispatcher", *, confirm_broker: "ConfirmBroker | None" = None
-) -> None:
+def register_slash_routing_methods(dispatcher: "Dispatcher", *, confirm_broker: "ConfirmBroker | None" = None) -> None:
     """Register all four slash routing handlers.
 
     ``confirm_broker`` is pre-bound to ``slash.exec`` so destructive commands

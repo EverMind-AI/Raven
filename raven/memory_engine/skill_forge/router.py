@@ -61,15 +61,9 @@ class SkillForgeRouter:
     ) -> list[RouterHit]:
         """Fan out to every source concurrently, fuse to top-K."""
         per_source_k = k * self._over_fetch_factor
-        per_source = await asyncio.gather(*[
-            self._safe_search(s, query, history, per_source_k)
-            for s in self._sources
-        ])
+        per_source = await asyncio.gather(*[self._safe_search(s, query, history, per_source_k) for s in self._sources])
         return rrf_merge_weighted(
-            [
-                (s.name, s.weight, hits)
-                for s, hits in zip(self._sources, per_source)
-            ],
+            [(s.name, s.weight, hits) for s, hits in zip(self._sources, per_source)],
             k=k,
             dedup_by=self._dedup_by,
         )
@@ -89,7 +83,8 @@ class SkillForgeRouter:
             # shows up in normal aggregations.
             logger.warning(
                 "skill source %r failed; treating as empty: %s",
-                source.name, e,
+                source.name,
+                e,
             )
             return []
 

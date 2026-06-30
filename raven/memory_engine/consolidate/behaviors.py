@@ -35,10 +35,10 @@ class BehaviorEvent:
     """Single behavior event — 12 canonical fields + a summary line."""
 
     id: str
-    day: str           # ISO date, e.g. "2026-05-29"
-    start: str         # "HH:MM"
-    end: str           # "HH:MM"
-    session: str       # session_key like "cli:default"
+    day: str  # ISO date, e.g. "2026-05-29"
+    start: str  # "HH:MM"
+    end: str  # "HH:MM"
+    session: str  # session_key like "cli:default"
     turns: int
     intent: str
     outcome: str
@@ -51,19 +51,25 @@ class BehaviorEvent:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "id": self.id, "day": self.day, "start": self.start, "end": self.end,
-            "session": self.session, "turns": self.turns,
-            "intent": self.intent, "outcome": self.outcome,
-            "topic": self.topic, "project": self.project,
-            "source": self.source, "owner": self.owner,
-            "tools": list(self.tools), "summary": self.summary,
+            "id": self.id,
+            "day": self.day,
+            "start": self.start,
+            "end": self.end,
+            "session": self.session,
+            "turns": self.turns,
+            "intent": self.intent,
+            "outcome": self.outcome,
+            "topic": self.topic,
+            "project": self.project,
+            "source": self.source,
+            "owner": self.owner,
+            "tools": list(self.tools),
+            "summary": self.summary,
         }
 
 
 _DAY_RE = re.compile(r"^## (\d{4}-\d{2}-\d{2})(?:\s+\([^)]*\))?\s*$")
-_EVENT_HEADER_RE = re.compile(
-    r"^### (evt_[A-Za-z0-9_]+) — (\d{1,2}:\d{2})–(\d{1,2}:\d{2})\s*$"
-)
+_EVENT_HEADER_RE = re.compile(r"^### (evt_[A-Za-z0-9_]+) — (\d{1,2}:\d{2})–(\d{1,2}:\d{2})\s*$")
 _FIELD_LINE_RE = re.compile(r"^- ([A-Za-z_]+): (.+?)\s*$")
 
 
@@ -160,9 +166,7 @@ def parse_behaviors(text: str) -> list[BehaviorEvent]:
         if key == "summary":
             current_event["_summary"] = raw.strip()
         elif key == "tools":
-            current_event["_tools"] = [
-                t.strip() for t in raw.split(",") if t.strip()
-            ]
+            current_event["_tools"] = [t.strip() for t in raw.split(",") if t.strip()]
         else:
             current_event["_fields"].update(_split_fields(f"{key}: {raw}"))
     _flush()
@@ -277,7 +281,9 @@ def render_folded_line(event: BehaviorEvent) -> str:
 
 
 def render_folded_block(
-    events: list[BehaviorEvent], *, max_events: int = 100,
+    events: list[BehaviorEvent],
+    *,
+    max_events: int = 100,
 ) -> str:
     """Folded-single-line block, newest event last (matches read order).
 

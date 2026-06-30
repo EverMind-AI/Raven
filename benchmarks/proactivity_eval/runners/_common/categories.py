@@ -25,10 +25,7 @@ def sample_stratified(records: list[dict[str, Any]], n: int) -> list[dict[str, A
     """
     per_cat_base = n // 4
     extras = n - per_cat_base * 4
-    targets = {
-        cat: per_cat_base + (1 if i < extras else 0)
-        for i, cat in enumerate(CATEGORIES)
-    }
+    targets = {cat: per_cat_base + (1 if i < extras else 0) for i, cat in enumerate(CATEGORIES)}
     seen = {c: 0 for c in CATEGORIES}
     picks: list[dict[str, Any]] = []
     for r in records:

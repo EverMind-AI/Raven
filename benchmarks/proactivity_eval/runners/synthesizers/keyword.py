@@ -21,31 +21,76 @@ from raven.proactive_engine.sentinel.types import Routine
 
 from .base import SynthesizedContext
 
-
 CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "coding": [
-        "vscode", "visual studio code", "ide", "pycharm", "intellij",
-        "debugger", "breakpoint", "compile", "runtime",
-        "stack overflow", "github", "gitlab", "terminal", "console",
-        ".py", ".rb", ".js", ".ts", ".go", ".rs", ".java", ".cpp",
-        ".php", ".sh", ".sql",
+        "vscode",
+        "visual studio code",
+        "ide",
+        "pycharm",
+        "intellij",
+        "debugger",
+        "breakpoint",
+        "compile",
+        "runtime",
+        "stack overflow",
+        "github",
+        "gitlab",
+        "terminal",
+        "console",
+        ".py",
+        ".rb",
+        ".js",
+        ".ts",
+        ".go",
+        ".rs",
+        ".java",
+        ".cpp",
+        ".php",
+        ".sh",
+        ".sql",
     ],
     "writing": [
-        "markdown", "paragraph", "draft", "article", "blog post",
-        "wrote", "writing notes", "document",
-        ".md", ".doc", ".docx", ".txt",
+        "markdown",
+        "paragraph",
+        "draft",
+        "article",
+        "blog post",
+        "wrote",
+        "writing notes",
+        "document",
+        ".md",
+        ".doc",
+        ".docx",
+        ".txt",
     ],
     "research": [
-        "searches", "google", "wikipedia", "paper", "documentation",
-        "browser", "clicked on a link", "scrolls through", "browses",
+        "searches",
+        "google",
+        "wikipedia",
+        "paper",
+        "documentation",
+        "browser",
+        "clicked on a link",
+        "scrolls through",
+        "browses",
     ],
     "communication": [
-        "email", "inbox", "slack", "message", "reply",
-        "compose", "chat conversation",
+        "email",
+        "inbox",
+        "slack",
+        "message",
+        "reply",
+        "compose",
+        "chat conversation",
     ],
     "data_analysis": [
-        "spreadsheet", "excel", "csv", "dataframe", "jupyter",
-        "chart", "visualization",
+        "spreadsheet",
+        "excel",
+        "csv",
+        "dataframe",
+        "jupyter",
+        "chart",
+        "visualization",
     ],
 }
 
@@ -98,24 +143,13 @@ PROFILE_TEMPLATES: dict[str, str] = {
         "content-drafting phase, alternating between writing and reference "
         "collection."
     ),
-    "writing": (
-        "The user is writing in a long-form text editor, drafting or "
-        "revising content."
-    ),
+    "writing": ("The user is writing in a long-form text editor, drafting or revising content."),
     "research_with_topic": (
-        "The user is conducting research on '{topic}', collecting references "
-        "from multiple sources."
+        "The user is conducting research on '{topic}', collecting references from multiple sources."
     ),
-    "research": (
-        "The user is conducting online research, visiting multiple sources."
-    ),
-    "communication": (
-        "The user is handling their inbox or messages, writing and reading "
-        "replies."
-    ),
-    "data_analysis": (
-        "The user is analyzing data in a spreadsheet or analytical tool."
-    ),
+    "research": ("The user is conducting online research, visiting multiple sources."),
+    "communication": ("The user is handling their inbox or messages, writing and reading replies."),
+    "data_analysis": ("The user is analyzing data in a spreadsheet or analytical tool."),
     "general": "The user is engaged in a focused work session.",
 }
 
@@ -152,19 +186,13 @@ class KeywordSynthesizer:
     # Category / language / topic detection
 
     def _detect_category(self, text: str) -> str:
-        scores = {
-            cat: sum(1 for kw in kws if kw in text)
-            for cat, kws in CATEGORY_KEYWORDS.items()
-        }
+        scores = {cat: sum(1 for kw in kws if kw in text) for cat, kws in CATEGORY_KEYWORDS.items()}
         if not any(scores.values()):
             return "general"
         return max(scores, key=lambda c: scores[c])
 
     def _detect_language(self, text: str) -> str | None:
-        scores = {
-            lang: sum(1 for hint in hints if hint in text)
-            for lang, hints in LANGUAGE_HINTS.items()
-        }
+        scores = {lang: sum(1 for hint in hints if hint in text) for lang, hints in LANGUAGE_HINTS.items()}
         best = max(scores, key=lambda l: scores[l]) if scores else None
         if best and scores[best] > 0:
             return best
@@ -207,39 +235,33 @@ class KeywordSynthesizer:
         events_lower = [e.get("event", "").lower() for e in obs]
 
         # Pattern 1: editor <-> browser alternation while working.
-        editor_mentions = sum(
-            1 for e in events_lower
-            if any(kw in e for kw in ("vscode", "ide", "pycharm"))
-        )
+        editor_mentions = sum(1 for e in events_lower if any(kw in e for kw in ("vscode", "ide", "pycharm")))
         browser_mentions = sum(
-            1 for e in events_lower
-            if any(kw in e for kw in ("google", "browser", "search", "scrolls"))
+            1 for e in events_lower if any(kw in e for kw in ("google", "browser", "search", "scrolls"))
         )
         if editor_mentions >= 2 and browser_mentions >= 2:
-            routines.append(Routine(
-                id="synthetic-research-while-working",
-                pattern="user alternates between editor and web research",
-                occurrence_count=min(editor_mentions, browser_mentions),
-                status="candidate",
-                user_confirmed=False,
-            ))
+            routines.append(
+                Routine(
+                    id="synthetic-research-while-working",
+                    pattern="user alternates between editor and web research",
+                    occurrence_count=min(editor_mentions, browser_mentions),
+                    status="candidate",
+                    user_confirmed=False,
+                )
+            )
 
         # Pattern 2: repeated search activity (>= threshold).
-        search_events = sum(
-            1 for e in events_lower
-            if any(kw in e for kw in ("searches", "search for", "google"))
-        )
+        search_events = sum(1 for e in events_lower if any(kw in e for kw in ("searches", "search for", "google")))
         if search_events >= self.routine_threshold:
-            routines.append(Routine(
-                id="synthetic-search-heavy",
-                pattern=(
-                    f"user has been performing repeated searches "
-                    f"({search_events} in this session)"
-                ),
-                occurrence_count=search_events,
-                status="candidate",
-                user_confirmed=False,
-            ))
+            routines.append(
+                Routine(
+                    id="synthetic-search-heavy",
+                    pattern=(f"user has been performing repeated searches ({search_events} in this session)"),
+                    occurrence_count=search_events,
+                    status="candidate",
+                    user_confirmed=False,
+                )
+            )
 
         return routines[:2]
 
@@ -260,10 +282,7 @@ class KeywordSynthesizer:
         focus_parts = [p for p in (language, topic) if p]
         focus = ", ".join(focus_parts) if focus_parts else category
 
-        return (
-            f"- Observed (just now, ~{duration // 60}min session): "
-            f"user is in {category} mode, focus on {focus}."
-        )
+        return f"- Observed (just now, ~{duration // 60}min session): user is in {category} mode, focus on {focus}."
 
     @staticmethod
     def _compute_duration(obs: list[dict]) -> int:

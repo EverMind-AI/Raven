@@ -64,7 +64,7 @@ class RecentProactiveDecisionsProducer(AttentionProducer):
         if not dispatched:
             return ""
         lines: list[str] = []
-        for rec in dispatched[-self._max_rows:]:
+        for rec in dispatched[-self._max_rows :]:
             ts_short = str(rec.get("ts", ""))[:16].replace("T", " ")
             details = rec.get("details") or {}
             if not isinstance(details, dict):
@@ -80,10 +80,7 @@ class RecentProactiveDecisionsProducer(AttentionProducer):
                 # pick one of these?" lookback.
                 opt_n = details.get("option_count", "?")
                 target = session.split(":", 1)[0] if ":" in session else session
-                lines.append(
-                    f"- [{ts_short}] discovery_menu "
-                    f"({opt_n} options → {target}){outcome_str}"
-                )
+                lines.append(f"- [{ts_short}] discovery_menu ({opt_n} options → {target}){outcome_str}")
                 continue
             topic = details.get("topic_tag") or ""
             prio = rec.get("priority", "?")
@@ -93,10 +90,7 @@ class RecentProactiveDecisionsProducer(AttentionProducer):
             except (TypeError, ValueError):
                 score_str = "?"
             topic_str = f"`{topic}`" if topic else "(untagged)"
-            lines.append(
-                f"- [{ts_short}] {topic_str} prio={prio} "
-                f"score={score_str}{outcome_str}"
-            )
+            lines.append(f"- [{ts_short}] {topic_str} prio={prio} score={score_str}{outcome_str}")
         return "\n".join(lines)
 
 

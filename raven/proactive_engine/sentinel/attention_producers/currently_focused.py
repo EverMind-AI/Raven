@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from raven.session.manager import SessionManager
 
 
-
 class CurrentlyFocusedProducer(AttentionProducer):
     """Snapshot of "what the user has been doing in the last N hours" —
     active sessions + top topics + top projects within the window.
@@ -63,39 +62,34 @@ class CurrentlyFocusedProducer(AttentionProducer):
         if active:
             lines.append("**Active sessions:**")
             for entry in active:
-                lines.append(
-                    f"- `{entry['key']}` — "
-                    f"{entry['msg_count']} msgs, "
-                    f"last activity {entry['last_activity']}"
-                )
+                lines.append(f"- `{entry['key']}` — {entry['msg_count']} msgs, last activity {entry['last_activity']}")
         if topics:
             top_pairs = sorted(
-                topics.items(), key=lambda kv: -kv[1],
-            )[:self._top_tags]
+                topics.items(),
+                key=lambda kv: -kv[1],
+            )[: self._top_tags]
             lines.append("")
             lines.append("**Top topics:**")
             lines.append(
-                "- " + ", ".join(
-                    f"`#{tag}` ({count})" for tag, count in top_pairs
-                ),
+                "- " + ", ".join(f"`#{tag}` ({count})" for tag, count in top_pairs),
             )
         if projects:
             top_pairs = sorted(
-                projects.items(), key=lambda kv: -kv[1],
-            )[:self._top_projects]
+                projects.items(),
+                key=lambda kv: -kv[1],
+            )[: self._top_projects]
             lines.append("")
             lines.append("**Top projects:**")
             lines.append(
-                "- " + ", ".join(
-                    f"`{name}` ({count})" for name, count in top_pairs
-                ),
+                "- " + ", ".join(f"`{name}` ({count})" for name, count in top_pairs),
             )
         return "\n".join(lines)
 
     # ── Internals ───────────────────────────────────────────────────
 
     def _collect_active_sessions(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> list[dict[str, str | int]]:
         """Return sessions with at least one message in the window,
         sorted by last activity descending."""
@@ -143,19 +137,22 @@ class CurrentlyFocusedProducer(AttentionProducer):
                 continue
             if msg_count == 0 or last_ts is None:
                 continue
-            out.append({
-                "key": key,
-                "msg_count": msg_count,
-                "last_activity": last_ts.strftime("%Y-%m-%d %H:%M"),
-                "_sort_ts": last_ts.isoformat(),
-            })
+            out.append(
+                {
+                    "key": key,
+                    "msg_count": msg_count,
+                    "last_activity": last_ts.strftime("%Y-%m-%d %H:%M"),
+                    "_sort_ts": last_ts.isoformat(),
+                }
+            )
         out.sort(key=lambda d: d["_sort_ts"], reverse=True)
         for d in out:
             d.pop("_sort_ts", None)
         return out
 
     def _collect_tag_distribution(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> tuple[dict[str, int], dict[str, int]]:
         """Return ``(topics, projects)`` counters over episodes.md within
         the window. ``topics`` excludes ``project-X`` tags; ``projects``
@@ -177,7 +174,8 @@ class CurrentlyFocusedProducer(AttentionProducer):
             ts, _, tags = parsed
             try:
                 dt = datetime.strptime(
-                    ts.replace("T", " "), "%Y-%m-%d %H:%M",
+                    ts.replace("T", " "),
+                    "%Y-%m-%d %H:%M",
                 )
             except ValueError:
                 continue
@@ -185,7 +183,7 @@ class CurrentlyFocusedProducer(AttentionProducer):
                 continue
             for tag in tags:
                 if tag.startswith("project-"):
-                    name = tag[len("project-"):]
+                    name = tag[len("project-") :]
                     projects[name] = projects.get(name, 0) + 1
                 else:
                     topics[tag] = topics.get(tag, 0) + 1

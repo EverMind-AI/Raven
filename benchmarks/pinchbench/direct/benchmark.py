@@ -25,14 +25,20 @@ from typing import Any, Dict, List
 # Add project root to path so we can import raven
 # Path: benchmarks/pinchbench/direct/benchmark.py
 SCRIPT_DIR = Path(__file__).parent
-BENCHMARK_ROOT = SCRIPT_DIR.parent          # pinchbench/
-BENCHMARKS_ROOT = BENCHMARK_ROOT.parent     # benchmarks/
-PROJECT_ROOT = BENCHMARKS_ROOT.parent       # project root
+BENCHMARK_ROOT = SCRIPT_DIR.parent  # pinchbench/
+BENCHMARKS_ROOT = BENCHMARK_ROOT.parent  # benchmarks/
+PROJECT_ROOT = BENCHMARKS_ROOT.parent  # project root
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from raven_executor import DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, DEFAULT_PROVIDER, execute_task  # noqa: E402
 from grading import DEFAULT_JUDGE_MODEL, GradeResult, grade_task  # noqa: E402
+from raven_executor import (  # noqa: E402
+    DEFAULT_API_BASE,
+    DEFAULT_API_KEY,
+    DEFAULT_MODEL,
+    DEFAULT_PROVIDER,
+    execute_task,
+)
 from task_loader import Task, load_all_tasks  # noqa: E402
 
 # Configure logging
@@ -50,60 +56,71 @@ logger = logging.getLogger("benchmark")
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PinchBench for Raven")
     parser.add_argument(
-        "--model", default=DEFAULT_MODEL,
+        "--model",
+        default=DEFAULT_MODEL,
         help=f"Model identifier (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
-        "--api-key", default=DEFAULT_API_KEY,
+        "--api-key",
+        default=DEFAULT_API_KEY,
         help="LLM API key (defaults to OPENROUTER_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY)",
     )
     parser.add_argument(
-        "--api-base", default=DEFAULT_API_BASE,
+        "--api-base",
+        default=DEFAULT_API_BASE,
         help=f"OpenAI-compatible API base (default: {DEFAULT_API_BASE})",
     )
     parser.add_argument(
-        "--provider", default=DEFAULT_PROVIDER,
+        "--provider",
+        default=DEFAULT_PROVIDER,
         help=f'Provider name: "custom" for direct OpenAI-compatible, or a LiteLLM provider (default: {DEFAULT_PROVIDER})',
     )
     parser.add_argument(
-        "--suite", default="all",
+        "--suite",
+        default="all",
         help='Tasks: "all", "automated-only", or comma-separated task IDs',
     )
     parser.add_argument(
-        "--timeout-multiplier", type=float, default=1.0,
+        "--timeout-multiplier",
+        type=float,
+        default=1.0,
         help="Scale all task timeouts",
     )
     parser.add_argument(
-        "--runs", type=int, default=1,
+        "--runs",
+        type=int,
+        default=1,
         help="Number of runs per task for averaging",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true",
+        "--verbose",
+        "-v",
+        action="store_true",
         help="Enable verbose logging",
     )
     parser.add_argument(
-        "--output-dir", default=str(BENCHMARK_ROOT / "results"),
+        "--output-dir",
+        default=str(BENCHMARK_ROOT / "results"),
         help="Results directory",
     )
     parser.add_argument(
-        "--judge-model", default=DEFAULT_JUDGE_MODEL,
+        "--judge-model",
+        default=DEFAULT_JUDGE_MODEL,
         help=f"Model used for LLM judge grading (default: {DEFAULT_JUDGE_MODEL})",
     )
     parser.add_argument(
         "--routing-profile",
         choices=["best", "balanced", "eco"],
         default=None,
-        help='EcoClaw routing profile. When set, each task uses the best model '
-             'for that prompt according to PinchBench data. '
-             'Choices: best (99%% quality), balanced (50/50), eco (80%% cost savings). '
-             '--model is used as fallback when routing fails.',
+        help="EcoClaw routing profile. When set, each task uses the best model "
+        "for that prompt according to PinchBench data. "
+        "Choices: best (99%% quality), balanced (50/50), eco (80%% cost savings). "
+        "--model is used as fallback when routing fails.",
     )
     return parser.parse_args()
 
 
-def _select_tasks(
-    tasks: List[Task], suite: str
-) -> List[Task]:
+def _select_tasks(tasks: List[Task], suite: str) -> List[Task]:
     if suite == "all":
         return tasks
     if suite == "automated-only":
@@ -138,7 +155,9 @@ async def run_benchmark(args: argparse.Namespace) -> None:
 
     routing_profile = getattr(args, "routing_profile", None)
     if not args.api_key:
-        logger.error("No LLM API key configured. Set OPENROUTER_API_KEY/DEEPSEEK_API_KEY/OPENAI_API_KEY or pass --api-key.")
+        logger.error(
+            "No LLM API key configured. Set OPENROUTER_API_KEY/DEEPSEEK_API_KEY/OPENAI_API_KEY or pass --api-key."
+        )
         return
     if routing_profile and args.provider != "openrouter":
         logger.error("--routing-profile requires --provider openrouter and an OpenRouter API key.")
@@ -162,7 +181,9 @@ async def run_benchmark(args: argparse.Namespace) -> None:
 
     model_slug = _slugify(args.model)
     if routing_profile:
-        model_slug = f"eco-routed_{model_slug}" if routing_profile == "eco" else f"{routing_profile}-routed_{model_slug}"
+        model_slug = (
+            f"eco-routed_{model_slug}" if routing_profile == "eco" else f"{routing_profile}-routed_{model_slug}"
+        )
     run_root = Path("/tmp/pinchbench-raven")
     run_id = _next_run_id(run_root)
 
@@ -177,8 +198,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             logger.info("=" * 70)
             logger.info(
                 "  Task %d/%d (Run %d/%d): [%s] %s",
-                i, len(tasks_to_run), run_idx + 1, args.runs,
-                task.task_id, task.name,
+                i,
+                len(tasks_to_run),
+                run_idx + 1,
+                args.runs,
+                task.task_id,
+                task.name,
             )
             logger.info("=" * 70)
 
@@ -245,8 +270,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
                     note = f"Exec error: {execution_error} | {note}"
                 logger.warning("Grading failed for %s: %s", task.task_id, exc)
                 grade = GradeResult(
-                    task_id=task.task_id, score=0.0, max_score=1.0,
-                    grading_type=task.grading_type, breakdown={}, notes=note,
+                    task_id=task.task_id,
+                    score=0.0,
+                    max_score=1.0,
+                    grading_type=task.grading_type,
+                    breakdown={},
+                    notes=note,
                 )
 
             task_grades.append(grade)
@@ -257,7 +286,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             emoji = "PASS" if grade.score >= grade.max_score else "PARTIAL" if grade.score > 0 else "FAIL"
             logger.info(
                 "  %s %s: %.2f/%.2f (%.0f%%) [%s]",
-                emoji, task.task_id, grade.score, grade.max_score, pct, grade.grading_type,
+                emoji,
+                task.task_id,
+                grade.score,
+                grade.max_score,
+                pct,
+                grade.grading_type,
             )
             if grade.notes:
                 logger.info("  Notes: %s", grade.notes[:300])
@@ -307,8 +341,7 @@ async def run_benchmark(args: argparse.Namespace) -> None:
 
     logger.info("-" * 70)
     logger.info("  COST SUMMARY")
-    logger.info("  Total tokens  prompt=%d  completion=%d  total=%d",
-                total_prompt, total_completion, total_tokens)
+    logger.info("  Total tokens  prompt=%d  completion=%d  total=%d", total_prompt, total_completion, total_tokens)
     if total_cost is not None:
         logger.info("  Total estimated cost: $%.6f USD", total_cost)
         if len(results) > 0:
@@ -326,10 +359,13 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             models = r.get("models_used", [])
             primary_model = models[0] if models else args.model
             cost_str = f"${task_cost:.6f}" if task_cost is not None else "N/A"
-            tokens_str = f"prompt={task_usage.get('prompt_tokens',0)} compl={task_usage.get('completion_tokens',0)}"
+            tokens_str = f"prompt={task_usage.get('prompt_tokens', 0)} compl={task_usage.get('completion_tokens', 0)}"
             logger.info(
                 "  %-25s  cost=%-12s  tokens=%-40s  model=%s",
-                r["task_id"], cost_str, tokens_str, primary_model,
+                r["task_id"],
+                cost_str,
+                tokens_str,
+                primary_model,
             )
 
     logger.info("=" * 70)

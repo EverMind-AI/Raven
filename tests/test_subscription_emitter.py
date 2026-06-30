@@ -10,7 +10,6 @@ import pytest
 from raven.tui_rpc.subscriptions import (
     COALESCE_WINDOW_S,
     QUEUE_CAPACITY,
-    Subscription,
     SubscriptionEmitter,
 )
 
@@ -108,9 +107,7 @@ async def test_16ms_coalesce_merges_consecutive_token_deltas(
     events = _collect_emitted_events(send_frame)
     delta_events = [e for e in events if e["type"] == "token.delta"]
     # All 5 pieces should coalesce into 1 frame (or at most very few).
-    assert len(delta_events) <= 2, (
-        f"expected coalesced ≤2 delta frames; got {len(delta_events)}: {delta_events}"
-    )
+    assert len(delta_events) <= 2, f"expected coalesced ≤2 delta frames; got {len(delta_events)}: {delta_events}"
     merged_text = "".join(e["payload"]["text"] for e in delta_events)
     assert merged_text == "Hello world"
 
@@ -126,14 +123,22 @@ async def test_mixed_events_preserve_order(
     sequence = [
         {"type": "token.delta", "payload": {"text": "A"}},
         {"type": "token.delta", "payload": {"text": "B"}},
-        {"type": "tool.start", "payload": {
-            "tool_call_id": "tc1", "name": "fs.read", "arguments": {"path": "/tmp"},
-        }},
+        {
+            "type": "tool.start",
+            "payload": {
+                "tool_call_id": "tc1",
+                "name": "fs.read",
+                "arguments": {"path": "/tmp"},
+            },
+        },
         {"type": "token.delta", "payload": {"text": "C"}},
-        {"type": "message.complete", "payload": {
-            "turn_id": "t1",
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }},
+        {
+            "type": "message.complete",
+            "payload": {
+                "turn_id": "t1",
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+        },
     ]
     for ev in sequence:
         await emitter.emit("tui:default", ev)
@@ -142,9 +147,7 @@ async def test_mixed_events_preserve_order(
     events = _collect_emitted_events(send_frame)
     types = [e["type"] for e in events]
     # Expected: ["token.delta" (merged "AB"), "tool.start", "token.delta" ("C"), "message.complete"]
-    assert types == ["token.delta", "tool.start", "token.delta", "message.complete"], (
-        f"order not preserved: {types}"
-    )
+    assert types == ["token.delta", "tool.start", "token.delta", "message.complete"], f"order not preserved: {types}"
     assert events[0]["payload"]["text"] == "AB"
     assert events[2]["payload"]["text"] == "C"
 
@@ -179,13 +182,8 @@ async def test_queue_overflow_emits_error_and_closes(
     await asyncio.sleep(COALESCE_WINDOW_S * 5)
 
     events = _collect_emitted_events(send_frame)
-    overflow_errors = [
-        e for e in events
-        if e.get("type") == "error" and e.get("payload", {}).get("code") == -32016
-    ]
-    assert len(overflow_errors) >= 1, (
-        f"expected ≥1 overflow error; got events: {[e['type'] for e in events]}"
-    )
+    overflow_errors = [e for e in events if e.get("type") == "error" and e.get("payload", {}).get("code") == -32016]
+    assert len(overflow_errors) >= 1, f"expected ≥1 overflow error; got events: {[e['type'] for e in events]}"
 
     # Subscription should be closed
     assert sub_id not in emitter._by_id
@@ -267,6 +265,4 @@ async def test_closed_subscription_does_not_receive_new_events(
     )
     await asyncio.sleep(COALESCE_WINDOW_S * 3)
     post_count = send_frame.call_count
-    assert post_count == pre_count, (
-        f"closed sub received events after unregister: pre={pre_count} post={post_count}"
-    )
+    assert post_count == pre_count, f"closed sub received events after unregister: pre={pre_count} post={post_count}"

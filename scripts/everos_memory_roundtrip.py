@@ -60,8 +60,7 @@ def _load_plugin_slice(config_path: Path) -> dict:
     slice_ = slices.get("everos-memory") or slices.get("everos") or {}
     if not slice_:
         print(
-            f"warning: no plugins.config['everos-memory'] in {config_path}; "
-            "backend will run on its built-in defaults.",
+            f"warning: no plugins.config['everos-memory'] in {config_path}; backend will run on its built-in defaults.",
             file=sys.stderr,
         )
     return slice_
@@ -110,10 +109,12 @@ async def _run(args: argparse.Namespace) -> int:
     from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
 
     slice_ = _load_plugin_slice(args.config)
-    be = EverosBackend(PluginContext(
-        config=slice_,
-        services=ServiceLocator(workspace=args.workspace),
-    ))
+    be = EverosBackend(
+        PluginContext(
+            config=slice_,
+            services=ServiceLocator(workspace=args.workspace),
+        )
+    )
     if not isinstance(be._adapter, _RealEverosAdapter):
         print(
             "FAIL: embedded backend degraded to no-op adapter — everos isn't "
@@ -164,21 +165,21 @@ async def _run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="EverOS memory store->recall round-trip check.")
-    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
-                   help=f"Raven config file (default: {DEFAULT_CONFIG})")
-    p.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE,
-                   help=f"Workspace dir for ServiceLocator (default: {DEFAULT_WORKSPACE})")
-    p.add_argument("--track", choices=("user", "agent"), default="user",
-                   help="Which track to recall (default: user)")
-    p.add_argument("--query", default="what are the user's preferences and job",
-                   help="Recall query string")
+    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=f"Raven config file (default: {DEFAULT_CONFIG})")
+    p.add_argument(
+        "--workspace",
+        type=Path,
+        default=DEFAULT_WORKSPACE,
+        help=f"Workspace dir for ServiceLocator (default: {DEFAULT_WORKSPACE})",
+    )
+    p.add_argument("--track", choices=("user", "agent"), default="user", help="Which track to recall (default: user)")
+    p.add_argument("--query", default="what are the user's preferences and job", help="Recall query string")
     p.add_argument("--top-k", type=int, default=5, help="Recall top-K (default: 5)")
-    p.add_argument("--times", type=int, default=3,
-                   help="How many store() calls of the demo corpus (default: 3)")
-    p.add_argument("--recall-only", action="store_true",
-                   help="Skip store; recall against whatever is already indexed")
-    p.add_argument("--deadline", type=float, default=180.0,
-                   help="Max seconds to wait for extraction to drain (default: 180)")
+    p.add_argument("--times", type=int, default=3, help="How many store() calls of the demo corpus (default: 3)")
+    p.add_argument("--recall-only", action="store_true", help="Skip store; recall against whatever is already indexed")
+    p.add_argument(
+        "--deadline", type=float, default=180.0, help="Max seconds to wait for extraction to drain (default: 180)"
+    )
     args = p.parse_args()
     return asyncio.run(_run(args))
 

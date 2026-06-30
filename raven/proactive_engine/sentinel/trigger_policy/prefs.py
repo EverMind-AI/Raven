@@ -43,15 +43,20 @@ class PersonalizedOverrides:
         return self.quiet_hours is None
 
 
-_SECTION_HEADER_RE = re.compile(
-    r"^##\s*Proactivity\s+Preferences\s*$", re.IGNORECASE | re.MULTILINE
-)
+_SECTION_HEADER_RE = re.compile(r"^##\s*Proactivity\s+Preferences\s*$", re.IGNORECASE | re.MULTILINE)
 # Matches "HH:MM-HH:MM" / "HH-HH" / "22:00-07:00" anywhere in a fact line.
-_QUIET_RANGE_RE = re.compile(
-    r"(?P<start>\d{1,2})(?::\d{2})?\s*[-–—~～至到]\s*(?P<end>\d{1,2})(?::\d{2})?"
+_QUIET_RANGE_RE = re.compile(r"(?P<start>\d{1,2})(?::\d{2})?\s*[-–—~～至到]\s*(?P<end>\d{1,2})(?::\d{2})?")
+_QUIET_KEYWORDS = (
+    "quiet hour",
+    "安静时段",
+    "勿扰",
+    "不打扰",
+    "免打扰",
+    "dnd",
+    "do not disturb",
+    "no proactive",
+    "安静时间",
 )
-_QUIET_KEYWORDS = ("quiet hour", "安静时段", "勿扰", "不打扰", "免打扰", "dnd",
-                   "do not disturb", "no proactive", "安静时间")
 
 
 class ProactivityPreferencesReader:
@@ -61,8 +66,7 @@ class ProactivityPreferencesReader:
     multiple facts all fall back to ``PersonalizedOverrides()`` (empty).
     """
 
-    def __init__(self, memory_file: Path | str | None = None,
-                 read_fn=None) -> None:
+    def __init__(self, memory_file: Path | str | None = None, read_fn=None) -> None:
         """Initialize with either a path or a read callable.
 
         ``read_fn`` (e.g. ``memory_store.read_long_term``) takes precedence

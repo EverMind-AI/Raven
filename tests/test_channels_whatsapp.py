@@ -41,18 +41,14 @@ def test_load_or_create_bridge_token_creates_then_reads(tmp_path: Path) -> None:
     assert t1 == t2, "second call must read the same persisted token"
 
 
-def test_effective_bridge_token_uses_configured_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_effective_bridge_token_uses_configured_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When config has a bridge_token, use it verbatim — don't auto-generate."""
     ch = _make_channel(monkeypatch, tmp_path, bridge_token="user-supplied-token")
     assert ch._effective_bridge_token() == "user-supplied-token"
     assert not (tmp_path / "whatsapp-auth" / "bridge-token").exists()
 
 
-def test_effective_bridge_token_falls_back_to_persistent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_effective_bridge_token_falls_back_to_persistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Empty config.bridge_token → auto-generate + persist under whatsapp-auth/."""
     ch = _make_channel(monkeypatch, tmp_path, bridge_token="")
     token = ch._effective_bridge_token()
@@ -62,9 +58,7 @@ def test_effective_bridge_token_falls_back_to_persistent(
     assert persisted.read_text(encoding="utf-8").strip() == token
 
 
-def test_effective_bridge_token_cached(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_effective_bridge_token_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Once resolved, second call returns the cached value (no file re-read)."""
     ch = _make_channel(monkeypatch, tmp_path, bridge_token="")
     t1 = ch._effective_bridge_token()
@@ -99,9 +93,7 @@ async def test_lid_to_phone_mapping_populated_when_both_present(
     assert kw["sender_id"] == "8613800138000"
 
 
-async def test_lid_only_resolves_via_cached_phone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_lid_only_resolves_via_cached_phone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Subsequent LID-only message resolves to the cached phone."""
     ch = _make_channel(monkeypatch, tmp_path)
     ch.intake.publish = AsyncMock()
@@ -120,9 +112,7 @@ async def test_lid_only_resolves_via_cached_phone(
     assert kw["sender_id"] == "8613800138000"
 
 
-async def test_lid_only_uncached_falls_back_to_lid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_lid_only_uncached_falls_back_to_lid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """LID-only message with no cache → sender_id is the lid itself (best effort)."""
     ch = _make_channel(monkeypatch, tmp_path)
     ch.intake.publish = AsyncMock()
@@ -145,9 +135,7 @@ async def test_lid_only_uncached_falls_back_to_lid(
 # ---------------------------------------------------------------------------
 
 
-async def test_group_policy_mention_filters_unmentioned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_group_policy_mention_filters_unmentioned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """group_policy=mention + isGroup=True + wasMentioned=False → message dropped."""
     ch = _make_channel(monkeypatch, tmp_path, group_policy="mention")
     ch.intake.publish = AsyncMock()
@@ -166,9 +154,7 @@ async def test_group_policy_mention_filters_unmentioned(
     ch.intake.publish.assert_not_awaited()
 
 
-async def test_group_policy_mention_lets_mentioned_through(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_group_policy_mention_lets_mentioned_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """group_policy=mention + wasMentioned=True → forwarded."""
     ch = _make_channel(monkeypatch, tmp_path, group_policy="mention")
     ch.intake.publish = AsyncMock()
@@ -187,9 +173,7 @@ async def test_group_policy_mention_lets_mentioned_through(
     ch.intake.publish.assert_awaited_once()
 
 
-async def test_group_policy_open_passes_unmentioned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_group_policy_open_passes_unmentioned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """group_policy=open (default) → group messages forwarded regardless of mention."""
     ch = _make_channel(monkeypatch, tmp_path, group_policy="open")
     ch.intake.publish = AsyncMock()
@@ -208,20 +192,20 @@ async def test_group_policy_open_passes_unmentioned(
     ch.intake.publish.assert_awaited_once()
 
 
-async def test_dedup_drops_repeated_message_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_dedup_drops_repeated_message_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Same message_id processed twice → second is silently dropped."""
     ch = _make_channel(monkeypatch, tmp_path)
     ch.intake.publish = AsyncMock()
 
-    payload = json.dumps({
-        "type": "message",
-        "pn": "8613800138000@s.whatsapp.net",
-        "sender": "12345@lid.whatsapp.net",
-        "content": "dup",
-        "id": "dup-id",
-    })
+    payload = json.dumps(
+        {
+            "type": "message",
+            "pn": "8613800138000@s.whatsapp.net",
+            "sender": "12345@lid.whatsapp.net",
+            "content": "dup",
+            "id": "dup-id",
+        }
+    )
     await ch._handle_bridge_message(payload)
     await ch._handle_bridge_message(payload)
 
@@ -382,11 +366,12 @@ async def test_send_swallows_permanent_error(monkeypatch, tmp_path):
 def test_whatsapp_satisfies_channel_contract(monkeypatch, tmp_path):
     from raven.channels import Channel, SupportsLogin
     from raven.channels.contract import capability_violations
+
     ch = _make_channel(monkeypatch, tmp_path)
     assert isinstance(ch, Channel)
-    assert isinstance(ch, SupportsLogin)             # QR pairing
+    assert isinstance(ch, SupportsLogin)  # QR pairing
     assert ch.capabilities.interactive_login is True
-    assert capability_violations(ch) == []           # declared interactive_login ↔ implements SupportsLogin
+    assert capability_violations(ch) == []  # declared interactive_login ↔ implements SupportsLogin
 
 
 def test_whatsapp_spec_declares_interactive_login_and_is_cheap():
@@ -394,6 +379,7 @@ def test_whatsapp_spec_declares_interactive_login_and_is_cheap():
     importing it must NOT import the channel implementation."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.whatsapp.spec as s;"
         "assert 'raven.channels.adapters.whatsapp.channel' not in sys.modules, "

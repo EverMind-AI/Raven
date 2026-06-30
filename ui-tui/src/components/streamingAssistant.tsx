@@ -7,11 +7,11 @@ import { useStore } from '@nanostores/react'
 import { memo } from 'react'
 
 import type { AppLayoutProgressProps } from '../app/interfaces.js'
+import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
+
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { appendToolShelfMessage } from '../lib/liveProgress.js'
-import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
-
 import { MessageLine } from './messageLine.js'
 import { TodoPanel } from './todoPanel.js'
 

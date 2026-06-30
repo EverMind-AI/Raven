@@ -73,9 +73,7 @@ class Harness:
 
     def spawn(self, command: str) -> None:
         if self._session_id is not None:
-            raise HarnessError(
-                "Harness.spawn() called twice; one subprocess per Harness instance"
-            )
+            raise HarnessError("Harness.spawn() called twice; one subprocess per Harness instance")
 
         label = f"eve-autotest-{uuid.uuid4().hex[:8]}"
         cmd = [
@@ -104,9 +102,7 @@ class Harness:
         except FileNotFoundError as e:
             raise ExtrasMissingError(f"`{_TUI_USE_BIN}` not on PATH: {e}") from e
         except subprocess.TimeoutExpired as e:
-            raise SpawnError(
-                f"tui-use start timed out after {_SPAWN_TIMEOUT_S}s"
-            ) from e
+            raise SpawnError(f"tui-use start timed out after {_SPAWN_TIMEOUT_S}s") from e
 
         if result.returncode != 0:
             raise SpawnError(
@@ -118,9 +114,7 @@ class Harness:
         # tui-use start prints the new session id to stdout on its own line.
         lines = [ln for ln in (result.stdout or "").splitlines() if ln.strip()]
         if not lines:
-            raise SpawnError(
-                f"tui-use start did not emit a session id; stdout={result.stdout!r}"
-            )
+            raise SpawnError(f"tui-use start did not emit a session id; stdout={result.stdout!r}")
         self._session_id = lines[-1].strip()
         # Make this the daemon's "current" session so the verbless tui-use
         # commands (type/press/wait/snapshot/info/kill) target it.
@@ -166,9 +160,7 @@ class Harness:
         elif isinstance(pattern, str):
             compiled = re.compile(pattern)
         else:
-            raise HarnessError(
-                f"wait() pattern must be str or re.Pattern, got {type(pattern).__name__}"
-            )
+            raise HarnessError(f"wait() pattern must be str or re.Pattern, got {type(pattern).__name__}")
 
         deadline = time.monotonic() + timeout
         poll_interval = 0.1
@@ -239,9 +231,7 @@ class Harness:
         except FileNotFoundError as e:
             raise ExtrasMissingError(f"`{_TUI_USE_BIN}` not on PATH: {e}") from e
         except subprocess.TimeoutExpired as e:
-            raise BackendError(
-                f"tui-use {args[0] if args else '?'} timed out after {_VERB_TIMEOUT_S}s"
-            ) from e
+            raise BackendError(f"tui-use {args[0] if args else '?'} timed out after {_VERB_TIMEOUT_S}s") from e
 
         if check and result.returncode != 0:
             raise BackendError(

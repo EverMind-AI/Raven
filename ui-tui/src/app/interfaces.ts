@@ -11,7 +11,6 @@ import type { GatewayClient } from '../gatewayClientStub.js'
 import type { ImageAttachResponse } from '../gatewayTypes.js'
 import type { ParsedVoiceRecordKey } from '../lib/platform.js'
 import type { RpcResult } from '../lib/rpc.js'
-import type { ChatStreamRpcClient } from './chatStream.js'
 import type { Theme } from '../theme.js'
 import type {
   ApprovalReq,
@@ -27,6 +26,7 @@ import type {
   SudoReq,
   Usage
 } from '../types.js'
+import type { ChatStreamRpcClient } from './chatStream.js'
 
 export interface StateSetter<T> {
   (value: SetStateAction<T>): void

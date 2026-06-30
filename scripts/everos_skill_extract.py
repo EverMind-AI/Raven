@@ -42,10 +42,14 @@ DEFAULT_WORKSPACE = Path.home() / ".raven" / "workspace"
 
 _RECALL_QUERY = "retrieve and verify the current weather conditions for a city"
 _CITIES = [
-    ("Tokyo", "+18C", "Partly cloudy"), ("London", "+12C", "Light rain"),
-    ("Paris", "+15C", "Sunny"), ("Berlin", "+10C", "Overcast"),
-    ("Madrid", "+22C", "Clear"), ("Oslo", "+3C", "Snow"),
-    ("Cairo", "+30C", "Sunny"), ("Lima", "+19C", "Cloudy"),
+    ("Tokyo", "+18C", "Partly cloudy"),
+    ("London", "+12C", "Light rain"),
+    ("Paris", "+15C", "Sunny"),
+    ("Berlin", "+10C", "Overcast"),
+    ("Madrid", "+22C", "Clear"),
+    ("Oslo", "+3C", "Snow"),
+    ("Cairo", "+30C", "Sunny"),
+    ("Lima", "+19C", "Cloudy"),
 ]
 
 
@@ -54,27 +58,43 @@ def _weather_session(city: str, temp: str, cond: str, user_id: str) -> list[dict
     tool trajectory. The shared shape across cities lets everos cluster the
     per-session cases into one reusable weather skill."""
     return [
-        {"role": "user", "sender_id": user_id,
-         "content": f"What's the weather in {city} right now?"},
-        {"role": "assistant",
-         "content": f"Checking {city} — I'll query wttr.in for a one-line summary.",
-         "tool_calls": [{"id": f"{city}-1", "type": "function", "function": {
-             "name": "exec",
-             "arguments": f'{{"command": "curl -s wttr.in/{city}?format=3"}}'}}]},
+        {"role": "user", "sender_id": user_id, "content": f"What's the weather in {city} right now?"},
+        {
+            "role": "assistant",
+            "content": f"Checking {city} — I'll query wttr.in for a one-line summary.",
+            "tool_calls": [
+                {
+                    "id": f"{city}-1",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": f'{{"command": "curl -s wttr.in/{city}?format=3"}}'},
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": f"{city}-1", "content": f"{city}: {cond} {temp}"},
-        {"role": "assistant",
-         "content": "Re-querying condition+temp+wind to verify before reporting.",
-         "tool_calls": [{"id": f"{city}-2", "type": "function", "function": {
-             "name": "exec",
-             "arguments": f'{{"command": "curl -s wttr.in/{city}?format=%C+%t+%w"}}'}}]},
+        {
+            "role": "assistant",
+            "content": "Re-querying condition+temp+wind to verify before reporting.",
+            "tool_calls": [
+                {
+                    "id": f"{city}-2",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": f'{{"command": "curl -s wttr.in/{city}?format=%C+%t+%w"}}',
+                    },
+                }
+            ],
+        },
         {"role": "tool", "tool_call_id": f"{city}-2", "content": f"{cond} {temp} 11km/h"},
-        {"role": "assistant",
-         "content": (
-             f"It's {cond.lower()} and {temp} in {city}. Procedure: query "
-             "wttr.in/<city>?format=3 for a quick summary, then re-query "
-             "wttr.in/<city>?format=%C+%t+%w to confirm condition, temperature "
-             "and wind before reporting. Always verify with the second query."
-         )},
+        {
+            "role": "assistant",
+            "content": (
+                f"It's {cond.lower()} and {temp} in {city}. Procedure: query "
+                "wttr.in/<city>?format=3 for a quick summary, then re-query "
+                "wttr.in/<city>?format=%C+%t+%w to confirm condition, temperature "
+                "and wind before reporting. Always verify with the second query."
+            ),
+        },
     ]
 
 
@@ -102,21 +122,20 @@ async def _drain(deadline: float, interval: float = 0.5) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    from raven.plugin import PluginContext, ServiceLocator
-    from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
     from everos.config import load_settings
     from everos.memory.search.dto import SearchRequest
     from everos.service.search import search
+
+    from raven.plugin import PluginContext, ServiceLocator
+    from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
 
     slice_ = _load_plugin_slice(args.config)
     # flush_every_turns=1 → each store() is a boundary flush, so extraction
     # runs deterministically per weather session (no accumulate-by-volume).
     slice_ = {"mode": "embedded", "flush_every_turns": 1, **slice_}
-    be = EverosBackend(PluginContext(
-        config=slice_, services=ServiceLocator(workspace=args.workspace)))
+    be = EverosBackend(PluginContext(config=slice_, services=ServiceLocator(workspace=args.workspace)))
     if not isinstance(be._adapter, _RealEverosAdapter):
-        print("FAIL: backend degraded to no-op — everos not importable/configured.",
-              file=sys.stderr)
+        print("FAIL: backend degraded to no-op — everos not importable/configured.", file=sys.stderr)
         return 2
 
     user_id = be._user_id or "user-default"
@@ -128,18 +147,18 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         print(f"storing {len(_CITIES)} weather sessions...")
         for i, (city, temp, cond) in enumerate(_CITIES):
-            await be.store(f"weather-{city.lower()}-{i}",
-                           _weather_session(city, temp, cond, user_id))
+            await be.store(f"weather-{city.lower()}-{i}", _weather_session(city, temp, cond, user_id))
         print("draining extraction + clustering (may take a few minutes)...")
         await _drain(deadline=args.deadline)
         print("drained.\n")
 
-        data = (await search(SearchRequest(
-            agent_id=agent_id, query=args.query, top_k=10))).data
+        data = (await search(SearchRequest(agent_id=agent_id, query=args.query, top_k=10))).data
         print(f"agent_skills extracted: {len(data.agent_skills)}")
         for s in data.agent_skills:
-            print(f"  SKILL {s.name!r} conf={s.confidence:.2f} "
-                  f"maturity={s.maturity_score:.2f} from {len(s.source_case_ids)} cases")
+            print(
+                f"  SKILL {s.name!r} conf={s.confidence:.2f} "
+                f"maturity={s.maturity_score:.2f} from {len(s.source_case_ids)} cases"
+            )
 
         hits = await be.recall(args.query, agent_id=agent_id, top_k=10)
     finally:
@@ -156,8 +175,14 @@ async def _run(args: argparse.Namespace) -> int:
         print("  ", p)
 
     ok = bool(data.agent_skills) and bool(hits) and bool(mds)
-    print("\n" + ("OK: weather skill extracted, recallable, and on disk."
-                  if ok else "FAIL: skill not extracted / not recallable / no SKILL.md."))
+    print(
+        "\n"
+        + (
+            "OK: weather skill extracted, recallable, and on disk."
+            if ok
+            else "FAIL: skill not extracted / not recallable / no SKILL.md."
+        )
+    )
     return 0 if ok else 1
 
 
@@ -167,8 +192,7 @@ def main() -> int:
     p.add_argument("--workspace", type=Path, default=DEFAULT_WORKSPACE)
     p.add_argument("--query", default=_RECALL_QUERY)
     p.add_argument("--top-k", type=int, default=10)
-    p.add_argument("--deadline", type=float, default=240.0,
-                   help="Max seconds to wait for extraction to drain.")
+    p.add_argument("--deadline", type=float, default=240.0, help="Max seconds to wait for extraction to drain.")
     return asyncio.run(_run(p.parse_args()))
 
 

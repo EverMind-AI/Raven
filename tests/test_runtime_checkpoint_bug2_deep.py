@@ -172,8 +172,16 @@ class _NoopProvider(LLMProvider):
     def __init__(self) -> None:
         super().__init__(api_key="test")
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return LLMResponse(content="", finish_reason="stop")
 
     def get_default_model(self) -> str:
@@ -182,8 +190,11 @@ class _NoopProvider(LLMProvider):
 
 def _agent_with_checkpoint(workspace: Path) -> AgentLoop:
     return AgentLoop(
-        provider=_NoopProvider(), workspace=workspace,
-        model="stub", max_iterations=2, restrict_to_workspace=True,
+        provider=_NoopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
@@ -219,10 +230,8 @@ def test_d3_repeated_stash_latest_wins(workspace):
     agent = _agent_with_checkpoint(workspace)
     from raven.agent.loop import TurnOutcome
 
-    out1 = TurnOutcome(status="interrupted", checkpoint_id="old",
-                       edited_files=["stale.py"])
-    out2 = TurnOutcome(status="interrupted", checkpoint_id="new",
-                       edited_files=["fresh.py"])
+    out1 = TurnOutcome(status="interrupted", checkpoint_id="old", edited_files=["stale.py"])
+    out2 = TurnOutcome(status="interrupted", checkpoint_id="new", edited_files=["fresh.py"])
     agent._stash_recovery("s", out1)
     agent._stash_recovery("s", out2)
     pending = agent._pending_recovery["s"]
@@ -250,9 +259,7 @@ async def test_d3_concurrent_commits_serialize_or_degrade(workspace):
     # At least one snapshot must have captured the two new files; if one was
     # locked out we accept (None, []) for it but never an exception.
     ids = [r1[0], r2[0]]
-    assert any(cid is not None for cid in ids), (
-        f"at least one concurrent commit should land; got {r1!r}, {r2!r}"
-    )
+    assert any(cid is not None for cid in ids), f"at least one concurrent commit should land; got {r1!r}, {r2!r}"
 
 
 # =============================================================================
@@ -272,6 +279,7 @@ async def test_d5_perf_1k_files_commit(workspace, capsys):
     Generous bounds: this is a sanity check, not a strict perf gate.
     """
     import time
+
     for i in range(1000):
         (workspace / f"f{i:04d}.py").write_text(f"# file {i}\n", encoding="utf-8")
 
@@ -291,8 +299,7 @@ async def test_d5_perf_1k_files_commit(workspace, capsys):
     assert len(changed2) == 10
 
     with capsys.disabled():
-        print(f"\n[D5 perf] 1000-file cold commit: {t_cold:.2f}s | "
-              f"10-file diff after 1000 baseline: {t_warm:.2f}s")
+        print(f"\n[D5 perf] 1000-file cold commit: {t_cold:.2f}s | 10-file diff after 1000 baseline: {t_warm:.2f}s")
     # Generous upper bound — catches catastrophic regressions only.
     assert t_cold < 30.0, f"cold commit took {t_cold:.2f}s, too slow"
     assert t_warm < 10.0, f"warm commit took {t_warm:.2f}s, too slow"
@@ -318,8 +325,11 @@ async def test_d2_loop_unaffected_when_shadow_blocked(workspace):
 
 def _agent(workspace: Path, *, policy: str, interactive: bool) -> AgentLoop:
     return AgentLoop(
-        provider=_NoopProvider(), workspace=workspace,
-        model="stub", max_iterations=2, restrict_to_workspace=True,
+        provider=_NoopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
@@ -463,6 +473,7 @@ async def test_d7_gc_invoked_every_n_commits(workspace, monkeypatch):
     ``git gc --auto``. We spy on ``_git`` to count invocations rather than
     pay for a real GC (which is cheap but still noisier than necessary)."""
     import raven.agent.loop.checkpoint as cp_module
+
     # Make the heartbeat fire every 3 commits to keep this test fast.
     monkeypatch.setattr(cp_module, "_GC_EVERY_N_COMMITS", 3)
     svc = CheckpointService(workspace)
@@ -556,17 +567,24 @@ def test_d9_nested_relative_path_accepted(workspace):
 async def test_d9_agent_loop_degrades_when_shadow_dir_invalid(workspace):
     """AgentLoop must not crash when the user config contains a bad
     ``shadow_dir`` — checkpoint silently disables so the turn still runs."""
-    bad_cfg = RuntimeConfig(checkpoint=CheckpointConfig(
-        policy="always", shadow_dir="../escape_via_config",
-    ))
+    bad_cfg = RuntimeConfig(
+        checkpoint=CheckpointConfig(
+            policy="always",
+            shadow_dir="../escape_via_config",
+        )
+    )
     agent = AgentLoop(
-        provider=_NoopProvider(), workspace=workspace,
-        model="stub", max_iterations=2, restrict_to_workspace=True,
+        provider=_NoopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
         # These checkpoint tests use a no-op model only as a "turn ends" stub;
         # empty-recovery is an orthogonal feature they don't exercise, so
         # disable it (a plain-empty response then completes immediately).
         empty_recovery=RecoveryLimits(enabled=False),
-        runtime_config=bad_cfg, interactive=True,
+        runtime_config=bad_cfg,
+        interactive=True,
     )
     assert agent._checkpoint is None, "bad config should degrade to no checkpoint"
     final, _u, _m, outcome = await agent._run_agent_loop(
@@ -594,8 +612,7 @@ def test_d10_recovery_kept_when_content_unknown_type(workspace):
     Now the pop only happens after a successful mutation; an unknown
     content shape keeps the recovery pending for the next assembly."""
     agent = _agent_with_checkpoint(workspace)
-    agent._pending_recovery["s"] = {"checkpoint_id": "abc123",
-                                     "files": ["x.py"]}
+    agent._pending_recovery["s"] = {"checkpoint_id": "abc123", "files": ["x.py"]}
 
     # First attempt: content=None → injection can't safely happen.
     msgs_bad = [{"role": "user", "content": None}]
@@ -618,6 +635,7 @@ async def test_d10_git_subprocess_times_out_and_kills_proc(workspace, monkeypatc
     ``communicate`` never returns, plus shrinking the timeout so the test
     runs in milliseconds. The hanging proc must also be killed (no zombie)."""
     import raven.agent.loop.checkpoint as cp_module
+
     monkeypatch.setattr(cp_module, "_GIT_TIMEOUT_SECONDS", 0.05)
 
     class _HangingProc:
@@ -656,6 +674,7 @@ async def test_d10_commit_turn_degrades_on_git_hang(workspace, monkeypatch):
     ``(None, [])`` and does not raise — preserving the "never break a turn"
     contract that the rest of the safety net relies on."""
     import raven.agent.loop.checkpoint as cp_module
+
     monkeypatch.setattr(cp_module, "_GIT_TIMEOUT_SECONDS", 0.05)
 
     class _HangingProc:
@@ -679,9 +698,7 @@ async def test_d10_commit_turn_degrades_on_git_hang(workspace, monkeypatch):
     svc = CheckpointService(workspace)
     (workspace / "a.py").write_text("ok\n", encoding="utf-8")
     cid, changed = await svc.commit_turn("t1")
-    assert cid is None and changed == [], (
-        f"hang must degrade to no-op, got {(cid, changed)!r}"
-    )
+    assert cid is None and changed == [], f"hang must degrade to no-op, got {(cid, changed)!r}"
 
 
 async def test_d8_interactive_mode_with_user_gitignore_end_to_end(workspace):

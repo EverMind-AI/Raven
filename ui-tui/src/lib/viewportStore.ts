@@ -5,6 +5,7 @@
 
 import type { ScrollBoxHandle } from '@hermes/ink'
 import type { RefObject } from 'react'
+
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 
 export interface ViewportSnapshot {

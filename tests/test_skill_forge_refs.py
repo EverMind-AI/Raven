@@ -85,13 +85,7 @@ def test_resolve_markdown_link_missing_target_untouched(tmp_path: Path) -> None:
 
 def test_resolve_skips_code_fence(tmp_path: Path) -> None:
     skill = _make_skill_dir(tmp_path)
-    body = (
-        "Use this snippet:\n"
-        "```\n"
-        "[Config](references/CONFIG.md)\n"
-        "```\n"
-        "Real ref: [Config](references/CONFIG.md)"
-    )
+    body = "Use this snippet:\n```\n[Config](references/CONFIG.md)\n```\nReal ref: [Config](references/CONFIG.md)"
     out, ok = resolve_refs(body, skill)
     # Inside the fence: untouched.
     assert "```\n[Config](references/CONFIG.md)\n```" in out

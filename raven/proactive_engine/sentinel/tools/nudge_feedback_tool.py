@@ -29,7 +29,6 @@ from raven.proactive_engine.sentinel.executor.runner import (
     current_session_key,
 )
 
-
 _SENTIMENTS = ("accepted", "dismissed", "snoozed", "irrelevant")
 
 
@@ -73,9 +72,7 @@ class NudgeFeedbackTool(Tool):
                 "sentiment": {
                     "type": "string",
                     "enum": list(_SENTIMENTS),
-                    "description": (
-                        "User intent toward the recent proactive nudge."
-                    ),
+                    "description": ("User intent toward the recent proactive nudge."),
                 },
                 "reason": {
                     "type": "string",
@@ -110,15 +107,13 @@ class NudgeFeedbackTool(Tool):
         except Exception as exc:  # noqa: BLE001 — tool must not raise
             logger.warning(
                 "nudge_feedback consume_feedback_via_tool failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return f"error: {type(exc).__name__}"
         if not outcome.get("recorded"):
             return f"no_pending_nudge: {outcome.get('reason', '')}"
-        return (
-            f"recorded {outcome.get('signal')} for nudge "
-            f"{outcome.get('nudge_id')}"
-        )
+        return f"recorded {outcome.get('signal')} for nudge {outcome.get('nudge_id')}"
 
 
 __all__ = ["NudgeFeedbackTool"]

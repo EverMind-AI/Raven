@@ -16,9 +16,7 @@ import re
 from typing import Any
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
-_JSON_BRACE_RE = re.compile(
-    r"\{[^{}]*?\"should_help\"[^{}]*?(?:\{[^{}]*\}[^{}]*)?\}", re.DOTALL
-)
+_JSON_BRACE_RE = re.compile(r"\{[^{}]*?\"should_help\"[^{}]*?(?:\{[^{}]*\}[^{}]*)?\}", re.DOTALL)
 
 
 def parse_decision(text: str | None) -> dict[str, Any]:

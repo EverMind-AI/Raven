@@ -12,6 +12,7 @@ console = Console()
 
 def register(app: typer.Typer) -> None:
     """Attach the ``status`` command to ``app``."""
+
     @app.command()
     def status():
         """Show Raven status."""
@@ -23,12 +24,8 @@ def register(app: typer.Typer) -> None:
 
         console.print(f"{__logo__} Raven Status\n")
 
-        console.print(
-            f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}"
-        )
-        console.print(
-            f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}"
-        )
+        console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
+        console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
 
         if config_path.exists():
             from raven.providers.registry import PROVIDERS
@@ -50,10 +47,7 @@ def register(app: typer.Typer) -> None:
                         console.print(f"{spec.label}: [dim]not set[/dim]")
                 else:
                     has_key = bool(p.api_key)
-                    console.print(
-                        f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
-                    )
-
+                    console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
 
 
 __all__ = ["register"]

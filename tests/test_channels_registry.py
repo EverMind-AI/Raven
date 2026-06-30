@@ -12,7 +12,7 @@ def test_discover_channel_names_lists_adapter_packages():
 
 def test_discover_specs_returns_channel_specs():
     specs = discover_specs()
-    assert specs                                   # non-empty
+    assert specs  # non-empty
     assert set(specs) <= set(discover_channel_names())
     for spec in specs.values():
         assert isinstance(spec, ChannelSpec)
@@ -33,6 +33,7 @@ def test_discover_specs_is_cheap():
     deferred into the spec factories)."""
     import subprocess
     import sys
+
     code = (
         "import sys; from raven.channels.registry import discover_specs; discover_specs();"
         "pulled = {m for m in ('botpy', 'telegram', 'slack_sdk', 'lark_oapi', 'nio') if m in sys.modules};"

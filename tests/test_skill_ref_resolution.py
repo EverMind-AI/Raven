@@ -5,6 +5,7 @@ Covers three mechanisms and their false-positive guards:
 - the ``{baseDir}`` per-ref substitution,
 - the directory-resolution header hint.
 """
+
 from pathlib import Path
 
 import pytest
@@ -42,8 +43,12 @@ def skill_dir(tmp_path: Path) -> Path:
 
 def _meta(skill_dir: Path, body: str, name: str = "demo") -> SkillMeta:
     return SkillMeta(
-        id=0, name=name, description="", path=skill_dir / "SKILL.md",
-        content=body, source="t",
+        id=0,
+        name=name,
+        description="",
+        path=skill_dir / "SKILL.md",
+        content=body,
+        source="t",
     )
 
 
@@ -52,6 +57,7 @@ def render(svc: LocalSkillCatalog, skill_dir: Path, body: str) -> str:
 
 
 # ── markdown-link rewrite (B) ────────────────────────────────────────
+
 
 def test_md_link_existing_becomes_absolute(svc, skill_dir):
     out = render(svc, skill_dir, "see [Guide](references/GUIDE.md)")
@@ -92,7 +98,8 @@ def test_md_link_anchor_and_query_preserved(svc, skill_dir):
 
 def test_md_link_all_bundled_dirs(svc, skill_dir):
     out = render(
-        svc, skill_dir,
+        svc,
+        skill_dir,
         "[s](scripts/run.sh) [a](assets/logo.svg) [e](examples/demo.py)",
     )
     assert f"({skill_dir}/scripts/run.sh)" in out
@@ -108,6 +115,7 @@ def test_md_link_in_code_fence_not_rewritten(svc, skill_dir):
 
 # ── bare / shell refs are NOT touched (rely on the header hint) ───────
 
+
 def test_bare_ref_in_prose_untouched(svc, skill_dir):
     out = render(svc, skill_dir, "see references/GUIDE.md for details")
     assert "references/GUIDE.md for details" in out
@@ -121,6 +129,7 @@ def test_bash_dotslash_ref_untouched(svc, skill_dir):
 
 # ── directory header hint (C) ────────────────────────────────────────
 
+
 def test_dir_header_present_for_pathset(svc, skill_dir):
     out = render(svc, skill_dir, "see references/GUIDE.md")
     assert f"**Skill directory**: `{skill_dir}`" in out
@@ -128,22 +137,25 @@ def test_dir_header_present_for_pathset(svc, skill_dir):
 
 
 def test_dir_header_absent_for_db_only(svc, skill_dir):
-    meta = SkillMeta(id=0, name="d", description="", path=Path("sqlite://t/d"),
-                     content="see references/GUIDE.md", source="t")
+    meta = SkillMeta(
+        id=0, name="d", description="", path=Path("sqlite://t/d"), content="see references/GUIDE.md", source="t"
+    )
     out = svc.load_skills_for_context([meta], max_inject=1)
     assert "Skill directory" not in out
 
 
 def test_dir_header_absent_when_dir_missing(svc, tmp_path):
     gone = tmp_path / "gone" / "SKILL.md"
-    meta = SkillMeta(id=0, name="g", description="", path=gone,
-                     content="[g](references/GUIDE.md)\nsee references/x.md", source="t")
+    meta = SkillMeta(
+        id=0, name="g", description="", path=gone, content="[g](references/GUIDE.md)\nsee references/x.md", source="t"
+    )
     out = svc.load_skills_for_context([meta], max_inject=1)
     assert "Skill directory" not in out
     assert f"{gone.parent}/references/GUIDE.md" not in out  # no 404 abs path
 
 
 # ── {baseDir} per-ref substitution ───────────────────────────────────
+
 
 def test_basedir_existing_ref_resolves(svc, skill_dir):
     out = render(svc, skill_dir, "cat {baseDir}/scripts/run.sh")
@@ -152,8 +164,8 @@ def test_basedir_existing_ref_resolves(svc, skill_dir):
 
 def test_basedir_missing_ref_left_literal_no_404(svc, skill_dir):
     out = render(svc, skill_dir, "ok {baseDir}/scripts/run.sh missing {baseDir}/references/NOPE.md")
-    assert f"{skill_dir}/scripts/run.sh" in out          # existing → abs
-    assert "{baseDir}/references/NOPE.md" in out         # missing → literal
+    assert f"{skill_dir}/scripts/run.sh" in out  # existing → abs
+    assert "{baseDir}/references/NOPE.md" in out  # missing → literal
     assert f"{skill_dir}/references/NOPE.md" not in out  # never a 404 abs path
 
 
@@ -170,15 +182,16 @@ def test_basedir_all_broken_no_header(svc, skill_dir):
 
 # ── misc ─────────────────────────────────────────────────────────────
 
+
 def test_multi_skill_each_own_dir(svc, tmp_path):
-    d1 = tmp_path / "s1"; (d1 / "references").mkdir(parents=True)
+    d1 = tmp_path / "s1"
+    (d1 / "references").mkdir(parents=True)
     (d1 / "references" / "A.md").write_text("a")
-    d2 = tmp_path / "s2"; (d2 / "references").mkdir(parents=True)
+    d2 = tmp_path / "s2"
+    (d2 / "references").mkdir(parents=True)
     (d2 / "references" / "B.md").write_text("b")
-    m1 = SkillMeta(id=1, name="s1", description="", path=d1 / "SKILL.md",
-                   content="[a](references/A.md)", source="t")
-    m2 = SkillMeta(id=2, name="s2", description="", path=d2 / "SKILL.md",
-                   content="[b](references/B.md)", source="t")
+    m1 = SkillMeta(id=1, name="s1", description="", path=d1 / "SKILL.md", content="[a](references/A.md)", source="t")
+    m2 = SkillMeta(id=2, name="s2", description="", path=d2 / "SKILL.md", content="[b](references/B.md)", source="t")
     out = svc.load_skills_for_context([m1, m2], max_inject=5)
     assert f"{d1}/references/A.md" in out
     assert f"{d2}/references/B.md" in out

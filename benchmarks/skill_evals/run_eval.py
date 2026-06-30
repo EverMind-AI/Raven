@@ -32,17 +32,14 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.memory_engine.skill_local.retrieval import Retrieval, RetrievalConfig
+
+from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.memory_engine.skill_local.types import SkillMeta
 
 
 def _load_queries(path: Path) -> list[dict]:
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _enrich(name: str, registry: SkillRegistry) -> dict:
@@ -103,16 +100,18 @@ def run_eval(
                 cat_observed += 1
                 top1_cat = obs == expected_cat
 
-        per_query.append({
-            "id": q["id"],
-            "query": q["query"],
-            "rank": rank,
-            "top1_kw": top1_kw,
-            "topk_kw": topk_kw,
-            "top1_cat": top1_cat,
-            "latency_ms": int(latency * 1000),
-            "top1_name": hits[0]["name"] if hits else None,
-        })
+        per_query.append(
+            {
+                "id": q["id"],
+                "query": q["query"],
+                "rank": rank,
+                "top1_kw": top1_kw,
+                "topk_kw": topk_kw,
+                "top1_cat": top1_cat,
+                "latency_ms": int(latency * 1000),
+                "top1_name": hits[0]["name"] if hits else None,
+            }
+        )
 
     n = len(per_query) or 1
     cat_attempts = sum(1 for r in per_query if r["top1_cat"] is not None)
@@ -123,17 +122,11 @@ def run_eval(
         "top_k": top_k,
         "top1_keyword_rate": round(sum(1 for r in per_query if r["top1_kw"]) / n, 3),
         f"top{top_k}_keyword_rate": round(sum(1 for r in per_query if r["topk_kw"]) / n, 3),
-        "top1_category_rate": (
-            round(cat_hits / cat_attempts, 3) if cat_attempts else None
-        ),
+        "top1_category_rate": (round(cat_hits / cat_attempts, 3) if cat_attempts else None),
         "category_coverage": f"{cat_attempts}/{n}",
-        "mrr": round(
-            sum(1.0 / r["rank"] for r in per_query if r["rank"] > 0) / n, 3
-        ),
+        "mrr": round(sum(1.0 / r["rank"] for r in per_query if r["rank"] > 0) / n, 3),
         "latency_ms_p50": sorted(r["latency_ms"] for r in per_query)[n // 2],
-        "latency_ms_avg": round(
-            sum(r["latency_ms"] for r in per_query) / n, 1
-        ),
+        "latency_ms_avg": round(sum(r["latency_ms"] for r in per_query) / n, 1),
     }
 
     if verbose:
@@ -146,8 +139,8 @@ def run_eval(
             n_c = len(rs) or 1
             print(
                 f"  {cat:14s}  n={len(rs):2d}  "
-                f"top1_kw={sum(1 for r in rs if r['top1_kw'])/n_c:.2f}  "
-                f"mrr={sum(1.0/r['rank'] for r in rs if r['rank']>0)/n_c:.2f}"
+                f"top1_kw={sum(1 for r in rs if r['top1_kw']) / n_c:.2f}  "
+                f"mrr={sum(1.0 / r['rank'] for r in rs if r['rank'] > 0) / n_c:.2f}"
             )
         print("\nMisses (top1_kw=False):")
         for r in per_query:
@@ -159,19 +152,24 @@ def run_eval(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--workspace", type=Path, required=True,
-                    help="Path to raven workspace (contains .cache/skill_index/ "
-                         "or .cache/skills.db when --store-path is set)")
-    ap.add_argument("--builtin", type=Path, default=None,
-                    help="Optional builtin skills dir")
-    ap.add_argument("--queries", type=Path,
-                    default=Path(__file__).parent / "queries.jsonl",
-                    help="Eval queries (default: bundled queries.jsonl)")
+    ap.add_argument(
+        "--workspace",
+        type=Path,
+        required=True,
+        help="Path to raven workspace (contains .cache/skill_index/ or .cache/skills.db when --store-path is set)",
+    )
+    ap.add_argument("--builtin", type=Path, default=None, help="Optional builtin skills dir")
+    ap.add_argument(
+        "--queries",
+        type=Path,
+        default=Path(__file__).parent / "queries.jsonl",
+        help="Eval queries (default: bundled queries.jsonl)",
+    )
     ap.add_argument("--top-k", type=int, default=10)
     ap.add_argument("--verbose", action="store_true")
-    ap.add_argument("--store-path", type=Path, default=None,
-                    help="SqliteStore DB path. Defaults to "
-                         "<workspace>/.cache/skills.db.")
+    ap.add_argument(
+        "--store-path", type=Path, default=None, help="SqliteStore DB path. Defaults to <workspace>/.cache/skills.db."
+    )
     args = ap.parse_args(argv)
 
     # Default store path discovery: if no --store-path was given, look
@@ -191,20 +189,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     from raven.memory_engine.skill_local.store import SqliteSkillRegistry, SqliteStore
+
     store = SqliteStore(store_path)
     registry = SqliteSkillRegistry(args.workspace, store, args.builtin)
     retrieval = Retrieval(registry, RetrievalConfig(store=store))
     if not retrieval.load_cache():
         print(
-            f"[ERROR] No compatible embeddings in {store_path}. "
-            "Run `raven skill rebuild-index` after import-files.",
+            f"[ERROR] No compatible embeddings in {store_path}. Run `raven skill rebuild-index` after import-files.",
             file=sys.stderr,
         )
         store.close()
         return 2
 
     summary = run_eval(
-        registry, retrieval, args.queries, args.top_k, verbose=args.verbose,
+        registry,
+        retrieval,
+        args.queries,
+        args.top_k,
+        verbose=args.verbose,
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0

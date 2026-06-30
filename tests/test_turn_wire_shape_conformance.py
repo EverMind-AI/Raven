@@ -42,6 +42,7 @@ class FakeScheduler:
 @pytest.fixture(autouse=True)
 def _clear_active_turns():
     from raven.tui_rpc.methods import turn as _turn_mod
+
     _turn_mod._active_turns.clear()
     yield
     _turn_mod._active_turns.clear()
@@ -106,9 +107,7 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
     assert len(completions) == 1, f"expected 1 message.complete; got {events}"
 
     payload = completions[0]["payload"]
-    assert set(payload) == {"turn_id", "usage"}, (
-        f"payload keys must be exactly {{turn_id, usage}}; got {set(payload)}"
-    )
+    assert set(payload) == {"turn_id", "usage"}, f"payload keys must be exactly {{turn_id, usage}}; got {set(payload)}"
     assert "content" not in payload  # B1: must not leak
     _assert_event_validates(completions[0])  # Pydantic accepts
 
@@ -125,6 +124,7 @@ async def test_overflow_error_event_payload_shape() -> None:
     sub_id = await emitter.register("tui:default")
     # Force overflow by pushing beyond queue capacity without yielding.
     from raven.tui_rpc.subscriptions import QUEUE_CAPACITY
+
     for i in range(QUEUE_CAPACITY + 50):
         await emitter.emit(
             "tui:default",
@@ -133,16 +133,11 @@ async def test_overflow_error_event_payload_shape() -> None:
     await asyncio.sleep(0.1)
 
     events = _collect_events(send_frame)
-    errors = [
-        e for e in events
-        if e.get("type") == "error"
-        and e.get("payload", {}).get("code") == -32016
-    ]
+    errors = [e for e in events if e.get("type") == "error" and e.get("payload", {}).get("code") == -32016]
     assert len(errors) >= 1, f"expected ≥1 -32016 overflow event; got {events}"
     err = errors[0]
     assert set(err["payload"]) <= {"code", "message", "reason"}, (
-        f"error payload must only contain {{code, message, reason?}}; "
-        f"got {set(err['payload'])}"
+        f"error payload must only contain {{code, message, reason?}}; got {set(err['payload'])}"
     )
     assert "detail" not in err["payload"]  # B2: must not leak
     _assert_event_validates(err)  # Pydantic accepts
@@ -168,9 +163,7 @@ async def test_cancel_error_event_payload_shape() -> None:
 
     events = _collect_events(send_frame)
     cancels = [
-        e for e in events
-        if e.get("type") == "error"
-        and e.get("payload", {}).get("reason") == "cancelled_by_client"
+        e for e in events if e.get("type") == "error" and e.get("payload", {}).get("reason") == "cancelled_by_client"
     ]
     assert len(cancels) >= 1
     payload = cancels[0]["payload"]

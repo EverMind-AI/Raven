@@ -71,23 +71,25 @@ class HubSkillSource:
             safety = it.get("score_safety")
             if safety is not None and float(safety) < self._min_safety:
                 continue
-            hits.append(RouterHit(
-                qualified_id=f"hub/{sid}",
-                name=name,
-                content="",  # Tier 0: metadata only; body via pre-gate hydrate
-                score=float(it.get("quality_score") or 0.0),
-                meta={
-                    "source": "hub",
-                    "id": sid,
-                    "skill_id": it.get("skill_id"),
-                    "description": it.get("description"),
-                    "tags": it.get("tags"),
-                    "category": it.get("category"),
-                    "quality_score": it.get("quality_score"),
-                    "install_count": it.get("install_count"),
-                    "score_safety": safety,
-                },
-            ))
+            hits.append(
+                RouterHit(
+                    qualified_id=f"hub/{sid}",
+                    name=name,
+                    content="",  # Tier 0: metadata only; body via pre-gate hydrate
+                    score=float(it.get("quality_score") or 0.0),
+                    meta={
+                        "source": "hub",
+                        "id": sid,
+                        "skill_id": it.get("skill_id"),
+                        "description": it.get("description"),
+                        "tags": it.get("tags"),
+                        "category": it.get("category"),
+                        "quality_score": it.get("quality_score"),
+                        "install_count": it.get("install_count"),
+                        "score_safety": safety,
+                    },
+                )
+            )
         return hits
 
 

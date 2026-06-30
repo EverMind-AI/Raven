@@ -6,11 +6,12 @@
 import { Box, Link, stringWidth, Text } from '@hermes/ink'
 import { Fragment, memo, type ReactNode, useMemo } from 'react'
 
+import type { Theme } from '../theme.js'
+
 import { ensureEmojiPresentation } from '../lib/emoji.js'
 import { normalizeExternalUrl, urlSlugTitleLabel, useLinkTitle } from '../lib/externalLink.js'
 import { BOX_CLOSE, BOX_OPEN, texToUnicode } from '../lib/mathUnicode.js'
 import { highlightLine, isHighlightable } from '../lib/syntax.js'
-import type { Theme } from '../theme.js'
 
 // `\boxed{X}` regions in `texToUnicode` output are marked with the
 // non-printable U+0001 / U+0002 sentinels. Split on them and render the

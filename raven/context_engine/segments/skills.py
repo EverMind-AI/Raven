@@ -97,11 +97,13 @@ class SkillsSegmentBuilder:
                 query = result.rewritten_query
 
         # ── ② Router fan-out ─────────────────────────────────────────
-        candidates = list(await self._router.select(
-            query=query,
-            history=ctx.session_messages,
-            k=self._pool_size,
-        ))
+        candidates = list(
+            await self._router.select(
+                query=query,
+                history=ctx.session_messages,
+                k=self._pool_size,
+            )
+        )
 
         # ── ③ Pre-gate body hydrate (Hub only) ────────────────────────
         # Side-channel: keep the metadata dict so post-gate install can
@@ -123,12 +125,8 @@ class SkillsSegmentBuilder:
         # ── ⑥ Render ─────────────────────────────────────────────────
         body = render.render_router_skills(gated)
         meta: dict[str, Any] = {
-            "injected_skill_ids": [
-                h.qualified_id for h in gated if getattr(h, "qualified_id", None)
-            ],
-            "skill_hits_by_source": dict(
-                Counter((h.meta.get("source") or "?") for h in gated)
-            ),
+            "injected_skill_ids": [h.qualified_id for h in gated if getattr(h, "qualified_id", None)],
+            "skill_hits_by_source": dict(Counter((h.meta.get("source") or "?") for h in gated)),
         }
         text = f"# Skills\n\n{body}" if body else ""
         return Segment(text=text, meta=meta)
@@ -147,10 +145,7 @@ class SkillsSegmentBuilder:
         """
         if self._hub_client is None:
             return candidates
-        targets = [
-            (i, c) for i, c in enumerate(candidates)
-            if c.meta.get("source") == "hub" and not c.content
-        ]
+        targets = [(i, c) for i, c in enumerate(candidates) if c.meta.get("source") == "hub" and not c.content]
         if not targets:
             return candidates
 
@@ -164,7 +159,8 @@ class SkillsSegmentBuilder:
                 # as the post-gate install failure further down.
                 log.warning(
                     "hub body hydrate failed for %s: %s",
-                    c.meta.get("id"), e,
+                    c.meta.get("id"),
+                    e,
                 )
                 return None
 
@@ -212,7 +208,8 @@ class SkillsSegmentBuilder:
                     # still lands in the prompt.
                     log.warning(
                         "hub install for refs hydrate failed (%s): %s",
-                        h.meta.get("id"), e,
+                        h.meta.get("id"),
+                        e,
                     )
                     return h
                 body = installed.get("skill_md", "") or h.content

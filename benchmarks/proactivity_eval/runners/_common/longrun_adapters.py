@@ -25,16 +25,13 @@ import os
 import re
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from loguru import logger
-
 
 EventEmitter = Callable[[dict[str, Any]], None]
 
@@ -47,9 +44,7 @@ _LONGRUN_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "longrun"
 # provider stack that starts before it). Those structlog lines corrupt the
 # captured reply, so drop them here. Fixing the CLI leak is a separate task;
 # this only sanitizes the stdout the eval reads back.
-_RUNTIME_LOG_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[\s*(?:debug|info|warning|error|critical)\s*\]"
-)
+_RUNTIME_LOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[\s*(?:debug|info|warning|error|critical)\s*\]")
 
 
 def _strip_runtime_logs(text: str) -> str:
@@ -70,6 +65,7 @@ def _load_scorer_quiet_windows(persona_id: str) -> list[dict[str, Any]]:
         return []
     try:
         import yaml as _yaml
+
         data = _yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         return []
@@ -88,13 +84,15 @@ def _load_scorer_quiet_windows(persona_id: str) -> list[dict[str, Any]]:
             eh, em = int(eh_s), int(em_s)
         except (ValueError, AttributeError):
             continue
-        windows.append({
-            "start_hour": sh,
-            "start_minute": sm,
-            "end_hour": eh,
-            "end_minute": em,
-            "why": f"scorer_window:{o.get('id','')}",
-        })
+        windows.append(
+            {
+                "start_hour": sh,
+                "start_minute": sm,
+                "end_hour": eh,
+                "end_minute": em,
+                "why": f"scorer_window:{o.get('id', '')}",
+            }
+        )
     return windows
 
 
@@ -109,13 +107,20 @@ class AgentAdapter(ABC):
 
     @abstractmethod
     async def send_user_message(
-        self, content: str, *, session_key: str, fake_now: datetime,
+        self,
+        content: str,
+        *,
+        session_key: str,
+        fake_now: datetime,
     ) -> str:
         """Deliver a user turn, return agent's reply text."""
 
     @abstractmethod
     async def tick_to(
-        self, target_fake_now: datetime, *, current_fake_now: datetime,
+        self,
+        target_fake_now: datetime,
+        *,
+        current_fake_now: datetime,
         emit: EventEmitter,
     ) -> datetime:
         """Advance fake_now to target. Emit agent_initiated events along
@@ -164,7 +169,9 @@ def _resolve_raven_repo() -> Path:
 
 
 def _seed_raven_home(
-    home_dir: Path, workspace: Path, persona: dict[str, Any] | None = None,
+    home_dir: Path,
+    workspace: Path,
+    persona: dict[str, Any] | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> Path:
     """Create a per-persona raven config dir.
@@ -191,6 +198,7 @@ def _seed_raven_home(
     untouched — agent reply LLM and Planner LLM are independent knobs.
     """
     import json as _json
+
     home_dir.mkdir(parents=True, exist_ok=True)
     src = Path.home() / ".raven" / "config.json"
     if not src.exists():
@@ -202,9 +210,7 @@ def _seed_raven_home(
     # Repoint workspace; preserve everything else (provider, model, etc).
     cfg.setdefault("agents", {}).setdefault("defaults", {})["workspace"] = str(workspace)
     if persona is not None:
-        dnd_raw = list(
-            (persona.get("policy_overrides") or {}).get("do_not_disturb_windows") or []
-        )
+        dnd_raw = list((persona.get("policy_overrides") or {}).get("do_not_disturb_windows") or [])
         # Append scorer-derived quiet windows (type_c_restraint
         # ``nudge_count_in_window == 0`` outcomes). End-minute is bumped
         # +1 to match the scorer's inclusive-end semantics.
@@ -212,9 +218,7 @@ def _seed_raven_home(
         if pid:
             dnd_raw.extend(_load_scorer_quiet_windows(pid))
         if dnd_raw:
-            cfg.setdefault("sentinel", {}).setdefault("nudge_policy", {})[
-                "do_not_disturb_windows"
-            ] = dnd_raw
+            cfg.setdefault("sentinel", {}).setdefault("nudge_policy", {})["do_not_disturb_windows"] = dnd_raw
     if overrides and overrides.get("planner_model"):
         cfg.setdefault("sentinel", {})["evaluator_model"] = overrides["planner_model"]
     dst = home_dir / "config.json"
@@ -264,10 +268,7 @@ def _derive_dnd_lines_from_persona(persona: dict[str, Any]) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        lines.append(
-            f"- dnd: {int(sh):02d}:{sm}-{int(eh):02d}:{em} "
-            f"weekdays=Mon-Fri reason=focus_block"
-        )
+        lines.append(f"- dnd: {int(sh):02d}:{sm}-{int(eh):02d}:{em} weekdays=Mon-Fri reason=focus_block")
 
     for m in _WEEKEND_RE.finditer(text):
         sh, sm = m.groups()
@@ -276,10 +277,7 @@ def _derive_dnd_lines_from_persona(persona: dict[str, Any]) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        lines.append(
-            f"- dnd: 00:00-{int(sh):02d}:{sm} weekdays=Sat-Sun "
-            f"reason=weekend_morning_quiet"
-        )
+        lines.append(f"- dnd: 00:00-{int(sh):02d}:{sm} weekdays=Sat-Sun reason=weekend_morning_quiet")
 
     # Also import the structured ``policy_overrides`` if present — keeps
     # the unified pipeline working for personas that DO have it (dev,
@@ -325,6 +323,7 @@ def _seed_attention_user_overrides(workspace: Path, persona: dict[str, Any]) -> 
     # section; otherwise scaffold a minimal file.
     if attention_md.exists():
         from raven.memory_engine.consolidate.attention import upsert_section
+
         new_text = upsert_section(
             attention_md.read_text(encoding="utf-8"),
             "## User overrides",
@@ -366,7 +365,7 @@ class RavenAdapter(AgentAdapter):
     def __init__(
         self,
         *,
-        driver,           # proactivity_eval.RavenDriver
+        driver,  # proactivity_eval.RavenDriver
         workspace: Path,
         persona: dict[str, Any],
         owns_workspace: bool,
@@ -402,19 +401,21 @@ class RavenAdapter(AgentAdapter):
         if not path.exists():
             return []
         try:
-            return json.loads(path.read_text(encoding="utf-8")).get(
-                "decisions", []
-            )
+            return json.loads(path.read_text(encoding="utf-8")).get("decisions", [])
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning(
                 "pending_decisions.json unreadable at {}: {}: {}",
-                path, type(exc).__name__, exc,
+                path,
+                type(exc).__name__,
+                exc,
             )
             return []
 
     @classmethod
     async def build(
-        cls, persona: dict[str, Any], *,
+        cls,
+        persona: dict[str, Any],
+        *,
         resume_root: Path | None = None,
         overrides: dict[str, Any] | None = None,
     ) -> "RavenAdapter":
@@ -453,7 +454,9 @@ class RavenAdapter(AgentAdapter):
             timeout_seconds=float(os.environ.get("EVAL_AGENT_TIMEOUT_SEC", "180")),
         )
         return cls(
-            driver=driver, workspace=root, persona=persona,
+            driver=driver,
+            workspace=root,
+            persona=persona,
             owns_workspace=True,
         )
 
@@ -462,7 +465,11 @@ class RavenAdapter(AgentAdapter):
         self._last_sentinel_tick = None
 
     async def send_user_message(
-        self, content: str, *, session_key: str, fake_now: datetime,
+        self,
+        content: str,
+        *,
+        session_key: str,
+        fake_now: datetime,
     ) -> str:
         # ``--fake-now`` propagates end-to-end via AgentLoop's ``now_fn``
         # (B1) → ContextBuilder.``_build_runtime_context`` (B2) injects
@@ -483,7 +490,8 @@ class RavenAdapter(AgentAdapter):
         if not response.ok:
             logger.warning(
                 "agent send_message returned rc={}: {}",
-                response.returncode, response.stderr[:400],
+                response.returncode,
+                response.stderr[:400],
             )
             return ""
         # The agent CLI prints rendered output to stdout; strip the
@@ -491,7 +499,10 @@ class RavenAdapter(AgentAdapter):
         return _strip_runtime_logs(response.stdout)
 
     async def tick_to(
-        self, target_fake_now: datetime, *, current_fake_now: datetime,
+        self,
+        target_fake_now: datetime,
+        *,
+        current_fake_now: datetime,
         emit: EventEmitter,
     ) -> datetime:
         """Fire sentinel ticks every 30 min between (current, target].
@@ -553,9 +564,7 @@ class RavenAdapter(AgentAdapter):
 
         # Snapshot pending decisions BEFORE the batch so any new entry
         # the daily TaskDiscoverer writes mid-batch shows up in the diff.
-        pre_decision_ids = {
-            d.get("decision_id") for d in self._load_pending_decisions()
-        }
+        pre_decision_ids = {d.get("decision_id") for d in self._load_pending_decisions()}
 
         loop = asyncio.get_event_loop()
         try:
@@ -572,8 +581,11 @@ class RavenAdapter(AgentAdapter):
         except Exception as exc:
             logger.warning(
                 "sentinel ticks batch failed ({} ticks {}→{}): {}: {}",
-                n_ticks, first_tick.isoformat(), last_tick.isoformat(),
-                type(exc).__name__, exc,
+                n_ticks,
+                first_tick.isoformat(),
+                last_tick.isoformat(),
+                type(exc).__name__,
+                exc,
             )
             self._last_sentinel_tick = last_tick
             return target_fake_now
@@ -583,22 +595,26 @@ class RavenAdapter(AgentAdapter):
             if not r.ok and r.action is None:
                 logger.warning(
                     "sentinel tick at {} failed: rc={} stderr={}",
-                    tick_iso, r.returncode, (r.raw_stderr or "")[:200],
+                    tick_iso,
+                    r.returncode,
+                    (r.raw_stderr or "")[:200],
                 )
                 continue
-            emit({
-                "kind": "sentinel_tick",
-                "fake_now": tick_iso,
-                "action": r.action,
-                "route": r.route,
-                "delivered": r.delivered,
-                "reason": (r.reason or "")[:200],
-                "priority": r.priority,
-                "target_session": r.target_session,
-                "nudge_message": r.nudge_message,
-                "topic_tag": r.topic_tag,
-                "content": r.nudge_message or "",  # scorecard reads this
-            })
+            emit(
+                {
+                    "kind": "sentinel_tick",
+                    "fake_now": tick_iso,
+                    "action": r.action,
+                    "route": r.route,
+                    "delivered": r.delivered,
+                    "reason": (r.reason or "")[:200],
+                    "priority": r.priority,
+                    "target_session": r.target_session,
+                    "nudge_message": r.nudge_message,
+                    "topic_tag": r.topic_tag,
+                    "content": r.nudge_message or "",  # scorecard reads this
+                }
+            )
 
         # Daily-batch discovery menus: any PendingDecision created during
         # this batch is a TaskDiscoverer fire that the per-tick JSON
@@ -607,38 +623,34 @@ class RavenAdapter(AgentAdapter):
         # scorecard counter (``_count_proactive_messages`` / line ~561)
         # picks them up without scorecard changes.
         post_decisions = self._load_pending_decisions()
-        new_decisions = [
-            d for d in post_decisions
-            if d.get("decision_id")
-            and d["decision_id"] not in pre_decision_ids
-        ]
+        new_decisions = [d for d in post_decisions if d.get("decision_id") and d["decision_id"] not in pre_decision_ids]
         for d in new_decisions:
             options = d.get("options") or []
             titles = [o.get("title", "") for o in options]
             # ``created_at_ms`` is fake_now epoch — TaskDiscoverer threads
             # ``now_fn`` through, so this aligns with the surrounding
             # tick stream. Strip tz: tick events use naive isoformat.
-            menu_dt = datetime.fromtimestamp(
-                int(d.get("created_at_ms", 0)) / 1000
+            menu_dt = datetime.fromtimestamp(int(d.get("created_at_ms", 0)) / 1000)
+            emit(
+                {
+                    "kind": "sentinel_tick",
+                    "fake_now": menu_dt.isoformat(),
+                    "action": "discovery_menu",
+                    "route": "task_discovery",
+                    "delivered": True,
+                    "reason": "daily discovery batch",
+                    "priority": "medium",
+                    "target_session": f"{d.get('channel', '')}:{d.get('to', '')}",
+                    "nudge_message": " | ".join(t for t in titles if t),
+                    "topic_tag": None,
+                    "content": " | ".join(t for t in titles if t),
+                    # Extras for downstream / debugging (scorecard ignores).
+                    "decision_id": d.get("decision_id"),
+                    "n_options": len(options),
+                    "option_ids": [o.get("id") for o in options],
+                    "option_titles": titles,
+                }
             )
-            emit({
-                "kind": "sentinel_tick",
-                "fake_now": menu_dt.isoformat(),
-                "action": "discovery_menu",
-                "route": "task_discovery",
-                "delivered": True,
-                "reason": "daily discovery batch",
-                "priority": "medium",
-                "target_session": f"{d.get('channel', '')}:{d.get('to', '')}",
-                "nudge_message": " | ".join(t for t in titles if t),
-                "topic_tag": None,
-                "content": " | ".join(t for t in titles if t),
-                # Extras for downstream / debugging (scorecard ignores).
-                "decision_id": d.get("decision_id"),
-                "n_options": len(options),
-                "option_ids": [o.get("id") for o in options],
-                "option_titles": titles,
-            })
 
         self._last_sentinel_tick = last_tick
         return target_fake_now
@@ -722,6 +734,7 @@ class RavenAdapter(AgentAdapter):
             if kind == "cron" and sched.get("expr"):
                 try:
                     from croniter import croniter
+
                     # Anchor at later of eval last_fire or cur_n. Note:
                     # croniter returns the FIRST run strictly after the
                     # anchor; daily "0 7 * * *" with anchor 06:50 returns
@@ -759,21 +772,23 @@ class RavenAdapter(AgentAdapter):
             message = payload.get("message") or job_name
             topic_tag = payload.get("topicTag")  # may be None — F-G optional
 
-            emit({
-                "kind": "cron_fire",
-                "fake_now": fire_time.isoformat(),
-                "delivered": True,
-                "action": "nudge",
-                "route": "cron",
-                "nudge_message": message,
-                "topic_tag": topic_tag or f"cron_{job_id[:12]}",
-                "cron_id": job_id,
-                "cron_name": job_name,
-                "priority": "low",
-                "target_session": "default",
-                "reason": f"cron fired: {job_name}",
-                "content": message,
-            })
+            emit(
+                {
+                    "kind": "cron_fire",
+                    "fake_now": fire_time.isoformat(),
+                    "delivered": True,
+                    "action": "nudge",
+                    "route": "cron",
+                    "nudge_message": message,
+                    "topic_tag": topic_tag or f"cron_{job_id[:12]}",
+                    "cron_id": job_id,
+                    "cron_name": job_name,
+                    "priority": "low",
+                    "target_session": "default",
+                    "reason": f"cron fired: {job_name}",
+                    "content": message,
+                }
+            )
 
             # Ledger writes: mirror what F-G's
             # _record_cron_dispatch_to_ledger does in production. Defer
@@ -866,6 +881,7 @@ class RavenAdapter(AgentAdapter):
             feedback_path.parent.mkdir(parents=True, exist_ok=True)
             with feedback_path.open("a", encoding="utf-8") as f:
                 import uuid as _uuid
+
                 for fire_time, topic_tag, job in writes:
                     rec = {
                         "ts": fire_time.isoformat(),
@@ -910,8 +926,12 @@ class HermesAdapter(AgentAdapter):
     agent_name = "hermes"
 
     def __init__(
-        self, persona: dict, root: Path, *,
-        hermes_src: Path, python_exe: str,
+        self,
+        persona: dict,
+        root: Path,
+        *,
+        hermes_src: Path,
+        python_exe: str,
     ) -> None:
         self.persona = persona
         self.root = root
@@ -922,21 +942,21 @@ class HermesAdapter(AgentAdapter):
 
     @classmethod
     async def build(
-        cls, persona: dict[str, Any], *, resume_root: Path | None = None,
+        cls,
+        persona: dict[str, Any],
+        *,
+        resume_root: Path | None = None,
     ) -> "HermesAdapter":
         from .config import get_config
+
         cfg = get_config()
         if cfg.hermes_src is None:
-            raise RuntimeError(
-                "Hermes longrun requires systems.hermes_src in runners.config.yaml"
-            )
+            raise RuntimeError("Hermes longrun requires systems.hermes_src in runners.config.yaml")
         if resume_root is not None:
             root = resume_root
         else:
             root = Path(tempfile.mkdtemp(prefix=f"longrun-hermes-{persona['id']}-"))
-        inst = cls(persona, root,
-                   hermes_src=cfg.hermes_src,
-                   python_exe=_find_hermes_python(cfg.hermes_src))
+        inst = cls(persona, root, hermes_src=cfg.hermes_src, python_exe=_find_hermes_python(cfg.hermes_src))
         inst._seed_home_if_fresh()
         return inst
 
@@ -961,7 +981,11 @@ class HermesAdapter(AgentAdapter):
         pass  # nothing to start — subprocess per turn
 
     async def send_user_message(
-        self, content: str, *, session_key: str, fake_now: datetime,
+        self,
+        content: str,
+        *,
+        session_key: str,
+        fake_now: datetime,
     ) -> str:
         """Subprocess into hermes_longrun_inner.py which patches
         hermes_time.now and invokes the conversational agent."""
@@ -974,26 +998,31 @@ class HermesAdapter(AgentAdapter):
         # strip proxy
         for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
             env.pop(k, None)
-        env.update({
-            "HERMES_HOME": str(self.hermes_home),
-            "HERMES_AGENT_SRC": str(self.hermes_src),
-            "HERMES_EVAL_FAKE_NOW": _iso_with_tz(fake_now),
-            "HERMES_EVAL_TURN_SPEC": json.dumps(spec, ensure_ascii=False),
-            "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{env.get('PYTHONPATH','')}",
-        })
+        env.update(
+            {
+                "HERMES_HOME": str(self.hermes_home),
+                "HERMES_AGENT_SRC": str(self.hermes_src),
+                "HERMES_EVAL_FAKE_NOW": _iso_with_tz(fake_now),
+                "HERMES_EVAL_TURN_SPEC": json.dumps(spec, ensure_ascii=False),
+                "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{env.get('PYTHONPATH', '')}",
+            }
+        )
         cmd = [self.python_exe, str(_HERMES_INNER_SCRIPT)]
 
         try:
             proc = await asyncio.to_thread(
-                subprocess.run, cmd, env=env, capture_output=True,
-                text=True, timeout=180,
+                subprocess.run,
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=180,
             )
         except subprocess.TimeoutExpired:
             return "[hermes timeout]"
 
         if proc.returncode != 0:
-            logger.warning("hermes turn failed rc={} stderr={}",
-                           proc.returncode, proc.stderr[-500:])
+            logger.warning("hermes turn failed rc={} stderr={}", proc.returncode, proc.stderr[-500:])
             return f"[hermes error rc={proc.returncode}]"
 
         tail = [ln for ln in proc.stdout.strip().splitlines() if ln.strip()]
@@ -1009,7 +1038,10 @@ class HermesAdapter(AgentAdapter):
         return payload.get("response", "") or ""
 
     async def tick_to(
-        self, target_fake_now: datetime, *, current_fake_now: datetime,
+        self,
+        target_fake_now: datetime,
+        *,
+        current_fake_now: datetime,
         emit: EventEmitter,
     ) -> datetime:
         """Poll hermes/cron/jobs.json. Fire any cron whose next_run_at falls
@@ -1090,17 +1122,23 @@ class HermesAdapter(AgentAdapter):
             env = os.environ.copy()
             for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
                 env.pop(k, None)
-            env.update({
-                "HERMES_HOME": str(self.hermes_home),
-                "HERMES_AGENT_SRC": str(self.hermes_src),
-                "HERMES_EVAL_FAKE_NOW": _iso_with_tz(fire_time),
-                "HERMES_EVAL_TURN_SPEC": json.dumps(spec, ensure_ascii=False),
-                "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{env.get('PYTHONPATH','')}",
-            })
+            env.update(
+                {
+                    "HERMES_HOME": str(self.hermes_home),
+                    "HERMES_AGENT_SRC": str(self.hermes_src),
+                    "HERMES_EVAL_FAKE_NOW": _iso_with_tz(fire_time),
+                    "HERMES_EVAL_TURN_SPEC": json.dumps(spec, ensure_ascii=False),
+                    "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{env.get('PYTHONPATH', '')}",
+                }
+            )
             try:
                 proc = await asyncio.to_thread(
-                    subprocess.run, [self.python_exe, str(_HERMES_INNER_SCRIPT)],
-                    env=env, capture_output=True, text=True, timeout=180,
+                    subprocess.run,
+                    [self.python_exe, str(_HERMES_INNER_SCRIPT)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
                 )
             except subprocess.TimeoutExpired:
                 response = "[hermes cron timeout]"
@@ -1122,20 +1160,22 @@ class HermesAdapter(AgentAdapter):
 
             # Emit cron_fire event mirroring sentinel_tick shape so the
             # scorecard / viewer can treat them uniformly.
-            emit({
-                "kind": "cron_fire",
-                "fake_now": fire_time.isoformat(),
-                "delivered": True,
-                "action": "nudge",
-                "route": "cron",
-                "nudge_message": response,
-                "topic_tag": f"cron_{job_id[:12]}",
-                "cron_id": job_id,
-                "cron_name": job_name,
-                "priority": "medium",
-                "target_session": "default",
-                "reason": f"cron fired: {job_name}",
-            })
+            emit(
+                {
+                    "kind": "cron_fire",
+                    "fake_now": fire_time.isoformat(),
+                    "delivered": True,
+                    "action": "nudge",
+                    "route": "cron",
+                    "nudge_message": response,
+                    "topic_tag": f"cron_{job_id[:12]}",
+                    "cron_id": job_id,
+                    "cron_name": job_name,
+                    "priority": "medium",
+                    "target_session": "default",
+                    "reason": f"cron fired: {job_name}",
+                }
+            )
 
             # Mark as fired; recompute next_run for recurring crons.
             # Hermes schedule schema: {"kind": "cron"|"interval"|"once",
@@ -1154,6 +1194,7 @@ class HermesAdapter(AgentAdapter):
             elif kind == "cron" and schedule.get("expr"):
                 try:
                     from croniter import croniter
+
                     nxt = croniter(schedule["expr"], fire_time).get_next(datetime)
                     job["next_run_at"] = nxt.isoformat()
                 except Exception:
@@ -1184,8 +1225,7 @@ class HermesAdapter(AgentAdapter):
                     payload = jobs_envelope
                 else:
                     payload = jobs
-                jobs_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                                     encoding="utf-8")
+                jobs_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Failed to persist hermes jobs.json: {}", exc)
 
@@ -1213,14 +1253,17 @@ class HermesAdapter(AgentAdapter):
 def _find_hermes_python(hermes_src: Path) -> str:
     """Prefer venv in hermes_src; else infer from `hermes` CLI on PATH; else sys.exec."""
     # 1. venv in source tree
-    for cand in (hermes_src / "venv" / "bin" / "python3",
-                 hermes_src / "venv" / "bin" / "python",
-                 hermes_src / ".venv" / "bin" / "python3",
-                 hermes_src / ".venv" / "bin" / "python"):
+    for cand in (
+        hermes_src / "venv" / "bin" / "python3",
+        hermes_src / "venv" / "bin" / "python",
+        hermes_src / ".venv" / "bin" / "python3",
+        hermes_src / ".venv" / "bin" / "python",
+    ):
         if cand.exists():
             return str(cand)
     # 2. infer from `hermes` on PATH — resolve symlink + take sibling python
     import shutil as _shutil
+
     hermes_bin = _shutil.which("hermes")
     if hermes_bin:
         py = Path(hermes_bin).resolve().parent / "python"
@@ -1231,12 +1274,14 @@ def _find_hermes_python(hermes_src: Path) -> str:
             return str(py3)
     # 3. fallback
     import sys
+
     return sys.executable
 
 
 def _iso_with_tz(dt: datetime) -> str:
     if dt.tzinfo is None:
         from datetime import timezone
+
         return dt.replace(tzinfo=timezone.utc).isoformat()
     return dt.isoformat()
 
@@ -1249,8 +1294,7 @@ def _sim_time_preamble(fake_now: datetime) -> str:
     """Prepend simulated time so agents without native fake-clock (OpenClaw,
     and as a belt-and-suspenders safety for Hermes) align replies with
     the sim timeline instead of real wall-clock."""
-    weekday = ["Monday", "Tuesday", "Wednesday", "Thursday",
-               "Friday", "Saturday", "Sunday"][fake_now.weekday()]
+    weekday = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"][fake_now.weekday()]
     return (
         f"[sim_context]\n"
         f"This conversation is part of a simulated day. "
@@ -1288,6 +1332,7 @@ def _resolve_oc_provider(persona_id: str) -> dict:
             "more keys, comma-separated for multi-account rotation)"
         )
     import hashlib as _hashlib
+
     idx = int(_hashlib.sha256(persona_id.encode()).hexdigest()[:8], 16) % len(keys)
     return {
         "model_id": os.environ.get("OPENCLAW_OR_MODEL", "qwen/qwen3.5-27b"),
@@ -1313,7 +1358,8 @@ class OpenClawAdapter(AgentAdapter):
         # rebuild with: ``docker tag ghcr.io/openclaw/openclaw:latest openclaw:local-mcp``
         # Override with $OPENCLAW_LONGRUN_IMAGE for ablations.
         self.docker_image = os.environ.get(
-            "OPENCLAW_LONGRUN_IMAGE", "openclaw:local-mcp",
+            "OPENCLAW_LONGRUN_IMAGE",
+            "openclaw:local-mcp",
         )
         # MCP cron store: LLM-driven set_reminder calls land here (writer is
         # the in-container Node MCP child; host-side tick_to reads via the
@@ -1324,7 +1370,10 @@ class OpenClawAdapter(AgentAdapter):
 
     @classmethod
     async def build(
-        cls, persona: dict[str, Any], *, resume_root: Path | None = None,
+        cls,
+        persona: dict[str, Any],
+        *,
+        resume_root: Path | None = None,
     ) -> "OpenClawAdapter":
         if resume_root is not None:
             root = resume_root
@@ -1336,6 +1385,7 @@ class OpenClawAdapter(AgentAdapter):
 
     def _seed_home(self) -> None:
         from .openclaw import build_openclaw_config, write_openclaw_home
+
         self.oc_home.mkdir(parents=True, exist_ok=True)
         ws = self.oc_home / "workspace"
         ws.mkdir(exist_ok=True)
@@ -1373,39 +1423,65 @@ class OpenClawAdapter(AgentAdapter):
         pass
 
     async def send_user_message(
-        self, content: str, *, session_key: str, fake_now: datetime,
+        self,
+        content: str,
+        *,
+        session_key: str,
+        fake_now: datetime,
     ) -> str:
         return await self._run_oc_turn(content, fake_now)
 
     async def _run_oc_turn(
-        self, content: str, fake_now: datetime, *, timeout_s: int = 180,
+        self,
+        content: str,
+        fake_now: datetime,
+        *,
+        timeout_s: int = 180,
     ) -> str:
         """One openclaw agent --local turn (docker) with sim_time preamble."""
         import time as _time
+
         from .openclaw import extract_response_text
+
         wrapped = _sim_time_preamble(fake_now) + content
         container_name = f"oc-lr-{self.persona['id']}-{_time.monotonic_ns()}"
         cmd = [
-            "docker", "run", "--rm", "--init",
-            "--name", container_name,
-            "-v", f"{self.oc_home}/.openclaw:{_OC_HOME_IN_CONTAINER}",
+            "docker",
+            "run",
+            "--rm",
+            "--init",
+            "--name",
+            container_name,
+            "-v",
+            f"{self.oc_home}/.openclaw:{_OC_HOME_IN_CONTAINER}",
             self.docker_image,
-            "node", "dist/index.js", "agent", "--local",
-            "--session-id", self._session_id,
-            "--message", wrapped,
-            "--thinking", "medium",
-            "--timeout", "90",
+            "node",
+            "dist/index.js",
+            "agent",
+            "--local",
+            "--session-id",
+            self._session_id,
+            "--message",
+            wrapped,
+            "--thinking",
+            "medium",
+            "--timeout",
+            "90",
             "--json",
         ]
         try:
             proc = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True,
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
                 timeout=timeout_s,
             )
         except subprocess.TimeoutExpired:
             subprocess.run(
                 ["docker", "kill", container_name],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             return "[openclaw timeout]"
         text = extract_response_text(proc.stdout, proc.stderr)
@@ -1413,7 +1489,9 @@ class OpenClawAdapter(AgentAdapter):
             dump_dir = os.environ.get("OC_NO_TEXT_DUMP")
             if dump_dir:
                 from pathlib import Path as _P
-                _d = _P(dump_dir); _d.mkdir(parents=True, exist_ok=True)
+
+                _d = _P(dump_dir)
+                _d.mkdir(parents=True, exist_ok=True)
                 stamp = f"{self.persona['id']}-{_time.monotonic_ns()}"
                 (_d / f"{stamp}.input.txt").write_text(wrapped, encoding="utf-8")
                 (_d / f"{stamp}.stdout").write_text(proc.stdout or "", encoding="utf-8")
@@ -1422,7 +1500,10 @@ class OpenClawAdapter(AgentAdapter):
         return text
 
     async def tick_to(
-        self, target_fake_now: datetime, *, current_fake_now: datetime,
+        self,
+        target_fake_now: datetime,
+        *,
+        current_fake_now: datetime,
         emit: EventEmitter,
     ) -> datetime:
         """Poll the MCP cron store and fire any reminder whose `when` falls
@@ -1470,32 +1551,32 @@ class OpenClawAdapter(AgentAdapter):
             # Persist immediately so a mid-tick crash doesn't double-fire.
             try:
                 self._cron_store.write_text(
-                    json.dumps(store, indent=2), encoding="utf-8",
+                    json.dumps(store, indent=2),
+                    encoding="utf-8",
                 )
             except OSError as exc:
                 logger.warning("OpenClaw cron store write failed: {}", exc)
 
             msg = reminder.get("message", "") or ""
-            synthetic = (
-                f"[Reminder fired at {fire_time.strftime('%Y-%m-%d %H:%M')}] "
-                f"{msg}"
-            )
+            synthetic = f"[Reminder fired at {fire_time.strftime('%Y-%m-%d %H:%M')}] {msg}"
             response = await self._run_oc_turn(synthetic, fire_time)
 
-            emit({
-                "kind": "cron_fire",
-                "fake_now": fire_time.isoformat(),
-                "delivered": True,
-                "action": "nudge",
-                "route": "cron",
-                "nudge_message": response,
-                "topic_tag": f"cron_{reminder.get('id', 'unknown')[:16]}",
-                "cron_id": reminder.get("id", "unknown"),
-                "cron_name": (msg[:60] or "reminder"),
-                "priority": "medium",
-                "target_session": "default",
-                "reason": f"reminder fired: {msg[:80]}",
-            })
+            emit(
+                {
+                    "kind": "cron_fire",
+                    "fake_now": fire_time.isoformat(),
+                    "delivered": True,
+                    "action": "nudge",
+                    "route": "cron",
+                    "nudge_message": response,
+                    "topic_tag": f"cron_{reminder.get('id', 'unknown')[:16]}",
+                    "cron_id": reminder.get("id", "unknown"),
+                    "cron_name": (msg[:60] or "reminder"),
+                    "priority": "medium",
+                    "target_session": "default",
+                    "reason": f"reminder fired: {msg[:80]}",
+                }
+            )
 
         return target_fake_now
 
@@ -1515,14 +1596,18 @@ class OpenClawAdapter(AgentAdapter):
 
 
 async def build_adapter(
-    system: str, persona: dict[str, Any], *,
+    system: str,
+    persona: dict[str, Any],
+    *,
     resume_root: Path | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> AgentAdapter:
     system = (system or "raven").lower()
     if system == "raven":
         return await RavenAdapter.build(
-            persona, resume_root=resume_root, overrides=overrides,
+            persona,
+            resume_root=resume_root,
+            overrides=overrides,
         )
     if system == "hermes":
         return await HermesAdapter.build(persona, resume_root=resume_root)
@@ -1531,5 +1616,4 @@ async def build_adapter(
     raise ValueError(f"unknown agent system: {system}")
 
 
-__all__ = ["AgentAdapter", "RavenAdapter", "HermesAdapter",
-           "OpenClawAdapter", "build_adapter"]
+__all__ = ["AgentAdapter", "RavenAdapter", "HermesAdapter", "OpenClawAdapter", "build_adapter"]

@@ -52,7 +52,7 @@ class EmailChannel(ChannelBase):
             return
 
         self._running = True
-        self._stop_event = asyncio.Event()   # fresh per start (restart-safe)
+        self._stop_event = asyncio.Event()  # fresh per start (restart-safe)
         logger.info("Starting Email channel (IMAP polling mode)...")
         poll_seconds = max(5, int(self.config.poll_interval_seconds))
         while self._running:
@@ -83,8 +83,10 @@ class EmailChannel(ChannelBase):
         if message_id := item.get("message_id", ""):
             self._last_message_id[sender] = message_id
         await self.intake.publish(
-            sender_id=sender, chat_id=sender,
-            content=item["content"], metadata=item.get("metadata", {}),
+            sender_id=sender,
+            chat_id=sender,
+            content=item["content"],
+            metadata=item.get("metadata", {}),
         )
 
     async def stop(self) -> None:
@@ -112,8 +114,7 @@ class EmailChannel(ChannelBase):
         summarization (e.g. 'yesterday')."""
         if end_date <= start_date:
             return []
-        criteria = ("SINCE", parsing.format_imap_date(start_date),
-                    "BEFORE", parsing.format_imap_date(end_date))
+        criteria = ("SINCE", parsing.format_imap_date(start_date), "BEFORE", parsing.format_imap_date(end_date))
         items: list[dict[str, Any]] = []
         for uid, raw in self._mailbox.search_fetch(criteria, mark_seen=False, limit=max(1, int(limit))):
             if item := parsing.parse_message(raw, self.config.max_body_chars, uid=uid):
@@ -172,14 +173,16 @@ class EmailChannel(ChannelBase):
 
     def _validate_config(self) -> bool:
         missing = [
-            name for name, value in (
+            name
+            for name, value in (
                 ("imap_host", self.config.imap_host),
                 ("imap_username", self.config.imap_username),
                 ("imap_password", self.config.imap_password),
                 ("smtp_host", self.config.smtp_host),
                 ("smtp_username", self.config.smtp_username),
                 ("smtp_password", self.config.smtp_password),
-            ) if not value
+            )
+            if not value
         ]
         if missing:
             logger.error("Email channel not configured, missing: {}", ", ".join(missing))

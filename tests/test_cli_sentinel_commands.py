@@ -45,20 +45,29 @@ def fake_sentinel_dir(tmp_path: Path, monkeypatch) -> Path:
 
 def _opt(oid: str = "opt_a", title: str = "task A") -> TaskOption:
     return TaskOption(
-        id=oid, title=title, why="why",
-        type="ad_hoc", exec_kind="reply",
+        id=oid,
+        title=title,
+        why="why",
+        type="ad_hoc",
+        exec_kind="reply",
         exec_payload={"prompt": f"do {oid}"},
         created_at_ms=_now_ms(),
     )
 
 
-def _decision(*, decision_id: str = "dec_test", channel: str = "cli",
-              to: str = "direct", awaiting: bool = False,
-              consumed: bool = False,
-              created_at_ms: int | None = None) -> PendingDecision:
+def _decision(
+    *,
+    decision_id: str = "dec_test",
+    channel: str = "cli",
+    to: str = "direct",
+    awaiting: bool = False,
+    consumed: bool = False,
+    created_at_ms: int | None = None,
+) -> PendingDecision:
     return PendingDecision(
         decision_id=decision_id,
-        channel=channel, to=to,
+        channel=channel,
+        to=to,
         created_at_ms=created_at_ms if created_at_ms is not None else _now_ms(),
         ttl_min=60,
         options=[_opt("opt_a", "task A"), _opt("opt_b", "task B")],
@@ -80,8 +89,7 @@ def test_decisions_empty(runner, fake_sentinel_dir):
 def test_decisions_lists_pending(runner, fake_sentinel_dir):
     store = PendingDecisionStore(fake_sentinel_dir / "pending_decisions.json")
     store.put(_decision(decision_id="dec_aa11"))
-    store.put(_decision(decision_id="dec_bb22", channel="feishu",
-                        to="ou_xxx", awaiting=True))
+    store.put(_decision(decision_id="dec_bb22", channel="feishu", to="ou_xxx", awaiting=True))
 
     result = runner.invoke(sentinel_app, ["decisions"])
     assert result.exit_code == 0
@@ -134,12 +142,13 @@ def test_routines_empty(runner, fake_sentinel_dir):
 
 def test_routines_lists_with_status(runner, fake_sentinel_dir):
     store = RoutineStore(fake_sentinel_dir / "routines.json")
-    store.merge([
-        Routine(id="dow1-h09-meet", pattern="x", occurrence_count=4,
-                weight=4.0),
-        Routine(id="dow6-h08-run", pattern="y", occurrence_count=3,
-                weight=3.0),
-    ], now_ms=_now_ms() - 1000)
+    store.merge(
+        [
+            Routine(id="dow1-h09-meet", pattern="x", occurrence_count=4, weight=4.0),
+            Routine(id="dow6-h08-run", pattern="y", occurrence_count=3, weight=3.0),
+        ],
+        now_ms=_now_ms() - 1000,
+    )
     store.upgrade("dow1-h09-meet", confirmed_at_ms=_now_ms())
 
     result = runner.invoke(sentinel_app, ["routines"])
@@ -152,10 +161,13 @@ def test_routines_lists_with_status(runner, fake_sentinel_dir):
 
 def test_routines_filter_status(runner, fake_sentinel_dir):
     store = RoutineStore(fake_sentinel_dir / "routines.json")
-    store.merge([
-        Routine(id="r-active", pattern="x", occurrence_count=4, weight=4.0),
-        Routine(id="r-cand", pattern="y", occurrence_count=3, weight=3.0),
-    ], now_ms=_now_ms() - 1000)
+    store.merge(
+        [
+            Routine(id="r-active", pattern="x", occurrence_count=4, weight=4.0),
+            Routine(id="r-cand", pattern="y", occurrence_count=3, weight=3.0),
+        ],
+        now_ms=_now_ms() - 1000,
+    )
     store.upgrade("r-active", confirmed_at_ms=_now_ms())
 
     r1 = runner.invoke(sentinel_app, ["routines", "--status", "active"])
@@ -177,9 +189,12 @@ def test_routines_invalid_status(runner, fake_sentinel_dir):
 
 def test_routines_no_match_with_status_filter(runner, fake_sentinel_dir):
     store = RoutineStore(fake_sentinel_dir / "routines.json")
-    store.merge([
-        Routine(id="r-only-cand", pattern="x", occurrence_count=4),
-    ], now_ms=_now_ms())
+    store.merge(
+        [
+            Routine(id="r-only-cand", pattern="x", occurrence_count=4),
+        ],
+        now_ms=_now_ms(),
+    )
 
     result = runner.invoke(sentinel_app, ["routines", "--status", "active"])
     assert result.exit_code == 0
@@ -195,7 +210,8 @@ def test_discover_now_aborts_when_disabled(runner, monkeypatch):
     from raven.config.raven import SentinelConfig
 
     stub_sentinel_cfg = SentinelConfig(
-        enabled=True, task_discovery_enabled=False,
+        enabled=True,
+        task_discovery_enabled=False,
     )
     stub_config = MagicMock()
     stub_config.sentinel = stub_sentinel_cfg
@@ -206,7 +222,8 @@ def test_discover_now_aborts_when_disabled(runner, monkeypatch):
     )
 
     result = runner.invoke(
-        sentinel_app, ["discover-now", "feishu", "ou_xxx", "--yes"],
+        sentinel_app,
+        ["discover-now", "feishu", "ou_xxx", "--yes"],
     )
     assert result.exit_code == 1
     assert "task_discovery_enabled is False" in result.stdout
@@ -225,7 +242,8 @@ def test_discover_now_aborts_when_sentinel_disabled(runner, monkeypatch):
     )
 
     result = runner.invoke(
-        sentinel_app, ["discover-now", "feishu", "ou_xxx", "--yes"],
+        sentinel_app,
+        ["discover-now", "feishu", "ou_xxx", "--yes"],
     )
     assert result.exit_code == 1
     assert "sentinel.enabled is False" in result.stdout
@@ -238,7 +256,8 @@ def test_discover_now_aborts_on_no_confirm(runner, monkeypatch):
     from raven.config.raven import SentinelConfig
 
     stub_sentinel_cfg = SentinelConfig(
-        enabled=True, task_discovery_enabled=True,
+        enabled=True,
+        task_discovery_enabled=True,
     )
     stub_config = MagicMock()
     stub_config.sentinel = stub_sentinel_cfg
@@ -249,7 +268,9 @@ def test_discover_now_aborts_on_no_confirm(runner, monkeypatch):
     )
 
     result = runner.invoke(
-        sentinel_app, ["discover-now", "cli", "direct"], input="n\n",
+        sentinel_app,
+        ["discover-now", "cli", "direct"],
+        input="n\n",
     )
     assert result.exit_code == 1
     assert "aborted" in result.stdout
@@ -259,13 +280,13 @@ def test_discover_now_happy_path(runner, monkeypatch):
     """Mock build_sentinel_stack to return a runner with a stub
     task_discoverer; verify discover_now is called and runner.stop()
     fires for cleanup."""
-    import asyncio
 
     from raven.config.raven import SentinelConfig
 
     # Stub config: enabled + task_discovery_enabled = True
     stub_sentinel_cfg = SentinelConfig(
-        enabled=True, task_discovery_enabled=True,
+        enabled=True,
+        task_discovery_enabled=True,
     )
     stub_config = MagicMock()
     stub_config.sentinel = stub_sentinel_cfg
@@ -304,14 +325,13 @@ def test_discover_now_happy_path(runner, monkeypatch):
     # --inproc routes through build_sentinel_stack → stubbed runner; the
     # default path queues a trigger file instead and never touches the stub.
     result = runner.invoke(
-        sentinel_app, ["discover-now", "feishu", "ou_xxx", "--yes", "--inproc"],
+        sentinel_app,
+        ["discover-now", "feishu", "ou_xxx", "--yes", "--inproc"],
     )
     assert result.exit_code == 0, result.stdout
     assert "discover_now invoked" in result.stdout
     assert discover_calls == [("feishu", "ou_xxx")]
-    assert stop_called["called"], (
-        "runner.stop() must be called in finally block for resource cleanup"
-    )
+    assert stop_called["called"], "runner.stop() must be called in finally block for resource cleanup"
 
 
 def test_discover_now_cleans_up_runner_on_exception(runner, monkeypatch):
@@ -319,7 +339,8 @@ def test_discover_now_cleans_up_runner_on_exception(runner, monkeypatch):
     from raven.config.raven import SentinelConfig
 
     stub_sentinel_cfg = SentinelConfig(
-        enabled=True, task_discovery_enabled=True,
+        enabled=True,
+        task_discovery_enabled=True,
     )
     stub_config = MagicMock()
     stub_config.sentinel = stub_sentinel_cfg
@@ -353,14 +374,13 @@ def test_discover_now_cleans_up_runner_on_exception(runner, monkeypatch):
     )
 
     result = runner.invoke(
-        sentinel_app, ["discover-now", "feishu", "ou_xxx", "--yes", "--inproc"],
+        sentinel_app,
+        ["discover-now", "feishu", "ou_xxx", "--yes", "--inproc"],
     )
     # Crash propagates out of asyncio.run, so exit code is non-zero
     assert result.exit_code != 0
     # But stop() was still called for cleanup
-    assert stop_called["called"], (
-        "runner.stop() must be called even if discover_now raises"
-    )
+    assert stop_called["called"], "runner.stop() must be called even if discover_now raises"
 
 
 # ── subapp registration / status smoke ───────────────────────────────
@@ -370,8 +390,7 @@ def test_sentinel_subapp_registered(runner):
     """``raven sentinel --help`` should list the user-facing commands."""
     result = runner.invoke(sentinel_app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("status", "enable", "disable", "tick", "ticks", "nudges",
-                "decisions", "routines"):
+    for cmd in ("status", "enable", "disable", "tick", "ticks", "nudges", "decisions", "routines"):
         assert cmd in result.output
 
 
@@ -527,8 +546,7 @@ def test_ticks_live_wires_headless_nudge_sink(runner, monkeypatch):
 
     result = runner.invoke(
         sentinel_app,
-        ["ticks", "--from", "2026-05-01T09:00:00",
-         "--to", "2026-05-01T09:00:00", "--live"],
+        ["ticks", "--from", "2026-05-01T09:00:00", "--to", "2026-05-01T09:00:00", "--live"],
     )
     assert result.exit_code == 0, result.stdout
     stub_runner.dispatcher.set_post.assert_called_once_with(_headless_nudge_sink)
@@ -543,8 +561,7 @@ def test_ticks_dry_run_neutralizes_dispatcher_and_skips_sink(runner, monkeypatch
 
     result = runner.invoke(
         sentinel_app,
-        ["ticks", "--from", "2026-05-01T09:00:00",
-         "--to", "2026-05-01T09:00:00", "--dry-run"],
+        ["ticks", "--from", "2026-05-01T09:00:00", "--to", "2026-05-01T09:00:00", "--dry-run"],
     )
     assert result.exit_code == 0, result.stdout
     assert stub_runner.dispatcher is None

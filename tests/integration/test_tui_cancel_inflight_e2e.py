@@ -76,9 +76,7 @@ async def _wire_paired_socket() -> tuple[socket.socket, socket.socket, Path]:
 
 async def _send(client: socket.socket, method: str, params: dict, rid: int) -> None:
     loop = asyncio.get_running_loop()
-    frame = json.dumps(
-        {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
-    ) + "\n"
+    frame = json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}) + "\n"
     await loop.sock_sendall(client, frame.encode())
 
 
@@ -91,9 +89,7 @@ async def _drain_events(client: socket.socket, *, duration: float = 0.6) -> list
     while loop.time() < deadline:
         remaining = deadline - loop.time()
         try:
-            chunk = await asyncio.wait_for(
-                loop.sock_recv(client, 65536), timeout=remaining
-            )
+            chunk = await asyncio.wait_for(loop.sock_recv(client, 65536), timeout=remaining)
         except asyncio.TimeoutError:
             break
         if not chunk:
@@ -140,9 +136,7 @@ async def test_turn2_streams_after_turn1_cancel_over_real_rpc() -> None:
         disp = Dispatcher()
         server = RpcServer(req_fd, notif_fd, disp)
         emitter = SubscriptionEmitter(send_frame=server.send_frame)
-        scheduler, _hub, turn_ids, teardown = build_tui(
-            FakeStreamingAgent(), emitter, on_turn_end=clear_active
-        )
+        scheduler, _hub, turn_ids, teardown = build_tui(FakeStreamingAgent(), emitter, on_turn_end=clear_active)
         register_turn_methods(disp, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)
 
         serve_task = asyncio.create_task(server.serve_forever())
@@ -153,17 +147,13 @@ async def test_turn2_streams_after_turn1_cancel_over_real_rpc() -> None:
         await asyncio.sleep(0.05)
 
         # Turn 1 — starts streaming, user hits Ctrl+C mid-stream.
-        await _send(
-            client, "turn.send", {"session_key": SESSION_KEY, "content": "hang"}, 2
-        )
+        await _send(client, "turn.send", {"session_key": SESSION_KEY, "content": "hang"}, 2)
         await asyncio.sleep(0.08)
         await _send(client, "turn.cancel", {"session_key": SESSION_KEY}, 3)
         await asyncio.sleep(0.08)
 
         # Turn 2 — must run and stream to completion on the SAME subscription.
-        await _send(
-            client, "turn.send", {"session_key": SESSION_KEY, "content": "second"}, 4
-        )
+        await _send(client, "turn.send", {"session_key": SESSION_KEY, "content": "second"}, 4)
 
         events = await _drain_events(client, duration=0.6)
 

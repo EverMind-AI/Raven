@@ -31,7 +31,7 @@ class WhatsAppChannel(ChannelBase):
     config: WhatsAppConfig
     name = "whatsapp"
     display_name = "WhatsApp"
-    capabilities = Capabilities(interactive_login=True)   # QR pairing via the bridge
+    capabilities = Capabilities(interactive_login=True)  # QR pairing via the bridge
 
     def __init__(self, config: WhatsAppConfig):
         super().__init__(config)
@@ -63,9 +63,7 @@ class WhatsAppChannel(ChannelBase):
             return False
 
         logger.info(f"{__logo__} Starting WhatsApp bridge for QR login...")
-        return bridge.run_login(
-            bridge_dir, self._effective_bridge_token(), str(get_runtime_subdir("whatsapp-auth"))
-        )
+        return bridge.run_login(bridge_dir, self._effective_bridge_token(), str(get_runtime_subdir("whatsapp-auth")))
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -116,14 +114,11 @@ class WhatsAppChannel(ChannelBase):
             # attachments to the user instead of losing them silently.
             logger.warning("WhatsApp bridge send is text-only; {} attachment(s) not sent", len(media))
             notes = "\n".join(
-                f"[Attachment not sent: {safe_name(m)}]"
-                for m in media if isinstance(m, str) and m.strip()
+                f"[Attachment not sent: {safe_name(m)}]" for m in media if isinstance(m, str) and m.strip()
             )
             text = f"{text}\n{notes}".strip()
         try:
-            await self._ws.send(json.dumps(
-                {"type": "send", "to": chat_id, "text": text}, ensure_ascii=False
-            ))
+            await self._ws.send(json.dumps({"type": "send", "to": chat_id, "text": text}, ensure_ascii=False))
         except Exception as e:
             if transient_network(e):
                 raise  # ws drop: let manager._send_with_retry back off and retry
@@ -180,7 +175,7 @@ class WhatsAppChannel(ChannelBase):
         media_paths = data.get("media") or []
         await self.intake.publish(
             sender_id=sender_id,
-            chat_id=data.get("sender", ""),   # full LID/JID, used for replies
+            chat_id=data.get("sender", ""),  # full LID/JID, used for replies
             content=parsing.build_inbound_content(data.get("content", ""), media_paths),
             media=media_paths,
             metadata={

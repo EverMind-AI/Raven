@@ -21,7 +21,6 @@ adapters can be deleted.
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from typing import Any, Awaitable, Callable, Union
@@ -57,9 +56,7 @@ class OnUserInboundAdapter(AgentHook):
     def name(self) -> str:
         return "Legacy(on_user_inbound)"
 
-    async def before_user_inbound(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         req = ctx.turn_request
         if req is None:
             return HookDecision()
@@ -70,7 +67,8 @@ class OnUserInboundAdapter(AgentHook):
         except Exception as exc:  # noqa: BLE001 — observer must not crash chain
             logger.warning(
                 "on_user_inbound legacy callback raised %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
         return HookDecision()
 
@@ -97,9 +95,7 @@ class DecisionConsumerAdapter(AgentHook):
     def name(self) -> str:
         return "Legacy(decision_consumer)"
 
-    async def before_user_inbound(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         req = ctx.turn_request
         if req is None:
             return HookDecision()
@@ -108,16 +104,15 @@ class DecisionConsumerAdapter(AgentHook):
         except Exception as exc:  # noqa: BLE001 — match legacy semantics
             logger.warning(
                 "decision_consumer legacy callback raised %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return HookDecision()
         if handled is not None:
             # The consumer replies with a MenuReply; _process_message now
             # carries a reply as a (content, media) tuple, so the short-circuit
             # result must match that shape.
-            return HookDecision(
-                short_circuit_result=(handled.content, handled.media or [])
-            )
+            return HookDecision(short_circuit_result=(handled.content, handled.media or []))
         return HookDecision()
 
 
@@ -153,7 +148,8 @@ class ResponseModifierAdapter(AgentHook):
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "response_modifier legacy callback raised %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return HookDecision()
         if not isinstance(modified, str) or modified == original:

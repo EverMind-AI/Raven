@@ -172,10 +172,7 @@ class UseSkillTool(Tool):
             return self._use_on_disk(source, native)
         if source == "hub":
             return await self._use_hub(native)
-        return (
-            f"Error: unknown skill source {source!r} in {skill_id!r} "
-            f"(expected one of local/everos/hub)."
-        )
+        return f"Error: unknown skill source {source!r} in {skill_id!r} (expected one of local/everos/hub)."
 
     def _use_on_disk(self, source: str, native: str) -> str:
         """Resolve an already-materialized local/everos skill dir."""
@@ -187,13 +184,8 @@ class UseSkillTool(Tool):
             )
         scripts = meta.path.parent / "scripts"
         if scripts.is_dir():
-            return (
-                f"## {meta.name}\nscripts_dir: {scripts}\ncached: true\n\n{meta.content}"
-            )
-        return (
-            f"## {meta.name}\n(no bundled scripts — pure-instruction skill; "
-            f"follow the body)\n\n{meta.content}"
-        )
+            return f"## {meta.name}\nscripts_dir: {scripts}\ncached: true\n\n{meta.content}"
+        return f"## {meta.name}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{meta.content}"
 
     async def _use_hub(self, native: str) -> str:
         """Download + extract a Hub skill, then expose its scripts dir."""
@@ -218,10 +210,7 @@ class UseSkillTool(Tool):
         head = f"## {name}" + (f" ({version})" if version else "")
         if scripts_dir:
             return f"{head}\nscripts_dir: {scripts_dir}\n\n{body}"
-        return (
-            f"{head}\n(no bundled scripts — pure-instruction skill; follow the "
-            f"body)\n\n{body}"
-        )
+        return f"{head}\n(no bundled scripts — pure-instruction skill; follow the body)\n\n{body}"
 
 
 __all__ = ["ReadSkillTool", "UseSkillTool"]

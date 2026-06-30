@@ -61,8 +61,8 @@ async def test_catalog_canon_contains_known_commands() -> None:
     # Single-token entries: one top-level (status; onboard/gateway/agent
     # are filtered) + 6 group heads.
     expected = [
-        "/status",      # top-level
-        "/skill",       # group head — TS exact match falls through; slash.exec("skill <sub>") routes via cli.dispatch
+        "/status",  # top-level
+        "/skill",  # group head — TS exact match falls through; slash.exec("skill <sub>") routes via cli.dispatch
         "/sentinel",
         "/channels",
         "/provider",
@@ -76,9 +76,7 @@ async def test_catalog_canon_contains_known_commands() -> None:
         assert canon[e] == e, f"canon[{e!r}] expected {e!r}, got {canon[e]!r}"
     # NO multi-token canon entries — that was the smoke-discovered regression.
     multi_token = [k for k in canon if " " in k]
-    assert not multi_token, (
-        f"canon must be single-token-only (hermes contract); leaked: {multi_token}"
-    )
+    assert not multi_token, f"canon must be single-token-only (hermes contract); leaked: {multi_token}"
 
 
 @pytest.mark.asyncio
@@ -90,15 +88,12 @@ async def test_catalog_pairs_shape_and_consistency() -> None:
     assert isinstance(pairs, list) and pairs, "pairs must be non-empty"
     for entry in pairs:
         # JSON deserialises tuples as lists; handler must produce length-2.
-        assert len(entry) == 2 and all(isinstance(x, str) for x in entry), (
-            f"pairs entry malformed: {entry!r}"
-        )
+        assert len(entry) == 2 and all(isinstance(x, str) for x in entry), f"pairs entry malformed: {entry!r}"
     # pairs (alias, canonical) ≡ canon items (order may differ — set-compare).
     pairs_set = {(a, c) for a, c in pairs}
     canon_set = set(canon.items())
     assert pairs_set == canon_set, (
-        f"pairs / canon drift: only-in-pairs={pairs_set - canon_set}; "
-        f"only-in-canon={canon_set - pairs_set}"
+        f"pairs / canon drift: only-in-pairs={pairs_set - canon_set}; only-in-canon={canon_set - pairs_set}"
     )
 
 
@@ -140,9 +135,7 @@ async def test_catalog_categories_order() -> None:
     """
     result = await commands_catalog({})
     categories = result["categories"]
-    assert categories[0] == "(top-level)", (
-        f"first category must be '(top-level)', got {categories[0]!r}"
-    )
+    assert categories[0] == "(top-level)", f"first category must be '(top-level)', got {categories[0]!r}"
     # Live groups always present
     for g in ("channels", "cron", "provider", "sandbox", "sentinel", "skill"):
         assert g in categories, f"group {g!r} missing from categories: {categories}"
@@ -246,9 +239,7 @@ def test_compute_skill_count_fallback_zero_on_db_missing(monkeypatch, tmp_path) 
         raise RuntimeError("config_missing")
 
     # Patch load_config (lazy-imported inside _compute_skill_count) to raise.
-    monkeypatch.setattr(
-        "raven.config.loader.load_config", _explode, raising=False
-    )
+    monkeypatch.setattr("raven.config.loader.load_config", _explode, raising=False)
     n, warning = commands._compute_skill_count()
     assert n == 0
     assert warning is not None and "config_missing" in warning
@@ -283,9 +274,7 @@ async def test_catalog_filters_hidden_typer_commands(monkeypatch) -> None:
     result = await commands.commands_catalog({})
     canon = result["canon"]
     assert "/visible-cmd" in canon, f"visible command missing from canon: {sorted(canon)}"
-    assert "/hidden-cmd" not in canon, (
-        f"hidden=True command leaked into catalog: {sorted(canon)}"
-    )
+    assert "/hidden-cmd" not in canon, f"hidden=True command leaked into catalog: {sorted(canon)}"
 
 
 def test_catalog_filter_uses_dispatch_blacklist_constant() -> None:

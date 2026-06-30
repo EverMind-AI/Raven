@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 _CRON_SHELL_ONLY = {
     "run": "test-fire mutates job state and uses asyncio.run, which can't "
-           "run inside the REPL event loop. Use `raven cron run` in a shell.",
+    "run inside the REPL event loop. Use `raven cron run` in a shell.",
 }
 
 # Sentinel subcommands not exposed in the REPL, with the reason. Two classes:
@@ -179,7 +179,8 @@ def _handle_cron(args: list[str], console: "Console") -> bool:
             )
             return True
         _invoke(
-            console, cc.cron_config_get,
+            console,
+            cc.cron_config_get,
             forward_channels=_has_flag(rest, "--forward-channels"),
             default_timezone=_has_flag(rest, "--default-timezone"),
         )
@@ -228,7 +229,8 @@ def _handle_cron_add(rest: list[str], console: "Console") -> bool:
     # Schedule validation (exactly-one-of, syntax) is delegated to cron_add,
     # which prints friendly errors and raises typer.Exit on bad input.
     _invoke(
-        console, cc.cron_add,
+        console,
+        cc.cron_add,
         name=name,
         message=message,
         cron=_opt(rest, "--cron"),
@@ -274,15 +276,15 @@ def _handle_sentinel(args: list[str], console: "Console") -> bool:
 
     if sub in _SENTINEL_SHELL_ONLY:
         console.print(
-            f"[yellow]/sentinel {sub} is shell-only: {_SENTINEL_SHELL_ONLY[sub]} "
-            f"Use `raven sentinel {sub} …`.[/yellow]"
+            f"[yellow]/sentinel {sub} is shell-only: {_SENTINEL_SHELL_ONLY[sub]} Use `raven sentinel {sub} …`.[/yellow]"
         )
         return True
 
     if sub == "nudges":
         n = _opt(rest, "-n", "--n")
         _invoke(
-            console, sc.sentinel_nudges,
+            console,
+            sc.sentinel_nudges,
             n=int(n) if n and n.isdigit() else 20,
             show_state=not _has_flag(rest, "--no-state"),
         )
@@ -290,7 +292,8 @@ def _handle_sentinel(args: list[str], console: "Console") -> bool:
 
     if sub == "decisions":
         _invoke(
-            console, sc.sentinel_decisions,
+            console,
+            sc.sentinel_decisions,
             all_=_has_flag(rest, "--all"),
             show_options=_has_flag(rest, "--show-options"),
         )
@@ -302,7 +305,8 @@ def _handle_sentinel(args: list[str], console: "Console") -> bool:
 
     if sub == "attention":
         _invoke(
-            console, sc.sentinel_attention,
+            console,
+            sc.sentinel_attention,
             section=_opt(rest, "--section", "-s"),
             workspace=_opt(rest, "--workspace", "-w"),
         )
@@ -310,7 +314,8 @@ def _handle_sentinel(args: list[str], console: "Console") -> bool:
 
     if sub == "behaviors":
         _invoke(
-            console, sc.sentinel_behaviors,
+            console,
+            sc.sentinel_behaviors,
             since=_opt(rest, "--since"),
             session_key=_opt(rest, "--session"),
             folded=_has_flag(rest, "--folded"),

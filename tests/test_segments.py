@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from raven.agent.context import ContextBuilder
 from raven.context_engine.base import AssemblyContext
 from raven.context_engine.segments import (
@@ -41,9 +39,14 @@ class _Backend:
         self.calls = []
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
-        self.calls.append({
-            "query": query, "user_id": user_id, "agent_id": agent_id, "top_k": top_k,
-        })
+        self.calls.append(
+            {
+                "query": query,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "top_k": top_k,
+            }
+        )
         return list(self._mems)
 
 
@@ -84,7 +87,9 @@ class TestMemory:
         backend = _Backend([Memory(text="likes espresso")])
         b = MemorySegmentBuilder(
             ContextBuilder(workspace=tmp_path).memory,
-            backend=backend, user_id="alice", memory_top_k=7,
+            backend=backend,
+            user_id="alice",
+            memory_top_k=7,
         )
         seg = await b.build(_ctx(tmp_path, "coffee"))
         assert "# Memory" in seg.text

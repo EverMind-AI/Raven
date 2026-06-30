@@ -42,12 +42,7 @@ from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
 
 KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "raven"
-    / "token_wise"
-    / "EXPERIMENT_REPORT.md"
-)
+REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 TURNS = 6
 COST_GUARD_USD = 0.50
@@ -258,8 +253,8 @@ async def _run_variant(
         provider=provider,
         workspace=workspace,
         model=MODEL,
-        max_iterations=4,                      # we expect zero tool turns
-        context_window_tokens=200_000,         # disable consolidator triggering
+        max_iterations=4,  # we expect zero tool turns
+        context_window_tokens=200_000,  # disable consolidator triggering
         mcp_servers={},
         channels_config=None,
         strategies=registry,
@@ -279,10 +274,7 @@ async def _run_variant(
     try:
         for turn_idx, q in enumerate(questions, 1):
             if sum(cost_so_far.values()) > COST_GUARD_USD:
-                pytest.fail(
-                    f"Cost guard tripped at ${sum(cost_so_far.values()):.4f} "
-                    f"(cap=${COST_GUARD_USD})."
-                )
+                pytest.fail(f"Cost guard tripped at ${sum(cost_so_far.values()):.4f} (cap=${COST_GUARD_USD}).")
             await _run_user_turn(loop, q, session_key=session_key, chat_id=name)
 
             # Pull this turn's usage out of the tracker history.
@@ -290,15 +282,17 @@ async def _run_variant(
                 f"expected tracker.history len={turn_idx}, got {len(tracker.history)}"
             )
             snap = tracker.history[-1]
-            result.turns.append(TurnResult(
-                turn=turn_idx,
-                fresh_prompt=snap.input_tokens,
-                cache_read=snap.cache_read_tokens,
-                cache_write=snap.cache_write_tokens,
-                completion=snap.output_tokens,
-                cost_usd=snap.estimated_cost_usd,
-                response_chars=0,  # session manager retains response; tracker doesn't
-            ))
+            result.turns.append(
+                TurnResult(
+                    turn=turn_idx,
+                    fresh_prompt=snap.input_tokens,
+                    cache_read=snap.cache_read_tokens,
+                    cache_write=snap.cache_write_tokens,
+                    completion=snap.output_tokens,
+                    cost_usd=snap.estimated_cost_usd,
+                    response_chars=0,  # session manager retains response; tracker doesn't
+                )
+            )
             cost_so_far[name] = result.total_cost
     except Exception as e:
         result.error = repr(e)
@@ -382,9 +376,7 @@ def _write_report(variants: list[VariantResult], baseline_name: str) -> str:
     for v in variants:
         if v.total_cache_read > 0:
             covered = v.total_cache_read / max(1, v.total_cache_read + v.total_fresh)
-            lines.append(
-                f"- `{v.name}`: {covered*100:.1f}% of input tokens served from cache"
-            )
+            lines.append(f"- `{v.name}`: {covered * 100:.1f}% of input tokens served from cache")
     lines.append("")
     lines.append(
         "## Caveat — OpenRouter routing affinity\n\n"
@@ -455,8 +447,11 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
     v1 = await _run_variant(
         name="V1_baseline",
         description="No cache_control. AgentLoop with empty CacheOptimizer; provider auto-cache OFF.",
-        api_key=api_key, workspace_root=tmp_path, questions=questions,
-        install_cache_optimizer=False, disable_provider_auto_cache=True,
+        api_key=api_key,
+        workspace_root=tmp_path,
+        questions=questions,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
@@ -464,8 +459,11 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
     v2 = await _run_variant(
         name="V2_provider_auto",
         description="LiteLLMProvider built-in cache_control (system + last tool); no CacheOptimizer.",
-        api_key=api_key, workspace_root=tmp_path, questions=questions,
-        install_cache_optimizer=False, disable_provider_auto_cache=False,
+        api_key=api_key,
+        workspace_root=tmp_path,
+        questions=questions,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=False,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
@@ -473,8 +471,11 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
     v3 = await _run_variant(
         name="V3_tokenwise",
         description="TokenWise CacheOptimizer (4 breakpoints) installed in the AgentLoop's StrategyRegistry; provider auto-cache OFF.",
-        api_key=api_key, workspace_root=tmp_path, questions=questions,
-        install_cache_optimizer=True, disable_provider_auto_cache=True,
+        api_key=api_key,
+        workspace_root=tmp_path,
+        questions=questions,
+        install_cache_optimizer=True,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
 
@@ -487,8 +488,7 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
         assert v.error is None, f"variant {v.name} crashed: {v.error}"
         assert len(v.turns) == TURNS, f"{v.name} did not complete all turns"
         assert v.sys_prompt_chars > 4_000, (
-            f"{v.name} system prompt too short ({v.sys_prompt_chars} chars) — "
-            f"may not exceed Anthropic's cache minimum"
+            f"{v.name} system prompt too short ({v.sys_prompt_chars} chars) — may not exceed Anthropic's cache minimum"
         )
 
     # V1: no cache markers placed → zero cache activity must be observed.
@@ -498,8 +498,7 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
     # V2 and V3: the system prompt was big enough to qualify for caching, so
     # repeated turns within each variant must have reused the cache.
     assert v2.total_cache_read > 0, (
-        f"V2 had no cache reads across {TURNS} turns — provider auto-cache "
-        f"is broken end-to-end. v2.turns={v2.turns}"
+        f"V2 had no cache reads across {TURNS} turns — provider auto-cache is broken end-to-end. v2.turns={v2.turns}"
     )
     assert v3.total_cache_read > 0, (
         f"V3 had no cache reads across {TURNS} turns — TokenWise "
@@ -509,16 +508,12 @@ async def test_agentloop_ablation_experiment(api_key: str, tmp_path: Path):
 
     # Savings claims.
     assert v3.total_cost < v1.total_cost, (
-        f"V3 (${v3.total_cost:.6f}) is not cheaper than V1 baseline "
-        f"(${v1.total_cost:.6f})"
+        f"V3 (${v3.total_cost:.6f}) is not cheaper than V1 baseline (${v1.total_cost:.6f})"
     )
     v3_pct = (1 - v3.total_cost / v1.total_cost) * 100
-    assert v3_pct >= 50, (
-        f"V3 saved only {v3_pct:.1f}% vs V1; expected >= 50% on this workload"
-    )
+    assert v3_pct >= 50, f"V3 saved only {v3_pct:.1f}% vs V1; expected >= 50% on this workload"
     assert v2.total_cost < v1.total_cost, (
-        f"V2 (provider auto-cache) showed no savings vs V1 (${v2.total_cost:.6f} "
-        f"vs ${v1.total_cost:.6f})"
+        f"V2 (provider auto-cache) showed no savings vs V1 (${v2.total_cost:.6f} vs ${v1.total_cost:.6f})"
     )
     assert v3.total_cost <= v2.total_cost * 1.05, (
         f"V3 (${v3.total_cost:.6f}) noticeably more expensive than V2 "

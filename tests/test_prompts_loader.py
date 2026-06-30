@@ -14,12 +14,7 @@ from pathlib import Path
 
 import pytest
 
-_RUNNERS = (
-    Path(__file__).resolve().parent.parent
-    / "benchmarks"
-    / "proactivity_eval"
-    / "runners"
-)
+_RUNNERS = Path(__file__).resolve().parent.parent / "benchmarks" / "proactivity_eval" / "runners"
 if str(_RUNNERS) not in sys.path:
     sys.path.insert(0, str(_RUNNERS))
 

@@ -64,16 +64,20 @@ class TestActiveBackend:
         assert "bundled" in result.stdout
 
     def test_shows_active_backend_with_track_ids(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         result = _invoke(
-            _make_runner_args(tmp_path, {
-                "memory": {
-                    "backend": "everos",
-                    "userId": "alice",
-                    "agentId": "robo",
+            _make_runner_args(
+                tmp_path,
+                {
+                    "memory": {
+                        "backend": "everos",
+                        "userId": "alice",
+                        "agentId": "robo",
+                    },
                 },
-            }),
+            ),
             tmp_path,
         )
         assert result.exit_code == 0
@@ -112,9 +116,12 @@ class TestBackendDisabled:
 class TestBackendUnavailable:
     def test_unknown_backend_flagged(self, tmp_path: Path) -> None:
         result = _invoke(
-            _make_runner_args(tmp_path, {
-                "memory": {"backend": "nonexistent"},
-            }),
+            _make_runner_args(
+                tmp_path,
+                {
+                    "memory": {"backend": "nonexistent"},
+                },
+            ),
             tmp_path,
         )
         assert result.exit_code == 0
@@ -130,9 +137,12 @@ class TestBackendUnavailable:
 class TestDisabledList:
     def test_disabled_plugin_status(self, tmp_path: Path) -> None:
         result = _invoke(
-            _make_runner_args(tmp_path, {
-                "plugins": {"disabled": ["everos-memory"]},
-            }),
+            _make_runner_args(
+                tmp_path,
+                {
+                    "plugins": {"disabled": ["everos-memory"]},
+                },
+            ),
             tmp_path,
         )
         assert result.exit_code == 0

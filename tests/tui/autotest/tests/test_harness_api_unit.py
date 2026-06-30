@@ -175,6 +175,7 @@ class TestWait:
         h = Harness()
         h.spawn("/bin/cat")
         import re
+
         assert h.wait(re.compile(r"agent\s+ID"), timeout=1.0) is True
 
     def test_wait_returns_false_on_timeout(self, mock_run):
@@ -195,13 +196,7 @@ class TestWait:
 class TestDump:
     def test_dump_returns_screen_rows_stripped(self, mock_run):
         spawn_calls = [_completed(stdout="sid\n"), _completed()]
-        snapshot = (
-            "─── sid ───\n"
-            "row one\n"
-            "row two trailing   \n"
-            "\n"
-            "─── running | cursor(0,0) ───\n"
-        )
+        snapshot = "─── sid ───\nrow one\nrow two trailing   \n\n─── running | cursor(0,0) ───\n"
         mock_run.side_effect = spawn_calls + [_completed(stdout=snapshot)]
         h = Harness()
         h.spawn("/bin/cat")
@@ -225,15 +220,7 @@ class TestDump:
 class TestExpectExit:
     def test_expect_exit_zero_match(self, mock_run):
         spawn_calls = [_completed(stdout="sid\n"), _completed()]
-        info = _completed(
-            stdout=(
-                "Session ID: sid\n"
-                "Label: t\n"
-                "Command: /bin/cat\n"
-                "Status: exited\n"
-                "Exit Code: 0\n"
-            )
-        )
+        info = _completed(stdout=("Session ID: sid\nLabel: t\nCommand: /bin/cat\nStatus: exited\nExit Code: 0\n"))
         mock_run.side_effect = spawn_calls + [info]
         h = Harness()
         h.spawn("/bin/cat")

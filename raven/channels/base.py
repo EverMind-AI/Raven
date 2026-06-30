@@ -29,7 +29,7 @@ class ChannelBase:
     name: str = ""
     display_name: str = ""
     capabilities: Capabilities = Capabilities()
-    transcription_api_key: str = ""   # set by ChannelManager
+    transcription_api_key: str = ""  # set by ChannelManager
 
     def __init__(self, config: Any):
         self.config = config

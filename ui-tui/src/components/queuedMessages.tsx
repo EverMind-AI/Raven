@@ -5,8 +5,9 @@
 
 import { Box, Text } from '@hermes/ink'
 
-import { compactPreview } from '../lib/text.js'
 import type { Theme } from '../theme.js'
+
+import { compactPreview } from '../lib/text.js'
 
 export const QUEUE_WINDOW = 3
 

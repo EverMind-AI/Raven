@@ -60,9 +60,7 @@ def update_cron_config(
     the caller's responsibility (CLI parsers handle it).
     """
     if key not in CronConfig.model_fields:
-        raise KeyError(
-            f"Unknown cron config key: {key!r}. Supported: {sorted(CronConfig.model_fields)}"
-        )
+        raise KeyError(f"Unknown cron config key: {key!r}. Supported: {sorted(CronConfig.model_fields)}")
     path = config_path or get_config_path()
     data = _load_raw(path)
     cron_section = data.setdefault("cron", {})

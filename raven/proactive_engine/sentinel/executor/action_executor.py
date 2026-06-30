@@ -99,22 +99,29 @@ class ActionExecutor:
                     started,
                     await self._execute_spawn(option, channel=ch, to=target),
                 )
-            return self._finish(started, ActionExecutionResult(
-                status="error",
-                exec_kind=option.exec_kind,
-                error=f"unknown exec_kind {option.exec_kind!r}",
-            ))
+            return self._finish(
+                started,
+                ActionExecutionResult(
+                    status="error",
+                    exec_kind=option.exec_kind,
+                    error=f"unknown exec_kind {option.exec_kind!r}",
+                ),
+            )
         except Exception as exc:
             logger.exception("ActionExecutor.execute crashed: {}", exc)
-            return self._finish(started, ActionExecutionResult(
-                status="error",
-                exec_kind=option.exec_kind,
-                error=f"{type(exc).__name__}: {exc}",
-            ))
+            return self._finish(
+                started,
+                ActionExecutionResult(
+                    status="error",
+                    exec_kind=option.exec_kind,
+                    error=f"{type(exc).__name__}: {exc}",
+                ),
+            )
 
     @staticmethod
     def _finish(
-        started: float, result: ActionExecutionResult,
+        started: float,
+        result: ActionExecutionResult,
     ) -> ActionExecutionResult:
         result.elapsed_ms = int((time.monotonic() - started) * 1000)
         return result
@@ -122,13 +129,12 @@ class ActionExecutor:
     # ------------------------------------------------------------------
     # exec_kind=reply
 
-    async def _execute_reply(
-        self, option: TaskOption, *, channel: str, to: str
-    ) -> ActionExecutionResult:
+    async def _execute_reply(self, option: TaskOption, *, channel: str, to: str) -> ActionExecutionResult:
         prompt = (option.exec_payload or {}).get("prompt", "").strip()
         if not prompt:
             return ActionExecutionResult(
-                status="error", exec_kind="reply",
+                status="error",
+                exec_kind="reply",
                 error="exec_payload.prompt missing or empty",
             )
         # Inject as the user's intent (filtered through their explicit menu
@@ -142,9 +148,7 @@ class ActionExecutor:
 
         req = TurnRequest(
             origin=Origin.USER,
-            source=Source(
-                channel=channel, chat_id=to, sender_id="user", chat_type=ChatType.DM
-            ),
+            source=Source(channel=channel, chat_id=to, sender_id="user", chat_type=ChatType.DM),
             text=prompt,
             conversation=f"{channel}:{to}",
             sentinel=SentinelExtras(action_origin=True),
@@ -174,24 +178,28 @@ class ActionExecutor:
     ) -> ActionExecutionResult:
         if self.routine_store is None:
             return ActionExecutionResult(
-                status="error", exec_kind="routine_confirm",
+                status="error",
+                exec_kind="routine_confirm",
                 error="routine_store not configured",
             )
         payload = option.exec_payload or {}
         routine_id = payload.get("routine_id")
         if not routine_id:
             return ActionExecutionResult(
-                status="error", exec_kind="routine_confirm",
+                status="error",
+                exec_kind="routine_confirm",
                 error="exec_payload.routine_id missing",
             )
 
         now_ms = int(self._now_fn().timestamp() * 1000)
         upgraded = self.routine_store.upgrade(
-            routine_id, confirmed_at_ms=now_ms,
+            routine_id,
+            confirmed_at_ms=now_ms,
         )
         if not upgraded:
             return ActionExecutionResult(
-                status="error", exec_kind="routine_confirm",
+                status="error",
+                exec_kind="routine_confirm",
                 error=f"routine {routine_id!r} not found in store",
             )
         side_effects = [f"upgraded routine {routine_id} to active"]
@@ -205,25 +213,17 @@ class ActionExecutor:
                 try:
                     job = self.cron_service.add_job(
                         name=option.title[:30] or routine_id,
-                        schedule=_build_cron_schedule(cron_expr,
-                                                      payload.get("tz")),
+                        schedule=_build_cron_schedule(cron_expr, payload.get("tz")),
                         message=cron_msg,
                         deliver=True,
                         channel=decision.channel,
                         to=decision.to,
                     )
-                    side_effects.append(
-                        f"created cron job {job.id} ({cron_expr})"
-                    )
+                    side_effects.append(f"created cron job {job.id} ({cron_expr})")
                 except Exception as exc:
-                    side_effects.append(
-                        f"cron job creation failed: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
+                    side_effects.append(f"cron job creation failed: {type(exc).__name__}: {exc}")
             else:
-                side_effects.append(
-                    "cron requested but exec_payload.cron_expr missing"
-                )
+                side_effects.append("cron requested but exec_payload.cron_expr missing")
 
         return ActionExecutionResult(
             status="ok",
@@ -232,16 +232,14 @@ class ActionExecutor:
             side_effects=side_effects,
         )
 
-
     # ------------------------------------------------------------------
     # exec_kind=tool
 
-    async def _execute_tool(
-        self, option: TaskOption, *, channel: str, to: str
-    ) -> ActionExecutionResult:
+    async def _execute_tool(self, option: TaskOption, *, channel: str, to: str) -> ActionExecutionResult:
         if self.tool_registry is None:
             return ActionExecutionResult(
-                status="error", exec_kind="tool",
+                status="error",
+                exec_kind="tool",
                 error="tool_registry not configured",
             )
         payload = option.exec_payload or {}
@@ -249,17 +247,20 @@ class ActionExecutor:
         args = payload.get("args") or {}
         if not tool_name:
             return ActionExecutionResult(
-                status="error", exec_kind="tool",
+                status="error",
+                exec_kind="tool",
                 error="exec_payload.tool missing",
             )
         if not isinstance(args, dict):
             return ActionExecutionResult(
-                status="error", exec_kind="tool",
+                status="error",
+                exec_kind="tool",
                 error="exec_payload.args must be an object",
             )
         if not self.tool_registry.has(tool_name):
             return ActionExecutionResult(
-                status="error", exec_kind="tool",
+                status="error",
+                exec_kind="tool",
                 error=f"tool {tool_name!r} not registered",
             )
         # Tools surface their own errors as strings; we don't transmute
@@ -269,7 +270,8 @@ class ActionExecutor:
             output = await self.tool_registry.execute(tool_name, args)
         except Exception as exc:
             return ActionExecutionResult(
-                status="error", exec_kind="tool",
+                status="error",
+                exec_kind="tool",
                 error=f"{type(exc).__name__}: {exc}",
             )
         return ActionExecutionResult(
@@ -282,19 +284,19 @@ class ActionExecutor:
     # ------------------------------------------------------------------
     # exec_kind=spawn
 
-    async def _execute_spawn(
-        self, option: TaskOption, *, channel: str, to: str
-    ) -> ActionExecutionResult:
+    async def _execute_spawn(self, option: TaskOption, *, channel: str, to: str) -> ActionExecutionResult:
         if self.subagent_manager is None:
             return ActionExecutionResult(
-                status="error", exec_kind="spawn",
+                status="error",
+                exec_kind="spawn",
                 error="subagent_manager not configured",
             )
         payload = option.exec_payload or {}
         task_description = payload.get("task_description", "").strip()
         if not task_description:
             return ActionExecutionResult(
-                status="error", exec_kind="spawn",
+                status="error",
+                exec_kind="spawn",
                 error="exec_payload.task_description missing or empty",
             )
         try:
@@ -307,16 +309,15 @@ class ActionExecutor:
             )
         except Exception as exc:
             return ActionExecutionResult(
-                status="error", exec_kind="spawn",
+                status="error",
+                exec_kind="spawn",
                 error=f"{type(exc).__name__}: {exc}",
             )
         return ActionExecutionResult(
             status="ok",
             exec_kind="spawn",
             output_text=ack or f"已派出后台任务：{option.title}",
-            side_effects=[
-                f"spawned subagent for: {task_description[:80]}"
-            ],
+            side_effects=[f"spawned subagent for: {task_description[:80]}"],
         )
 
 
@@ -325,6 +326,7 @@ def _build_cron_schedule(expr: str, tz: str | None):
     cron isn't installed (defensive — keep the sentinel module
     self-contained for tests that don't care about cron)."""
     from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
     return CronSchedule(kind="cron", expr=expr, tz=tz)
 
 

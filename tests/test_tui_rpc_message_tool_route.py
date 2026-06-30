@@ -19,10 +19,10 @@ import pytest
 
 from raven.agent.loop import AgentLoop, TurnOutcome
 from raven.agent.tools.message import MessageTool
+from raven.providers.base import StreamDelta
+from raven.spine import ChatType, Origin, Source, TurnRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.providers.base import LLMResponse, StreamDelta
-from raven.spine import ChatType, Origin, Source, TurnRequest
 
 
 @pytest.fixture
@@ -56,12 +56,18 @@ class _MessageToolProvider:
     async def chat_stream(self, **kwargs):
         self._i += 1
         if self._i == 1:
-            yield StreamDelta(content=None, tool_call_delta={
-                "tool_calls": [{
-                    "index": 0, "id": "m1",
-                    "function": {"name": "message", "arguments": f'{{"content": "{self._content}"}}'},
-                }],
-            })
+            yield StreamDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "m1",
+                            "function": {"name": "message", "arguments": f'{{"content": "{self._content}"}}'},
+                        }
+                    ],
+                },
+            )
         # second call: no content, no tool -> the loop finishes
 
     def get_default_model(self) -> str:
@@ -128,9 +134,7 @@ async def test_ac2_callback_isolated_per_turn(workspace) -> None:
 
     # Mimic the lane: run the turn in its own task. run_turn swaps the
     # message-tool callback turn-locally; it must not leak back to this task.
-    await asyncio.create_task(
-        loop.run_turn(_req(), _noop_emit, lambda: [], stream=True)
-    )
+    await asyncio.create_task(loop.run_turn(_req(), _noop_emit, lambda: [], stream=True))
     assert message_tool._cur().send_callback is original  # no cross-task leak
 
 
@@ -152,9 +156,7 @@ async def test_ac2_callback_isolated_even_on_error(workspace) -> None:
         return None
 
     with pytest.raises(RuntimeError):
-        await asyncio.create_task(
-            loop.run_turn(_req(), _noop_emit, lambda: [], stream=True)
-        )
+        await asyncio.create_task(loop.run_turn(_req(), _noop_emit, lambda: [], stream=True))
     assert message_tool._cur().send_callback is original  # no leak even on error
 
 
@@ -213,7 +215,10 @@ def _make_inbound(content: str = "test prompt") -> TurnRequest:
     return TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM,
+            channel="tui",
+            chat_id="default",
+            sender_id="user",
+            chat_type=ChatType.DM,
         ),
         text=content,
     )
@@ -232,6 +237,7 @@ async def test_ac3_silent_return_logs_final_content_when_message_tool_used(works
 
     captured: list[str] = []
     from loguru import logger
+
     sink_id = logger.add(
         lambda msg: captured.append(str(msg)),
         level="INFO",
@@ -244,9 +250,7 @@ async def test_ac3_silent_return_logs_final_content_when_message_tool_used(works
 
     assert result is None, "silent-return path expected"
     fingerprint = [c for c in captured if "MessageTool sent in turn" in c]
-    assert len(fingerprint) == 1, (
-        f"expected exactly 1 'MessageTool sent in turn' log line; got {captured!r}"
-    )
+    assert len(fingerprint) == 1, f"expected exactly 1 'MessageTool sent in turn' log line; got {captured!r}"
     assert "hello world via message tool" in fingerprint[0], (
         f"log must include final_content preview; got {fingerprint[0]!r}"
     )
@@ -265,6 +269,7 @@ async def test_ac3_no_log_when_final_content_empty(workspace, monkeypatch) -> No
 
     captured: list[str] = []
     from loguru import logger
+
     sink_id = logger.add(lambda msg: captured.append(str(msg)), level="INFO", format="{message}")
     try:
         result = await agent._process_message(_make_inbound())

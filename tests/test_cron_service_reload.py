@@ -31,9 +31,7 @@ def test_reload_detects_rewrite_within_float_mtime_collision(tmp_path: Path):
     # Mirror what save() records, in whatever precision the impl uses,
     # as if the save itself had produced this controlled timestamp.
     stat = store_path.stat()
-    svc._last_mtime = (
-        stat.st_mtime_ns if isinstance(svc._last_mtime, int) else stat.st_mtime
-    )
+    svc._last_mtime = stat.st_mtime_ns if isinstance(svc._last_mtime, int) else stat.st_mtime
     assert [j.id for j in svc.list_jobs()] == [job.id]
 
     external = CronService(store_path)

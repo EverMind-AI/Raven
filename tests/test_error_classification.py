@@ -11,8 +11,8 @@ import pytest
 
 from raven.providers.base import ErrorClassification, LLMProvider
 
-
 # --- fakes mimicking provider exception shapes (no SDK import needed) -------- #
+
 
 class _StatusError(Exception):
     def __init__(self, msg: str, status_code: int):
@@ -34,16 +34,20 @@ def _c(exc=None, content=None) -> ErrorClassification:
 
 # --- by HTTP status code ---------------------------------------------------- #
 
-@pytest.mark.parametrize("status,category,retry,fb,comp", [
-    (429, "rate_limit", True, True, False),
-    (503, "server", True, True, False),
-    (500, "server", True, True, False),
-    (401, "auth", False, False, False),
-    (403, "auth", False, False, False),
-    (402, "billing", False, True, False),
-    (404, "model_unavailable", False, True, False),
-    (400, "invalid_request", False, False, False),
-])
+
+@pytest.mark.parametrize(
+    "status,category,retry,fb,comp",
+    [
+        (429, "rate_limit", True, True, False),
+        (503, "server", True, True, False),
+        (500, "server", True, True, False),
+        (401, "auth", False, False, False),
+        (403, "auth", False, False, False),
+        (402, "billing", False, True, False),
+        (404, "model_unavailable", False, True, False),
+        (400, "invalid_request", False, False, False),
+    ],
+)
 def test_classify_by_status_code(status, category, retry, fb, comp):
     c = _c(_StatusError("boom", status))
     assert c.category == category
@@ -51,6 +55,7 @@ def test_classify_by_status_code(status, category, retry, fb, comp):
 
 
 # --- by exception class name ------------------------------------------------ #
+
 
 def test_classify_by_class_name_rate_limit():
     c = _c(RateLimitError("slow down"))
@@ -68,6 +73,7 @@ def test_classify_context_window_by_class_name_compresses_not_fallback():
 
 # --- walks the __cause__ chain for the status code -------------------------- #
 
+
 def test_classify_follows_cause_chain():
     inner = _StatusError("upstream 429", 429)
     try:
@@ -82,17 +88,21 @@ def test_classify_follows_cause_chain():
 
 # --- degraded string path (provider already swallowed the exception) -------- #
 
-@pytest.mark.parametrize("text,category", [
-    ("429 rate limit hit", "rate_limit"),
-    ("503 service unavailable", "server"),
-    ("connection reset by peer", "network"),
-    ("insufficient credit / billing", "billing"),
-    ("model not found", "model_unavailable"),
-    ("This model's maximum context length is 8192 tokens", "context_overflow"),
-    ("401 unauthorized: invalid api key", "auth"),
-    ("400 invalid request: bad schema", "invalid_request"),
-    ("something totally unexpected", "unknown"),
-])
+
+@pytest.mark.parametrize(
+    "text,category",
+    [
+        ("429 rate limit hit", "rate_limit"),
+        ("503 service unavailable", "server"),
+        ("connection reset by peer", "network"),
+        ("insufficient credit / billing", "billing"),
+        ("model not found", "model_unavailable"),
+        ("This model's maximum context length is 8192 tokens", "context_overflow"),
+        ("401 unauthorized: invalid api key", "auth"),
+        ("400 invalid request: bad schema", "invalid_request"),
+        ("something totally unexpected", "unknown"),
+    ],
+)
 def test_classify_by_string(text, category):
     assert _c(content=text).category == category
 
@@ -103,6 +113,7 @@ def test_unknown_is_conservative():
 
 
 # --- jitter ----------------------------------------------------------------- #
+
 
 def test_jitter_within_ten_percent():
     for _ in range(50):

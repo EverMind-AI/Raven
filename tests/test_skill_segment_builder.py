@@ -8,13 +8,11 @@ to exercise each stage without network or LLM calls.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace as dataclass_replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pytest
-
-from raven.context_engine.base import AssemblyContext, Segment, TokenBudget
+from raven.context_engine.base import AssemblyContext, TokenBudget
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
 from raven.memory_engine.skill_forge import (
     LLMGateFilter,
@@ -22,7 +20,6 @@ from raven.memory_engine.skill_forge import (
     SkillForgeRouter,
 )
 from raven.memory_engine.skill_forge.types import RouterHit
-
 
 # ----------------------------------------------------------------------
 # Stub doubles
@@ -54,7 +51,10 @@ class _StubSource:
         self._hits = hits
 
     async def search(
-        self, query: str, history: list[dict[str, Any]], k: int,
+        self,
+        query: str,
+        history: list[dict[str, Any]],
+        k: int,
     ) -> list[RouterHit]:
         return list(self._hits[:k])
 
@@ -72,7 +72,10 @@ class _StubHubClient:
         return dict(self._payloads[skill_id])
 
     async def install(
-        self, skill_id: str, *, prefetched_meta: dict[str, Any] | None = None,
+        self,
+        skill_id: str,
+        *,
+        prefetched_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.install_calls.append((skill_id, prefetched_meta))
         payload = dict(self._payloads[skill_id])
@@ -91,7 +94,11 @@ def _hit(qid: str, name: str, body: str = "", **meta: Any) -> RouterHit:
     if source == "hub":
         meta.setdefault("id", qid.split("/", 1)[1])
     return RouterHit(
-        qualified_id=qid, name=name, content=body, score=0.5, meta=meta,
+        qualified_id=qid,
+        name=name,
+        content=body,
+        score=0.5,
+        meta=meta,
     )
 
 
@@ -104,8 +111,10 @@ def _ctx(message: str) -> AssemblyContext:
         chat_id=None,
         session_messages=[],
         budget=TokenBudget(
-            context_length=200_000, reserved_output=8000,
-            reserved_tools=4000, reserved_system=4000,
+            context_length=200_000,
+            reserved_output=8000,
+            reserved_tools=4000,
+            reserved_system=4000,
             available_history=184_000,
         ),
     )
@@ -117,10 +126,13 @@ def _ctx(message: str) -> AssemblyContext:
 
 
 async def test_baseline_renders_local_hits() -> None:
-    src = _StubSource("local", [
-        _hit("local/foo", "foo", body="body foo"),
-        _hit("local/bar", "bar", body="body bar"),
-    ])
+    src = _StubSource(
+        "local",
+        [
+            _hit("local/foo", "foo", body="body foo"),
+            _hit("local/bar", "bar", body="body bar"),
+        ],
+    )
     router = SkillForgeRouter([src])
     builder = SkillsSegmentBuilder(router, skill_top_k=2)
     seg = await builder.build(_ctx("anything"))
@@ -145,9 +157,7 @@ async def test_no_router_returns_empty_segment() -> None:
 async def test_rewriter_skip_short_circuits_segment() -> None:
     src = _StubSource("local", [_hit("local/foo", "foo", body="b")])
     router = SkillForgeRouter([src])
-    rewriter = QueryRewriter(_StubProvider(
-        json.dumps({"need_retrieval": False})
-    ))
+    rewriter = QueryRewriter(_StubProvider(json.dumps({"need_retrieval": False})))
     builder = SkillsSegmentBuilder(router, rewriter=rewriter)
     seg = await builder.build(_ctx("hello there"))
     assert seg.text == ""
@@ -169,9 +179,16 @@ async def test_rewriter_rewrite_passes_through() -> None:
             return []
 
     router = SkillForgeRouter([_SpySource()])
-    rewriter = QueryRewriter(_StubProvider(json.dumps({
-        "need_retrieval": True, "rewritten_query": "pdf gen",
-    })))
+    rewriter = QueryRewriter(
+        _StubProvider(
+            json.dumps(
+                {
+                    "need_retrieval": True,
+                    "rewritten_query": "pdf gen",
+                }
+            )
+        )
+    )
     builder = SkillsSegmentBuilder(router, rewriter=rewriter)
     await builder.build(_ctx("please generate me a pdf report"))
     assert received == ["pdf gen"]
@@ -185,10 +202,11 @@ async def test_rewriter_rewrite_passes_through() -> None:
 async def test_pre_gate_hydrate_fills_hub_body() -> None:
     hub_hit = _hit("hub/abc", "Calendar", body="")
     src = _StubSource("hub", [hub_hit])
-    hub_client = _StubHubClient({
-        "abc": {"name": "Calendar", "skill_md": "# Hub body content",
-                "slug": "calendar", "version": "1.0"},
-    })
+    hub_client = _StubHubClient(
+        {
+            "abc": {"name": "Calendar", "skill_md": "# Hub body content", "slug": "calendar", "version": "1.0"},
+        }
+    )
     router = SkillForgeRouter([src])
     builder = SkillsSegmentBuilder(router, skill_top_k=1, hub_client=hub_client)
     seg = await builder.build(_ctx("schedule"))
@@ -213,16 +231,21 @@ async def test_pre_gate_skipped_when_no_hub_client() -> None:
 
 
 async def test_gate_filters_pool_down_to_selected() -> None:
-    src = _StubSource("local", [
-        _hit("local/keep", "keep", body="k"),
-        _hit("local/drop", "drop", body="d"),
-    ])
+    src = _StubSource(
+        "local",
+        [
+            _hit("local/keep", "keep", body="k"),
+            _hit("local/drop", "drop", body="d"),
+        ],
+    )
     gate = LLMGateFilter(
         _StubProvider(json.dumps({"plan": "p", "skills": ["local/keep"]})),
         max_select=2,
     )
     builder = SkillsSegmentBuilder(
-        SkillForgeRouter([src]), gate=gate, gate_pool_size=5,
+        SkillForgeRouter([src]),
+        gate=gate,
+        gate_pool_size=5,
     )
     seg = await builder.build(_ctx("task"))
     assert seg.meta["injected_skill_ids"] == ["local/keep"]
@@ -251,9 +274,17 @@ async def test_post_gate_resolves_local_refs(tmp_path: Path) -> None:
     (skill_dir / "references" / "x.md").write_text("ref body")
 
     body = "Read {baseDir}/references/x.md."
-    src = _StubSource("local", [_hit(
-        "local/foo", "foo", body=body, skill_dir=str(skill_dir),
-    )])
+    src = _StubSource(
+        "local",
+        [
+            _hit(
+                "local/foo",
+                "foo",
+                body=body,
+                skill_dir=str(skill_dir),
+            )
+        ],
+    )
     builder = SkillsSegmentBuilder(SkillForgeRouter([src]), skill_top_k=1)
     seg = await builder.build(_ctx("anything"))
     assert f"{skill_dir}/references/x.md" in seg.text
@@ -267,12 +298,15 @@ async def test_post_gate_install_hub_passes_prefetched_meta(tmp_path: Path) -> N
     src = _StubSource("hub", [hub_hit])
     skill_dir = tmp_path / "x1"
     skill_dir.mkdir()
-    hub_client = _StubHubClient({
-        "x1": {"name": "Hub Skill", "skill_md": "# Body",
-               "slug": "x1", "version": "1.0", "_dir": str(skill_dir)},
-    })
+    hub_client = _StubHubClient(
+        {
+            "x1": {"name": "Hub Skill", "skill_md": "# Body", "slug": "x1", "version": "1.0", "_dir": str(skill_dir)},
+        }
+    )
     builder = SkillsSegmentBuilder(
-        SkillForgeRouter([src]), skill_top_k=1, hub_client=hub_client,
+        SkillForgeRouter([src]),
+        skill_top_k=1,
+        hub_client=hub_client,
     )
     await builder.build(_ctx("q"))
     assert hub_client.get_calls == ["x1"]
@@ -307,7 +341,9 @@ async def test_get_tool_names_extracts_from_openai_schema() -> None:
         ]
 
     builder = SkillsSegmentBuilder(
-        SkillForgeRouter([src]), gate=gate, get_tool_definitions=tool_defs,
+        SkillForgeRouter([src]),
+        gate=gate,
+        get_tool_definitions=tool_defs,
     )
     await builder.build(_ctx("task"))
     assert captured == [["read_file", "exec", "flat_form"]]

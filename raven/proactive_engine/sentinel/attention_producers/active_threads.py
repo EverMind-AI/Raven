@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from raven.proactive_engine.sentinel.attention_producers._base import (
-    AttentionProducer, WEEKDAY,
+    WEEKDAY,
+    AttentionProducer,
 )
 
 if TYPE_CHECKING:
@@ -29,10 +30,7 @@ def _routine_bullet(r: "Routine") -> str:
     stats = (
         f"occ {r.occurrence_count}"
         + (f" · weight {r.weight:.2f}" if r.weight else "")
-        + (
-            f" · last {r.last_triggered[:10]}"
-            if r.last_triggered else ""
-        )
+        + (f" · last {r.last_triggered[:10]}" if r.last_triggered else "")
     )
     return f"- {' '.join(bits)} ({stats})"
 
@@ -47,10 +45,7 @@ class ActiveThreadsProducer(AttentionProducer):
         self._store = routine_store
 
     async def compute_body(self, now: datetime) -> str:
-        routines = [
-            r for r in self._store.all_routines()
-            if r.status == "active" and r.user_confirmed
-        ]
+        routines = [r for r in self._store.all_routines() if r.status == "active" and r.user_confirmed]
         if not routines:
             return ""
         routines.sort(

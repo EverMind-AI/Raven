@@ -8,7 +8,6 @@ from datetime import datetime
 from raven.proactive_engine.sentinel.types import PlannerContext
 from raven.security.trust import wrap_untrusted
 
-
 _DATE_RE = re.compile(
     r"(?P<iso>\d{4}-\d{1,2}-\d{1,2})"
     r"|"
@@ -17,7 +16,9 @@ _DATE_RE = re.compile(
 
 
 def _extract_upcoming_deadlines(
-    text: str, now: datetime, horizon_days: int = 30,
+    text: str,
+    now: datetime,
+    horizon_days: int = 30,
 ) -> list[str]:
     """Pull date-line pairs from text and return ``- YYYY-MM-DD (N days left): <snippet>``.
 
@@ -55,10 +56,8 @@ def _extract_upcoming_deadlines(
             seen.add(key)
             out.append((days, dt, snippet))
     out.sort(key=lambda x: x[0])
-    return [
-        f"- {dt.strftime('%Y-%m-%d')} (还剩 {days} 天): {snippet}"
-        for days, dt, snippet in out
-    ]
+    return [f"- {dt.strftime('%Y-%m-%d')} (还剩 {days} 天): {snippet}" for days, dt, snippet in out]
+
 
 PLANNER_TOOL: dict = {
     "type": "function",
@@ -146,8 +145,7 @@ PLANNER_TOOL: dict = {
                 "spawn_task": {
                     "type": "string",
                     "description": (
-                        "Self-contained task description for the micro-agent "
-                        "(required when action=spawn_agent)."
+                        "Self-contained task description for the micro-agent (required when action=spawn_agent)."
                     ),
                 },
                 "defer_condition": {
@@ -355,18 +353,13 @@ def build_context_prompt(ctx: PlannerContext) -> str:
     parts: list[str] = []
 
     weekday_cn = "一二三四五六日"[ctx.now.weekday()]
-    parts.append(
-        f"## 当前时间\n{ctx.now.isoformat()}（周{weekday_cn}）"
-    )
+    parts.append(f"## 当前时间\n{ctx.now.isoformat()}（周{weekday_cn}）")
 
     if ctx.user_profile:
         parts.append(f"## 用户画像\n{ctx.user_profile.strip()}")
 
     if ctx.memory_md:
-        parts.append(
-            "## 用户 MEMORY.md\n"
-            + wrap_untrusted(ctx.memory_md.strip(), source="unverified memory")
-        )
+        parts.append("## 用户 MEMORY.md\n" + wrap_untrusted(ctx.memory_md.strip(), source="unverified memory"))
 
     # Pre-compute days_until for date-like patterns found in user_profile /
     # memory_md so the Planner doesn't have to parse Chinese dates and
@@ -419,9 +412,7 @@ def build_context_prompt(ctx: PlannerContext) -> str:
         for r in ctx.routines:
             dow = "每天" if r.day_of_week is None else f"周{'一二三四五六日'[r.day_of_week]}"
             ts = f" {r.time_slot[0]:02d}-{r.time_slot[1]:02d}时" if r.time_slot else ""
-            lines.append(
-                f"- [{r.status}] {r.pattern} ({dow}{ts}, 出现 {r.occurrence_count} 次)"
-            )
+            lines.append(f"- [{r.status}] {r.pattern} ({dow}{ts}, 出现 {r.occurrence_count} 次)")
         parts.append("## 已学习的 Routine\n" + "\n".join(lines))
 
     if ctx.calendar:
@@ -450,11 +441,7 @@ def build_context_prompt(ctx: PlannerContext) -> str:
 
     if ctx.last_decision:
         last = ctx.last_decision
-        entry = (
-            f"## 上次 tick 的决策\n"
-            f"action={last.action}, priority={last.priority}\n"
-            f"reason: {last.reason}"
-        )
+        entry = f"## 上次 tick 的决策\naction={last.action}, priority={last.priority}\nreason: {last.reason}"
         if last.nudge_message:
             entry += f"\n上次 nudge: {last.nudge_message[:200]}"
         parts.append(entry)
@@ -473,8 +460,10 @@ def build_context_prompt(ctx: PlannerContext) -> str:
         if t7d:
             top7 = [(k, v) for k, v in t7d.items() if v >= 2]
             if top7:
-                lines.append("- 7 天内推 ≥2 次的 topic (**同上：同主题必须复用**): " +
-                             ", ".join(f"`{k}`×{v}" for k, v in sorted(top7, key=lambda x: -x[1])[:8]))
+                lines.append(
+                    "- 7 天内推 ≥2 次的 topic (**同上：同主题必须复用**): "
+                    + ", ".join(f"`{k}`×{v}" for k, v in sorted(top7, key=lambda x: -x[1])[:8])
+                )
         dismissals = fh.get("recent_dismissals") or []
         if dismissals:
             lines.append(f"- 最近 dismiss: {len(dismissals)} 次（用户表示已知道/不想被打扰）")

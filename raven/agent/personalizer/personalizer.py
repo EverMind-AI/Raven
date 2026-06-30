@@ -129,6 +129,7 @@ for backwards compatibility — category defaults to "preference" in that case."
 
 # ── Personalizer ──────────────────────────────────────────────────────────────
 
+
 class Personalizer:
     """Implements the 4-step PAHF-inspired personalization flow.
 
@@ -168,8 +169,8 @@ class Personalizer:
             response = await self.provider.chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
-                temperature=0.0,   # classification needs deterministic output
-                max_tokens=100,    # JSON is short; cap tokens to save cost
+                temperature=0.0,  # classification needs deterministic output
+                max_tokens=100,  # JSON is short; cap tokens to save cost
             )
             result = self._parse_json(
                 response.content or "",
@@ -202,7 +203,7 @@ class Personalizer:
             response = await self.provider.chat(
                 messages=[{"role": "user", "content": prompt}],
                 model=self.model,
-                temperature=0.3,   # slight randomness makes the question more natural
+                temperature=0.3,  # slight randomness makes the question more natural
                 max_tokens=120,
             )
             question = (response.content or "").strip()
@@ -214,9 +215,7 @@ class Personalizer:
 
     # ── Step 2b: extract preferences and write them to memory ─────────────────
 
-    async def extract_and_store_preference(
-        self, original_message: str, question: str, answer: str
-    ) -> bool:
+    async def extract_and_store_preference(self, original_message: str, question: str, answer: str) -> bool:
         """Extract reusable preferences from a Q&A pair and persist to MEMORY.md.
 
         Called after the user answers a clarifying question.
@@ -271,7 +270,7 @@ class Personalizer:
 
         prompt = _POST_LEARN_PROMPT.format(
             message=message,
-            response_summary=response_summary[:600],   # keep the prompt from growing too long
+            response_summary=response_summary[:600],  # keep the prompt from growing too long
             memory=current_memory or "(empty)",
         )
 
@@ -303,7 +302,9 @@ class Personalizer:
                 total += len(facts)
                 logger.info(
                     "Personalizer.post_learn: stored {} fact(s) → section={} facts={}",
-                    len(facts), section, facts,
+                    len(facts),
+                    section,
+                    facts,
                 )
             return total > 0
 
@@ -317,9 +318,7 @@ class Personalizer:
     }
 
     @classmethod
-    def _group_facts_by_category(
-        cls, new_facts: list, legacy_section: str = "Preferences"
-    ) -> dict[str, list[str]]:
+    def _group_facts_by_category(cls, new_facts: list, legacy_section: str = "Preferences") -> dict[str, list[str]]:
         """Normalize the two possible ``new_facts`` shapes into
         ``{section_header: [fact_text, ...]}``.
 

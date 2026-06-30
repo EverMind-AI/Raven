@@ -31,17 +31,47 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
 # Defensive limits for untrusted zip extraction.
-_MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024      # 8 MiB per file
-_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024     # 64 MiB uncompressed total
+_MAX_ZIP_ENTRY_BYTES = 8 * 1024 * 1024  # 8 MiB per file
+_MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MiB uncompressed total
 _ALLOWED_SUFFIXES = {
     # docs / data / config
-    ".md", ".txt", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".csv",
-    ".tsv", ".cfg", ".ini", ".xml", ".html", ".htm", ".sql", ".env", "",
+    ".md",
+    ".txt",
+    ".json",
+    ".jsonl",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".csv",
+    ".tsv",
+    ".cfg",
+    ".ini",
+    ".xml",
+    ".html",
+    ".htm",
+    ".sql",
+    ".env",
+    "",
     # scripts
-    ".sh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".lua",
-    ".ps1", ".bat",
+    ".sh",
+    ".py",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".rb",
+    ".pl",
+    ".lua",
+    ".ps1",
+    ".bat",
     # inert assets
-    ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf",
+    ".svg",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pdf",
 }
 
 
@@ -108,7 +138,9 @@ class SkillHubClient:
         if sort:
             params["sort"] = sort
         r = await self._client.get(
-            f"{self._base}/openapi/v1/skills", params=params, headers=self._headers(),
+            f"{self._base}/openapi/v1/skills",
+            params=params,
+            headers=self._headers(),
         )
         r.raise_for_status()
         result = self._result(r.json() or {})
@@ -117,7 +149,8 @@ class SkillHubClient:
     # ── Read body (skill_md) — no download ──────────────────────────
     async def get(self, skill_id: str) -> dict[str, Any]:
         r = await self._client.get(
-            f"{self._base}/openapi/v1/skills/{skill_id}", headers=self._headers(),
+            f"{self._base}/openapi/v1/skills/{skill_id}",
+            headers=self._headers(),
         )
         r.raise_for_status()
         return dict(self._result(r.json() or {}))
@@ -126,7 +159,8 @@ class SkillHubClient:
     async def download(self, skill_id: str) -> bytes:
         r = await self._client.get(
             f"{self._base}/openapi/v1/skills/{skill_id}/download",
-            params={"source": self._source}, headers=self._headers(),
+            params={"source": self._source},
+            headers=self._headers(),
         )
         r.raise_for_status()
         return r.content
@@ -157,7 +191,9 @@ class SkillHubClient:
         root = self._bundle_root(dest)
         scripts = root / "scripts"
         return {
-            "slug": slug, "version": version, "dir": str(root),
+            "slug": slug,
+            "version": version,
+            "dir": str(root),
             "scripts_dir": str(scripts) if scripts.is_dir() else None,
             "skill_md": meta.get("skill_md", ""),
         }

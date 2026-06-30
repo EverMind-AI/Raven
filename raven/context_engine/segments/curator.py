@@ -27,9 +27,9 @@ from raven.agent.tools.registry import ToolRegistry
 from raven.config.raven import ContextConfig
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.curator import (
+    CuratorArchiveMessagesTool,
     CuratorArchiveStore,
     CuratorAssembler,
-    CuratorArchiveMessagesTool,
     CuratorBuildContextTool,
     CuratorCheckBudgetTool,
     CuratorReadMemoryTool,
@@ -74,7 +74,10 @@ class CuratorSegmentBuilder:
         self.max_steps = max_steps
         self.archive = CuratorArchiveStore(workspace, config, now_fn=now_fn)
         self.assembler = CuratorAssembler(
-            provider, model, get_tool_definitions, context_window_tokens,
+            provider,
+            model,
+            get_tool_definitions,
+            context_window_tokens,
         )
         self._turn_ids: dict[str, str] = {}
 
@@ -95,11 +98,16 @@ class CuratorSegmentBuilder:
             chat_id=ctx.chat_id,
         )
         state = CuratorState(session_key, ctx.session_messages, ctx.budget, turn, manifest)
-        self.archive.append_trace(session_key, turn_id, "curator_start", {
-            "budget": asdict(ctx.budget),
-            "message_count": len(ctx.session_messages),
-            "max_steps": self.max_steps,
-        })
+        self.archive.append_trace(
+            session_key,
+            turn_id,
+            "curator_start",
+            {
+                "budget": asdict(ctx.budget),
+                "message_count": len(ctx.session_messages),
+                "max_steps": self.max_steps,
+            },
+        )
 
         history_tokens = sum(item.tokens for item in manifest)
         threshold = int(ctx.budget.available_history * self.config.fast_path_threshold)
@@ -128,10 +136,15 @@ class CuratorSegmentBuilder:
             "path": "fallback",
             "trace_path": str(self.archive.trace_path(session_key, turn_id)),
         }
-        self.archive.append_trace(session_key, turn_id, "fallback", {
-            "plan": asdict(plan),
-            "validation": validation,
-        })
+        self.archive.append_trace(
+            session_key,
+            turn_id,
+            "fallback",
+            {
+                "plan": asdict(plan),
+                "validation": validation,
+            },
+        )
         return Segment(
             text=self.assembler.working_state_segment(plan.working_state_injection or None),
             history=assembled.messages[1:-1],
@@ -147,10 +160,15 @@ class CuratorSegmentBuilder:
         turn_id = self._turn_ids.get(session_key)
         if not turn_id:
             return
-        self.archive.append_trace(session_key, turn_id, "main_agent_result", {
-            "response": response,
-            "usage": usage or {},
-        })
+        self.archive.append_trace(
+            session_key,
+            turn_id,
+            "main_agent_result",
+            {
+                "response": response,
+                "usage": usage or {},
+            },
+        )
 
     # ------------------------------------------------------------------
     # Slow path (bounded internal Curator LLM loop)
@@ -160,15 +178,19 @@ class CuratorSegmentBuilder:
         registry = self._make_tools(state, turn_id)
         messages = [
             {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": json.dumps(
-                _curator_input_payload(state, self.archive), ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(_curator_input_payload(state, self.archive), ensure_ascii=False)},
         ]
         for step in range(1, self.max_steps + 1):
-            self.archive.append_trace(state.session_key, turn_id, "curator_llm_request", {
-                "step": step,
-                "messages": _trace_messages(messages),
-                "tools": registry.tool_names,
-            })
+            self.archive.append_trace(
+                state.session_key,
+                turn_id,
+                "curator_llm_request",
+                {
+                    "step": step,
+                    "messages": _trace_messages(messages),
+                    "tools": registry.tool_names,
+                },
+            )
             response = await self.provider.chat_with_retry(
                 messages=messages,
                 tools=registry.get_definitions(),
@@ -176,12 +198,17 @@ class CuratorSegmentBuilder:
                 max_tokens=2048,
                 temperature=0.1,
             )
-            self.archive.append_trace(state.session_key, turn_id, "curator_llm_response", {
-                "step": step,
-                "content": response.content,
-                "finish_reason": response.finish_reason,
-                "tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
-            })
+            self.archive.append_trace(
+                state.session_key,
+                turn_id,
+                "curator_llm_response",
+                {
+                    "step": step,
+                    "content": response.content,
+                    "finish_reason": response.finish_reason,
+                    "tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
+                },
+            )
             if response.finish_reason == "error":
                 return None
             if not response.has_tool_calls:
@@ -191,28 +218,39 @@ class CuratorSegmentBuilder:
             messages.append({"role": "assistant", "content": response.content, "tool_calls": tool_call_dicts})
             for tool_call in response.tool_calls:
                 result = await registry.execute(tool_call.name, tool_call.arguments)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_call.name,
-                    "content": result,
-                })
-                self.archive.append_trace(state.session_key, turn_id, "curator_tool_result", {
-                    "step": step,
-                    "tool": tool_call.name,
-                    "arguments": tool_call.arguments,
-                    "result": _json_or_text(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": tool_call.name,
+                        "content": result,
+                    }
+                )
+                self.archive.append_trace(
+                    state.session_key,
+                    turn_id,
+                    "curator_tool_result",
+                    {
+                        "step": step,
+                        "tool": tool_call.name,
+                        "arguments": tool_call.arguments,
+                        "result": _json_or_text(result),
+                    },
+                )
                 if tool_call.name == "curator_build_context" and state.final_plan is not None:
                     assembled, validation = self.assembler.build(state, state.final_plan)
                     if validation.get("ok"):
-                        self.archive.append_trace(state.session_key, turn_id, "slow_path_accepted", {
-                            "plan": asdict(state.final_plan),
-                            "validation": validation,
-                        })
+                        self.archive.append_trace(
+                            state.session_key,
+                            turn_id,
+                            "slow_path_accepted",
+                            {
+                                "plan": asdict(state.final_plan),
+                                "validation": validation,
+                            },
+                        )
                         return Segment(
-                            text=self.assembler.working_state_segment(
-                                state.final_plan.working_state_injection or None),
+                            text=self.assembler.working_state_segment(state.final_plan.working_state_injection or None),
                             history=assembled.messages[1:-1],
                             meta={
                                 "path": "slow",

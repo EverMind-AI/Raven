@@ -46,9 +46,7 @@ class AfterIterationHook(AgentHook):
     def name(self) -> str:
         return "EvalAfterIterationHook"
 
-    async def after_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         if not (self._config.enabled and self._config.on_task_completion):
             return HookDecision()
 
@@ -65,7 +63,8 @@ class AfterIterationHook(AgentHook):
         except Exception as exc:  # noqa: BLE001 — defensive; judge already handles its own
             logger.debug(
                 "EvalAfterIterationHook judge error %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             verdict = JudgeVerdict.unknown
 
@@ -81,7 +80,8 @@ class AfterIterationHook(AgentHook):
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "EvalAfterIterationHook adapter error %s: %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
         return HookDecision(
             notes=[f"eval_verdict={verdict.value}"],

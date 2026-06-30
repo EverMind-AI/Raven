@@ -213,10 +213,7 @@ def build_user_content(text: str, media: list[str] | None) -> str | list[dict[st
             b64 = base64.b64encode(raw).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
         else:
-            notes.append(
-                f"[Attachment: {p.name} (path: {p}) — use the understand_media "
-                f"tool to read its contents]"
-            )
+            notes.append(f"[Attachment: {p.name} (path: {p}) — use the understand_media tool to read its contents]")
     body = text
     if notes:
         body = (f"{text}\n\n" if text else "") + "\n".join(notes)

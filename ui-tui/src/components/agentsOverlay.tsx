@@ -7,6 +7,11 @@ import { Box, NoSelect, ScrollBox, type ScrollBoxHandle, Text, useInput, useStdo
 import { useStore } from '@nanostores/react'
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react'
 
+import type { GatewayClient } from '../gatewayClientStub.js'
+import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
+import type { Theme } from '../theme.js'
+import type { SubagentNode, SubagentProgress } from '../types.js'
+
 import {
   $delegationState,
   $overlaySectionsOpen,
@@ -16,8 +21,6 @@ import {
 import { patchOverlayState } from '../app/overlayStore.js'
 import { $spawnDiff, $spawnHistory, clearDiffPair, type SpawnSnapshot } from '../app/spawnHistoryStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
-import type { GatewayClient } from '../gatewayClientStub.js'
-import type { DelegationPauseResponse, DelegationStatusResponse, SubagentInterruptResponse } from '../gatewayTypes.js'
 import { asRpcResult } from '../lib/rpc.js'
 import {
   buildSubagentTree,
@@ -35,8 +38,6 @@ import {
   widthByDepth
 } from '../lib/subagentTree.js'
 import { compactPreview } from '../lib/text.js'
-import type { Theme } from '../theme.js'
-import type { SubagentNode, SubagentProgress } from '../types.js'
 
 // ── Types + lookup tables ────────────────────────────────────────────
 

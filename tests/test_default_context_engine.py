@@ -31,7 +31,6 @@ from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
@@ -73,16 +72,28 @@ class _StubBackend:
         self._recall_raises = recall_raises
         self.recall_calls: list[dict[str, Any]] = []
 
-    async def start(self): pass
-    async def stop(self): pass
-    async def feedback(self, signals): pass
-    async def store(self, session_id, messages): pass
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def feedback(self, signals):
+        pass
+
+    async def store(self, session_id, messages):
+        pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         await asyncio.sleep(self._delay)
-        self.recall_calls.append({
-            "query": query, "user_id": user_id, "agent_id": agent_id, "top_k": top_k,
-        })
+        self.recall_calls.append(
+            {
+                "query": query,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "top_k": top_k,
+            }
+        )
         if self._recall_raises is not None:
             raise self._recall_raises
         return list(self._recall_response)
@@ -137,8 +148,10 @@ def _engine(
         IdentitySegmentBuilder(builder.workspace),
         BootstrapSegmentBuilder(builder.workspace),
         MemorySegmentBuilder(
-            builder.memory, backend,
-            user_id=user_id, memory_top_k=memory_top_k,
+            builder.memory,
+            backend,
+            user_id=user_id,
+            memory_top_k=memory_top_k,
         ),
         ActiveSkillsSegmentBuilder(builder.skills),
         SkillsSegmentBuilder(router, skill_top_k=skill_top_k),
@@ -179,12 +192,15 @@ class TestEngineIdentity:
 
 class TestTwoTrackConcurrency:
     async def test_skill_and_memory_run_concurrently(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         slow_source = _StubSource("local", hits=[], delay_s=0.10)
         slow_backend = _StubBackend(recall_response=[], delay_s=0.10)
         eng = _engine(
-            builder, router=SkillForgeRouter([slow_source]), backend=slow_backend,
+            builder,
+            router=SkillForgeRouter([slow_source]),
+            backend=slow_backend,
         )
         t0 = time.monotonic()
         await eng.assemble(
@@ -198,29 +214,38 @@ class TestTwoTrackConcurrency:
         assert elapsed < 0.15
 
     async def test_track_ids_passed_to_recall(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         backend = _StubBackend()
         eng = _engine(
-            builder, router=SkillForgeRouter([]), backend=backend,
+            builder,
+            router=SkillForgeRouter([]),
+            backend=backend,
             user_id="alice",
         )
         await eng.assemble("s", [], _budget(), turn=_turn("git resolver"))
         assert backend.recall_calls == [
             {
-                "query": "git resolver", "user_id": "alice",
-                "agent_id": None, "top_k": 5,
+                "query": "git resolver",
+                "user_id": "alice",
+                "agent_id": None,
+                "top_k": 5,
             },
         ]
 
     async def test_top_k_propagated_per_track(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         source = _StubSource("local", hits=[])
         backend = _StubBackend()
         eng = _engine(
-            builder, router=SkillForgeRouter([source]), backend=backend,
-            skill_top_k=3, memory_top_k=7,
+            builder,
+            router=SkillForgeRouter([source]),
+            backend=backend,
+            skill_top_k=3,
+            memory_top_k=7,
         )
         await eng.assemble("s", [], _budget(), turn=_turn("q"))
         # SkillForgeRouter applies an over-fetch factor; the source sees k*2
@@ -248,7 +273,8 @@ class TestAssembledMetadata:
     async def test_memory_hits_count(self, builder: ContextBuilder) -> None:
         memories = [Memory(text=f"fact-{i}") for i in range(3)]
         eng = _engine(
-            builder, router=SkillForgeRouter([]),
+            builder,
+            router=SkillForgeRouter([]),
             backend=_StubBackend(recall_response=memories),
         )
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
@@ -267,7 +293,8 @@ class TestAssembledMetadata:
 
 class TestRendering:
     async def test_recalled_memory_merged_into_memory_segment(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         backend = _StubBackend(
             recall_response=[Memory(text="user likes espresso")],
@@ -281,7 +308,8 @@ class TestRendering:
         assert "user likes espresso" in sys_msg["content"]
 
     async def test_router_skills_in_skills_segment(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         hits = [
             RouterHit(
@@ -305,17 +333,20 @@ class TestRendering:
         assert "resolves git refs" in sys_content
 
     async def test_no_skills_addition_when_empty(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
         assert ac.system_prompt_addition is None
 
     async def test_no_recalled_block_when_empty(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         eng = _engine(
-            builder, router=SkillForgeRouter([]),
+            builder,
+            router=SkillForgeRouter([]),
             backend=_StubBackend(recall_response=[]),
         )
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
@@ -329,13 +360,19 @@ class TestRendering:
 
 class TestNoBackendDegrade:
     async def test_recall_skipped_router_local_only(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         """With ``backend=None`` the recall lane yields [] and the local
         router still feeds # Skills."""
-        hits = [RouterHit(
-            qualified_id="local/x", name="x", content="body", score=0.5,
-        )]
+        hits = [
+            RouterHit(
+                qualified_id="local/x",
+                name="x",
+                content="body",
+                score=0.5,
+            )
+        ]
         source = _StubSource("local", hits=hits)
         eng = _engine(builder, router=SkillForgeRouter([source]), backend=None)
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
@@ -351,7 +388,8 @@ class TestNoBackendDegrade:
 
 class TestFailureSemantics:
     async def test_backend_recall_exception_propagates(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         """Memory backend outage surfaces to AgentLoop. SkillForgeRouter has
         its own per-source isolation; the backend recall does NOT."""
@@ -361,7 +399,8 @@ class TestFailureSemantics:
             await eng.assemble("s", [], _budget(), turn=_turn())
 
     async def test_single_skill_source_failure_isolated(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         """SkillForgeRouter's _safe_search swallows per-source exceptions;
         assemble still returns an AssembledContext."""
@@ -369,12 +408,18 @@ class TestFailureSemantics:
         class _Failing:
             name = "broken"
             weight = 1.0
+
             async def search(self, q, h, k):
                 raise RuntimeError("source dead")
 
-        good_hits = [RouterHit(
-            qualified_id="local/x", name="x", content="", score=0.5,
-        )]
+        good_hits = [
+            RouterHit(
+                qualified_id="local/x",
+                name="x",
+                content="",
+                score=0.5,
+            )
+        ]
         eng = _engine(
             builder,
             router=SkillForgeRouter([_Failing(), _StubSource("local", hits=good_hits)]),
@@ -391,11 +436,14 @@ class TestFailureSemantics:
 
 class TestTurnPassthrough:
     async def test_channel_chat_id_propagate_to_builder(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
         ac = await eng.assemble(
-            "s", [], _budget(),
+            "s",
+            [],
+            _budget(),
             turn=_turn("hello", channel="slack", chat_id="C123"),
         )
         joined = "\n".join(str(m.get("content")) for m in ac.messages)

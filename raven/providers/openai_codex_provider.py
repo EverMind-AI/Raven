@@ -132,12 +132,14 @@ def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not name:
             continue
         params = fn.get("parameters") or {}
-        converted.append({
-            "type": "function",
-            "name": name,
-            "description": fn.get("description") or "",
-            "parameters": params if isinstance(params, dict) else {},
-        })
+        converted.append(
+            {
+                "type": "function",
+                "name": name,
+                "description": fn.get("description") or "",
+                "parameters": params if isinstance(params, dict) else {},
+            }
+        )
     return converted
 
 

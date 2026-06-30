@@ -10,7 +10,6 @@ from raven.proactive_engine.sentinel.predictor.routine_store import (
 )
 from raven.proactive_engine.sentinel.types import LLMValidation, Routine
 
-
 # ── helpers ───────────────────────────────────────────────────────────
 
 
@@ -58,15 +57,13 @@ def _ms_days_ago(days: int) -> int:
 
 def test_merge_persists_new_candidates(tmp_path: Path):
     store = RoutineStore(tmp_path / "routines.json")
-    learned = [_routine(), _routine(rid="dow6-h08-running",
-                                    pattern="Saturday 08:00-11:00 — running")]
+    learned = [_routine(), _routine(rid="dow6-h08-running", pattern="Saturday 08:00-11:00 — running")]
     merged = store.merge(learned, now_ms=_NOW_MS)
 
     assert len(merged) == 2
     assert {r.id for r in merged} == {"dow1-h09-meeting", "dow6-h08-running"}
     # Persisted
-    assert {r.id for r in store.all_routines()} == {"dow1-h09-meeting",
-                                                     "dow6-h08-running"}
+    assert {r.id for r in store.all_routines()} == {"dow1-h09-meeting", "dow6-h08-running"}
 
 
 def test_merge_preserves_user_confirmed_status(tmp_path: Path):
@@ -74,8 +71,7 @@ def test_merge_preserves_user_confirmed_status(tmp_path: Path):
     # First merge: candidate
     store.merge([_routine()], now_ms=_NOW_MS)
     # User confirms
-    assert store.upgrade("dow1-h09-meeting",
-                         confirmed_at_ms=_NOW_MS + 60_000) is True
+    assert store.upgrade("dow1-h09-meeting", confirmed_at_ms=_NOW_MS + 60_000) is True
     # Second merge with refreshed stats — status should stay active
     refreshed = _routine(occurrence_count=8, weight=8.0, keywords=("meeting",))
     merged = store.merge([refreshed], now_ms=_NOW_MS + 120_000)
@@ -93,8 +89,7 @@ def test_merge_preserves_user_confirmed_status(tmp_path: Path):
 def test_dismiss_blocks_re_surfacing_within_cooldown(tmp_path: Path):
     store = RoutineStore(tmp_path / "routines.json")
     store.merge([_routine()], now_ms=_NOW_MS)
-    assert store.dismiss("dow1-h09-meeting",
-                         dismissed_at_ms=_NOW_MS) is True
+    assert store.dismiss("dow1-h09-meeting", dismissed_at_ms=_NOW_MS) is True
 
     # Within cooldown — re-derive the routine again, expect it excluded
     fresh = _routine(occurrence_count=10)
@@ -149,11 +144,14 @@ def test_retired_past_cooldown_routine_drops_when_not_re_learned(tmp_path: Path)
 def test_upsert_description_updates_aggregator_fields(tmp_path: Path):
     store = RoutineStore(tmp_path / "routines.json")
     store.merge([_routine()], now_ms=_NOW_MS)
-    assert store.upsert_description(
-        "dow1-h09-meeting",
-        description="weekly engineering team standup",
-        semantic_group="standup",
-    ) is True
+    assert (
+        store.upsert_description(
+            "dow1-h09-meeting",
+            description="weekly engineering team standup",
+            semantic_group="standup",
+        )
+        is True
+    )
     r = store.get("dow1-h09-meeting")
     assert r is not None
     assert r.description == "weekly engineering team standup"
@@ -200,19 +198,26 @@ def test_serialization_back_compat_no_llm_validation_field(tmp_path: Path):
     """Old persisted routines (pre-PR-B) have no ``llm_validation`` key — must
     deserialize cleanly with the field defaulted to None."""
     import json
+
     p = tmp_path / "routines.json"
-    p.write_text(json.dumps({
-        "routines": [{
-            "id": "dow1-h09-meeting",
-            "pattern": "Tuesday 09:00-12:00 — meeting",
-            "keywords": ["meeting"],
-            "day_of_week": 1,
-            "time_slot": [9, 12],
-            "status": "candidate",
-            "occurrence_count": 4,
-            "weight": 4.0,
-        }]
-    }))
+    p.write_text(
+        json.dumps(
+            {
+                "routines": [
+                    {
+                        "id": "dow1-h09-meeting",
+                        "pattern": "Tuesday 09:00-12:00 — meeting",
+                        "keywords": ["meeting"],
+                        "day_of_week": 1,
+                        "time_slot": [9, 12],
+                        "status": "candidate",
+                        "occurrence_count": 4,
+                        "weight": 4.0,
+                    }
+                ]
+            }
+        )
+    )
     store = RoutineStore(p)
     r = store.get("dow1-h09-meeting")
     assert r is not None
@@ -222,20 +227,27 @@ def test_serialization_back_compat_no_llm_validation_field(tmp_path: Path):
 def test_serialization_invalid_llm_validation_falls_back_to_none(tmp_path: Path):
     """Malformed llm_validation in persisted JSON shouldn't crash load."""
     import json
+
     p = tmp_path / "routines.json"
-    p.write_text(json.dumps({
-        "routines": [{
-            "id": "dow1-h09-meeting",
-            "pattern": "x",
-            "keywords": [],
-            "day_of_week": 1,
-            "time_slot": [9, 12],
-            "status": "candidate",
-            "occurrence_count": 3,
-            "weight": 3.0,
-            "llm_validation": "not a dict",  # corrupt
-        }]
-    }))
+    p.write_text(
+        json.dumps(
+            {
+                "routines": [
+                    {
+                        "id": "dow1-h09-meeting",
+                        "pattern": "x",
+                        "keywords": [],
+                        "day_of_week": 1,
+                        "time_slot": [9, 12],
+                        "status": "candidate",
+                        "occurrence_count": 3,
+                        "weight": 3.0,
+                        "llm_validation": "not a dict",  # corrupt
+                    }
+                ]
+            }
+        )
+    )
     r = RoutineStore(p).get("dow1-h09-meeting")
     assert r is not None
     assert r.llm_validation is None

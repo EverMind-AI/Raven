@@ -45,12 +45,19 @@ async def test_api_download_happy_returns_bytes(tmp_path, monkeypatch):
     """post URL → get bytes → returns the file content."""
     ch = _make_channel(tmp_path, monkeypatch)
     api = _api_with_token(ch)
-    api._http.post = AsyncMock(return_value=SimpleNamespace(
-        status_code=200, text="", json=lambda: {"downloadUrl": "https://dt.example/file"},
-    ))
-    api._http.get = AsyncMock(return_value=SimpleNamespace(
-        status_code=200, content=b"\x89PNG" + b"\x00" * 100,
-    ))
+    api._http.post = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {"downloadUrl": "https://dt.example/file"},
+        )
+    )
+    api._http.get = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            content=b"\x89PNG" + b"\x00" * 100,
+        )
+    )
 
     data = await api.download_file("dc123")
     assert data is not None and data.startswith(b"\x89PNG")
@@ -72,12 +79,19 @@ async def test_api_download_oversize_aborts(tmp_path, monkeypatch):
     """Body > 20MB → return None."""
     ch = _make_channel(tmp_path, monkeypatch)
     api = _api_with_token(ch)
-    api._http.post = AsyncMock(return_value=SimpleNamespace(
-        status_code=200, text="", json=lambda: {"downloadUrl": "https://dt.example/file"},
-    ))
-    api._http.get = AsyncMock(return_value=SimpleNamespace(
-        status_code=200, content=b"X" * (21 * 1024 * 1024),
-    ))
+    api._http.post = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            text="",
+            json=lambda: {"downloadUrl": "https://dt.example/file"},
+        )
+    )
+    api._http.get = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            content=b"X" * (21 * 1024 * 1024),
+        )
+    )
 
     assert await api.download_file("dc123") is None
 
@@ -108,7 +122,7 @@ async def test_download_saves_via_shared_sink(tmp_path, monkeypatch):
     assert fp is not None
     saved = Path(fp)
     assert saved.parent == tmp_path
-    assert saved.name.endswith("_alice_image.jpg")   # <hash>_alice_image.jpg
+    assert saved.name.endswith("_alice_image.jpg")  # <hash>_alice_image.jpg
     assert saved.read_bytes().startswith(b"\x89PNG")
 
 
@@ -119,9 +133,9 @@ async def test_download_sanitizes_path_traversal(tmp_path, monkeypatch):
 
     fp = await ch._download_dingtalk_file("dc123", "../../../../etc/evil.sh", "alice")
     saved = Path(fp)
-    assert saved.parent == tmp_path           # stayed inside the media dir
+    assert saved.parent == tmp_path  # stayed inside the media dir
     assert ".." not in saved.name
-    assert saved.name.endswith("evil.sh")     # basename only
+    assert saved.name.endswith("evil.sh")  # basename only
 
 
 async def test_download_none_when_fetch_fails(tmp_path, monkeypatch):
@@ -129,7 +143,7 @@ async def test_download_none_when_fetch_fails(tmp_path, monkeypatch):
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api.download_file = AsyncMock(return_value=None)
     assert await ch._download_dingtalk_file("dc123", "x.bin", "alice") is None
-    assert not any(tmp_path.iterdir())        # nothing written
+    assert not any(tmp_path.iterdir())  # nothing written
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +159,12 @@ async def test_stop_awaits_tasks_before_closing_api(tmp_path, monkeypatch):
     ch._background_tasks.add(task)
 
     def assert_task_done():
-        assert task.done()   # tasks reaped before the client goes away
+        assert task.done()  # tasks reaped before the client goes away
 
     ch._api.close = AsyncMock(side_effect=assert_task_done)
     await asyncio.wait_for(ch.stop(), timeout=2)
     assert task.cancelled()
-    await asyncio.wait_for(ch.stop(), timeout=2)   # idempotent
+    await asyncio.wait_for(ch.stop(), timeout=2)  # idempotent
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +182,7 @@ def _patch_chatbot_msg(monkeypatch: pytest.MonkeyPatch, fake_msg) -> None:
     monkeypatch.setattr("raven.channels.adapters.dingtalk.channel.ChatbotMessage", fake_cls)
 
 
-async def test_process_picture_branch_attaches_image_marker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_process_picture_branch_attaches_image_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """picture message with download_code → content has [Image] + Received files footer."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch._download_dingtalk_file = AsyncMock(return_value="/fake/path/image.jpg")
@@ -203,9 +215,7 @@ async def test_process_picture_branch_attaches_image_marker(
     assert forwarded_file_paths == ["/fake/path/image.jpg"]
 
 
-async def test_process_text_only_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_process_text_only_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """text message → no media handling, content unchanged (regression guard)."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch._download_dingtalk_file = AsyncMock()
@@ -245,14 +255,18 @@ async def test_process_disallowed_sender_skips_download_and_dispatch(
     """Denied sender is rejected in process() before file download + dispatch —
     not merely dropped at the central intake."""
     ch = _make_channel(tmp_path, monkeypatch)
-    ch.config.allow_from = []          # deny all
+    ch.config.allow_from = []  # deny all
     ch._download_dingtalk_file = AsyncMock(return_value="/fake/x.jpg")
     ch._on_message = AsyncMock()
 
     fake_msg = SimpleNamespace(
-        text=None, extensions={}, message_type="picture",
+        text=None,
+        extensions={},
+        message_type="picture",
         image_content=SimpleNamespace(download_code="dc-pic"),
-        sender_staff_id="alice", sender_id="alice", sender_nick="Alice",
+        sender_staff_id="alice",
+        sender_id="alice",
+        sender_nick="Alice",
     )
     _patch_chatbot_msg(monkeypatch, fake_msg)
 
@@ -263,13 +277,11 @@ async def test_process_disallowed_sender_skips_download_and_dispatch(
         task = next(iter(ch._background_tasks))
         await task
 
-    ch._download_dingtalk_file.assert_not_called()   # no download for a denied sender
+    ch._download_dingtalk_file.assert_not_called()  # no download for a denied sender
     ch._on_message.assert_not_called()
 
 
-async def test_process_file_branch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_process_file_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """file message → downloads + content has [File] + footer with original filename path."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch._download_dingtalk_file = AsyncMock(return_value="/fake/path/report.pdf")
@@ -303,9 +315,7 @@ async def test_process_file_branch(
     assert forwarded_file_paths == ["/fake/path/report.pdf"]
 
 
-async def test_process_empty_message_acked_but_not_dispatched(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_process_empty_message_acked_but_not_dispatched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A message that parses to no text and no media is acked OK but never
     forwarded to the bus (guard for the empty/unsupported branch)."""
     ch = _make_channel(tmp_path, monkeypatch)
@@ -336,9 +346,7 @@ async def test_process_empty_message_acked_but_not_dispatched(
 # ---------------------------------------------------------------------------
 
 
-async def test_outbound_blocks_private_ip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_outbound_blocks_private_ip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Layer 1 blocks http://10.x at the very first hop, no HTTP call made."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api._http = MagicMock()
@@ -350,21 +358,23 @@ async def test_outbound_blocks_private_ip(
     ch._api._http.get.assert_not_called()
 
 
-async def test_outbound_allows_public_url(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_outbound_allows_public_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Public URL with public DNS resolution → bytes returned."""
+
     def fake_getaddrinfo(*_args, **_kwargs):
         return [(0, 0, 0, "", ("93.184.216.34", 0))]
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api._http = MagicMock()
-    ch._api._http.get = AsyncMock(return_value=SimpleNamespace(
-        status_code=200,
-        headers={"content-type": "image/png"},
-        content=b"\x89PNG" + b"\x00" * 100,
-    ))
+    ch._api._http.get = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "image/png"},
+            content=b"\x89PNG" + b"\x00" * 100,
+        )
+    )
 
     data, ct = await ch._api.fetch_remote("https://example.com/img.png")
     assert data is not None
@@ -372,30 +382,30 @@ async def test_outbound_allows_public_url(
     assert ct == "image/png"
 
 
-async def test_outbound_redirect_revalidates_each_hop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_outbound_redirect_revalidates_each_hop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hop 1 = public OK; Hop 2 = redirect to 10.0.0.1 → Layer 1 blocks at hop 2."""
+
     def fake_getaddrinfo(host, *_args, **_kwargs):
         return [(0, 0, 0, "", ("93.184.216.34", 0))]
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api._http = MagicMock()
-    ch._api._http.get = AsyncMock(return_value=SimpleNamespace(
-        status_code=302,
-        headers={"location": "http://10.0.0.1/internal"},
-        content=b"",
-    ))
+    ch._api._http.get = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=302,
+            headers={"location": "http://10.0.0.1/internal"},
+            content=b"",
+        )
+    )
 
     data, _ = await ch._api.fetch_remote("https://shortener.example/abc")
     assert data is None
     ch._api._http.get.assert_awaited_once()
 
 
-async def test_on_message_threads_file_paths_to_publish(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_on_message_threads_file_paths_to_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_on_message passes file_paths as media= to intake.publish (multimodal hand-off)."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch.intake.publish = AsyncMock()
@@ -415,9 +425,7 @@ async def test_on_message_threads_file_paths_to_publish(
     assert kw["chat_id"] == "alice"
 
 
-async def test_on_message_empty_file_paths_passes_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_on_message_empty_file_paths_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Empty / missing file_paths → media=None (regression guard)."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch.intake.publish = AsyncMock()
@@ -432,21 +440,23 @@ async def test_on_message_empty_file_paths_passes_none(
     assert kw["media"] is None
 
 
-async def test_outbound_too_many_redirects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_outbound_too_many_redirects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Chained redirects exceed MAX_REDIRECTS → bail."""
+
     def fake_getaddrinfo(*_args, **_kwargs):
         return [(0, 0, 0, "", ("93.184.216.34", 0))]
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api._http = MagicMock()
-    ch._api._http.get = AsyncMock(return_value=SimpleNamespace(
-        status_code=302,
-        headers={"location": "https://example.com/next"},
-        content=b"",
-    ))
+    ch._api._http.get = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=302,
+            headers={"location": "https://example.com/next"},
+            content=b"",
+        )
+    )
 
     data, _ = await ch._api.fetch_remote("https://example.com/start")
     assert data is None
@@ -509,9 +519,7 @@ def test_parse_inbound_raw_text_fallback():
 
 
 def test_parse_inbound_picture():
-    parsed = p.parse_inbound(
-        _msg(message_type="picture", image_content=SimpleNamespace(download_code="dc1")), {}
-    )
+    parsed = p.parse_inbound(_msg(message_type="picture", image_content=SimpleNamespace(download_code="dc1")), {})
     assert parsed.media == [p.MediaRequest("dc1", "image.jpg", "[Image]")]
 
 
@@ -529,12 +537,14 @@ def test_parse_inbound_file_top_level_fallback():
 
 
 def test_parse_inbound_rich_text():
-    rich = SimpleNamespace(rich_text_list=[
-        {"type": "text", "text": "hello"},
-        {"downloadCode": "dc4", "fileName": "a.png"},
-        {"type": "text", "text": "world"},
-        "not-a-dict",
-    ])
+    rich = SimpleNamespace(
+        rich_text_list=[
+            {"type": "text", "text": "hello"},
+            {"downloadCode": "dc4", "fileName": "a.png"},
+            {"type": "text", "text": "world"},
+            "not-a-dict",
+        ]
+    )
     parsed = p.parse_inbound(_msg(message_type="richText", rich_text_content=rich), {})
     assert parsed.text == "hello world"
     assert parsed.media == [p.MediaRequest("dc4", "a.png", "[File]")]
@@ -569,7 +579,7 @@ def _resp(status=200, payload=None, text="", json_ct=True):
         status_code=status,
         text=text,
         headers={"content-type": "application/json"} if json_ct else {},
-        json=lambda: (payload if payload is not None else {}),
+        json=lambda: payload if payload is not None else {},
     )
 
 
@@ -577,10 +587,13 @@ async def test_api_access_token_caches(tmp_path, monkeypatch):
     """First call fetches + caches; second call reuses without a second POST."""
     ch = _make_channel(tmp_path, monkeypatch)
     ch._api._http = MagicMock()
-    ch._api._http.post = AsyncMock(return_value=SimpleNamespace(
-        status_code=200, raise_for_status=lambda: None,
-        json=lambda: {"accessToken": "tok", "expireIn": 7200},
-    ))
+    ch._api._http.post = AsyncMock(
+        return_value=SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {"accessToken": "tok", "expireIn": 7200},
+        )
+    )
     assert await ch._api.access_token() == "tok"
     assert await ch._api.access_token() == "tok"
     ch._api._http.post.assert_awaited_once()
@@ -726,9 +739,10 @@ async def test_send_media_failure_replies_with_marker(tmp_path, monkeypatch):
 def test_dingtalk_satisfies_channel_contract() -> None:
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = DingTalkChannel(DingTalkConfig(enabled=True, client_id="ak", client_secret="sk"))
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_dingtalk_spec_import_is_cheap() -> None:
@@ -736,6 +750,7 @@ def test_dingtalk_spec_import_is_cheap() -> None:
     is deferred into SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.dingtalk.spec as s;"
         "assert 'dingtalk_stream' not in sys.modules, 'spec import pulled in dingtalk_stream';"

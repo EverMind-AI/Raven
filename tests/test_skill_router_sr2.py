@@ -38,10 +38,13 @@ class TestRrfMergeBasics:
         assert out == []
 
     def test_each_source_empty_returns_empty(self) -> None:
-        out = rrf_merge_weighted([
-            ("a", 1.0, []),
-            ("b", 0.8, []),
-        ], k=5)
+        out = rrf_merge_weighted(
+            [
+                ("a", 1.0, []),
+                ("b", 0.8, []),
+            ],
+            k=5,
+        )
         assert out == []
 
 

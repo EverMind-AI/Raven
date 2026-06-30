@@ -59,7 +59,7 @@ def test_resolve_require_mention():
         groups={"g1": SimpleNamespace(require_mention=True)},
         mention=SimpleNamespace(require_in_groups=False),
     )
-    assert mp.resolve_require_mention(cfg, "s1", "g1") is True   # per-group
+    assert mp.resolve_require_mention(cfg, "s1", "g1") is True  # per-group
     assert mp.resolve_require_mention(cfg, "s1", "other") is False  # global fallback
 
 
@@ -93,23 +93,23 @@ def test_safe_dict_and_str_field():
 
 def test_dedup_remembers_per_key():
     from raven.channels.adapters.mochat.pipeline import Dedup
+
     d = Dedup()
     assert d.seen("k", "m1") is False  # first time
-    assert d.seen("k", "m1") is True   # duplicate
+    assert d.seen("k", "m1") is True  # duplicate
     assert d.seen("k", "m2") is False  # different id
     assert d.seen("k2", "m1") is False  # same id, different target key
 
 
 def test_dedup_fifo_cap_evicts_oldest():
     from raven.channels.adapters.mochat.pipeline import Dedup
+
     d = Dedup(cap=2)
     d.seen("k", "m1")
     d.seen("k", "m2")
     d.seen("k", "m3")  # m1 evicted
-    assert d.seen("k", "m1") is False   # forgotten -> accepted again
-    assert d.seen("k", "m3") is True    # still remembered
-
-
+    assert d.seen("k", "m1") is False  # forgotten -> accepted again
+    assert d.seen("k", "m3") is True  # still remembered
 
 
 def test_normalize_id_list():
@@ -119,8 +119,14 @@ def test_normalize_id_list():
 
 def test_make_synthetic_event():
     evt = mp.make_synthetic_event(
-        "m1", "a1", "hi", {"k": 1}, "g1", "c1",
-        timestamp="2026-01-01T00:00:00Z", author_info={"nick": "x"},
+        "m1",
+        "a1",
+        "hi",
+        {"k": 1},
+        "g1",
+        "c1",
+        timestamp="2026-01-01T00:00:00Z",
+        author_info={"nick": "x"},
     )
     assert evt["type"] == "message.add"
     assert evt["timestamp"] == "2026-01-01T00:00:00Z"
@@ -146,15 +152,16 @@ def test_ack_items():
 
 def test_cursor_store_mark_keeps_max(tmp_path):
     from raven.channels.adapters.mochat.cursors import CursorStore
+
     store = CursorStore(tmp_path)
     store._save_task = MagicMock()
     store._save_task.done = lambda: False  # skip scheduling the debounced save
     store.mark("s1", 5)
     assert store.get("s1") == 5
-    store.mark("s1", 3)   # lower -> ignored
+    store.mark("s1", 3)  # lower -> ignored
     store.mark("s1", -1)  # negative -> ignored
     assert store.get("s1") == 5
-    store.mark("s1", 7)   # higher -> updates
+    store.mark("s1", 7)  # higher -> updates
     assert store.get("s1") == 7
     assert "s1" in store and "s2" not in store
 
@@ -169,10 +176,9 @@ def test_seed_targets_from_config():
 
 def test_cursor_store_load_filters_invalid(tmp_path):
     from raven.channels.adapters.mochat.cursors import CursorStore
+
     store = CursorStore(tmp_path)
-    (tmp_path / "session_cursors.json").write_text(
-        json.dumps({"cursors": {"s1": 5, "neg": -1, "s2": 3}})
-    )
+    (tmp_path / "session_cursors.json").write_text(json.dumps({"cursors": {"s1": 5, "neg": -1, "s2": 3}}))
     asyncio.run(store.load())
     assert store.snapshot() == {"s1": 5, "s2": 3}  # negative cursor filtered out
 
@@ -183,11 +189,11 @@ def test_cursor_store_save_load_roundtrip_and_close(tmp_path):
     from raven.channels.adapters.mochat.cursors import CursorStore
 
     async def scenario():
-        store = CursorStore(tmp_path, debounce_s=60)   # debounce far away
-        store.mark("s1", 5)                            # schedules a save task
+        store = CursorStore(tmp_path, debounce_s=60)  # debounce far away
+        store.mark("s1", 5)  # schedules a save task
         pending = store._save_task
-        await store.close()                            # cancel + immediate save
-        await asyncio.sleep(0)                         # let the cancellation land
+        await store.close()  # cancel + immediate save
+        await asyncio.sleep(0)  # let the cancellation land
         assert pending.cancelled()
 
         fresh = CursorStore(tmp_path)
@@ -203,7 +209,7 @@ def test_cursor_store_debounced_save_fires(tmp_path):
     async def scenario():
         store = CursorStore(tmp_path, debounce_s=0)
         store.mark("s1", 9)
-        await store._save_task                         # debounce elapses -> saved
+        await store._save_task  # debounce elapses -> saved
         data = json.loads((tmp_path / "session_cursors.json").read_text())
         assert data["cursors"] == {"s1": 9} and data["schemaVersion"] == 1
 
@@ -219,7 +225,9 @@ def _api():
 
 def _resp(status=200, payload=None, text="", success=True):
     return SimpleNamespace(
-        is_success=success, status_code=status, text=text,
+        is_success=success,
+        status_code=status,
+        text=text,
         json=lambda: payload if payload is not None else {},
     )
 
@@ -270,10 +278,16 @@ def test_api_endpoint_payloads():
     assert api.post.call_args.args == ("/api/claw/sessions/send", {"sessionId": "s1", "content": "hi", "replyTo": "r1"})
 
     asyncio.run(api.send_panel("p1", "yo", None, "g1"))
-    assert api.post.call_args.args == ("/api/claw/groups/panels/send", {"panelId": "p1", "content": "yo", "groupId": "g1"})
+    assert api.post.call_args.args == (
+        "/api/claw/groups/panels/send",
+        {"panelId": "p1", "content": "yo", "groupId": "g1"},
+    )
 
     asyncio.run(api.watch_session("s2", 5, 1000, 50))
-    assert api.post.call_args.args == ("/api/claw/sessions/watch", {"sessionId": "s2", "cursor": 5, "timeoutMs": 1000, "limit": 50})
+    assert api.post.call_args.args == (
+        "/api/claw/sessions/watch",
+        {"sessionId": "s2", "cursor": 5, "timeoutMs": 1000, "limit": 50},
+    )
 
     asyncio.run(api.panel_messages("p2", 30))
     assert api.post.call_args.args == ("/api/claw/groups/panels/messages", {"panelId": "p2", "limit": 30})
@@ -290,11 +304,17 @@ def test_api_endpoint_payloads():
 
 def _ch(**over):
     cfg = SimpleNamespace(
-        allow_from=["*"], agent_user_id="bot",
-        reply_delay_mode="instant", reply_delay_ms=0,
-        groups={}, mention=SimpleNamespace(require_in_groups=False),
-        base_url="http://m", claw_token="t", watch_limit=50,
-        sessions=[], panels=[],
+        allow_from=["*"],
+        agent_user_id="bot",
+        reply_delay_mode="instant",
+        reply_delay_ms=0,
+        groups={},
+        mention=SimpleNamespace(require_in_groups=False),
+        base_url="http://m",
+        claw_token="t",
+        watch_limit=50,
+        sessions=[],
+        panels=[],
     )
     for k, v in over.items():
         setattr(cfg, k, v)
@@ -304,8 +324,13 @@ def _ch(**over):
 
 
 def _event(author="alice", message_id="m1", content="hello", group_id="", seq=None, meta=None):
-    payload = {"author": author, "messageId": message_id, "content": content,
-               "groupId": group_id, "authorInfo": {"nickname": "Alice"}}
+    payload = {
+        "author": author,
+        "messageId": message_id,
+        "content": content,
+        "groupId": group_id,
+        "authorInfo": {"nickname": "Alice"},
+    }
     if meta is not None:
         payload["meta"] = meta
     evt = {"type": "message.add", "timestamp": "2026-01-01T00:00:00Z", "payload": payload}
@@ -381,7 +406,7 @@ def test_char_watch_payload_cold_session_drains_without_dispatch():
     asyncio.run(ch._handle_watch_payload(payload, "session"))
     ch.intake.publish.assert_not_called()
     assert "s1" not in ch._cold_sessions
-    assert ch._cursors.get("s1") == 9   # cursor still advanced from payload
+    assert ch._cursors.get("s1") == 9  # cursor still advanced from payload
 
 
 def test_char_watch_payload_ignores_non_dict_and_no_session():
@@ -406,8 +431,13 @@ def test_char_dispatch_entries_buffered_body_group():
 
 
 def test_build_entry():
-    payload = {"author": "alice", "messageId": "m1", "content": "  hi  ", "groupId": "g",
-               "authorInfo": {"nickname": "Alice", "agentId": "ag1"}}
+    payload = {
+        "author": "alice",
+        "messageId": "m1",
+        "content": "  hi  ",
+        "groupId": "g",
+        "authorInfo": {"nickname": "Alice", "agentId": "ag1"},
+    }
     e = mp.build_entry(payload, "2026-06-04T00:00:00Z")
     assert (e.author, e.raw_body, e.message_id, e.group_id) == ("alice", "hi", "m1", "g")
     assert e.sender_name == "Alice" and e.sender_username == "ag1"
@@ -417,9 +447,11 @@ def test_build_entry():
 
 
 def test_mention_gate():
-    cfg = SimpleNamespace(groups={"g1": SimpleNamespace(require_mention=True)},
-                          mention=SimpleNamespace(require_in_groups=False),
-                          reply_delay_mode="instant")
+    cfg = SimpleNamespace(
+        groups={"g1": SimpleNamespace(require_mention=True)},
+        mention=SimpleNamespace(require_in_groups=False),
+        reply_delay_mode="instant",
+    )
     # panel + group requiring mention
     assert mp.mention_gate(cfg, "panel", "g1", "g1") == (True, False)
     # session is never gated/delayed
@@ -433,11 +465,11 @@ def test_char_inbox_append_refreshes_on_cache_miss():
     """notify:chat.inbox.append for an unknown converseId refreshes the session
     directory once, then dispatches to the resolved session (regression guard)."""
     ch = _ch()
-    ch._refresh_sessions_directory = AsyncMock(
-        side_effect=lambda _sn: ch._session_by_converse.update({"cv1": "sessX"})
-    )
-    payload = {"type": "message", "payload": {
-        "converseId": "cv1", "messageId": "m1", "messageAuthor": "alice", "messagePlainContent": "hi"}}
+    ch._refresh_sessions_directory = AsyncMock(side_effect=lambda _sn: ch._session_by_converse.update({"cv1": "sessX"}))
+    payload = {
+        "type": "message",
+        "payload": {"converseId": "cv1", "messageId": "m1", "messageAuthor": "alice", "messagePlainContent": "hi"},
+    }
     asyncio.run(ch._on_inbox_append(payload))
     ch._refresh_sessions_directory.assert_awaited_once()
     ch.intake.publish.assert_awaited_once()
@@ -480,7 +512,7 @@ def test_delay_timer_flushes_all_entries_once():
     asyncio.run(scenario())
     ch._dispatch_entries.assert_awaited_once()
     args = ch._dispatch_entries.await_args.args
-    assert args[2] == [e1, e2]                 # all entries, exactly once
+    assert args[2] == [e1, e2]  # all entries, exactly once
     assert ch._delays._states["session:s1"].entries == []
 
 
@@ -495,15 +527,15 @@ def test_delay_mention_flush_includes_trigger_and_cancels_timer():
         timer = ch._delays._states["session:s1"].timer
         await ch._delays.flush_now("session:s1", "s1", "session", e2)
         try:
-            await timer                         # cancelled -> must not fire
+            await timer  # cancelled -> must not fire
         except asyncio.CancelledError:
             pass
 
     asyncio.run(scenario())
     ch._dispatch_entries.assert_awaited_once()
     args = ch._dispatch_entries.await_args
-    assert args.args[2] == [e1, e2]            # buffered + trigger, exactly once
-    assert args.args[3] is True                 # reason "mention" -> was_mentioned
+    assert args.args[2] == [e1, e2]  # buffered + trigger, exactly once
+    assert args.args[3] is True  # reason "mention" -> was_mentioned
 
 
 def test_delay_cancel_all_drops_pending():
@@ -533,7 +565,7 @@ def test_delay_dispatch_runs_outside_state_lock():
 
     async def reentrant_dispatch(target_id, target_kind, entries, was_mentioned):
         seen.append(entries)
-        if len(seen) == 1:                      # re-enter once from the callback
+        if len(seen) == 1:  # re-enter once from the callback
             await ch._delays.enqueue("session:s1", "s1", "session", _entry("m2"))
 
     ch._dispatch_entries = reentrant_dispatch
@@ -543,7 +575,7 @@ def test_delay_dispatch_runs_outside_state_lock():
         await asyncio.wait_for(ch._delays._states["session:s1"].timer, timeout=2)
         await asyncio.wait_for(ch._delays._states["session:s1"].timer, timeout=2)
 
-    asyncio.run(scenario())                     # completing at all proves no deadlock
+    asyncio.run(scenario())  # completing at all proves no deadlock
     assert [e.message_id for batch in seen for e in batch] == ["m1", "m2"]
 
 
@@ -603,6 +635,7 @@ def test_send_reraises_transient_for_manager_retry():
     off; business errors stay swallowed (see test_send_swallows_api_error)."""
     import httpx
     import pytest
+
     ch = _send_ch()
     ch._api.send_session = AsyncMock(side_effect=httpx.ConnectTimeout("t"))
     with pytest.raises(httpx.ConnectTimeout):
@@ -612,7 +645,7 @@ def test_send_reraises_transient_for_manager_retry():
 def test_send_swallows_api_error():
     ch = _send_ch()
     ch._api.send_session = AsyncMock(side_effect=RuntimeError("boom"))
-    asyncio.run(ch.send("session_s1", "hi"))     # logged, not raised
+    asyncio.run(ch.send("session_s1", "hi"))  # logged, not raised
 
 
 # ── subscribe orchestration (transport.request mocked) ────────────────
@@ -621,13 +654,13 @@ def test_send_swallows_api_error():
 def test_subscribe_sessions_payload_and_cold_marking():
     ch = _ch()
     ch._cursors.mark = lambda *a: None
-    ch._cursors._cursors["s1"] = 7                  # s1 warm, s2 cold
+    ch._cursors._cursors["s1"] = 7  # s1 warm, s2 cold
     ch._transport.request = AsyncMock(return_value={"result": True})
     assert asyncio.run(ch._subscribe_sessions(["s1", "s2"])) is True
     args = ch._transport.request.await_args.args
     assert args[0] == "com.claw.im.subscribeSessions"
     assert args[1]["sessionIds"] == ["s1", "s2"]
-    assert args[1]["cursors"] == {"s1": 7}          # snapshot of known cursors
+    assert args[1]["cursors"] == {"s1": 7}  # snapshot of known cursors
     assert "s2" in ch._cold_sessions and "s1" not in ch._cold_sessions
 
 
@@ -639,9 +672,12 @@ def test_subscribe_sessions_failure_returns_false():
 
 def test_subscribe_sessions_replays_ack_items():
     ch = _ch()
-    ch._transport.request = AsyncMock(return_value={
-        "result": True, "data": [{"sessionId": "s1", "events": []}],
-    })
+    ch._transport.request = AsyncMock(
+        return_value={
+            "result": True,
+            "data": [{"sessionId": "s1", "events": []}],
+        }
+    )
     ch._handle_watch_payload = AsyncMock()
     asyncio.run(ch._subscribe_sessions(["s1"]))
     ch._handle_watch_payload.assert_awaited_once_with({"sessionId": "s1", "events": []}, "session")
@@ -659,7 +695,8 @@ def test_subscribe_panels_payload_and_failure():
     ch._transport.request = AsyncMock(return_value={"result": True})
     assert asyncio.run(ch._subscribe_panels(["p1"])) is True
     assert ch._transport.request.await_args.args == (
-        "com.claw.im.subscribePanels", {"panelIds": ["p1"]},
+        "com.claw.im.subscribePanels",
+        {"panelIds": ["p1"]},
     )
     ch._transport.request = AsyncMock(return_value={"result": False})
     assert asyncio.run(ch._subscribe_panels(["p1"])) is False
@@ -670,10 +707,15 @@ def test_subscribe_panels_payload_and_failure():
 
 def _transport_cfg(**over):
     cfg = SimpleNamespace(
-        socket_disable_msgpack=True, max_retry_attempts=3,
-        socket_reconnect_delay_ms=1000, socket_max_reconnect_delay_ms=5000,
-        socket_url="", base_url="http://m.example/", socket_path="",
-        claw_token="t", socket_connect_timeout_ms=2000,
+        socket_disable_msgpack=True,
+        max_retry_attempts=3,
+        socket_reconnect_delay_ms=1000,
+        socket_max_reconnect_delay_ms=5000,
+        socket_url="",
+        base_url="http://m.example/",
+        socket_path="",
+        claw_token="t",
+        socket_connect_timeout_ms=2000,
     )
     for k, v in over.items():
         setattr(cfg, k, v)
@@ -700,6 +742,7 @@ class _FakeSocketClient:
 
 def _patched_transport(monkeypatch, cfg=None, handlers=None, setup=None):
     from raven.channels.adapters.mochat import transport as tr
+
     fake_holder = {}
 
     def factory(**kwargs):
@@ -741,25 +784,27 @@ def test_transport_client_held_before_connect(monkeypatch):
 
     def setup(client):
         async def handshake_connect(url, **kwargs):
-            seen["ack"] = await t.request("subscribe", {})   # fired mid-handshake
+            seen["ack"] = await t.request("subscribe", {})  # fired mid-handshake
+
         client.connect = handshake_connect
         client.call = AsyncMock(return_value={"result": True})
 
     t, _ = _patched_transport(monkeypatch, setup=setup)
     assert asyncio.run(t.connect()) is True
-    assert seen["ack"] == {"result": True}                # NOT "socket not connected"
+    assert seen["ack"] == {"result": True}  # NOT "socket not connected"
 
 
 def test_transport_connect_failure_clears_client(monkeypatch):
     def setup(client):
         async def boom(url, **kwargs):
             raise RuntimeError("refused")
+
         client.connect = boom
 
     t, holder = _patched_transport(monkeypatch, setup=setup)
     assert asyncio.run(t.connect()) is False
-    assert t._client is None                              # cleared on failure
-    assert holder["client"].disconnected is True          # best-effort cleanup
+    assert t._client is None  # cleared on failure
+    assert holder["client"].disconnected is True  # best-effort cleanup
 
 
 def test_transport_url_path_normalization_and_handlers(monkeypatch):
@@ -770,14 +815,15 @@ def test_transport_url_path_normalization_and_handlers(monkeypatch):
     t, holder = _patched_transport(monkeypatch, cfg=cfg, handlers={"connect": h, "claw.session.events": h})
     assert asyncio.run(t.connect()) is True
     client = holder["client"]
-    assert client.connect_args["url"] == "http://ws.example"          # stripped + rstripped
-    assert client.connect_args["socketio_path"] == "sock/"            # lstripped
+    assert client.connect_args["url"] == "http://ws.example"  # stripped + rstripped
+    assert client.connect_args["socketio_path"] == "sock/"  # lstripped
     assert client.connect_args["auth"] == {"token": "t"}
     assert set(client.handlers) == {"connect", "claw.session.events"}  # table registered
 
 
 def test_transport_serializer_selection(monkeypatch):
     from raven.channels.adapters.mochat import transport as tr
+
     # msgpack enabled + available -> msgpack
     t, holder = _patched_transport(monkeypatch, cfg=_transport_cfg(socket_disable_msgpack=False))
     monkeypatch.setattr(tr, "MSGPACK_AVAILABLE", True)
@@ -800,11 +846,12 @@ def test_transport_close_disconnects_and_clears(monkeypatch):
     asyncio.run(t.close())
     assert holder["client"].disconnected is True
     assert t._client is None
-    asyncio.run(t.close())                                # idempotent, no raise
+    asyncio.run(t.close())  # idempotent, no raise
 
 
 def test_transport_unavailable_socketio_returns_false(monkeypatch):
     from raven.channels.adapters.mochat import transport as tr
+
     monkeypatch.setattr(tr, "SOCKETIO_AVAILABLE", False)
     t = tr.SocketTransport(_transport_cfg(), {})
     assert asyncio.run(t.connect()) is False
@@ -816,9 +863,10 @@ def test_transport_unavailable_socketio_returns_false(monkeypatch):
 def test_mochat_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _ch()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_mochat_spec_import_is_cheap():
@@ -826,6 +874,7 @@ def test_mochat_spec_import_is_cheap():
     API/socket client import is deferred into SPEC.factory."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.mochat.spec as s;"
         "assert 'raven.channels.adapters.mochat.channel' not in sys.modules, "

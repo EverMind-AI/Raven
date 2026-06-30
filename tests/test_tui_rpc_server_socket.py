@@ -206,9 +206,7 @@ async def test_socket_no_asyncio_pipe_warnings(_capture_asyncio_warnings: list[s
             pass
 
         pipe_warnings = [m for m in _capture_asyncio_warnings if "pipe closed by peer" in m]
-        assert not pipe_warnings, (
-            f"asyncio.unix_events emitted pipe-closed warnings: {pipe_warnings!r}"
-        )
+        assert not pipe_warnings, f"asyncio.unix_events emitted pipe-closed warnings: {pipe_warnings!r}"
     finally:
         client.close()
         conn.close()

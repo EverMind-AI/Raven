@@ -145,7 +145,9 @@ class TestRegistryTools:
         reg.activate([_discovered_with_tools("p", [("t", "_tp_tools_b:make_tool")])])
 
         out = reg.build_tool(
-            "t", config={"k": 1}, services=ServiceLocator(workspace=tmp_path),
+            "t",
+            config={"k": 1},
+            services=ServiceLocator(workspace=tmp_path),
         )
         assert out == "built"
         assert captured["config"] == {"k": 1}
@@ -157,10 +159,12 @@ class TestRegistryTools:
         _install_test_module("_tp_tools_c", {"make_tool": f})
         reg = PluginRegistry()
         with pytest.raises(PluginConflict, match="tool 'dup'"):
-            reg.activate([
-                _discovered_with_tools("one", [("dup", "_tp_tools_c:make_tool")]),
-                _discovered_with_tools("two", [("dup", "_tp_tools_c:make_tool")]),
-            ])
+            reg.activate(
+                [
+                    _discovered_with_tools("one", [("dup", "_tp_tools_c:make_tool")]),
+                    _discovered_with_tools("two", [("dup", "_tp_tools_c:make_tool")]),
+                ]
+            )
 
     def test_unknown_tool_raises(self) -> None:
         reg = PluginRegistry()
@@ -175,7 +179,7 @@ class TestRegistryTools:
 
 class TestBuildPluginTools:
     def _config(self, plugin_config: dict | None = None):
-        from raven.config.raven import RavenConfig, PluginsConfig
+        from raven.config.raven import PluginsConfig, RavenConfig
 
         return RavenConfig(plugins=PluginsConfig(config=dict(plugin_config or {})))
 
@@ -251,10 +255,11 @@ class TestRenderAttachments:
         from raven.context_engine.segments import render
 
         png = tmp_path / "a.png"
-        png.write_bytes(_b64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-            "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-        ))
+        png.write_bytes(
+            _b64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+        )
         out = render.build_user_content("look", [str(png)])
         assert isinstance(out, list)
         assert out[0]["type"] == "image_url"
@@ -266,10 +271,11 @@ class TestRenderAttachments:
         from raven.context_engine.segments import render
 
         png = tmp_path / "a.png"
-        png.write_bytes(_b64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-            "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-        ))
+        png.write_bytes(
+            _b64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+        )
         pdf = tmp_path / "d.pdf"
         pdf.write_bytes(b"%PDF-1.4")
         out = render.build_user_content("q", [str(png), str(pdf)])
@@ -294,9 +300,8 @@ from raven.plugin.memory.everos.tools import UnderstandMediaTool, make_understan
 
 class TestUnderstandMediaTool:
     def test_factory_returns_tool_when_extra_available(self, monkeypatch) -> None:
-        from raven.agent.tools.base import Tool
-
         import raven.plugin.memory.everos.tools as tools_mod
+        from raven.agent.tools.base import Tool
 
         # Gate on the parser extra; force it "available" so the assertion
         # holds regardless of whether the heavy extra is installed here.

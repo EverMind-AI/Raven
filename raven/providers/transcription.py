@@ -48,12 +48,7 @@ class GroqTranscriptionProvider:
                         "Authorization": f"Bearer {self.api_key}",
                     }
 
-                    response = await client.post(
-                        self.api_url,
-                        headers=headers,
-                        files=files,
-                        timeout=60.0
-                    )
+                    response = await client.post(self.api_url, headers=headers, files=files, timeout=60.0)
 
                     response.raise_for_status()
                     data = response.json()

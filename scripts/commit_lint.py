@@ -39,9 +39,7 @@ def check_commit_message(message: str, config: CommitLintConfig | None = None) -
 
 
 def check_pr_title(title: str, config: CommitLintConfig | None = None) -> LintResult:
-    return _check_message(
-        title, subject_limit=(config or CommitLintConfig()).pr_title_subject_limit
-    )
+    return _check_message(title, subject_limit=(config or CommitLintConfig()).pr_title_subject_limit)
 
 
 def _check_message(message: str, *, subject_limit: int) -> LintResult:

@@ -9,6 +9,7 @@ Each test starts its own SandboxDebugServer over a freshly created VM, runs the
 CLI command (in an executor thread for non-shell, or via pty.fork for shell),
 and asserts on real output produced inside the VM.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +44,7 @@ runner = CliRunner(mix_stderr=False)
 
 # ── session setup ─────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="session", autouse=True)
 def pre_pull_image():
     """Pull the OCI image once per session before any test starts.
@@ -75,13 +77,11 @@ def pre_pull_image():
     try:
         asyncio.run(_pull())
     except Exception as exc:
-        pytest.skip(
-            f"OCI image pull failed for {_IMAGE!r} — likely a network issue, "
-            f"not a code bug.\n  Error: {exc}"
-        )
+        pytest.skip(f"OCI image pull failed for {_IMAGE!r} — likely a network issue, not a code bug.\n  Error: {exc}")
 
 
 # ── per-test fixtures: short socket dir + real VM + real debug server ───────
+
 
 @pytest.fixture
 def sock_dir():
@@ -109,13 +109,12 @@ async def real_server(sock_dir):
     they would not see each other.
     """
     import boxlite
+
     from raven.sandbox._runtime import get_boxlite_runtime
     from raven.sandbox.debug_server import SandboxDebugServer
 
     runtime = get_boxlite_runtime()
-    box = await runtime.create(
-        boxlite.BoxOptions(image=_IMAGE, cpus=1, memory_mib=512)
-    )
+    box = await runtime.create(boxlite.BoxOptions(image=_IMAGE, cpus=1, memory_mib=512))
     # `create` leaves the VM in `configured` state; we need it `running` before
     # the CLI's `list` will show it as running and exec/shell can attach.
     await box.start()
@@ -146,10 +145,12 @@ async def real_server(sock_dir):
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 async def _invoke(args, socket_path):
     """Run a CLI command in an executor thread so the test loop can keep
     servicing the SandboxDebugServer concurrently.
     """
+
     def _run():
         with patch(
             "raven.cli.sandbox_commands._get_socket_path",
@@ -161,6 +162,7 @@ async def _invoke(args, socket_path):
 
 
 # ── list / ls ─────────────────────────────────────────────────────────────────
+
 
 class TestListLsRealVM:
     async def test_list_shows_running_vm(self, real_server):
@@ -195,6 +197,7 @@ class TestListLsRealVM:
 
 # ── exec ──────────────────────────────────────────────────────────────────────
 
+
 class TestExecRealVM:
     async def test_exec_echo(self, real_server):
         path, _ = real_server
@@ -225,6 +228,7 @@ class TestExecRealVM:
 
 
 # ── shell ─────────────────────────────────────────────────────────────────────
+
 
 # Helper to launch the real CLI under a PTY. We use subprocess with the slave
 # end as stdin/stdout/stderr instead of pty.fork() — pytest-asyncio runs the
@@ -297,8 +301,7 @@ class TestShellRealVM:
         try:
             # Wait for the in-VM shell prompt (sh prints `# ` for root, `$ ` for non-root).
             deadline = time.time() + 30
-            while b"# " not in bytes(output) and b"$ " not in bytes(output) \
-                    and time.time() < deadline:
+            while b"# " not in bytes(output) and b"$ " not in bytes(output) and time.time() < deadline:
                 await asyncio.sleep(0.1)
             await asyncio.sleep(0.3)  # let the prompt fully arrive
             assert b"# " in bytes(output) or b"$ " in bytes(output), (

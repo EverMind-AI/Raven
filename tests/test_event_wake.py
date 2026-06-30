@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
 from raven.proactive_engine.schedulers.heartbeat.service import HeartbeatService
+from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
 from raven.proactive_engine.wake import WakeScheduler
 
 # ---------------------------------------------------------------------------
@@ -174,9 +174,7 @@ class FakeProvider:
         self.calls.append(messages)
         return SimpleNamespace(
             has_tool_calls=True,
-            tool_calls=[
-                SimpleNamespace(arguments={"action": self.action, "tasks": self.tasks})
-            ],
+            tool_calls=[SimpleNamespace(arguments={"action": self.action, "tasks": self.tasks})],
         )
 
 
@@ -252,9 +250,7 @@ async def test_failed_tick_keeps_events_queued(tmp_path: Path):
     wake = WakeScheduler(coalesce_s=0.01)
     queue = SystemEventQueue()
     on_execute = AsyncMock(side_effect=RuntimeError("boom"))
-    service = _make_service(
-        tmp_path, provider, wake=wake, queue=queue, on_execute=on_execute
-    )
+    service = _make_service(tmp_path, provider, wake=wake, queue=queue, on_execute=on_execute)
 
     await service.start()
     try:
@@ -274,9 +270,7 @@ async def test_run_decision_executes_and_acks(tmp_path: Path):
     wake = WakeScheduler(coalesce_s=0.01)
     queue = SystemEventQueue()
     on_execute = AsyncMock(return_value="done")
-    service = _make_service(
-        tmp_path, provider, wake=wake, queue=queue, on_execute=on_execute
-    )
+    service = _make_service(tmp_path, provider, wake=wake, queue=queue, on_execute=on_execute)
 
     await service.start()
     try:
@@ -385,9 +379,7 @@ async def test_cron_completion_enqueues_event_and_wakes():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(
-        agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake
-    )
+    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     await on_job(_make_job())
 
     events = queue.peek_all()
@@ -412,9 +404,7 @@ async def test_cron_failure_enqueues_failure_event_and_reraises():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(
-        agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake
-    )
+    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     with pytest.raises(RuntimeError, match="provider down"):
         await on_job(_make_job())
 
@@ -443,9 +433,7 @@ async def test_cron_recovery_drops_stale_failure_event():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(
-        agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake
-    )
+    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     with pytest.raises(RuntimeError):
         await on_job(_make_job())
     assert [e.context_key for e in queue.peek_all()] == ["cron:job_wake:fail"]
@@ -466,9 +454,7 @@ async def test_cron_failure_after_success_keeps_both_events():
     queue = SystemEventQueue()
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(
-        agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake
-    )
+    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     await on_job(_make_job())
     with pytest.raises(RuntimeError):
         await on_job(_make_job())
@@ -491,9 +477,7 @@ async def test_cron_event_emit_is_best_effort():
     queue.enqueue.side_effect = ValueError("queue broken")
     wake = WakeScheduler(coalesce_s=0.01)
 
-    on_job = make_on_cron_job(
-        agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake
-    )
+    on_job = make_on_cron_job(agent, hub, submit=submit, readback_texts=readback, system_events=queue, wake=wake)
     assert await on_job(_make_job()) == "fine"
     with pytest.raises(RuntimeError, match="the real error"):
         await on_job(_make_job())

@@ -14,10 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from raven.agent.loop import AgentLoop
-
 
 # ---------------------------------------------------------------------------
 # Stubs
@@ -42,16 +39,25 @@ class _FakeBackend:
         self.store_calls: list[dict[str, Any]] = []
         self.store_raises: Exception | None = None
 
-    async def start(self) -> None: pass
-    async def stop(self) -> None: pass
-    async def feedback(self, signals): pass
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k): return []
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def feedback(self, signals):
+        pass
+
+    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+        return []
 
     async def store(self, session_id, messages):
-        self.store_calls.append({
-            "session_id": session_id,
-            "messages": messages,
-        })
+        self.store_calls.append(
+            {
+                "session_id": session_id,
+                "messages": messages,
+            }
+        )
         if self.store_raises is not None:
             raise self.store_raises
 
@@ -98,7 +104,8 @@ class TestDispatcher:
         )
 
     async def test_empty_messages_skips_backend(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         b = _FakeBackend()
         agent = _make_loop(tmp_path, backend=b)
@@ -107,7 +114,8 @@ class TestDispatcher:
         assert b.store_calls == []
 
     async def test_calls_backend_store_with_full_slice(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         b = _FakeBackend()
         agent = _make_loop(tmp_path, backend=b)
@@ -122,7 +130,8 @@ class TestDispatcher:
         assert call["messages"] == slice_
 
     async def test_backend_exception_swallowed(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A backend failure must not derail the AgentLoop. The turn is
         already saved to the session log; plugin-side indexing is
@@ -133,7 +142,8 @@ class TestDispatcher:
         # The dispatcher swallows the exception (and logs an exception
         # traceback). The call must return normally.
         await agent._dispatch_backend_store(
-            "s", [{"role": "user", "content": "x"}],
+            "s",
+            [{"role": "user", "content": "x"}],
         )
         # Verify the adapter was hit (so we know exception came from store).
         assert len(b.store_calls) == 1
@@ -146,7 +156,8 @@ class TestDispatcher:
 
 class TestLegacyCompat:
     def test_construction_without_backend_unchanged(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Pre-AG-1 construction (no ``backend=`` keyword) still works
         end-to-end. After Phase B-3 the ``self.memory`` facade is gone;

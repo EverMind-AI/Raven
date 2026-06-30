@@ -7,7 +7,6 @@ query-conditioned recall hits. Two contributing sources, one owner.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 from raven.context_engine.base import AssemblyContext, Segment
@@ -52,6 +51,10 @@ class MemorySegmentBuilder:
     async def _recall(self, query: str) -> list[Any]:
         if self._backend is None:
             return []
-        return list(await self._backend.recall(
-            query=query, user_id=self._user_id, top_k=self._memory_top_k,
-        ))
+        return list(
+            await self._backend.recall(
+                query=query,
+                user_id=self._user_id,
+                top_k=self._memory_top_k,
+            )
+        )

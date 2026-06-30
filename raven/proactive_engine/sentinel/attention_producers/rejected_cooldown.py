@@ -36,7 +36,8 @@ class RejectedCooldownProducer(AttentionProducer):
         cutoff_ms = now_ms - int(self._cooldown_hours * 3_600_000)
         decisions = self._store.all_decisions(include_consumed=True)
         rejected = [
-            d for d in decisions
+            d
+            for d in decisions
             if d.consumed
             and d.picked_option_id is None
             and d.consumed_at_ms is not None
@@ -54,10 +55,7 @@ class RejectedCooldownProducer(AttentionProducer):
                 ((d.consumed_at_ms or 0) + cooldown_ms) / 1000,
             ).strftime("%Y-%m-%d %H:%M")
             intent = d.options[0].title if d.options else "(empty)"
-            lines.append(
-                f"- `{d.decision_id}` {intent} — rejected {ts_short}, "
-                f"cooldown until {expires}"
-            )
+            lines.append(f"- `{d.decision_id}` {intent} — rejected {ts_short}, cooldown until {expires}")
         return "\n".join(lines)
 
 

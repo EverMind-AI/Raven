@@ -673,9 +673,7 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = int(
-            getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096
-        )
+        reserved_output = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
@@ -903,8 +901,7 @@ class AgentLoop:
             await self.backend.store(session_key, messages_slice)
         except Exception:
             logger.exception(
-                "backend.store failed for session {}; turn data preserved "
-                "in session log, plugin-side indexing skipped",
+                "backend.store failed for session {}; turn data preserved in session log, plugin-side indexing skipped",
                 session_key,
             )
 
@@ -994,8 +991,7 @@ class AgentLoop:
             return
         if cfg.backend == "none":
             logger.warning(
-                "sandbox.debug.enabled=true is ignored because backend='none' "
-                "(no boxlite runtime is active)"
+                "sandbox.debug.enabled=true is ignored because backend='none' (no boxlite runtime is active)"
             )
             return
         try:
@@ -1355,9 +1351,7 @@ class AgentLoop:
                     inj_paths = [m.path for m in inj.media]
                     if inj_paths:
                         prefix = inj_text + "\n" if inj_text else ""
-                        inj_text = (
-                            f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
-                        )
+                        inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
                     if inj_text:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
@@ -1416,9 +1410,7 @@ class AgentLoop:
                 usage_sink["cost_usd"] = usage_snapshot.estimated_cost_usd
                 usage_sink["context_max"] = context_max
                 usage_sink["context_used"] = context_used
-                usage_sink["context_percent"] = (
-                    round(100 * context_used / context_max) if context_max else 0
-                )
+                usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0
 
             # Context-window overflow recovery: the structured classifier flags
             # should_compress (a smaller window won't help, but eliding the bulk
@@ -1496,9 +1488,7 @@ class AgentLoop:
                                 "truncated": len(result_str) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
+                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(result):
@@ -1577,9 +1567,7 @@ class AgentLoop:
                     # the nudge — a bare tool→user sequence is a 400 on most APIs.
                     messages = self.context.add_assistant_message(messages, "(empty)")
                     messages[-1]["_recovery_synthetic"] = True
-                    messages.append(
-                        {"role": "user", "content": POST_TOOL_NUDGE, "_recovery_synthetic": True}
-                    )
+                    messages.append({"role": "user", "content": POST_TOOL_NUDGE, "_recovery_synthetic": True})
                     prev_had_tool_calls = False
                     continue
                 if action is RecoveryAction.RETRY:
@@ -1602,9 +1590,7 @@ class AgentLoop:
                 break
 
         if final_content is None and iteration >= self.max_iterations:
-            logger.warning(
-                "Max iterations ({}) reached; synthesizing final answer", self.max_iterations
-            )
+            logger.warning("Max iterations ({}) reached; synthesizing final answer", self.max_iterations)
             # Exhaustion is two orthogonal facts, not an either/or:
             #   1. The turn did NOT complete — tag it ``interrupted`` so the
             #      shadow-git checkpoint commit is labelled and the next turn's
@@ -1859,9 +1845,7 @@ class AgentLoop:
                     # User started a new request; discard the old pending state and re-classify.
                     session.pending_clarification = None
                     self.sessions.save(session)
-                    logger.info(
-                        "Personalization: new request detected, discarding old pending_clarification"
-                    )
+                    logger.info("Personalization: new request detected, discarding old pending_clarification")
 
                     _question = await _personalizer.generate_question(
                         content,
@@ -1870,9 +1854,7 @@ class AgentLoop:
                     if _question:
                         _ts = _dt.now().isoformat()
                         session.record({"role": "user", "content": content, "timestamp": _ts})
-                        session.record(
-                            {"role": "assistant", "content": _question, "timestamp": _ts}
-                        )
+                        session.record({"role": "assistant", "content": _question, "timestamp": _ts})
                         session.pending_clarification = {
                             "original_message": content,
                             "question": _question,
@@ -1920,9 +1902,7 @@ class AgentLoop:
                         # Write the original request and the clarifying question into history to keep the conversation coherent.
                         _ts = _dt.now().isoformat()
                         session.record({"role": "user", "content": content, "timestamp": _ts})
-                        session.record(
-                            {"role": "assistant", "content": _question, "timestamp": _ts}
-                        )
+                        session.record({"role": "assistant", "content": _question, "timestamp": _ts})
 
                         # Save the pending state so the next message can resume it.
                         session.pending_clarification = {
@@ -1932,9 +1912,7 @@ class AgentLoop:
                         }
                         self.sessions.save(session)
 
-                        logger.info(
-                            "Personalization: asked clarification for session {}", session.key
-                        )
+                        logger.info("Personalization: asked clarification for session {}", session.key)
                         return (_question, [])
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
@@ -2084,16 +2062,10 @@ class AgentLoop:
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
-            if (
-                role == "tool"
-                and isinstance(content, str)
-                and len(content) > self._TOOL_RESULT_MAX_CHARS
-            ):
+            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
-                if isinstance(content, str) and content.startswith(
-                    ContextBuilder._RUNTIME_CONTEXT_TAG
-                ):
+                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
                     parts = content.split("\n\n", 1)
                     if len(parts) > 1 and parts[1].strip():
@@ -2109,9 +2081,9 @@ class AgentLoop:
                             and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
                         ):
                             continue  # Strip runtime context from multimodal messages
-                        if c.get("type") == "image_url" and c.get("image_url", {}).get(
-                            "url", ""
-                        ).startswith("data:image/"):
+                        if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
+                            "data:image/"
+                        ):
                             filtered.append({"type": "text", "text": "[image]"})
                         else:
                             filtered.append(c)
@@ -2230,11 +2202,7 @@ class AgentLoop:
 
         async def _emit_media(paths: list[str]) -> None:
             await emit(
-                MediaOut(
-                    media=tuple(
-                        Media(path=p, mime="application/octet-stream", kind="file") for p in paths
-                    )
-                )
+                MediaOut(media=tuple(Media(path=p, mime="application/octet-stream", kind="file") for p in paths))
             )
 
         # Route the message tool's reply through the token stream so a

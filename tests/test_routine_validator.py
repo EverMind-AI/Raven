@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from raven.providers.base import LLMResponse, ToolCallRequest
 from raven.proactive_engine.sentinel.predictor.routine_validator import (
-    RoutineValidator,
     VALIDATOR_TOOL,
+    RoutineValidator,
 )
 from raven.proactive_engine.sentinel.types import Routine
-
+from raven.providers.base import LLMResponse, ToolCallRequest
 
 # ── stubs ─────────────────────────────────────────────────────────────
 
@@ -63,9 +62,7 @@ def _routine(**kw) -> Routine:
     return Routine(**defaults)
 
 
-_HISTORY = "\n".join(
-    f"[2026-04-{d:02d} 09:30] standup meeting notes" for d in (7, 14, 21, 28)
-)
+_HISTORY = "\n".join(f"[2026-04-{d:02d} 09:30] standup meeting notes" for d in (7, 14, 21, 28))
 _NOW = 1_700_000_000_000
 
 
@@ -178,6 +175,7 @@ async def test_validate_nan_confidence_normalized_to_zero():
     """LLM returning NaN would slip through max/min clamping (Python's
     max(0.0, NaN) == NaN). Must be caught explicitly."""
     import math
+
     provider = _StubProvider(response=_ok_response(is_routine=True, confidence=math.nan))
     v = RoutineValidator(provider, model="m")
     out = await v.validate(_routine(), _HISTORY, now_ms=_NOW)
@@ -190,6 +188,7 @@ async def test_validate_nan_confidence_normalized_to_zero():
 async def test_validate_inf_confidence_normalized_to_zero():
     """+inf / -inf are also non-finite and must be rejected before clamping."""
     import math
+
     for bad in (math.inf, -math.inf):
         provider = _StubProvider(response=_ok_response(is_routine=True, confidence=bad))
         v = RoutineValidator(provider, model="m")

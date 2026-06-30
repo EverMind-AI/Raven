@@ -18,13 +18,12 @@ from raven.cli._plugin_stack import (
     maybe_build_memory_backend,
 )
 from raven.config.raven import (
-    RavenConfig,
     MemoryConfig,
     PluginsConfig,
+    RavenConfig,
 )
 from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginRegistry
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -78,20 +77,24 @@ class TestMaybeBuildBackend:
         assert isinstance(backend, MemoryBackend)
 
     def test_memory_backend_none_returns_none(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         backend = maybe_build_memory_backend(
-            tmp_path, _config(memory_backend=None),
+            tmp_path,
+            _config(memory_backend=None),
         )
         assert backend is None
 
     def test_unknown_backend_returns_none_no_raise(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A user-config typo / missing plugin must NOT crash boot —
         the helper logs + degrades, AgentLoop falls back to legacy."""
         backend = maybe_build_memory_backend(
-            tmp_path, _config(memory_backend="nonexistent"),
+            tmp_path,
+            _config(memory_backend="nonexistent"),
         )
         assert backend is None
 
@@ -115,43 +118,52 @@ class TestConfigSliceResolution:
     def test_config_by_plugin_id(self, tmp_path: Path) -> None:
         backend = maybe_build_memory_backend(
             tmp_path,
-            _config(plugin_config={
-                "everos-memory": {"mode": "embedded", "base_url": "http://x"},
-            }),
+            _config(
+                plugin_config={
+                    "everos-memory": {"mode": "embedded", "base_url": "http://x"},
+                }
+            ),
         )
         # Backend received the config slice keyed by plugin id.
         assert backend._config["mode"] == "embedded"
         assert backend._config["base_url"] == "http://x"
 
     def test_config_by_backend_name_fallback(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """When the user uses the shorter key (backend name), the
         helper still finds it. Useful for handwritten configs."""
         backend = maybe_build_memory_backend(
             tmp_path,
-            _config(plugin_config={
-                "everos": {"mode": "http", "base_url": "http://y"},
-            }),
+            _config(
+                plugin_config={
+                    "everos": {"mode": "http", "base_url": "http://y"},
+                }
+            ),
         )
         assert backend._config["mode"] == "http"
         assert backend._config["base_url"] == "http://y"
 
     def test_plugin_id_takes_precedence_over_backend_name(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """If both keys are present, the canonical (plugin id) wins."""
         backend = maybe_build_memory_backend(
             tmp_path,
-            _config(plugin_config={
-                "everos-memory": {"marker": "canonical"},
-                "everos":        {"marker": "fallback"},
-            }),
+            _config(
+                plugin_config={
+                    "everos-memory": {"marker": "canonical"},
+                    "everos": {"marker": "fallback"},
+                }
+            ),
         )
         assert backend._config["marker"] == "canonical"
 
     def test_no_config_slice_yields_empty_dict(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         backend = maybe_build_memory_backend(tmp_path, _config())
         assert backend._config == {}
@@ -166,13 +178,16 @@ class TestRegistryInjection:
     def test_caller_supplied_registry_used(self, tmp_path: Path) -> None:
         reg = build_plugin_registry(_config())
         backend = maybe_build_memory_backend(
-            tmp_path, _config(), registry=reg,
+            tmp_path,
+            _config(),
+            registry=reg,
         )
         # Backend constructed via the explicit registry.
         assert backend is not None
 
     def test_default_construction_creates_internal_registry(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         # Sanity: with no registry passed, the helper still works.
         backend = maybe_build_memory_backend(tmp_path, _config())

@@ -10,6 +10,13 @@ calls ``assemble()`` each tick.
 
 from __future__ import annotations
 
+# ---------------------------------------------------------------------------
+# Memory smart-loading helpers.
+#
+# Section parsing is line-anchored on ``^## `` so code-fenced ``## ``
+# mid-line stays in the prior section body. ALWAYS_KEEP sections survive
+# even if the user blocklists them — the Planner depends on them.
+import re as _re  # local alias to avoid leaking into module exports
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -18,12 +25,12 @@ from loguru import logger
 
 from raven.config.raven import DEFAULT_PLANNER_ATTENTION_SECTIONS
 from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
     PersonalizedOverrides,
     ProactivityPreferencesReader,
 )
-from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
 from raven.proactive_engine.sentinel.types import (
     ActiveSession,
     NudgePolicyState,
@@ -31,22 +38,16 @@ from raven.proactive_engine.sentinel.types import (
     Routine,
 )
 
-# ---------------------------------------------------------------------------
-# Memory smart-loading helpers.
-#
-# Section parsing is line-anchored on ``^## `` so code-fenced ``## ``
-# mid-line stays in the prior section body. ALWAYS_KEEP sections survive
-# even if the user blocklists them — the Planner depends on them.
-import re as _re  # local alias to avoid leaking into module exports
-
 _H2_RE = _re.compile(r"^##\s+(.+?)\s*$", _re.MULTILINE)
 
-ALWAYS_KEEP_SECTIONS = frozenset({
-    "Sentinel Observations (auto)",
-    "Proactivity Preferences",
-    "User Information",
-    "Important Notes",
-})
+ALWAYS_KEEP_SECTIONS = frozenset(
+    {
+        "Sentinel Observations (auto)",
+        "Proactivity Preferences",
+        "User Information",
+        "Important Notes",
+    }
+)
 
 
 def _parse_h2_sections(raw: str) -> list[tuple[str, str]]:
@@ -87,7 +88,7 @@ def _filter_memory_md(raw: str, cfg) -> str:
     allow = getattr(cfg, "memory_section_allowlist", None)
     block = list(getattr(cfg, "memory_section_blocklist", []) or [])
     max_chars = int(getattr(cfg, "memory_max_chars", 0) or 0)
-    no_filter = (allow is None and not block and max_chars <= 0)
+    no_filter = allow is None and not block and max_chars <= 0
     if no_filter:
         return raw
 
@@ -109,9 +110,7 @@ def _filter_memory_md(raw: str, cfg) -> str:
     out = "".join(b for _, b, _ in kept)
     if max_chars > 0 and len(out) > max_chars:
         # Drop "normal" sections tail-first until we fit.
-        drop_indices: list[int] = [
-            i for i, (_, _, kind) in enumerate(kept) if kind == "normal"
-        ]
+        drop_indices: list[int] = [i for i, (_, _, kind) in enumerate(kept) if kind == "normal"]
         for idx in reversed(drop_indices):
             kept.pop(idx)
             out = "".join(b for _, b, _ in kept)
@@ -153,9 +152,7 @@ class ContextAssembler:
         # Default 6-section selection matches SentinelConfig defaults;
         # callers override per-deploy.
         self._attention_sections: list[str] = list(
-            attention_planner_sections
-            if attention_planner_sections is not None
-            else DEFAULT_PLANNER_ATTENTION_SECTIONS
+            attention_planner_sections if attention_planner_sections is not None else DEFAULT_PLANNER_ATTENTION_SECTIONS
         )
         self._behaviors_window_days = behaviors_planner_window_days
         self._behaviors_max_events = behaviors_planner_max_events
@@ -226,6 +223,7 @@ class ContextAssembler:
         except OSError:
             return ""
         from raven.memory_engine.consolidate.attention import parse_attention
+
         sections = parse_attention(text)
         parts: list[str] = []
         for h2 in self._attention_sections:
@@ -249,10 +247,14 @@ class ContextAssembler:
             text = path.read_text(encoding="utf-8")
         except OSError:
             return ""
-        from raven.memory_engine.consolidate.behaviors import (
-            parse_behaviors, render_folded_block, slice_after_day,
-        )
         from datetime import timedelta as _td
+
+        from raven.memory_engine.consolidate.behaviors import (
+            parse_behaviors,
+            render_folded_block,
+            slice_after_day,
+        )
+
         cutoff = now - _td(days=self._behaviors_window_days)
         # Bounded read: behaviors.md is append-only on disk, but the
         # Planner only consumes the last ``behaviors_window_days``. Slice
@@ -276,7 +278,8 @@ class ContextAssembler:
                 continue
             kept.append(ev)
         return render_folded_block(
-            kept, max_events=self._behaviors_max_events,
+            kept,
+            max_events=self._behaviors_max_events,
         )
 
     def _fire_history(self, now: datetime) -> dict:
@@ -294,6 +297,7 @@ class ContextAssembler:
             return {}
         try:
             from datetime import timedelta as _td
+
             policy = self.nudge_policy
             # Hot-reload from store for multi-process coherence.
             if getattr(policy, "_store", None) is not None:
@@ -311,8 +315,7 @@ class ContextAssembler:
             topic_24h = {k: v for k, v in topic_24h.items() if v > 0}
             topic_7d = {k: v for k, v in topic_7d.items() if v > 0}
             dismissed = [
-                {"session_key": k, "ts": v.isoformat()}
-                for k, v in list((policy._dismissed_at or {}).items())[-5:]
+                {"session_key": k, "ts": v.isoformat()} for k, v in list((policy._dismissed_at or {}).items())[-5:]
             ]
             return {
                 "recent_fires": recent_fires,
@@ -367,7 +370,7 @@ class ContextAssembler:
         except OSError as exc:
             logger.warning("ContextAssembler history read failed: {}", exc)
             return ""
-        return "\n".join(lines[-self.history_tail_lines:])
+        return "\n".join(lines[-self.history_tail_lines :])
 
     def _learn_routines(self, history_md: str) -> list[Routine]:
         if self.routine_learner is None or not history_md:
@@ -394,12 +397,14 @@ class ContextAssembler:
             if (now - updated_at).total_seconds() > self.active_session_window:
                 continue
             last_user, last_asst = self._last_turns(sess)
-            active.append(ActiveSession(
-                key=str(key),
-                last_active_at=updated_at,
-                last_user_message=last_user,
-                last_assistant_message=last_asst,
-            ))
+            active.append(
+                ActiveSession(
+                    key=str(key),
+                    last_active_at=updated_at,
+                    last_user_message=last_user,
+                    last_assistant_message=last_asst,
+                )
+            )
         active.sort(key=lambda s: s.last_active_at, reverse=True)
         return active
 

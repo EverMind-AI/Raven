@@ -330,9 +330,7 @@ def test_warm_disk_hit_skips_network(monkeypatch, disk_cache):
 def test_expired_disk_triggers_refetch(monkeypatch, disk_cache):
     """A disk file older than the TTL is not served fresh — the catalog refetches."""
     stale_at = time.time() - (pricing._OPENROUTER_CACHE_TTL + 100)
-    disk_cache.write_text(
-        json.dumps(_disk_payload(stale_at, prompt="9", completion="9")), encoding="utf-8"
-    )
+    disk_cache.write_text(json.dumps(_disk_payload(stale_at, prompt="9", completion="9")), encoding="utf-8")
     counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
     cost = estimate_cost_usd("openrouter/deepseek/deepseek-v4-pro", 1000, 500)

@@ -143,8 +143,8 @@ async def test_spawn_rate_limit_recovers_after_window(monkeypatch):
     assert "started" in await mgr.spawn(task="a")
     assert "Spawn refused" in await mgr.spawn(task="b")  # second within window
 
-    clock[0] += manager_mod._SPAWN_WINDOW_SECONDS + 1     # first spawn ages out
-    assert "started" in await mgr.spawn(task="c")         # recovered
+    clock[0] += manager_mod._SPAWN_WINDOW_SECONDS + 1  # first spawn ages out
+    assert "started" in await mgr.spawn(task="c")  # recovered
 
 
 async def test_spawn_rate_limit_is_per_session(monkeypatch):

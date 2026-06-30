@@ -3,9 +3,6 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { STARTUP_IMAGE, STARTUP_QUERY } from '../config/env.js'
-import { STREAM_BATCH_MS } from '../config/timing.js'
-import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
 import type {
   CommandsCatalogResponse,
   ConfigFullResponse,
@@ -14,13 +11,16 @@ import type {
   GatewaySkin,
   SessionMostRecentResponse
 } from '../gatewayTypes.js'
+import type { Msg, SubagentProgress } from '../types.js'
+import type { GatewayEventHandlerContext } from './interfaces.js'
+
+import { STARTUP_IMAGE, STARTUP_QUERY } from '../config/env.js'
+import { STREAM_BATCH_MS } from '../config/timing.js'
+import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { topLevelSubagents } from '../lib/subagentTree.js'
 import { formatToolCall, stripAnsi } from '../lib/text.js'
-import type { Msg, SubagentProgress } from '../types.js'
-
 import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
-import type { GatewayEventHandlerContext } from './interfaces.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { applySkinTheme, getUiState, patchUiState } from './uiStore.js'

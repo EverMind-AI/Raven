@@ -13,11 +13,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { TurnEvent, TurnSendResult } from '../rpc/index.js'
+
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import { turnController } from '../app/turnController.js'
 import { resetTurnState } from '../app/turnStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
-import type { TurnEvent, TurnSendResult } from '../rpc/index.js'
 
 interface FakeRpc extends ChatStreamRpcClient {
   __pushEvent: (event: TurnEvent) => void
@@ -27,7 +28,9 @@ const makeFakeRpc = (sendResult?: TurnSendResult): FakeRpc => {
   let handler: ((event: TurnEvent) => void) | null = null
   const fake: FakeRpc = {
     __pushEvent: (event: TurnEvent) => {
-      if (handler) handler(event)
+      if (handler) {
+        handler(event)
+      }
     },
     async rpc<R, P>(method: string, _params: P): Promise<R> {
       if (method === 'turn.send') {
@@ -44,9 +47,9 @@ const makeFakeRpc = (sendResult?: TurnSendResult): FakeRpc => {
         subscription_id: 'sub-1',
         unsubscribe: async () => {
           handler = null
-        },
+        }
       }
-    },
+    }
   }
   return fake
 }
@@ -68,8 +71,8 @@ describe('createChatStream — wedge defenses', () => {
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (m) => sysCalls.push(m),
-      watchdogMs: 5000,
+      sys: m => sysCalls.push(m),
+      watchdogMs: 5000
     })
     await stream.attach()
 
@@ -84,7 +87,7 @@ describe('createChatStream — wedge defenses', () => {
 
     expect(stream.isTurnActive()).toBe(false)
     expect(getUiState().busy).toBe(false)
-    expect(sysCalls.some((m) => /no response/i.test(m))).toBe(true)
+    expect(sysCalls.some(m => /no response/i.test(m))).toBe(true)
   })
 
   it('does not fire the watchdog when the turn completes normally', async () => {
@@ -94,8 +97,8 @@ describe('createChatStream — wedge defenses', () => {
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (m) => sysCalls.push(m),
-      watchdogMs: 5000,
+      sys: m => sysCalls.push(m),
+      watchdogMs: 5000
     })
     await stream.attach()
     patchUiState({ busy: true })
@@ -107,13 +110,13 @@ describe('createChatStream — wedge defenses', () => {
       type: 'message.complete',
       payload: {
         turn_id: 'turn-1',
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      },
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      }
     })
 
     // Long after the window: a completed turn must not trip the watchdog.
     vi.advanceTimersByTime(60000)
-    expect(sysCalls.some((m) => /no response/i.test(m))).toBe(false)
+    expect(sysCalls.some(m => /no response/i.test(m))).toBe(false)
     expect(getUiState().busy).toBe(false)
   })
 
@@ -161,7 +164,9 @@ describe('createChatStream — wedge defenses', () => {
     const fake: ChatStreamRpcClient = {
       async rpc<R, P>(method: string, _params: P): Promise<R> {
         if (method === 'turn.send') {
-          if (handler) handler({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+          if (handler) {
+            handler({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+          }
           return { turn_id: 'turn-1', accepted: true } as unknown as R
         }
         return {} as R
@@ -169,14 +174,14 @@ describe('createChatStream — wedge defenses', () => {
       async subscribe<E, P>(_method: string, _params: P, h: (event: E) => void) {
         handler = h as unknown as (event: TurnEvent) => void
         return { subscription_id: 'sub-1', unsubscribe: async () => {} }
-      },
+      }
     }
     const sysCalls: string[] = []
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (m) => sysCalls.push(m),
-      watchdogMs: 5000,
+      sys: m => sysCalls.push(m),
+      watchdogMs: 5000
     })
     await stream.attach()
     patchUiState({ busy: true })
@@ -184,7 +189,7 @@ describe('createChatStream — wedge defenses', () => {
 
     vi.advanceTimersByTime(60000)
 
-    expect(sysCalls.some((m) => /no response/i.test(m))).toBe(false)
+    expect(sysCalls.some(m => /no response/i.test(m))).toBe(false)
     expect(stream.isTurnActive()).toBe(true)
   })
 
@@ -201,14 +206,14 @@ describe('createChatStream — wedge defenses', () => {
       },
       async subscribe<E, P>(_method: string, _params: P, _h: (event: E) => void) {
         return { subscription_id: 'sub-1', unsubscribe: async () => {} }
-      },
+      }
     }
     const sysCalls: string[] = []
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (m) => sysCalls.push(m),
-      watchdogMs: 5000,
+      sys: m => sysCalls.push(m),
+      watchdogMs: 5000
     })
     await stream.attach()
     patchUiState({ busy: true })
@@ -217,7 +222,7 @@ describe('createChatStream — wedge defenses', () => {
     await vi.advanceTimersByTimeAsync(5000)
 
     expect(getUiState().busy).toBe(false)
-    expect(sysCalls.some((m) => /no response/i.test(m))).toBe(true)
+    expect(sysCalls.some(m => /no response/i.test(m))).toBe(true)
   })
 
   it('detach during a hung turn.send clears the in-flight guard so the next send is accepted', async () => {
@@ -235,7 +240,7 @@ describe('createChatStream — wedge defenses', () => {
       },
       async subscribe<E, P>(_method: string, _params: P, _h: (event: E) => void) {
         return { subscription_id: 'sub-1', unsubscribe: async () => {} }
-      },
+      }
     }
     const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default' })
     await stream.attach()
@@ -257,8 +262,8 @@ describe('createChatStream — wedge defenses', () => {
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (m) => sysCalls.push(m),
-      watchdogMs: 5000,
+      sys: m => sysCalls.push(m),
+      watchdogMs: 5000
     })
     await stream.attach()
     patchUiState({ busy: true })
@@ -269,7 +274,7 @@ describe('createChatStream — wedge defenses', () => {
     // the window. The watchdog must NOT re-arm into an LLM-TTFT judge.
     vi.advanceTimersByTime(60000)
 
-    expect(sysCalls.some((m) => /no response/i.test(m))).toBe(false)
+    expect(sysCalls.some(m => /no response/i.test(m))).toBe(false)
     expect(stream.isTurnActive()).toBe(true)
   })
 })

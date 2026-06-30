@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 from raven.channels.intake import Intake
 from raven.channels.transcribe import transcribe_audio
 
-
 # ── Intake: permission ────────────────────────────────────────────────
 
 
@@ -31,7 +30,7 @@ def test_intake_custom_allow_check_gates_publish():
     intake = Intake("tg", SimpleNamespace(allow_from=["*"]), allow_check=lambda s: False)
     intake.set_submit(submit)
     asyncio.run(intake.publish(sender_id="u", chat_id="c", content="x"))
-    submit.assert_not_awaited()   # custom check wins even over allow_from=["*"]
+    submit.assert_not_awaited()  # custom check wins even over allow_from=["*"]
 
 
 # ── Intake: spine submit path ─────────────────────────────────────────
@@ -43,10 +42,16 @@ def test_intake_submit_path_builds_turnrequest():
     submit = AsyncMock()
     intake = Intake("tg", SimpleNamespace(allow_from=["*"]))
     intake.set_submit(submit)
-    asyncio.run(intake.publish(
-        sender_id=123, chat_id=456, content="hi",
-        media=["/m.jpg"], metadata={"chat_type": "group", "message_id": "9"}, session_key="s1",
-    ))
+    asyncio.run(
+        intake.publish(
+            sender_id=123,
+            chat_id=456,
+            content="hi",
+            media=["/m.jpg"],
+            metadata={"chat_type": "group", "message_id": "9"},
+            session_key="s1",
+        )
+    )
     submit.assert_awaited_once()
     req = submit.await_args.args[0]
     assert req.origin is Origin.USER
@@ -90,26 +95,37 @@ def test_intake_no_submit_wired_drops(monkeypatch):
 
 def test_transcribe_audio_delegates(monkeypatch):
     class _FakeProvider:
-        def __init__(self, api_key=None): pass
-        async def transcribe(self, path): return "hello world"
+        def __init__(self, api_key=None):
+            pass
+
+        async def transcribe(self, path):
+            return "hello world"
+
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _FakeProvider)
     assert asyncio.run(transcribe_audio("/a.ogg", api_key="k")) == "hello world"
 
 
 def test_transcribe_audio_swallows_errors(monkeypatch):
     class _Boom:
-        def __init__(self, api_key=None): raise RuntimeError("nope")
+        def __init__(self, api_key=None):
+            raise RuntimeError("nope")
+
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _Boom)
-    assert asyncio.run(transcribe_audio("/a.ogg")) == ""   # failure -> empty string
+    assert asyncio.run(transcribe_audio("/a.ogg")) == ""  # failure -> empty string
 
 
 def test_transcribe_audio_empty_key_becomes_none(monkeypatch):
     seen = {}
+
     class _Rec:
-        def __init__(self, api_key=None): seen["key"] = api_key
-        async def transcribe(self, path): return ""
+        def __init__(self, api_key=None):
+            seen["key"] = api_key
+
+        async def transcribe(self, path):
+            return ""
+
     monkeypatch.setattr("raven.providers.transcription.GroqTranscriptionProvider", _Rec)
-    asyncio.run(transcribe_audio("/a.ogg", api_key=""))    # empty -> None (provider env fallback)
+    asyncio.run(transcribe_audio("/a.ogg", api_key=""))  # empty -> None (provider env fallback)
     assert seen["key"] is None
     asyncio.run(transcribe_audio("/a.ogg", api_key="k"))
     assert seen["key"] == "k"

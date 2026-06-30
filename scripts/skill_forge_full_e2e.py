@@ -20,7 +20,6 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import sys
 import textwrap
@@ -29,6 +28,7 @@ from pathlib import Path
 # Repo root on sys.path so we can run as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
+
 
 # Load .env if present (simple key=value loader, no python-dotenv dep).
 def _load_dotenv(path: Path) -> None:
@@ -57,31 +57,60 @@ from raven.memory_engine.skill_local.local_pool import LocalPool
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.providers.litellm_provider import LiteLLMProvider
 
-
 # Fixture skills — same shape as benchmarks/skill_evals queries, with
 # one having a bundled reference file to exercise refs hydrate.
 _SKILLS = [
-    ("pdf-gen", "Generate PDF reports using Python reportlab",
-     "Use reportlab to build PDF documents. Supports tables, images, charts.\n\n"
-     "See [Configuration](references/CONFIG.md) for advanced options."),
-    ("pptx-builder", "Create PowerPoint presentations programmatically via python-pptx",
-     "python-pptx library for building .pptx slide decks. Add titles, bullets, images."),
-    ("docx-md-converter", "Convert .docx documents to Markdown using python-docx",
-     "Read Word documents with python-docx and emit markdown text."),
-    ("excel-ops", "Manipulate Excel spreadsheets with openpyxl",
-     "openpyxl handles xlsx spreadsheet read/write, formulas, formatting."),
-    ("react-hooks", "Patterns for React custom hooks for state management",
-     "Build reusable hooks: useReducer, useContext, useMemo composition."),
-    ("git-resolver", "Resolve git merge conflicts via three-way merge",
-     "Parse <<<<<<< / ======= / >>>>>>> markers and reconcile."),
-    ("kubernetes-debug", "Debug Kubernetes pods and services using kubectl",
-     "kubectl logs / describe / exec for pod-level troubleshooting."),
-    ("sql-explain", "Analyze slow SQL queries with EXPLAIN ANALYZE",
-     "PostgreSQL / MySQL EXPLAIN output interpretation."),
-    ("regex-builder", "Build and test regular expressions",
-     "Compose regex patterns step-by-step, test against samples."),
-    ("csv-clean", "Clean and normalize CSV data files",
-     "pandas-based CSV cleanup: dedup, type coercion, missing value fill."),
+    (
+        "pdf-gen",
+        "Generate PDF reports using Python reportlab",
+        "Use reportlab to build PDF documents. Supports tables, images, charts.\n\n"
+        "See [Configuration](references/CONFIG.md) for advanced options.",
+    ),
+    (
+        "pptx-builder",
+        "Create PowerPoint presentations programmatically via python-pptx",
+        "python-pptx library for building .pptx slide decks. Add titles, bullets, images.",
+    ),
+    (
+        "docx-md-converter",
+        "Convert .docx documents to Markdown using python-docx",
+        "Read Word documents with python-docx and emit markdown text.",
+    ),
+    (
+        "excel-ops",
+        "Manipulate Excel spreadsheets with openpyxl",
+        "openpyxl handles xlsx spreadsheet read/write, formulas, formatting.",
+    ),
+    (
+        "react-hooks",
+        "Patterns for React custom hooks for state management",
+        "Build reusable hooks: useReducer, useContext, useMemo composition.",
+    ),
+    (
+        "git-resolver",
+        "Resolve git merge conflicts via three-way merge",
+        "Parse <<<<<<< / ======= / >>>>>>> markers and reconcile.",
+    ),
+    (
+        "kubernetes-debug",
+        "Debug Kubernetes pods and services using kubectl",
+        "kubectl logs / describe / exec for pod-level troubleshooting.",
+    ),
+    (
+        "sql-explain",
+        "Analyze slow SQL queries with EXPLAIN ANALYZE",
+        "PostgreSQL / MySQL EXPLAIN output interpretation.",
+    ),
+    (
+        "regex-builder",
+        "Build and test regular expressions",
+        "Compose regex patterns step-by-step, test against samples.",
+    ),
+    (
+        "csv-clean",
+        "Clean and normalize CSV data files",
+        "pandas-based CSV cleanup: dedup, type coercion, missing value fill.",
+    ),
 ]
 
 
@@ -92,15 +121,15 @@ def _build_workspace(tmpdir: Path) -> Path:
         d = skills_root / name
         d.mkdir(exist_ok=True)
         (d / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: {desc}\n---\n\n"
-            f"# {name}\n\n{body}\n",
+            f"---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\n{body}\n",
             encoding="utf-8",
         )
     # For pdf-gen, also create the referenced bundled file so refs hydrate
     # rewrites it to an absolute path in the prompt.
     (skills_root / "pdf-gen" / "references").mkdir()
     (skills_root / "pdf-gen" / "references" / "CONFIG.md").write_text(
-        "# PDF Config\n\nFonts, margins, page size.\n", encoding="utf-8",
+        "# PDF Config\n\nFonts, margins, page size.\n",
+        encoding="utf-8",
     )
     return tmpdir
 
@@ -141,11 +170,15 @@ async def run_one(builder: SkillsSegmentBuilder, task: dict) -> None:
     ctx = AssemblyContext(
         session_key=f"e2e-{task['label']}",
         current_message=task["query"],
-        media=None, channel=None, chat_id=None,
+        media=None,
+        channel=None,
+        chat_id=None,
         session_messages=[],
         budget=TokenBudget(
-            context_length=200_000, reserved_output=8000,
-            reserved_tools=4000, reserved_system=4000,
+            context_length=200_000,
+            reserved_output=8000,
+            reserved_tools=4000,
+            reserved_system=4000,
             available_history=184_000,
         ),
     )
@@ -189,6 +222,7 @@ async def main() -> int:
         return 1
 
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _build_workspace(Path(tmp))
         registry = SkillRegistry(workspace, builtin_skills_dir=workspace / "_unused")

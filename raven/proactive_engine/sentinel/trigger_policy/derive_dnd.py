@@ -38,14 +38,26 @@ _DND_RE = re.compile(
     re.IGNORECASE,
 )
 _WEEKDAYS_RE = re.compile(
-    r"weekdays\s*=\s*(?P<spec>[A-Za-z0-9,\-]+)", re.IGNORECASE,
+    r"weekdays\s*=\s*(?P<spec>[A-Za-z0-9,\-]+)",
+    re.IGNORECASE,
 )
 _REASON_RE = re.compile(r"reason\s*=\s*(?P<tag>\S+)", re.IGNORECASE)
 
 _DAY_NAMES = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
-    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
-    "friday": 4, "saturday": 5, "sunday": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
 }
 
 
@@ -128,14 +140,16 @@ def parse_user_overrides_dnd(attention_md: str) -> list[DndWindow]:
         rm = _REASON_RE.search(rest)
         if rm:
             reason = rm.group("tag")
-        out.append(DndWindow(
-            start_hour=sh,
-            start_minute=sm,
-            end_hour=eh,
-            end_minute=em,
-            weekdays=weekdays,
-            why=reason or "user_override",
-        ))
+        out.append(
+            DndWindow(
+                start_hour=sh,
+                start_minute=sm,
+                end_hour=eh,
+                end_minute=em,
+                weekdays=weekdays,
+                why=reason or "user_override",
+            )
+        )
     return out
 
 
@@ -146,10 +160,12 @@ _PLAN_HEAD_RE = re.compile(
     r"(?P<rest>.*)$",
 )
 _PLAN_PRIORITY_RE = re.compile(
-    r"priority\s*=\s*(?P<pri>low|medium|high)", re.IGNORECASE,
+    r"priority\s*=\s*(?P<pri>low|medium|high)",
+    re.IGNORECASE,
 )
 _PLAN_MSG_RE = re.compile(
-    r"msg\s*=\s*(?P<msg>.*)", re.IGNORECASE | re.DOTALL,
+    r"msg\s*=\s*(?P<msg>.*)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -205,13 +221,15 @@ def parse_daily_plan(attention_md: str) -> list[dict]:
                 user_message = mm.group("msg").strip()
                 continue
             rationale_parts.append(seg)
-        out.append({
-            "time_hhmm": f"{h:02d}:{mi:02d}",
-            "topic_tag": m.group("tag").strip().lower(),
-            "priority": priority,
-            "user_message": user_message,
-            "rationale": " ".join(rationale_parts),
-        })
+        out.append(
+            {
+                "time_hhmm": f"{h:02d}:{mi:02d}",
+                "topic_tag": m.group("tag").strip().lower(),
+                "priority": priority,
+                "user_message": user_message,
+                "rationale": " ".join(rationale_parts),
+            }
+        )
     return out
 
 

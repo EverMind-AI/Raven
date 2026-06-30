@@ -76,11 +76,13 @@ async def test_before_hooks_run_in_registration_order():
 
 async def test_after_hooks_run_in_registration_order():
     sink: list[str] = []
-    reg = StrategyRegistry([
-        _RecordingAfter("first", sink),
-        _RecordingAfter("second", sink),
-        _RecordingAfter("third", sink),
-    ])
+    reg = StrategyRegistry(
+        [
+            _RecordingAfter("first", sink),
+            _RecordingAfter("second", sink),
+            _RecordingAfter("third", sink),
+        ]
+    )
     await reg.after_llm_call({}, _snap())
     assert sink == ["first", "second", "third"]
 
@@ -95,11 +97,13 @@ async def test_before_hook_failure_propagates():
 async def test_after_hook_failure_is_swallowed_other_strategies_still_run():
     """A failing telemetry hook must not abort downstream hooks or the loop."""
     sink: list[str] = []
-    reg = StrategyRegistry([
-        _RecordingAfter("before_boom", sink),
-        _BoomAfter(),
-        _RecordingAfter("after_boom", sink),
-    ])
+    reg = StrategyRegistry(
+        [
+            _RecordingAfter("before_boom", sink),
+            _BoomAfter(),
+            _RecordingAfter("after_boom", sink),
+        ]
+    )
     # Should NOT raise.
     await reg.after_llm_call({}, _snap())
     # Both surrounding hooks still fired.

@@ -165,20 +165,12 @@ def register(app: typer.Typer) -> None:
                 "'direct' session remains reachable via --resume direct."
             ),
         ),
-        continue_: bool = typer.Option(
-            False, "--continue", "-c", help="Continue the most recent cli session"
-        ),
-        resume: str | None = typer.Option(
-            None, "--resume", "-r", help="Resume session by bare id or unique prefix"
-        ),
+        continue_: bool = typer.Option(False, "--continue", "-c", help="Continue the most recent cli session"),
+        resume: str | None = typer.Option(None, "--resume", "-r", help="Resume session by bare id or unique prefix"),
         workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
         config: str | None = typer.Option(None, "--config", help="Config file path"),
-        markdown: bool = typer.Option(
-            True, "--markdown/--no-markdown", help="Render assistant output as Markdown"
-        ),
-        logs: bool = typer.Option(
-            False, "--logs/--no-logs", help="Show Raven runtime logs during chat"
-        ),
+        markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
+        logs: bool = typer.Option(False, "--logs/--no-logs", help="Show Raven runtime logs during chat"),
         wait_skill_extract: bool = typer.Option(
             False,
             "--wait-skill-extract/--no-wait-skill-extract",
@@ -297,15 +289,13 @@ def register(app: typer.Typer) -> None:
         # triggers are dispatcher-side: only the gateway has real channel
         # adapters, so REPL must NOT drain them or feishu/slack triggers get
         # consumed without delivery.
-        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = (
-            build_sentinel_stack(
-                config,
-                sentinel_cfg,
-                session_manager,
-                provider,
-                now_fn=parse_fake_now(fake_now),
-                include_discover_triggers=False,
-            )
+        sentinel_runner, sentinel_response_modifier, sentinel_on_user_inbound = build_sentinel_stack(
+            config,
+            sentinel_cfg,
+            session_manager,
+            provider,
+            now_fn=parse_fake_now(fake_now),
+            include_discover_triggers=False,
         )
 
         if logs:
@@ -487,9 +477,7 @@ def register(app: typer.Typer) -> None:
             from raven.cli._repl_spine import build_repl, run_repl_loop
 
             _init_prompt_session()
-            console.print(
-                f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
-            )
+            console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
 
             if ":" in session_id:
                 cli_channel, cli_chat_id = session_id.split(":", 1)
@@ -597,9 +585,7 @@ def register(app: typer.Typer) -> None:
                         await sentinel_runner.stop()
                     cron.stop()
                     agent_loop.stop()
-                    await (
-                        teardown()
-                    )  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
+                    await teardown()  # scheduler.shutdown + hub.aclose (honors the shutdown contract)
                     await asyncio.gather(runtime_task, return_exceptions=True)
                     if wait_skill_extract or flush_skill_buffer:
                         # ``exit`` is not a natural boundary; without a
@@ -610,9 +596,7 @@ def register(app: typer.Typer) -> None:
                         # ``wait_skill_extract`` we block on the
                         # resulting (and any other in-flight) task.
                         await agent_loop.await_pending_extractions(
-                            flush_session_id=(
-                                f"{cli_channel}:{cli_chat_id}" if flush_skill_buffer else None
-                            ),
+                            flush_session_id=(f"{cli_channel}:{cli_chat_id}" if flush_skill_buffer else None),
                             wait=wait_skill_extract,
                         )
                     await agent_loop.close_mcp()

@@ -122,14 +122,16 @@ class SubscriptionEmitter:
                 for event in merged:
                     if sub.closed:
                         return
-                    await self._send_frame({
-                        "jsonrpc": "2.0",
-                        "method": "event",
-                        "params": {
-                            "subscription_id": sub.sub_id,
-                            "event": event,
-                        },
-                    })
+                    await self._send_frame(
+                        {
+                            "jsonrpc": "2.0",
+                            "method": "event",
+                            "params": {
+                                "subscription_id": sub.sub_id,
+                                "event": event,
+                            },
+                        }
+                    )
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -145,24 +147,27 @@ class SubscriptionEmitter:
         if sub.closed:
             return
         try:
-            await self._send_frame({
-                "jsonrpc": "2.0",
-                "method": "event",
-                "params": {
-                    "subscription_id": sub.sub_id,
-                    "event": {
-                        "type": "error",
-                        "payload": {
-                            "code": -32016,
-                            "message": "subscription_capacity_exceeded",
-                            "reason": "internal",
+            await self._send_frame(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "event",
+                    "params": {
+                        "subscription_id": sub.sub_id,
+                        "event": {
+                            "type": "error",
+                            "payload": {
+                                "code": -32016,
+                                "message": "subscription_capacity_exceeded",
+                                "reason": "internal",
+                            },
                         },
                     },
-                },
-            })
+                }
+            )
         except Exception:
             logger.exception(
-                "failed to send overflow notification sub_id={}", sub.sub_id,
+                "failed to send overflow notification sub_id={}",
+                sub.sub_id,
             )
         finally:
             self._mark_closed(sub)

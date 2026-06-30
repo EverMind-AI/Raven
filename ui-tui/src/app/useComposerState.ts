@@ -3,18 +3,19 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import { useStdin, withInkSuspended } from '@hermes/ink'
+import { useStore } from '@nanostores/react'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-
-import { useStdin, withInkSuspended } from '@hermes/ink'
-import { useStore } from '@nanostores/react'
 import { useCallback, useMemo, useState } from 'react'
 
 import type { PasteEvent } from '../components/textInput.js'
-import { LARGE_PASTE } from '../config/limits.js'
 import type { ImageAttachResponse, InputDetectDropResponse } from '../gatewayTypes.js'
+import type { MaybePromise, PasteSnippet, UseComposerStateOptions, UseComposerStateResult } from './interfaces.js'
+
+import { LARGE_PASTE } from '../config/limits.js'
 import { useCompletion } from '../hooks/useCompletion.js'
 import { useInputHistory } from '../hooks/useInputHistory.js'
 import { useQueue } from '../hooks/useQueue.js'
@@ -23,8 +24,6 @@ import { resolveEditor } from '../lib/editor.js'
 import { readOsc52Clipboard } from '../lib/osc52.js'
 import { isRemoteShellSession } from '../lib/terminalSetup.js'
 import { pasteTokenLabel, stripTrailingPasteNewlines } from '../lib/text.js'
-
-import type { MaybePromise, PasteSnippet, UseComposerStateOptions, UseComposerStateResult } from './interfaces.js'
 import { $isBlocked } from './overlayStore.js'
 import { getUiState } from './uiStore.js'
 

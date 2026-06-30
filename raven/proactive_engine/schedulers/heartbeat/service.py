@@ -105,9 +105,7 @@ class HeartbeatService:
         if events and self._system_events:
             self._system_events.ack(events)
 
-    async def _decide(
-        self, content: str, events: list[SystemEvent] | None = None
-    ) -> tuple[str, str]:
+    async def _decide(self, content: str, events: list[SystemEvent] | None = None) -> tuple[str, str]:
         """Phase 1: ask LLM to decide skip/run via virtual tool call.
 
         Returns (action, tasks) where action is 'skip' or 'run'.
@@ -127,7 +125,10 @@ class HeartbeatService:
             )
         response = await self.provider.chat_with_retry(
             messages=[
-                {"role": "system", "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
+                {
+                    "role": "system",
+                    "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision.",
+                },
                 {"role": "user", "content": user_msg},
             ],
             tools=_HEARTBEAT_TOOL,
@@ -212,9 +213,7 @@ class HeartbeatService:
                 logger.error("Heartbeat error: {}", e)
                 next_tick_at = time.monotonic() + self.interval_s
 
-    async def _tick(
-        self, reason: str = "interval", events: list[SystemEvent] | None = None
-    ) -> None:
+    async def _tick(self, reason: str = "interval", events: list[SystemEvent] | None = None) -> None:
         """Execute a single heartbeat tick.
 
         Raises on failure so the caller can decide whether to ack events.

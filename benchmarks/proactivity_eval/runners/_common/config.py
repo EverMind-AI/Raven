@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -103,25 +102,19 @@ def _build(config_path: Path, data: dict[str, Any]) -> RunnersConfig:
 
     # Env var takes precedence over yaml for individual fields.
     hermes_src = os.environ.get("HERMES_AGENT_SRC") or systems.get("hermes_src")
-    openclaw_cmd = (
-        os.environ.get("OPENCLAW_CMD") or systems.get("openclaw_cmd") or "openclaw"
-    )
+    openclaw_cmd = os.environ.get("OPENCLAW_CMD") or systems.get("openclaw_cmd") or "openclaw"
 
     return RunnersConfig(
         config_path=config_path,
         hermes_src=resolve_path(hermes_src, base),
         openclaw_cmd=openclaw_cmd,
-        vllm_base_url=os.environ.get("VLLM_BASE_URL") or llm.get("vllm_base_url")
-            or "http://localhost:8000/v1",
-        vllm_model_id=os.environ.get("VLLM_MODEL_ID") or llm.get("vllm_model_id")
-            or "qwen3.5-27B",
+        vllm_base_url=os.environ.get("VLLM_BASE_URL") or llm.get("vllm_base_url") or "http://localhost:8000/v1",
+        vllm_model_id=os.environ.get("VLLM_MODEL_ID") or llm.get("vllm_model_id") or "qwen3.5-27B",
         vllm_api_key=llm.get("vllm_api_key") or "EMPTY",
         vllm_context_window=int(llm.get("vllm_context_window") or 65536),
         vllm_max_tokens=int(llm.get("vllm_max_tokens") or 8192),
-        judge_base_url=os.environ.get("JUDGE_BASE_URL") or llm.get("judge_base_url")
-            or "http://localhost:8001",
-        judge_model=os.environ.get("JUDGE_MODEL") or llm.get("judge_model")
-            or "Qwen3.5-397B",
+        judge_base_url=os.environ.get("JUDGE_BASE_URL") or llm.get("judge_base_url") or "http://localhost:8001",
+        judge_model=os.environ.get("JUDGE_MODEL") or llm.get("judge_model") or "Qwen3.5-397B",
     )
 
 

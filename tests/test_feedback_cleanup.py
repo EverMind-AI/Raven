@@ -38,14 +38,14 @@ def tracker(tmp_path: Path, clock: Clock) -> NudgeFeedbackTracker:
     return NudgeFeedbackTracker(tmp_path / "feedback.jsonl", now_fn=clock)
 
 
-def _seed_at(tracker: NudgeFeedbackTracker, clock: Clock, days_ago: int,
-             nudge_id: str, signal: str = "dispatched") -> None:
+def _seed_at(
+    tracker: NudgeFeedbackTracker, clock: Clock, days_ago: int, nudge_id: str, signal: str = "dispatched"
+) -> None:
     """Record one event N days before the tracker's "now"."""
     save = clock.t
     clock.t = save - timedelta(days=days_ago)
     if signal == "dispatched":
-        tracker.record_dispatched(nudge_id, action="nudge", session_key="default",
-                                  priority="medium")
+        tracker.record_dispatched(nudge_id, action="nudge", session_key="default", priority="medium")
     elif signal == "accepted":
         tracker.record_accepted(nudge_id)
     elif signal == "dismissed":
@@ -96,7 +96,7 @@ def test_cleanup_handles_malformed_lines(tracker, clock):
     # Append garbage directly so we exercise the parse path
     with tracker.log_path.open("a", encoding="utf-8") as f:
         f.write("not-json\n")
-        f.write('{"id": "no-ts"}\n')               # no ts
+        f.write('{"id": "no-ts"}\n')  # no ts
         f.write('{"id": "bad-ts", "ts": "garbage"}\n')  # unparseable ts
     res = tracker.cleanup_older_than(days=30)
     # 1 kept, 3 dropped (the malformed ones)
@@ -116,14 +116,11 @@ def test_acceptance_rate_reflects_post_cleanup(tracker, clock):
     so the adaptive tuner can't see ghost dispatches."""
     # 5 dispatched + 5 accepted recently → 100% acceptance
     for i in range(5):
-        _seed_at(tracker, clock, days_ago=1, nudge_id=f"recent-{i}",
-                 signal="dispatched")
-        _seed_at(tracker, clock, days_ago=1, nudge_id=f"recent-{i}",
-                 signal="accepted")
+        _seed_at(tracker, clock, days_ago=1, nudge_id=f"recent-{i}", signal="dispatched")
+        _seed_at(tracker, clock, days_ago=1, nudge_id=f"recent-{i}", signal="accepted")
     # 20 stale dispatched + 0 accepted → would drag rate down if not pruned
     for i in range(20):
-        _seed_at(tracker, clock, days_ago=90, nudge_id=f"stale-{i}",
-                 signal="dispatched")
+        _seed_at(tracker, clock, days_ago=90, nudge_id=f"stale-{i}", signal="dispatched")
 
     # Before cleanup: 25 dispatched in last 365d window, rate would be 5/25 = 0.2
     # But acceptance_rate uses 7d window by default — stale (90d ago) already
@@ -133,14 +130,14 @@ def test_acceptance_rate_reflects_post_cleanup(tracker, clock):
 
     # Now run a 30d cleanup; the 20 stale events get dropped from disk + cache.
     res = tracker.cleanup_older_than(days=30)
-    assert res == {"kept": 10, "dropped": 20}   # 5 dispatched + 5 accepted kept
+    assert res == {"kept": 10, "dropped": 20}  # 5 dispatched + 5 accepted kept
 
     # acceptance_rate is unchanged — it was already filtered by 7d window.
     post = tracker.acceptance_rate(since_days=7)
     assert post == 1.0
     # But the 90d-since window now shows the cleanup effect.
     long_rate = tracker.acceptance_rate(since_days=365)
-    assert long_rate == 1.0   # 5/5 = 1.0, no longer 5/25
+    assert long_rate == 1.0  # 5/5 = 1.0, no longer 5/25
 
 
 def test_cleanup_idempotent(tracker, clock):

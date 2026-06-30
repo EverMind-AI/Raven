@@ -7,8 +7,8 @@ import type { RunExternalProcess } from '@hermes/ink'
 
 import type { SetupStatusResponse } from '../gatewayTypes.js'
 import type { LaunchResult } from '../lib/externalCli.js'
-
 import type { SlashHandlerContext } from './interfaces.js'
+
 import { patchUiState } from './uiStore.js'
 
 export interface RunExternalSetupOptions {

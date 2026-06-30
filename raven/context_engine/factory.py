@@ -88,6 +88,8 @@ def build_context_engine(
     """
     from raven.config.raven import (
         MemoryConfig as _MemoryConfig,
+    )
+    from raven.config.raven import (
         SkillForgeRouterConfig as _SkillForgeRouterConfig,
     )
 
@@ -114,7 +116,8 @@ def build_context_engine(
         IdentitySegmentBuilder(workspace),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
-            builder.memory, backend,
+            builder.memory,
+            backend,
             user_id=memory_config.user_id,
             memory_top_k=memory_config.memory_top_k,
         ),
@@ -125,8 +128,7 @@ def build_context_engine(
             rewriter=rewriter,
             gate=gate,
             gate_pool_size=(
-                int(getattr(skill_forge_config, "llm_gate_pool_size", 10))
-                if skill_forge_config is not None else 10
+                int(getattr(skill_forge_config, "llm_gate_pool_size", 10)) if skill_forge_config is not None else 10
             ),
             hub_client=skill_hub_client,
             get_tool_definitions=get_tool_definitions,

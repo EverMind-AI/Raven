@@ -314,9 +314,7 @@ async def test_user_interrupt_preempts_then_runs_before_appended_backlog():
     hang = sched.submit(_req(channel="tg", chat_id="1", text="hang"))
     await runner.hanging_started.wait()
     appended = sched.submit(_req(channel="tg", chat_id="1", text="append"))  # queued behind
-    interrupter = sched.submit(
-        _req(channel="tg", chat_id="1", busy=BusyPolicy.INTERRUPT, text="interrupt")
-    )
+    interrupter = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INTERRUPT, text="interrupt"))
     assert await asyncio.wait_for(hang.result(), timeout=1.0) is None  # preempted
     await asyncio.wait_for(interrupter.result(), timeout=1.0)
     await asyncio.wait_for(appended.result(), timeout=1.0)
@@ -478,9 +476,7 @@ async def test_interrupt_runs_before_a_hosts_fallen_back_inject():
     host = sched.submit(_req(channel="tg", chat_id="1", text="host"))
     await runner.started.wait()
     inject = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text="inject"))
-    interrupter = sched.submit(
-        _req(channel="tg", chat_id="1", busy=BusyPolicy.INTERRUPT, text="interrupt")
-    )
+    interrupter = sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INTERRUPT, text="interrupt"))
     gate.set()  # lets the interrupter and the fallen-back inject finish
     assert await asyncio.wait_for(host.result(), timeout=1.0) is None  # preempted
     await asyncio.wait_for(interrupter.result(), timeout=1.0)
@@ -638,8 +634,7 @@ async def test_inject_fallback_re_enqueue_also_triggers_the_depth_warning(monkey
         sched.submit(_req(channel="tg", chat_id="1", text="host"))  # runs, awaits gate
         await runner.started.wait()
         injects = [
-            sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text=f"inj{i}"))
-            for i in range(3)
+            sched.submit(_req(channel="tg", chat_id="1", busy=BusyPolicy.INJECT, text=f"inj{i}")) for i in range(3)
         ]
         gate.set()  # host completes -> worker re-enqueues the 3 injects via _enqueue (depth -> 3)
         for handle in injects:

@@ -16,13 +16,7 @@ def test_parse_returns_empty_for_empty_text() -> None:
 
 
 def test_parse_splits_two_canonical_sections() -> None:
-    text = (
-        "## User overrides\n"
-        "- 凌晨别 nudge\n"
-        "\n"
-        "## Pending proposals\n"
-        "- prop_42: review weekly\n"
-    )
+    text = "## User overrides\n- 凌晨别 nudge\n\n## Pending proposals\n- prop_42: review weekly\n"
     out = parse_attention(text)
     assert out == {
         "## User overrides": "- 凌晨别 nudge",

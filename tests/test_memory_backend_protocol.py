@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from typing import Any
 
 import pytest
 
 from raven.memory_engine import Memory, MemoryBackend
-
 
 # ---------------------------------------------------------------------------
 # Memory dataclass

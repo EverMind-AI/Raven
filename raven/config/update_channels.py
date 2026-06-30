@@ -21,7 +21,6 @@ from pydantic_core import PydanticUndefined
 from raven.config.loader import get_config_path
 from raven.config.schema import ChannelsConfig
 
-
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -76,14 +75,10 @@ def _channel_schema_cls(name: str) -> type[BaseModel]:
     """Look up the Pydantic class for a channel ('telegram' -> TelegramConfig)."""
     field = ChannelsConfig.model_fields.get(name)
     if field is None:
-        raise KeyError(
-            f"Unknown channel '{name}'. Available channels: {sorted(_channel_names())}"
-        )
+        raise KeyError(f"Unknown channel '{name}'. Available channels: {sorted(_channel_names())}")
     ann = _unwrap_optional(field.annotation)
     if not _is_model_class(ann):
-        raise KeyError(
-            f"'{name}' is not a channel section. Available channels: {sorted(_channel_names())}"
-        )
+        raise KeyError(f"'{name}' is not a channel section. Available channels: {sorted(_channel_names())}")
     return ann
 
 
@@ -134,9 +129,7 @@ def _is_secret_field(field_name: str, field_info: Any) -> bool:
     return any(field_name.endswith(suf) for suf in _SECRET_SUFFIXES)
 
 
-def _walk_nested_path(
-    model_cls: type[BaseModel], dotted_key: str
-) -> tuple[type[BaseModel], str]:
+def _walk_nested_path(model_cls: type[BaseModel], dotted_key: str) -> tuple[type[BaseModel], str]:
     """Walk ``a.b.c`` into nested ``BaseModel`` classes.
 
     For ``'dm.policy'`` on ``SlackConfig`` returns ``(SlackDMConfig, 'policy')``.
@@ -149,14 +142,10 @@ def _walk_nested_path(
     for seg in segs[:-1]:
         finfo = cls.model_fields.get(seg)
         if finfo is None:
-            raise KeyError(
-                f"Unknown nested field '{seg}' in {cls.__name__}"
-            )
+            raise KeyError(f"Unknown nested field '{seg}' in {cls.__name__}")
         ann = _unwrap_optional(finfo.annotation)
         if not _is_model_class(ann):
-            raise KeyError(
-                f"Field '{seg}' in {cls.__name__} is not a nested model"
-            )
+            raise KeyError(f"Field '{seg}' in {cls.__name__} is not a nested model")
         cls = ann
     leaf = segs[-1]
     if leaf not in cls.model_fields:
@@ -424,10 +413,7 @@ def _patch_channel(
 
     unknown = [k for k in fields if k not in specs]
     if unknown:
-        raise KeyError(
-            f"Unknown field(s) {unknown} for channel '{name}'. "
-            f"Available fields: {sorted(specs.keys())}"
-        )
+        raise KeyError(f"Unknown field(s) {unknown} for channel '{name}'. Available fields: {sorted(specs.keys())}")
 
     path = config_path or get_config_path()
     data = _load_raw(path)

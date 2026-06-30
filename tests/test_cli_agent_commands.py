@@ -142,9 +142,7 @@ def _invoke_agent_capturing_session(
     return r, captured
 
 
-def test_agent_default_mints_fresh_session(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_agent_default_mints_fresh_session(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Bare ``agent -m`` mints a fresh ``cli:{chat_id}`` per invocation."""
     import re
 
@@ -159,9 +157,7 @@ def test_agent_default_mints_fresh_session(
 
     r2, cap2 = _invoke_agent_capturing_session(monkeypatch, ws, [])
     assert r2.exit_code == 0
-    assert cap1["session_id"] != cap2["session_id"], (
-        "each bare invocation must mint a NEW session"
-    )
+    assert cap1["session_id"] != cap2["session_id"], "each bare invocation must mint a NEW session"
 
 
 def test_agent_continue_binds_most_recent_cli_session(
@@ -183,9 +179,7 @@ def test_agent_continue_binds_most_recent_cli_session(
     assert captured["session_id"] == f"cli:{seeded}"
 
 
-def test_agent_resume_binds_resolved_session(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_agent_resume_binds_resolved_session(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--resume <prefix>`` resolves and binds that cli session."""
     from raven.session.manager import SessionManager
 
@@ -197,23 +191,17 @@ def test_agent_resume_binds_resolved_session(
     s.add_message("user", "earlier turn")
     mgr.save(s)
 
-    r, captured = _invoke_agent_capturing_session(
-        monkeypatch, ws, ["--resume", seeded[:20]]
-    )
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--resume", seeded[:20]])
     assert r.exit_code == 0, r.stdout
     assert captured["session_id"] == f"cli:{seeded}"
 
 
-def test_agent_session_key_passthrough(
-    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_agent_session_key_passthrough(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--session <key>`` passes a full key through unchanged (any channel)."""
     ws = tmp_path / "ws"
     ws.mkdir()
 
-    r, captured = _invoke_agent_capturing_session(
-        monkeypatch, ws, ["--session", "feishu:ou_xyz"]
-    )
+    r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "feishu:ou_xyz"])
     assert r.exit_code == 0, r.stdout
     assert captured["session_id"] == "feishu:ou_xyz"
 
@@ -261,9 +249,7 @@ def test_agent_unknown_bare_session_falls_back_to_cli(
         ["--session", "cli:abc", "-c", "--resume", "x"],
     ],
 )
-def test_agent_session_binding_flags_mutually_exclusive(
-    tmp_config: Path, args: list[str]
-) -> None:
+def test_agent_session_binding_flags_mutually_exclusive(tmp_config: Path, args: list[str]) -> None:
     """More than one of --session/--continue/--resume exits with usage error."""
     r = runner.invoke(app, ["agent", "-m", "hi", *args])
     assert r.exit_code == 2, f"expected usage error, got {r.exit_code}: {r.stdout}"
@@ -352,9 +338,9 @@ def test_agent_without_fake_now_leaves_cron_on_wall_clock(
         ("/exit", True),
         ("/quit", True),
         (":q", True),
-        ("EXIT", True),       # case-insensitive
+        ("EXIT", True),  # case-insensitive
         ("Quit", True),
-        (" exit", False),     # leading whitespace not stripped
+        (" exit", False),  # leading whitespace not stripped
         ("hello", False),
         ("", False),
         ("exit later", False),
@@ -398,9 +384,7 @@ def test_print_agent_response_plain(capsys: pytest.CaptureFixture) -> None:
 # ============================================================================
 
 
-def test_agent_message_mode_mocked_provider(
-    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_agent_message_mode_mocked_provider(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``agent -m 'hi'`` with a mocked provider must reach a clean exit
     (no traceback). We mock ``make_provider`` so the agent loop builds
     without contacting any LLM."""

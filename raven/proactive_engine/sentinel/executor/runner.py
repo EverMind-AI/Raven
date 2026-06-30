@@ -34,37 +34,37 @@ import asyncio
 import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from raven.channels.manager import ChannelManager
-    from raven.proactive_engine.sentinel.discover_triggers import (
-        DiscoverTriggerStore,
-    )
-    from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
     from raven.memory_engine.consolidate.behaviors_extractor import (
         BehaviorsExtractor,
     )
     from raven.proactive_engine.sentinel.attention_updater import AttentionUpdater
+    from raven.proactive_engine.sentinel.discover_triggers import (
+        DiscoverTriggerStore,
+    )
+    from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
     from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
+    from raven.proactive_engine.sentinel.types import PlannerContext
     from raven.session.manager import SessionManager
 
 from loguru import logger
 
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
-from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker, new_nudge_id
 from raven.proactive_engine.sentinel.executor.dispatcher import (
     ExecutionResult,
     NudgeDispatcher,
     split_session_key,
 )
 from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
-from raven.proactive_engine.sentinel.planner import ProactivePlanner
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
+from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker, new_nudge_id
+from raven.proactive_engine.sentinel.planner import ProactivePlanner
+from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
-
 
 # Per-turn session_key published by ``on_user_inbound`` so the
 # ``nudge_feedback`` tool can find the current session without changing
@@ -72,7 +72,8 @@ from raven.proactive_engine.sentinel.types import PlannerDecision
 # this propagates correctly from the user-inbound hook through the ReAct
 # loop into tool execution.
 current_session_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "sentinel_current_session_key", default=None,
+    "sentinel_current_session_key",
+    default=None,
 )
 
 
@@ -87,8 +88,8 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
         return h, m
     except Exception:
         logger.warning(
-            "SentinelRunner: invalid task_discovery_time {!r}, "
-            "falling back to 08:00", value,
+            "SentinelRunner: invalid task_discovery_time {!r}, falling back to 08:00",
+            value,
         )
         return 8, 0
 
@@ -96,10 +97,11 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
 @dataclass
 class TickOutcome:
     """Structured summary of one tick — useful for benchmark adapters + tests."""
+
     decision: PlannerDecision
-    result: ExecutionResult | None                # None when skip or no executor fired
-    nudge_id: str | None = None                   # correlates tracker events
-    route: str = ""                                # which executor path taken
+    result: ExecutionResult | None  # None when skip or no executor fired
+    nudge_id: str | None = None  # correlates tracker events
+    route: str = ""  # which executor path taken
     notes: list[str] = field(default_factory=list)
 
 
@@ -327,8 +329,7 @@ class SentinelRunner:
         except Exception as exc:
             logger.exception("ContextAssembler failed: {}", exc)
             return TickOutcome(
-                decision=PlannerDecision(action="skip",
-                                          reason=f"assembler_error: {type(exc).__name__}"),
+                decision=PlannerDecision(action="skip", reason=f"assembler_error: {type(exc).__name__}"),
                 result=None,
                 route="error",
             )
@@ -348,7 +349,9 @@ class SentinelRunner:
             # explicit dismissals.
             self.feedback.sweep_ignored(
                 window_seconds=getattr(
-                    self.policy.config, "ignore_window_seconds", 21600,
+                    self.policy.config,
+                    "ignore_window_seconds",
+                    21600,
                 ),
             )
             counts = self.feedback.counts(since_days=7)
@@ -362,7 +365,8 @@ class SentinelRunner:
             logger.warning("adaptive tuning skipped: {}: {}", type(exc).__name__, exc)
 
     def _policy_feedback_kwargs(
-        self, topic_tag: str | None = None,
+        self,
+        topic_tag: str | None = None,
     ) -> dict[str, Any]:
         """Snapshot acceptance signal for NudgePolicy.check.
 
@@ -385,17 +389,14 @@ class SentinelRunner:
                 "recent_dispatched": counts.get("dispatched", 0),
             }
             if topic_tag:
-                kwargs["topic_reject_count"] = (
-                    self.feedback.recent_topic_rejects(topic_tag)
-                )
-                kwargs["topic_acceptance"] = (
-                    self.feedback.topic_acceptance_rate(topic_tag)
-                )
+                kwargs["topic_reject_count"] = self.feedback.recent_topic_rejects(topic_tag)
+                kwargs["topic_acceptance"] = self.feedback.topic_acceptance_rate(topic_tag)
             return kwargs
         except Exception as exc:
             logger.warning(
                 "policy feedback snapshot failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return {}
 
@@ -406,19 +407,19 @@ class SentinelRunner:
         if self.feedback is None:
             return
         now = self._now_fn()
-        if (self._last_feedback_cleanup_date is not None
-                and self._last_feedback_cleanup_date.date() == now.date()):
+        if self._last_feedback_cleanup_date is not None and self._last_feedback_cleanup_date.date() == now.date():
             return
         try:
             res = self.feedback.cleanup_older_than(days=retention_days)
             if res.get("dropped"):
                 logger.info(
                     "feedback cleanup: kept={} dropped={} (retention={}d)",
-                    res.get("kept", 0), res.get("dropped", 0), retention_days,
+                    res.get("kept", 0),
+                    res.get("dropped", 0),
+                    retention_days,
                 )
         except Exception as exc:
-            logger.warning("feedback cleanup skipped: {}: {}",
-                           type(exc).__name__, exc)
+            logger.warning("feedback cleanup skipped: {}: {}", type(exc).__name__, exc)
         self._last_feedback_cleanup_date = now
 
     async def _refresh_memory_state(self) -> None:
@@ -441,7 +442,8 @@ class SentinelRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "AttentionUpdater.update raised: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
             # Re-parse ## User overrides each tick after attention.md
             # refresh so agent-edited DND windows reach NudgePolicy
@@ -450,6 +452,7 @@ class SentinelRunner:
                 from raven.proactive_engine.sentinel.trigger_policy.derive_dnd import (
                     parse_user_overrides_dnd,
                 )
+
                 attention_file = self.attention_updater.memory_store.attention_file
                 if attention_file.exists():
                     content = attention_file.read_text(encoding="utf-8")
@@ -459,7 +462,8 @@ class SentinelRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "user-overrides DND reload failed: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
         if self.behaviors_extractor is not None:
             try:
@@ -469,13 +473,14 @@ class SentinelRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "BehaviorsExtractor.tick raised: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
         self._last_memory_write_date = self._now_fn()
 
     _maybe_write_observations = _refresh_memory_state
 
-    _SENTINEL_INFINITE_IDLE_SECONDS = 10 ** 9  # ~ 31 years; any idle gate clears
+    _SENTINEL_INFINITE_IDLE_SECONDS = 10**9  # ~ 31 years; any idle gate clears
 
     def _observed_idle_seconds(self) -> int:
         """Seconds since the last user inbound. Returns a large sentinel
@@ -493,7 +498,9 @@ class SentinelRunner:
         self._channel_manager = channel_manager
 
     def _resolve_target(
-        self, channel: str, chat_id: str,
+        self,
+        channel: str,
+        chat_id: str,
     ) -> list[tuple[str, str]]:
         """Resolve one target into concrete ``(channel, chat_id)`` deliveries.
 
@@ -512,10 +519,7 @@ class SentinelRunner:
         / benchmark harness), the explicit pair passes through verbatim
         so eval harnesses still write PendingDecisions.
         """
-        enabled_channels = (
-            set(self._channel_manager.enabled_channels)
-            if self._channel_manager is not None else set()
-        )
+        enabled_channels = set(self._channel_manager.enabled_channels) if self._channel_manager is not None else set()
 
         def _lookup_chat_id(ch: str) -> str | None:
             if self._delivery_session_manager is None:
@@ -525,8 +529,7 @@ class SentinelRunner:
         if channel == "*":
             if not enabled_channels:
                 logger.warning(
-                    "Sentinel discovery: target '*' but no ChannelManager "
-                    "attached — skip",
+                    "Sentinel discovery: target '*' but no ChannelManager attached — skip",
                 )
                 return []
             results: list[tuple[str, str]] = []
@@ -536,8 +539,8 @@ class SentinelRunner:
                     results.append((ch, cid))
                 else:
                     logger.warning(
-                        "Sentinel discovery: '*' → {} skipped "
-                        "(no recent session)", ch,
+                        "Sentinel discovery: '*' → {} skipped (no recent session)",
+                        ch,
                     )
             return results
 
@@ -551,8 +554,8 @@ class SentinelRunner:
             if cid:
                 return [(channel, cid)]
             logger.warning(
-                "Sentinel discovery: target {!r} (no chat_id, no CM) — "
-                "nothing to deliver, skip", channel,
+                "Sentinel discovery: target {!r} (no chat_id, no CM) — nothing to deliver, skip",
+                channel,
             )
             return []
 
@@ -561,7 +564,8 @@ class SentinelRunner:
                 "Sentinel discovery: target channel {!r} is ephemeral or "
                 "unconfigured (enabled: {}) — skip. Use '*' for broadcast "
                 "or a real channel name.",
-                channel, sorted(enabled_channels),
+                channel,
+                sorted(enabled_channels),
             )
             return []
 
@@ -571,8 +575,8 @@ class SentinelRunner:
         if cid:
             return [(channel, cid)]
         logger.warning(
-            "Sentinel discovery: target {!r} has no chat_id and no recent "
-            "session — skip", channel,
+            "Sentinel discovery: target {!r} has no chat_id and no recent session — skip",
+            channel,
         )
         return []
 
@@ -588,11 +592,7 @@ class SentinelRunner:
         """
         channel, chat_id = split_session_key(target)
         if channel == "sentinel":
-            raw = [
-                pair
-                for tch, tcid in self.task_discovery_targets
-                for pair in self._resolve_target(tch, tcid)
-            ]
+            raw = [pair for tch, tcid in self.task_discovery_targets for pair in self._resolve_target(tch, tcid)]
             if not raw:
                 # No configured proactive targets — deliver to the single
                 # most-recent active session (like cron's default channel),
@@ -623,10 +623,7 @@ class SentinelRunner:
         sm = self._delivery_session_manager
         if sm is None:
             return []
-        enabled = (
-            set(self._channel_manager.enabled_channels)
-            if self._channel_manager is not None else set()
-        )
+        enabled = set(self._channel_manager.enabled_channels) if self._channel_manager is not None else set()
         lister = getattr(sm, "list_sessions", None)
         if callable(lister):
             try:
@@ -660,8 +657,7 @@ class SentinelRunner:
             return
         now = self._now_fn()
         # Already ran today.
-        if (self._last_task_discovery_date is not None
-                and self._last_task_discovery_date.date() == now.date()):
+        if self._last_task_discovery_date is not None and self._last_task_discovery_date.date() == now.date():
             return
         # Time-of-day gate: only run after the configured local time.
         target_h, target_m = self.task_discovery_time
@@ -677,12 +673,17 @@ class SentinelRunner:
                     await self.task_discoverer.run(channel=ch, to=cid)
                     logger.info(
                         "Sentinel discovery fired: {} → {} (origin={!r})",
-                        ch, cid, channel if not chat_id else f"{channel}:{chat_id}",
+                        ch,
+                        cid,
+                        channel if not chat_id else f"{channel}:{chat_id}",
                     )
                 except Exception as exc:
                     logger.warning(
                         "TaskDiscoverer.run failed for ({}, {}): {}: {}",
-                        ch, cid, type(exc).__name__, exc,
+                        ch,
+                        cid,
+                        type(exc).__name__,
+                        exc,
                     )
         # Per-day guard advances even if every target failed — retrying
         # next tick would just re-fail and spam logs.
@@ -699,13 +700,15 @@ class SentinelRunner:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "DiscoverTriggerStore.consume_all raised: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return
         if not triggers:
             return
         logger.info(
-            "Sentinel: consuming {} discover trigger(s) from CLI", len(triggers),
+            "Sentinel: consuming {} discover trigger(s) from CLI",
+            len(triggers),
         )
         for trg in triggers:
             try:
@@ -713,7 +716,11 @@ class SentinelRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "discover-trigger {} ({}, {}) failed: {}: {}",
-                    trg.id, trg.channel, trg.to, type(exc).__name__, exc,
+                    trg.id,
+                    trg.channel,
+                    trg.to,
+                    type(exc).__name__,
+                    exc,
                 )
 
     async def discover_now(self, channel: str, to: str) -> None:
@@ -733,7 +740,10 @@ class SentinelRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "discover_now: TaskDiscoverer.run failed for ({}, {}): {}: {}",
-                    ch, cid, type(exc).__name__, exc,
+                    ch,
+                    cid,
+                    type(exc).__name__,
+                    exc,
                 )
 
     async def tick_with_context(self, ctx: "PlannerContext") -> TickOutcome:
@@ -800,8 +810,7 @@ class SentinelRunner:
                 return outcome
             self.assembler.remember_last_decision(None)
             return TickOutcome(
-                decision=PlannerDecision(action="skip",
-                                          reason=f"planner_error: {type(exc).__name__}"),
+                decision=PlannerDecision(action="skip", reason=f"planner_error: {type(exc).__name__}"),
                 result=None,
                 route="error",
             )
@@ -849,13 +858,12 @@ class SentinelRunner:
         return any(tag.startswith(p) for p in cls._DEADLINE_SLOT_PREFIXES)
 
     def _has_due_high_priority_deadline(
-        self, due_slots: "list[tuple[dict, str]]",
+        self,
+        due_slots: "list[tuple[dict, str]]",
     ) -> bool:
         """True if any due slot is a ``priority=high`` deadline_* slot."""
         return any(
-            self._is_deadline_slot(tag)
-            and entry.get("priority", "low").lower() == "high"
-            for entry, tag in due_slots
+            self._is_deadline_slot(tag) and entry.get("priority", "low").lower() == "high" for entry, tag in due_slots
         )
 
     def _due_plan_slots(self, now: datetime) -> list[tuple[dict, str]]:
@@ -878,6 +886,7 @@ class SentinelRunner:
             from raven.proactive_engine.sentinel.trigger_policy.derive_dnd import (
                 parse_daily_plan,
             )
+
             plan = parse_daily_plan(content)
         except Exception as exc:  # noqa: BLE001
             logger.warning("daily-plan parse failed: {}: {}", type(exc).__name__, exc)
@@ -890,7 +899,10 @@ class SentinelRunner:
             try:
                 h_s, m_s = time_hhmm.split(":", 1)
                 slot = now.replace(
-                    hour=int(h_s), minute=int(m_s), second=0, microsecond=0,
+                    hour=int(h_s),
+                    minute=int(m_s),
+                    second=0,
+                    microsecond=0,
                 )
             except ValueError:
                 continue
@@ -923,7 +935,9 @@ class SentinelRunner:
         )
 
     def _fast_path_scheduled_fire(
-        self, now: datetime, due_slots: "list[tuple[dict, str]] | None" = None,
+        self,
+        now: datetime,
+        due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> PlannerDecision | None:
         """Return a synthetic PlannerDecision if a ``## 今日 fire 计划``
         entry is due within ``_SCHEDULED_FIRE_SLACK_S`` (±20 min) of
@@ -938,7 +952,7 @@ class SentinelRunner:
         ``due_slots`` lets the tick pass a pre-parsed plan (computed once and
         shared with the rules / fallback / warning); None recomputes.
         """
-        for entry, tag in (self._due_plan_slots(now) if due_slots is None else due_slots):
+        for entry, tag in self._due_plan_slots(now) if due_slots is None else due_slots:
             # One-shot deadline-style slots are routed to the Planner, not
             # fast-fired: only the Planner (reading the episodes tail) can tell
             # a still-pending deadline from one the user already finished, so
@@ -957,7 +971,9 @@ class SentinelRunner:
         return None
 
     def _fallback_deadline_fire(
-        self, now: datetime, due_slots: "list[tuple[dict, str]] | None" = None,
+        self,
+        now: datetime,
+        due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> PlannerDecision | None:
         """Planner-down safety net: re-fire a high-priority ``deadline_*`` slot
         the fast path deferred, used only when ``Planner.decide`` raised.
@@ -974,7 +990,7 @@ class SentinelRunner:
         """
         if not self._deadline_outage_fallback:
             return None
-        for entry, tag in (self._due_plan_slots(now) if due_slots is None else due_slots):
+        for entry, tag in self._due_plan_slots(now) if due_slots is None else due_slots:
             if not self._is_deadline_slot(tag):
                 continue
             if entry.get("priority", "low").lower() != "high":
@@ -985,7 +1001,9 @@ class SentinelRunner:
         return None
 
     def _warn_unfired_due_deadline(
-        self, decision: PlannerDecision, now: datetime,
+        self,
+        decision: PlannerDecision,
+        now: datetime,
         due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> None:
         """Log when the Planner ran (online) but left a due ``deadline_*``
@@ -1001,18 +1019,22 @@ class SentinelRunner:
         a still-pending hard deadline.
         """
         fired = decision.topic_tag if decision.action == "nudge" else None
-        for _entry, tag in (self._due_plan_slots(now) if due_slots is None else due_slots):
+        for _entry, tag in self._due_plan_slots(now) if due_slots is None else due_slots:
             if not self._is_deadline_slot(tag):
                 continue
             if tag == fired or self.policy.topic_fired_today(tag, now):
                 continue
             logger.warning(
                 "planner skipped due deadline slot {} (decision={}, reason={!r})",
-                tag, decision.action, (decision.reason or "")[:120],
+                tag,
+                decision.action,
+                (decision.reason or "")[:120],
             )
 
     def _fast_path_rules(
-        self, ctx: "PlannerContext", due_slots: "list[tuple[dict, str]] | None" = None,
+        self,
+        ctx: "PlannerContext",
+        due_slots: "list[tuple[dict, str]] | None" = None,
     ) -> PlannerDecision | None:
         # A due high-priority deadline must reach the Planner (or, if it is
         # down, the fallback): quiet hours is bypassable for high priority at
@@ -1046,10 +1068,7 @@ class SentinelRunner:
             prev_sig = getattr(last, "_ctx_signature", None)
             prev_ts = getattr(last, "_ts_at", None)
             now = self._now_fn()
-            stale = (
-                prev_ts is not None
-                and (now - prev_ts).total_seconds() > self._FAST_PATH_SKIP_TTL_S
-            )
+            stale = prev_ts is not None and (now - prev_ts).total_seconds() > self._FAST_PATH_SKIP_TTL_S
             if prev_sig is not None and prev_sig == sig and not stale:
                 dec = PlannerDecision(
                     action="skip",
@@ -1066,6 +1085,7 @@ class SentinelRunner:
     def _context_signature(ctx: "PlannerContext") -> str:
         """Hash memory + history + session keys to detect unchanged contexts."""
         import hashlib
+
         h = hashlib.blake2b(digest_size=16)
         h.update((ctx.memory_md or "").encode("utf-8"))
         h.update(b"|")
@@ -1111,7 +1131,10 @@ class SentinelRunner:
 
         content = decision.nudge_message or ""
         check = self.policy.check(
-            decision.action, target, content, decision.priority,
+            decision.action,
+            target,
+            content,
+            decision.priority,
             topic_tag=decision.topic_tag,
             **self._policy_feedback_kwargs(decision.topic_tag),
         )
@@ -1136,20 +1159,20 @@ class SentinelRunner:
             logger.exception("NudgeDispatcher raised: {}", exc)
             return TickOutcome(
                 decision=decision,
-                result=ExecutionResult(
-                    delivered=False, reason=f"dispatcher_error:{type(exc).__name__}"
-                ),
+                result=ExecutionResult(delivered=False, reason=f"dispatcher_error:{type(exc).__name__}"),
                 route="nudge_error",
             )
 
         nudge_id = new_nudge_id()
         if result.delivered:
             self.policy.record_fired(
-                decision.action, target, content, topic_tag=decision.topic_tag,
+                decision.action,
+                target,
+                content,
+                topic_tag=decision.topic_tag,
             )
             self._record_dispatched(nudge_id, decision, target)
-        return TickOutcome(decision=decision, result=result,
-                            nudge_id=nudge_id, route="nudge")
+        return TickOutcome(decision=decision, result=result, nudge_id=nudge_id, route="nudge")
 
     async def _route_inject(self, decision: PlannerDecision, target: str) -> TickOutcome:
         if self.injector is None:
@@ -1157,7 +1180,10 @@ class SentinelRunner:
 
         content = decision.nudge_message or ""
         check = self.policy.check(
-            decision.action, target, content, decision.priority,
+            decision.action,
+            target,
+            content,
+            decision.priority,
             topic_tag=decision.topic_tag,
             **self._policy_feedback_kwargs(decision.topic_tag),
         )
@@ -1174,9 +1200,7 @@ class SentinelRunner:
             logger.exception("NudgeInjector.queue raised: {}", exc)
             return TickOutcome(
                 decision=decision,
-                result=ExecutionResult(
-                    delivered=False, reason=f"injector_error:{type(exc).__name__}"
-                ),
+                result=ExecutionResult(delivered=False, reason=f"injector_error:{type(exc).__name__}"),
                 route="inject_error",
             )
 
@@ -1184,14 +1208,17 @@ class SentinelRunner:
         # produces a reply and the response_modifier pops the queue.
         nudge_id = new_nudge_id()
         self.policy.record_fired(
-            decision.action, target, content, topic_tag=decision.topic_tag,
+            decision.action,
+            target,
+            content,
+            topic_tag=decision.topic_tag,
         )
         self._record_dispatched(nudge_id, decision, target, extra={"note": "queued"})
         return TickOutcome(
             decision=decision,
-            result=ExecutionResult(delivered=True, reason="queued",
-                                    delivery_time=self._now_fn(),
-                                    details={"session_key": target}),
+            result=ExecutionResult(
+                delivered=True, reason="queued", delivery_time=self._now_fn(), details={"session_key": target}
+            ),
             nudge_id=nudge_id,
             route="inject",
         )
@@ -1202,7 +1229,10 @@ class SentinelRunner:
 
         content = decision.nudge_message or ""
         check = self.policy.check(
-            decision.action, target, content, decision.priority,
+            decision.action,
+            target,
+            content,
+            decision.priority,
             topic_tag=decision.topic_tag,
             **self._policy_feedback_kwargs(decision.topic_tag),
         )
@@ -1219,9 +1249,7 @@ class SentinelRunner:
             logger.exception("DeferManager.register raised: {}", exc)
             return TickOutcome(
                 decision=decision,
-                result=ExecutionResult(
-                    delivered=False, reason=f"defer_error:{type(exc).__name__}"
-                ),
+                result=ExecutionResult(delivered=False, reason=f"defer_error:{type(exc).__name__}"),
                 route="defer_error",
             )
 
@@ -1234,7 +1262,8 @@ class SentinelRunner:
         return TickOutcome(
             decision=decision,
             result=ExecutionResult(
-                delivered=False, reason="deferred",
+                delivered=False,
+                reason="deferred",
                 defer_id=defer_id,
                 details={"session_key": target, "defer_id": defer_id},
             ),
@@ -1250,23 +1279,25 @@ class SentinelRunner:
             logger.exception("ProactiveSpawn.dispatch raised: {}", exc)
             return TickOutcome(
                 decision=decision,
-                result=ExecutionResult(
-                    delivered=False, reason=f"spawn_error:{type(exc).__name__}"
-                ),
+                result=ExecutionResult(delivered=False, reason=f"spawn_error:{type(exc).__name__}"),
                 route="spawn_error",
             )
         nudge_id = new_nudge_id()
         if result.delivered:
-            self._record_dispatched(nudge_id, decision, target,
-                                     extra={"task_id": (result.details or {}).get("task_id")})
-        return TickOutcome(decision=decision, result=result,
-                            nudge_id=nudge_id, route="spawn")
+            self._record_dispatched(
+                nudge_id, decision, target, extra={"task_id": (result.details or {}).get("task_id")}
+            )
+        return TickOutcome(decision=decision, result=result, nudge_id=nudge_id, route="spawn")
 
     # ------------------------------------------------------------------
     # Shared helpers
 
     def _degraded(
-        self, decision: PlannerDecision, target: str, reason: str, route: str,
+        self,
+        decision: PlannerDecision,
+        target: str,
+        reason: str,
+        route: str,
     ) -> TickOutcome:
         """When a required executor isn't wired, log + degrade gracefully.
 
@@ -1276,7 +1307,9 @@ class SentinelRunner:
         """
         logger.info(
             "SentinelRunner degraded: action={} → {} (reason={})",
-            decision.action, route, reason,
+            decision.action,
+            route,
+            reason,
         )
         return TickOutcome(
             decision=decision,
@@ -1403,25 +1436,27 @@ class SentinelRunner:
                 self._persist_engagement()
                 logger.info(
                     "nudge_dismissed id={} session={} via {!r}",
-                    nudge_id, session_key, content[:40],
+                    nudge_id,
+                    session_key,
+                    content[:40],
                 )
                 return
 
             # Defer: let the main LLM classify via the nudge_feedback
             # tool. If the LLM doesn't call the tool, finalize_pending_feedback
             # records this as NEUTRAL at after_send time.
-            self._awaiting_llm_feedback.setdefault(session_key, []).append(
-                (nudge_id, dispatched_at)
-            )
+            self._awaiting_llm_feedback.setdefault(session_key, []).append((nudge_id, dispatched_at))
             self._persist_engagement()
             logger.debug(
                 "nudge_awaiting_llm_classification id={} session={}",
-                nudge_id, session_key,
+                nudge_id,
+                session_key,
             )
         except Exception as exc:
             logger.warning(
                 "SentinelRunner.on_user_inbound failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
 
     # ------------------------------------------------------------------
@@ -1471,20 +1506,20 @@ class SentinelRunner:
                 self.feedback.record_accepted(nudge_id, context=reason)
             logger.info(
                 "nudge_accepted (llm-classified) id={} session={}",
-                nudge_id, session_key,
+                nudge_id,
+                session_key,
             )
             return {"recorded": True, "nudge_id": nudge_id, "signal": "accepted"}
         if sentiment in ("dismissed", "snoozed"):
             self.policy.record_dismissed(session_key)
             if self.feedback is not None:
-                tagged = (
-                    f"snoozed: {reason}" if (sentiment == "snoozed" and reason)
-                    else (reason or sentiment)
-                )
+                tagged = f"snoozed: {reason}" if (sentiment == "snoozed" and reason) else (reason or sentiment)
                 self.feedback.record_dismissed(nudge_id, reason=tagged)
             logger.info(
                 "nudge_dismissed (llm-classified {}) id={} session={}",
-                sentiment, nudge_id, session_key,
+                sentiment,
+                nudge_id,
+                session_key,
             )
             return {"recorded": True, "nudge_id": nudge_id, "signal": sentiment}
         # Default: irrelevant / unknown sentiment → neutral.
@@ -1492,7 +1527,8 @@ class SentinelRunner:
             self.feedback.record_neutral(nudge_id, reason=reason or sentiment or None)
         logger.info(
             "nudge_neutral (llm-classified irrelevant) id={} session={}",
-            nudge_id, session_key,
+            nudge_id,
+            session_key,
         )
         return {"recorded": True, "nudge_id": nudge_id, "signal": "neutral"}
 
@@ -1519,15 +1555,18 @@ class SentinelRunner:
         for nudge_id, _ in queue:
             try:
                 self.feedback.record_neutral(
-                    nudge_id, reason="no_llm_classification",
+                    nudge_id,
+                    reason="no_llm_classification",
                 )
             except Exception as exc:
                 logger.warning(
-                    "FeedbackTracker.record_neutral failed: {}", exc,
+                    "FeedbackTracker.record_neutral failed: {}",
+                    exc,
                 )
         logger.debug(
             "nudge_feedback_finalized n={} session={}",
-            len(queue), session_key,
+            len(queue),
+            session_key,
         )
         return len(queue)
 
@@ -1537,10 +1576,7 @@ class SentinelRunner:
             return []
         now = self._now_fn()
         window = self._engagement_window
-        fresh = [
-            (nid, ts) for nid, ts in pending
-            if (now - ts).total_seconds() <= window
-        ]
+        fresh = [(nid, ts) for nid, ts in pending if (now - ts).total_seconds() <= window]
         if not fresh:
             self._pending_engagement.pop(session_key, None)
             self._persist_engagement()
@@ -1566,9 +1602,7 @@ class SentinelRunner:
             logger.warning("engagement state load failed: {}", exc)
             return
         self._pending_engagement = _decode_engagement(blob.get("pending"))
-        self._awaiting_llm_feedback = _decode_engagement(
-            blob.get("awaiting_llm_feedback")
-        )
+        self._awaiting_llm_feedback = _decode_engagement(blob.get("awaiting_llm_feedback"))
 
     def _persist_engagement(self) -> None:
         """Write current engagement state back to the store under an
@@ -1578,9 +1612,7 @@ class SentinelRunner:
             return
         blob = {
             "pending": _encode_engagement(self._pending_engagement),
-            "awaiting_llm_feedback": _encode_engagement(
-                self._awaiting_llm_feedback
-            ),
+            "awaiting_llm_feedback": _encode_engagement(self._awaiting_llm_feedback),
         }
         state_key = self._STATE_KEY
 
@@ -1599,11 +1631,7 @@ def _encode_engagement(
 ) -> dict[str, list[list[str]]]:
     """Serialize an engagement dict to a JSON-friendly shape:
     ``{session_key: [[nudge_id, iso_ts], ...]}``."""
-    return {
-        sk: [[nid, ts.isoformat()] for nid, ts in entries]
-        for sk, entries in src.items()
-        if entries
-    }
+    return {sk: [[nid, ts.isoformat()] for nid, ts in entries] for sk, entries in src.items() if entries}
 
 
 def _decode_engagement(

@@ -31,9 +31,7 @@ async def test_setup_status_provider_configured_true(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
     (cfg_dir / "config.json").write_text(
-        json.dumps(
-            {"agents": {"defaults": {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"}}}
-        )
+        json.dumps({"agents": {"defaults": {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"}}})
     )
     result = await setup_status({})
     assert result == {"provider_configured": True}
@@ -43,9 +41,7 @@ async def test_setup_status_provider_without_model_returns_false(fake_home: Path
     # A provider but no default model can't drive a turn → not configured.
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
-    (cfg_dir / "config.json").write_text(
-        json.dumps({"agents": {"defaults": {"provider": "anthropic"}}})
-    )
+    (cfg_dir / "config.json").write_text(json.dumps({"agents": {"defaults": {"provider": "anthropic"}}}))
     result = await setup_status({})
     assert result == {"provider_configured": False}
 
@@ -76,9 +72,7 @@ async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
     (cfg_dir / "config.json").write_text(
-        json.dumps(
-            {"agents": {"defaults": {"provider": "openai", "model": "openai/gpt-4o-mini"}}}
-        )
+        json.dumps({"agents": {"defaults": {"provider": "openai", "model": "openai/gpt-4o-mini"}}})
     )
     d = Dispatcher()
     register_setup_methods(d)

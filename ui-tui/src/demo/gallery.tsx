@@ -12,15 +12,17 @@
 //
 // To add components: append to an existing *Page, or add a new page to PAGES.
 
-import { Box, render, Text, useApp, useInput, useStdout } from '@hermes/ink'
 import type { ReactNode } from 'react'
+
+import { Box, render, Text, useApp, useInput, useStdout } from '@hermes/ink'
 import { useState } from 'react'
+
+import type { ApprovalReq, ClarifyReq, ConfirmReq, PanelSection, SessionInfo, Usage } from '../types.js'
 
 import { FloatBox, StatusRule } from '../components/appChrome.js'
 import { Banner, Panel, SessionPanel } from '../components/branding.js'
 import { ApprovalPrompt, ClarifyPrompt, ConfirmPrompt } from '../components/prompts.js'
 import { DEFAULT_THEME } from '../theme.js'
-import type { ApprovalReq, ClarifyReq, ConfirmReq, PanelSection, SessionInfo, Usage } from '../types.js'
 
 const t = DEFAULT_THEME
 const noop = () => {}
@@ -103,7 +105,13 @@ const sessionInfo: SessionInfo = {
 }
 
 const panelSections: PanelSection[] = [
-  { rows: [['Model', 'claude-opus-4-8'], ['Provider', 'Anthropic']], title: 'Overview' },
+  {
+    rows: [
+      ['Model', 'claude-opus-4-8'],
+      ['Provider', 'Anthropic']
+    ],
+    title: 'Overview'
+  },
   { items: ['first item', 'second item', 'third item'] },
   { text: 'A free-form text section, e.g. a help blurb.' }
 ]

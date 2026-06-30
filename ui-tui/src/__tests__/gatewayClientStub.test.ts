@@ -4,14 +4,15 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { GatewayClientStub } from '../gatewayClientStub.js'
 import type {
   CommandsCatalogResponse,
   GatewayEvent,
   SessionListResponse,
   SessionResumeResponse,
-  SetupStatusResponse,
+  SetupStatusResponse
 } from '../gatewayTypes.js'
+
+import { GatewayClientStub } from '../gatewayClientStub.js'
 
 describe('GatewayClientStub', () => {
   it('start() does not spawn subprocess or open sockets, completes synchronously', () => {
@@ -50,7 +51,7 @@ describe('GatewayClientStub', () => {
 
     const r = await c.request<SessionResumeResponse>('session.resume', {
       cols: 80,
-      session_id: 'mock-session-1',
+      session_id: 'mock-session-1'
     })
 
     expect(r.messages).toHaveLength(3)

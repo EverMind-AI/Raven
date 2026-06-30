@@ -371,8 +371,10 @@ async def test_a_stream_reopens_cleanly_for_the_next_turn(hub):
         await hub.close_stream("tg:c")
         await hub.wait_idle("tg")
     assert outlet.chunks == [
-        ("c", "tg:c", "a", False), ("c", "tg:c", "", True),   # turn 1
-        ("c", "tg:c", "b", False), ("c", "tg:c", "", True),   # turn 2, reopened cleanly
+        ("c", "tg:c", "a", False),
+        ("c", "tg:c", "", True),  # turn 1
+        ("c", "tg:c", "b", False),
+        ("c", "tg:c", "", True),  # turn 2, reopened cleanly
     ]
     assert "tg:c" not in hub._open_streams  # close left no open-stream state behind
     assert "tg:c" not in hub._stream_channel  # nor a routing entry

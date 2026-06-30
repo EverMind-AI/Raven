@@ -10,8 +10,6 @@ on-disk state file.
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 import time
 from pathlib import Path
 
@@ -23,8 +21,8 @@ from raven.proactive_engine.schedulers.cron.types import CronSchedule
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
 
 
@@ -184,7 +182,9 @@ def test_defer_cancel_propagates_to_peer(tmp_state_dir: Path):
     b = DeferManager(dispatcher, lambda k: None, store=JsonStateStore(path))
 
     decision = PlannerDecision(
-        action="nudge_defer", nudge_message="x", defer_condition="idle",
+        action="nudge_defer",
+        nudge_message="x",
+        defer_condition="idle",
     )
     did = a.register(decision, "cli:default", max_wait_seconds=3600)
     a.cancel(did)
@@ -259,14 +259,13 @@ def test_cli_reminder_stores_request_context_verbatim(tmp_state_dir: Path):
     """New design: CronTool persists the request-time channel/chat_id as-is.
     Delivery resolution (pass-through vs ephemeral forward) is the cron
     handler's job at trigger time, not the tool's at creation time."""
-    from raven.proactive_engine.schedulers.cron.tool import CronTool
     from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.schedulers.cron.tool import CronTool
 
     svc = CronService(tmp_state_dir / "jobs.json")
     tool = CronTool(svc)
     tool.set_context(channel="cli", chat_id="direct")
-    tool._add_job(message="drink water", every_seconds=None, cron_expr=None,
-                  tz=None, at="2099-01-01T00:00:00")
+    tool._add_job(message="drink water", every_seconds=None, cron_expr=None, tz=None, at="2099-01-01T00:00:00")
     jobs = svc.list_jobs()
     assert jobs[0].payload.channel == "cli"
     assert jobs[0].payload.to == "direct"
@@ -275,6 +274,7 @@ def test_cli_reminder_stores_request_context_verbatim(tmp_state_dir: Path):
 def test_session_manager_find_most_recent_chat_id(tmp_state_dir: Path):
     """SessionManager.find_most_recent_chat_id respects mtime and metadata."""
     import json
+
     from raven.session.manager import SessionManager
 
     workspace = tmp_state_dir / "ws"
@@ -283,19 +283,16 @@ def test_session_manager_find_most_recent_chat_id(tmp_state_dir: Path):
     (sessions_dir / "telegram").mkdir(parents=True)
     # Feishu — two sessions, pick newer by updated_at
     (sessions_dir / "feishu" / "ou_old.jsonl").write_text(
-        json.dumps({"_type": "metadata", "key": "feishu:ou_old",
-                    "updated_at": "2026-06-10T10:00:00"}) + "\n",
+        json.dumps({"_type": "metadata", "key": "feishu:ou_old", "updated_at": "2026-06-10T10:00:00"}) + "\n",
         encoding="utf-8",
     )
     (sessions_dir / "feishu" / "ou_new.jsonl").write_text(
-        json.dumps({"_type": "metadata", "key": "feishu:ou_new",
-                    "updated_at": "2026-06-10T11:00:00"}) + "\n",
+        json.dumps({"_type": "metadata", "key": "feishu:ou_new", "updated_at": "2026-06-10T11:00:00"}) + "\n",
         encoding="utf-8",
     )
     # Distractor: telegram session — must not pollute feishu lookup
     (sessions_dir / "telegram" / "12345.jsonl").write_text(
-        json.dumps({"_type": "metadata", "key": "telegram:12345",
-                    "updated_at": "2026-06-10T12:00:00"}) + "\n",
+        json.dumps({"_type": "metadata", "key": "telegram:12345", "updated_at": "2026-06-10T12:00:00"}) + "\n",
         encoding="utf-8",
     )
 
@@ -378,7 +375,8 @@ def test_cron_arm_timer_caps_sleep_for_peer_writes(tmp_state_dir: Path, monkeypa
             svc.add_job(
                 name="f",
                 schedule=CronSchedule(kind="at", at_ms=now_ms + 3600_000),
-                message="x", delete_after_run=True,
+                message="x",
+                delete_after_run=True,
             )
         monkeypatch.setattr(cron_service.asyncio, "sleep", _recording_sleep)
         svc._arm_timer()
@@ -406,9 +404,13 @@ def test_adaptive_tuning_reduces_quota_on_low_acceptance(tmp_state_dir: Path):
     uses the effective (tightened) cap. Pre-L1 floor was 0.25; L1 made tiers
     stricter (≥0.3→0.5, <0.3→0.2) because moderate rejection (~30% accept)
     never crossed the old <0.1 threshold to tighten."""
-    cfg = _policy_cfg(max_nudges_per_hour=10, max_nudges_per_day=100,
-                      min_interval_seconds=0, dedup_window_seconds=1,
-                      high_priority_bypasses_limits=False)
+    cfg = _policy_cfg(
+        max_nudges_per_hour=10,
+        max_nudges_per_day=100,
+        min_interval_seconds=0,
+        dedup_window_seconds=1,
+        high_priority_bypasses_limits=False,
+    )
     policy = NudgePolicy(cfg, store=JsonStateStore(tmp_state_dir / "p.json"))
 
     # Data sufficient but acceptance ~5% → clamp to 0.2 × 10 = 2
@@ -454,9 +456,7 @@ def test_adaptive_tuning_loosen_requires_volume_gate(tmp_state_dir: Path):
     policy = NudgePolicy(cfg, store=JsonStateStore(tmp_state_dir / "p.json"))
     # 5/5 accepted (100%) but volume below the loosen gate (default 10)
     policy.apply_adaptive_tuning(acceptance_rate=1.0, dispatched_count=5)
-    assert policy._hour_quota_multiplier == 1.0, (
-        "must NOT loosen on small N — falls back to neutral tier"
-    )
+    assert policy._hour_quota_multiplier == 1.0, "must NOT loosen on small N — falls back to neutral tier"
 
 
 def test_adaptive_tuning_noop_on_insufficient_data(tmp_state_dir: Path):
@@ -495,6 +495,7 @@ def test_adaptive_multiplier_reaches_planner_prompt(tmp_state_dir: Path):
     """PlannerContext surfaces hour_quota_multiplier, and the prompt renders
     an adaptive-tightening note only when multiplier < 1.0."""
     from datetime import datetime
+
     from raven.proactive_engine.sentinel.trigger_policy.prompts import build_context_prompt
     from raven.proactive_engine.sentinel.types import NudgePolicyState, PlannerContext
 
@@ -502,8 +503,10 @@ def test_adaptive_multiplier_reaches_planner_prompt(tmp_state_dir: Path):
     ctx = PlannerContext(
         now=datetime(2026, 4, 24, 18, 0),
         nudge_policy_state=NudgePolicyState(
-            nudges_used_this_hour=1, remaining_today=8,
-            in_quiet_hours=False, hour_quota_multiplier=1.0,
+            nudges_used_this_hour=1,
+            remaining_today=8,
+            in_quiet_hours=False,
+            hour_quota_multiplier=1.0,
         ),
     )
     prompt = build_context_prompt(ctx)
@@ -513,8 +516,10 @@ def test_adaptive_multiplier_reaches_planner_prompt(tmp_state_dir: Path):
     ctx2 = PlannerContext(
         now=datetime(2026, 4, 24, 18, 0),
         nudge_policy_state=NudgePolicyState(
-            nudges_used_this_hour=1, remaining_today=8,
-            in_quiet_hours=False, hour_quota_multiplier=0.5,
+            nudges_used_this_hour=1,
+            remaining_today=8,
+            in_quiet_hours=False,
+            hour_quota_multiplier=0.5,
         ),
     )
     prompt2 = build_context_prompt(ctx2)
@@ -548,42 +553,59 @@ def test_cron_start_drops_past_due_at_jobs(tmp_state_dir: Path):
         "jobs": [
             # Past-due at — should be dropped
             {
-                "id": "past_at", "name": "drink water", "enabled": True,
-                "schedule": {"kind": "at", "atMs": now_ms - 3600_000,
-                             "everyMs": None, "expr": None, "tz": None},
-                "payload": {"kind": "agent_turn", "message": "m",
-                            "deliver": True, "channel": "cli", "to": "direct"},
-                "state": {"nextRunAtMs": None, "lastRunAtMs": None,
-                          "lastStatus": None, "lastError": None,
-                          "claimedByPid": None, "claimedAtMs": None},
+                "id": "past_at",
+                "name": "drink water",
+                "enabled": True,
+                "schedule": {"kind": "at", "atMs": now_ms - 3600_000, "everyMs": None, "expr": None, "tz": None},
+                "payload": {"kind": "agent_turn", "message": "m", "deliver": True, "channel": "cli", "to": "direct"},
+                "state": {
+                    "nextRunAtMs": None,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "claimedByPid": None,
+                    "claimedAtMs": None,
+                },
                 "createdAtMs": now_ms - 7200_000,
                 "updatedAtMs": now_ms - 7200_000,
                 "deleteAfterRun": True,
             },
             # Future at — should be kept
             {
-                "id": "future_at", "name": "later", "enabled": True,
-                "schedule": {"kind": "at", "atMs": now_ms + 600_000,
-                             "everyMs": None, "expr": None, "tz": None},
-                "payload": {"kind": "agent_turn", "message": "m",
-                            "deliver": True, "channel": "cli", "to": "direct"},
-                "state": {"nextRunAtMs": now_ms + 600_000, "lastRunAtMs": None,
-                          "lastStatus": None, "lastError": None,
-                          "claimedByPid": None, "claimedAtMs": None},
-                "createdAtMs": now_ms, "updatedAtMs": now_ms,
+                "id": "future_at",
+                "name": "later",
+                "enabled": True,
+                "schedule": {"kind": "at", "atMs": now_ms + 600_000, "everyMs": None, "expr": None, "tz": None},
+                "payload": {"kind": "agent_turn", "message": "m", "deliver": True, "channel": "cli", "to": "direct"},
+                "state": {
+                    "nextRunAtMs": now_ms + 600_000,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "claimedByPid": None,
+                    "claimedAtMs": None,
+                },
+                "createdAtMs": now_ms,
+                "updatedAtMs": now_ms,
                 "deleteAfterRun": True,
             },
             # Recurring 'every' — should be kept with next run in the future
             {
-                "id": "every", "name": "heartbeat", "enabled": True,
-                "schedule": {"kind": "every", "atMs": None, "everyMs": 300_000,
-                             "expr": None, "tz": None},
-                "payload": {"kind": "agent_turn", "message": "m",
-                            "deliver": True, "channel": "cli", "to": "direct"},
-                "state": {"nextRunAtMs": now_ms - 100, "lastRunAtMs": None,
-                          "lastStatus": None, "lastError": None,
-                          "claimedByPid": None, "claimedAtMs": None},
-                "createdAtMs": now_ms, "updatedAtMs": now_ms,
+                "id": "every",
+                "name": "heartbeat",
+                "enabled": True,
+                "schedule": {"kind": "every", "atMs": None, "everyMs": 300_000, "expr": None, "tz": None},
+                "payload": {"kind": "agent_turn", "message": "m", "deliver": True, "channel": "cli", "to": "direct"},
+                "state": {
+                    "nextRunAtMs": now_ms - 100,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "claimedByPid": None,
+                    "claimedAtMs": None,
+                },
+                "createdAtMs": now_ms,
+                "updatedAtMs": now_ms,
                 "deleteAfterRun": False,
             },
         ],
@@ -591,9 +613,11 @@ def test_cron_start_drops_past_due_at_jobs(tmp_state_dir: Path):
     store_path.write_text(json.dumps(seed), encoding="utf-8")
 
     svc = CronService(store_path)
+
     async def _drive():
         await svc.start()
         svc.stop()
+
     asyncio.run(_drive())
 
     # Reload from disk — simulate a fresh reader
@@ -614,6 +638,7 @@ def test_cron_stale_claim_is_stolen(tmp_state_dir: Path):
     """If a peer's claim is older than CLAIM_TTL_MS, another process can
     take over — otherwise crashed peers would freeze their jobs forever."""
     import json
+
     from raven.proactive_engine.schedulers.cron.service import _CLAIM_TTL_MS
 
     store_path = tmp_state_dir / "jobs.json"
@@ -623,22 +648,26 @@ def test_cron_stale_claim_is_stolen(tmp_state_dir: Path):
     now_ms = int(time.time() * 1000)
     stale_data = {
         "version": 1,
-        "jobs": [{
-            "id": "j1",
-            "name": "t",
-            "enabled": True,
-            "schedule": {"kind": "at", "atMs": now_ms - 60000, "everyMs": None,
-                         "expr": None, "tz": None},
-            "payload": {"kind": "agent_turn", "message": "m",
-                        "deliver": False, "channel": None, "to": None},
-            "state": {"nextRunAtMs": now_ms - 60000, "lastRunAtMs": None,
-                      "lastStatus": None, "lastError": None,
-                      "claimedByPid": 999999,  # no such process
-                      "claimedAtMs": now_ms - _CLAIM_TTL_MS - 1000},
-            "createdAtMs": now_ms - 60000,
-            "updatedAtMs": now_ms - 60000,
-            "deleteAfterRun": True,
-        }]
+        "jobs": [
+            {
+                "id": "j1",
+                "name": "t",
+                "enabled": True,
+                "schedule": {"kind": "at", "atMs": now_ms - 60000, "everyMs": None, "expr": None, "tz": None},
+                "payload": {"kind": "agent_turn", "message": "m", "deliver": False, "channel": None, "to": None},
+                "state": {
+                    "nextRunAtMs": now_ms - 60000,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "claimedByPid": 999999,  # no such process
+                    "claimedAtMs": now_ms - _CLAIM_TTL_MS - 1000,
+                },
+                "createdAtMs": now_ms - 60000,
+                "updatedAtMs": now_ms - 60000,
+                "deleteAfterRun": True,
+            }
+        ],
     }
     store_path.write_text(json.dumps(stale_data), encoding="utf-8")
 

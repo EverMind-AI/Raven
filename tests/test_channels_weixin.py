@@ -5,7 +5,7 @@ iLink connection / WeChat account required."""
 import asyncio
 import base64
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -21,8 +21,9 @@ def _channel():
     ch.intake.set_submit(AsyncMock())
     return ch
 
+
 _KEY16 = b"0123456789abcdef"
-_KEY_RAW_B64 = base64.b64encode(_KEY16).decode()           # base64 of 16 raw bytes
+_KEY_RAW_B64 = base64.b64encode(_KEY16).decode()  # base64 of 16 raw bytes
 _KEY_HEX_B64 = base64.b64encode(_KEY16.hex().encode()).decode()  # base64 of 32 hex chars
 
 
@@ -52,6 +53,7 @@ def test_unpad_pkcs7_valid_and_invalid():
 
 def test_parse_aes_key_rejects_bad_length():
     import pytest
+
     with pytest.raises(ValueError):
         crypto.parse_aes_key(base64.b64encode(b"short").decode())
 
@@ -60,12 +62,14 @@ def test_encrypt_raises_on_bad_key():
     """Upload-side encryption must fail loudly, never upload plaintext while
     advertising an AES key (silently corrupted media for the receiver)."""
     import pytest
+
     with pytest.raises(ValueError):
         crypto.encrypt(b"data", base64.b64encode(b"short").decode())
 
 
 def test_encrypt_raises_without_backend(monkeypatch):
     import pytest
+
     monkeypatch.setattr(crypto, "_run_ecb", lambda *a, **k: None)
     key = base64.b64encode(b"0123456789abcdef").decode()
     with pytest.raises(RuntimeError):
@@ -239,8 +243,12 @@ def test_process_skips_bot_message():
 def test_process_denies_disallowed_sender():
     ch = _channel()
     ch.config.allow_from = ["only"]
-    msg = {"message_type": p.MESSAGE_TYPE_USER, "from_user_id": "other", "message_id": "m1",
-           "item_list": [{"type": p.ITEM_TEXT, "text_item": {"text": "hi"}}]}
+    msg = {
+        "message_type": p.MESSAGE_TYPE_USER,
+        "from_user_id": "other",
+        "message_id": "m1",
+        "item_list": [{"type": p.ITEM_TEXT, "text_item": {"text": "hi"}}],
+    }
     asyncio.run(ch._process_message(msg))
     ch.intake._submit.assert_not_called()
 
@@ -248,9 +256,13 @@ def test_process_denies_disallowed_sender():
 def test_process_dedup_text_message():
     ch = _channel()
     ch._save_state = lambda: None  # avoid disk write on context_token cache
-    msg = {"message_type": p.MESSAGE_TYPE_USER, "from_user_id": "u1", "message_id": "m1",
-           "context_token": "c1",
-           "item_list": [{"type": p.ITEM_TEXT, "text_item": {"text": "hi"}}]}
+    msg = {
+        "message_type": p.MESSAGE_TYPE_USER,
+        "from_user_id": "u1",
+        "message_id": "m1",
+        "context_token": "c1",
+        "item_list": [{"type": p.ITEM_TEXT, "text_item": {"text": "hi"}}],
+    }
     asyncio.run(ch._process_message(msg))
     asyncio.run(ch._process_message(msg))  # same message_id -> deduped
     assert ch.intake._submit.await_count == 1
@@ -296,9 +308,9 @@ def test_authenticate_with_config_token_still_loads_state(tmp_path):
     ch.config.token = "cfg-token"
     ch._dir = lambda: tmp_path
     assert asyncio.run(ch._authenticate()) is True
-    assert ch._token == "cfg-token"            # configured token wins
-    assert ch._updates_buf == "buf9"           # persisted cursor survives
-    assert ch._context_tokens == {"u": "c"}    # reply context survives
+    assert ch._token == "cfg-token"  # configured token wins
+    assert ch._updates_buf == "buf9"  # persisted cursor survives
+    assert ch._context_tokens == {"u": "c"}  # reply context survives
 
 
 def test_authenticate_falls_back_to_qr(monkeypatch):
@@ -371,12 +383,12 @@ def test_typing_ticket_fetch_then_ttl_reuse():
 
     async def scenario():
         first = await ch._typing.ticket_for("u1", "ctx")
-        second = await ch._typing.ticket_for("u1")   # within TTL -> cached
+        second = await ch._typing.ticket_for("u1")  # within TTL -> cached
         return first, second
 
     first, second = asyncio.run(scenario())
     assert first == second == "tk1"
-    ch._post.assert_awaited_once()                   # no second fetch
+    ch._post.assert_awaited_once()  # no second fetch
     entry = ch._typing._tickets["u1"]
     assert entry["ever_succeeded"] is True
     assert entry["retry_delay_s"] == p.CONFIG_CACHE_INITIAL_RETRY_S
@@ -384,10 +396,10 @@ def test_typing_ticket_fetch_then_ttl_reuse():
 
 def test_typing_ticket_failure_backoff_doubles_and_serves_stale():
     ch = _typing_ch()
-    asyncio.run(ch._typing.ticket_for("u1"))         # success -> tk1 cached
-    ch._typing._tickets["u1"]["next_fetch_at"] = 0    # expire
-    ch._post = AsyncMock(return_value={"ret": 1})    # refresh fails
-    assert asyncio.run(ch._typing.ticket_for("u1")) == "tk1"   # stale served
+    asyncio.run(ch._typing.ticket_for("u1"))  # success -> tk1 cached
+    ch._typing._tickets["u1"]["next_fetch_at"] = 0  # expire
+    ch._post = AsyncMock(return_value={"ret": 1})  # refresh fails
+    assert asyncio.run(ch._typing.ticket_for("u1")) == "tk1"  # stale served
     assert ch._typing._tickets["u1"]["retry_delay_s"] == p.CONFIG_CACHE_INITIAL_RETRY_S * 2
     ch._typing._tickets["u1"]["next_fetch_at"] = 0
     asyncio.run(ch._typing.ticket_for("u1"))
@@ -417,15 +429,15 @@ def test_start_typing_keepalive_stops_cleanly(monkeypatch):
 
     async def scenario():
         await ch._start_typing("u1")
-        await asyncio.sleep(0.05)                    # keepalive ticks
+        await asyncio.sleep(0.05)  # keepalive ticks
         await ch._stop_typing("u1", clear_remote=True)
         count = len(sent)
         await asyncio.sleep(0.05)
-        assert len(sent) == count                    # nothing after stop
+        assert len(sent) == count  # nothing after stop
 
     asyncio.run(scenario())
     assert sent[0] == p.TYPING_STATUS_TYPING
-    assert sent[-1] == p.TYPING_STATUS_CANCEL        # clear_remote sends CANCEL
+    assert sent[-1] == p.TYPING_STATUS_CANCEL  # clear_remote sends CANCEL
     assert not ch._typing._tasks
 
 
@@ -455,11 +467,12 @@ def test_stop_typing_without_clear_remote_sends_no_cancel():
 def test_weixin_satisfies_channel_contract():
     from raven.channels import Channel, SupportsLogin
     from raven.channels.contract import capability_violations
+
     ch = _channel()
     assert isinstance(ch, Channel)
-    assert isinstance(ch, SupportsLogin)             # QR pairing
+    assert isinstance(ch, SupportsLogin)  # QR pairing
     assert ch.capabilities.interactive_login is True
-    assert capability_violations(ch) == []           # declared interactive_login ↔ implements SupportsLogin
+    assert capability_violations(ch) == []  # declared interactive_login ↔ implements SupportsLogin
 
 
 def test_weixin_spec_declares_interactive_login_and_is_cheap():
@@ -467,6 +480,7 @@ def test_weixin_spec_declares_interactive_login_and_is_cheap():
     import must NOT pull in httpx (deferred into SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.weixin.spec as s;"
         "assert 'httpx' not in sys.modules, 'spec import pulled in httpx';"

@@ -3,16 +3,12 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { writeFileSync } from 'node:fs'
-
 import type { ScrollBoxHandle } from '@hermes/ink'
+
 import { evictInkCaches } from '@hermes/ink'
+import { writeFileSync } from 'node:fs'
 import { type RefObject, useCallback } from 'react'
 
-import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
-import { introMsg, toTranscriptMessages } from '../domain/messages.js'
-import { ZERO } from '../domain/usage.js'
-import { type GatewayClient } from '../gatewayClientStub.js'
 import type {
   SessionCloseResponse,
   SessionCreateResponse,
@@ -21,10 +17,14 @@ import type {
   SessionTitleResponse,
   SetupStatusResponse
 } from '../gatewayTypes.js'
-import { asRpcResult } from '../lib/rpc.js'
 import type { Msg, PanelSection, SessionInfo, Usage } from '../types.js'
-
 import type { ComposerActions, GatewayRpc, StateSetter } from './interfaces.js'
+
+import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
+import { introMsg, toTranscriptMessages } from '../domain/messages.js'
+import { ZERO } from '../domain/usage.js'
+import { type GatewayClient } from '../gatewayClientStub.js'
+import { asRpcResult } from '../lib/rpc.js'
 import { patchOverlayState } from './overlayStore.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
@@ -68,10 +68,7 @@ export interface DeleteFallbackDeps {
 // session (never resume a survivor) — the UI must never stay bound to a
 // deleted key. Resolves to whether the server actually removed a file
 // (deleted: null means no such session).
-export const performDeleteWithFallback = async (
-  targetId: string,
-  deps: DeleteFallbackDeps
-): Promise<boolean> => {
+export const performDeleteWithFallback = async (targetId: string, deps: DeleteFallbackDeps): Promise<boolean> => {
   const isActive = deps.activeSid === targetId
 
   const r = await deps.rpc<SessionDeleteResponse>('session.delete', { session_id: targetId })
@@ -205,9 +202,7 @@ export function useSessionLifecycle(opts: UseSessionLifecycleOptions) {
       }
 
       if (msg) {
-        const bareId = r.session_id.includes(':')
-          ? r.session_id.slice(r.session_id.indexOf(':') + 1)
-          : r.session_id
+        const bareId = r.session_id.includes(':') ? r.session_id.slice(r.session_id.indexOf(':') + 1) : r.session_id
         sys(`${msg}, new session id = ${bareId}`)
       }
 

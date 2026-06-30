@@ -7,16 +7,17 @@
 // handshake, gateway.ready synth, drain-replay, request delegation,
 // kill semantics, and getLogTail placeholder.
 
+import type { Server, Socket } from 'node:net'
+
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
-import type { Server, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { GatewayClientCompat } from '../gatewayClientCompat.js'
 import type { GatewayEvent } from '../gatewayTypes.js'
+
+import { GatewayClientCompat } from '../gatewayClientCompat.js'
 import { STUB_SKIN } from '../lib/stubGatewayFixtures.js'
 import { RpcClient } from '../rpc/index.js'
 
@@ -233,10 +234,7 @@ describe('GatewayClientCompat', () => {
       }
     })
 
-    const result = await client.request<{ config: { display: Record<string, unknown> } }>(
-      'config.get',
-      { key: 'full' }
-    )
+    const result = await client.request<{ config: { display: Record<string, unknown> } }>('config.get', { key: 'full' })
 
     expect(result.config.display).toBeDefined()
   })

@@ -74,10 +74,14 @@ class TestReadSkill:
         assert (await ReadSkillTool().execute(skill_id="")).startswith("Error")
 
     async def test_hub_body_fetched(self) -> None:
-        client = _FakeClient(get_result={
-            "skill_md": "do the thing", "name": "Foo", "version": "v2",
-            "scenario_tags": ["a", "b"],
-        })
+        client = _FakeClient(
+            get_result={
+                "skill_md": "do the thing",
+                "name": "Foo",
+                "version": "v2",
+                "scenario_tags": ["a", "b"],
+            }
+        )
         out = await ReadSkillTool(client=client).execute(skill_id="hub/foo")
         assert client.get_calls == ["foo"]
         assert "Foo" in out and "v2" in out and "do the thing" in out
@@ -141,10 +145,14 @@ class TestUseSkill:
         assert out.startswith("Error")
 
     async def test_hub_install_and_registry_invalidation(self) -> None:
-        client = _FakeClient(install_result={
-            "slug": "foo", "version": "v1",
-            "scripts_dir": "/cache/foo/scripts", "skill_md": "hub body",
-        })
+        client = _FakeClient(
+            install_result={
+                "slug": "foo",
+                "version": "v1",
+                "scripts_dir": "/cache/foo/scripts",
+                "skill_md": "hub body",
+            }
+        )
         reg = _FakeRegistry({})
         out = await UseSkillTool(client=client, registry=reg).execute(
             skill_id="hub/foo",
@@ -155,10 +163,14 @@ class TestUseSkill:
         assert reg.invalidated == ["hub"]
 
     async def test_hub_without_scripts(self) -> None:
-        client = _FakeClient(install_result={
-            "slug": "foo", "version": "v1",
-            "scripts_dir": None, "skill_md": "pure instructions",
-        })
+        client = _FakeClient(
+            install_result={
+                "slug": "foo",
+                "version": "v1",
+                "scripts_dir": None,
+                "skill_md": "pure instructions",
+            }
+        )
         out = await UseSkillTool(client=client).execute(skill_id="hub/foo")
         assert "no bundled scripts" in out and "pure instructions" in out
 

@@ -14,17 +14,12 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { TurnEvent, TurnSendParams, TurnSendResult, TurnSubscribeParams } from '../rpc/index.js'
+
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
-import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
-import type {
-  TurnEvent,
-  TurnSendParams,
-  TurnSendResult,
-  TurnSubscribeParams,
-  TurnSubscribeResult,
-} from '../rpc/index.js'
+import { getUiState, resetUiState } from '../app/uiStore.js'
 
 type FakeUnsubscribe = () => Promise<void>
 
@@ -49,7 +44,9 @@ const makeFakeRpc = (opts: { sendResult?: TurnSendResult; subId?: string } = {})
     __unsubscribeCalls: 0,
     __subParams: null,
     __pushEvent: (event: TurnEvent) => {
-      if (handler) handler(event)
+      if (handler) {
+        handler(event)
+      }
     },
     async rpc<R, P>(method: string, params: P): Promise<R> {
       sendCalls.push({ method, params })
@@ -67,7 +64,7 @@ const makeFakeRpc = (opts: { sendResult?: TurnSendResult; subId?: string } = {})
     async subscribe<E, P, R extends { subscription_id: string } = { subscription_id: string }>(
       method: string,
       params: P,
-      h: (event: E) => void,
+      h: (event: E) => void
     ): Promise<{ subscription_id: string; unsubscribe: FakeUnsubscribe }> {
       void method
       subParams = params as unknown as TurnSubscribeParams
@@ -83,7 +80,7 @@ const makeFakeRpc = (opts: { sendResult?: TurnSendResult; subId?: string } = {})
         subscription_id: string
         unsubscribe: FakeUnsubscribe
       } & R
-    },
+    }
   }
   return fake
 }
@@ -105,7 +102,7 @@ describe('createChatStream', () => {
     expect(sendResult).toEqual({ turn_id: 'turn-1', accepted: true })
     expect(fake.__sendCalls[0]).toEqual({
       method: 'turn.send',
-      params: { session_key: 'tui:default', content: 'hello' } satisfies TurnSendParams,
+      params: { session_key: 'tui:default', content: 'hello' } satisfies TurnSendParams
     })
     expect(fake.__subParams).toEqual({ session_key: 'tui:default' } satisfies TurnSubscribeParams)
 
@@ -132,9 +129,9 @@ describe('createChatStream', () => {
           cost_usd: 0.0012,
           context_used: 8378,
           context_max: 1048576,
-          context_percent: 1,
-        },
-      },
+          context_percent: 1
+        }
+      }
     })
 
     // Turn closed: busy flag released, bufRef cleared.
@@ -165,7 +162,7 @@ describe('createChatStream', () => {
 
     fake.__pushEvent({
       type: 'error',
-      payload: { code: -32800, message: 'cancelled by client', reason: 'cancelled_by_client' },
+      payload: { code: -32800, message: 'cancelled by client', reason: 'cancelled_by_client' }
     })
 
     // Input prompt restored: not busy, status reset to 'ready' (or
@@ -188,8 +185,8 @@ describe('createChatStream', () => {
     await stream.cancel()
 
     expect(fake.__cancelCalls).toBe(1)
-    expect(fake.__sendCalls.some((c) => c.method === 'turn.cancel')).toBe(true)
-    const cancelCall = fake.__sendCalls.find((c) => c.method === 'turn.cancel')
+    expect(fake.__sendCalls.some(c => c.method === 'turn.cancel')).toBe(true)
+    const cancelCall = fake.__sendCalls.find(c => c.method === 'turn.cancel')
     expect(cancelCall?.params).toEqual({ session_key: 'tui:default' })
   })
 
@@ -211,17 +208,17 @@ describe('createChatStream', () => {
     fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
     fake.__pushEvent({
       type: 'tool.start',
-      payload: { tool_call_id: 'tc-1', name: 'shell.exec', arguments: { command: 'ls' } },
+      payload: { tool_call_id: 'tc-1', name: 'shell.exec', arguments: { command: 'ls' } }
     })
     // After tool.start the active tool list contains the started tool.
-    expect(getTurnState().tools.some((t) => t.name === 'shell.exec')).toBe(true)
+    expect(getTurnState().tools.some(t => t.name === 'shell.exec')).toBe(true)
 
     fake.__pushEvent({
       type: 'tool.complete',
-      payload: { tool_call_id: 'tc-1', result_preview: 'a b c', truncated: false },
+      payload: { tool_call_id: 'tc-1', result_preview: 'a b c', truncated: false }
     })
     // After tool.complete the active tool is removed.
-    expect(getTurnState().tools.some((t) => t.id === 'tc-1')).toBe(false)
+    expect(getTurnState().tools.some(t => t.id === 'tc-1')).toBe(false)
   })
 
   it('surfaces non-cancellation errors and restores input prompt', async () => {
@@ -230,7 +227,7 @@ describe('createChatStream', () => {
     const stream = createChatStream({
       rpcClient: fake,
       sessionKey: 'tui:default',
-      sys: (msg) => sysCalls.push(msg),
+      sys: msg => sysCalls.push(msg)
     })
     await stream.attach()
     await stream.send('bad request')
@@ -238,10 +235,10 @@ describe('createChatStream', () => {
 
     fake.__pushEvent({
       type: 'error',
-      payload: { code: -32008, message: 'model not available' },
+      payload: { code: -32008, message: 'model not available' }
     })
 
-    expect(sysCalls.some((m) => m.includes('model not available'))).toBe(true)
+    expect(sysCalls.some(m => m.includes('model not available'))).toBe(true)
     const ui = getUiState()
     expect(ui.busy).toBe(false)
     // Status should reflect an error state — startsWith('error') or
@@ -258,7 +255,7 @@ describe('createChatStream', () => {
 
     await expect(stream.send('second')).rejects.toThrow(/turn.*in.*progress|active/i)
     // Only the initial turn.send should have hit the wire.
-    const sendCount = fake.__sendCalls.filter((c) => c.method === 'turn.send').length
+    const sendCount = fake.__sendCalls.filter(c => c.method === 'turn.send').length
     expect(sendCount).toBe(1)
   })
 

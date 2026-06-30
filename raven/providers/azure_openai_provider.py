@@ -43,8 +43,8 @@ class AzureOpenAIProvider(LLMProvider):
             raise ValueError("Azure OpenAI api_base is required")
 
         # Ensure api_base ends with /
-        if not api_base.endswith('/'):
-            api_base += '/'
+        if not api_base.endswith("/"):
+            api_base += "/"
         self.api_base = api_base
 
     def _build_chat_url(self, deployment_name: str) -> str:
@@ -52,13 +52,10 @@ class AzureOpenAIProvider(LLMProvider):
         # Azure OpenAI URL format:
         # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
         base_url = self.api_base
-        if not base_url.endswith('/'):
-            base_url += '/'
+        if not base_url.endswith("/"):
+            base_url += "/"
 
-        url = urljoin(
-            base_url,
-            f"openai/deployments/{deployment_name}/chat/completions"
-        )
+        url = urljoin(base_url, f"openai/deployments/{deployment_name}/chat/completions")
         return f"{url}?api-version={self.api_version}"
 
     def _build_headers(self) -> dict[str, str]:
@@ -139,7 +136,12 @@ class AzureOpenAIProvider(LLMProvider):
         url = self._build_chat_url(deployment_name)
         headers = self._build_headers()
         payload = self._prepare_request_payload(
-            deployment_name, messages, tools, max_tokens, temperature, reasoning_effort,
+            deployment_name,
+            messages,
+            tools,
+            max_tokens,
+            temperature,
+            reasoning_effort,
             tool_choice=tool_choice,
         )
 

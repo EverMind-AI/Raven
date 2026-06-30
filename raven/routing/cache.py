@@ -69,8 +69,7 @@ def _serialize(data: BenchmarkData) -> dict:
                 "cost": b.cost,
                 "submission_id": b.submission_id,
                 "task_scores": [
-                    {"task_id": t.task_id, "score": t.score, "max_score": t.max_score}
-                    for t in b.task_scores
+                    {"task_id": t.task_id, "score": t.score, "max_score": t.max_score} for t in b.task_scores
                 ],
             }
             for b in data.values()
@@ -177,12 +176,14 @@ class BenchmarkCache:
     def _schedule_background_refresh(self) -> None:
         if self._refresh_task and not self._refresh_task.done():
             return
+
         async def _bg():
             await asyncio.sleep(0.1)
             try:
                 await self._do_refresh()
             except Exception:
                 pass
+
         self._refresh_task = asyncio.create_task(_bg())
 
     def get_fallback(self) -> BenchmarkData:

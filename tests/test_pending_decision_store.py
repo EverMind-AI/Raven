@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import time
 from datetime import datetime
 from pathlib import Path
-
-import pytest
 
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
-
 
 # ── helpers ───────────────────────────────────────────────────────────
 
@@ -107,8 +103,7 @@ def test_put_does_not_supersede_consumed_decisions(tmp_path: Path):
     store = PendingDecisionStore(tmp_path / "pending.json")
     older = _decision(decision_id="dec_old", created_at_ms=1_700_000_000_000)
     store.put(older)
-    store.mark_consumed("dec_old", picked_option_id="opt_a",
-                        consumed_at_ms=1_700_000_000_500)
+    store.mark_consumed("dec_old", picked_option_id="opt_a", consumed_at_ms=1_700_000_000_500)
 
     newer = _decision(decision_id="dec_new", created_at_ms=1_700_000_001_000)
     store.put(newer)
@@ -126,8 +121,7 @@ def test_mark_consumed_records_pick(tmp_path: Path):
     d = _decision(decision_id="dec_x")
     store.put(d)
 
-    ok = store.mark_consumed("dec_x", picked_option_id="opt_b",
-                             consumed_at_ms=1_700_000_000_500)
+    ok = store.mark_consumed("dec_x", picked_option_id="opt_b", consumed_at_ms=1_700_000_000_500)
     assert ok is True
 
     # Subsequent get_recent ignores it
@@ -163,11 +157,13 @@ def test_sweep_expired_removes_old_unconsumed(tmp_path: Path):
     # Put both close in time so put()'s opportunistic expiry-cleanup leaves
     # them both. Different (channel, to) so put() of "fresh" doesn't
     # supersede "old".
-    old = _decision(decision_id="dec_old", created_at_ms=1_000_000_000_000,
-                    ttl_min=60)
-    fresh = _decision(decision_id="dec_fresh",
-                      created_at_ms=1_000_000_002_000,  # 2s after old
-                      channel="feishu", to="ou_other")
+    old = _decision(decision_id="dec_old", created_at_ms=1_000_000_000_000, ttl_min=60)
+    fresh = _decision(
+        decision_id="dec_fresh",
+        created_at_ms=1_000_000_002_000,  # 2s after old
+        channel="feishu",
+        to="ou_other",
+    )
     store.put(old)
     store.put(fresh)
 
@@ -183,15 +179,19 @@ def test_sweep_expired_removes_old_unconsumed(tmp_path: Path):
 
 def test_serialization_roundtrip_preserves_options(tmp_path: Path):
     store = PendingDecisionStore(tmp_path / "pending.json")
-    d = _decision(options=[
-        _opt("opt_a", type="routine_confirm", exec_kind="routine_confirm",
-             exec_payload={"routine_id": "dow1-h09-meeting", "make_cron": True,
-                           "cron_expr": "0 9 * * 1"},
-             source="routine", priority="high"),
-        _opt("opt_b", exec_kind="spawn",
-             exec_payload={"task_description": "research X",
-                           "max_iterations": 5}),
-    ])
+    d = _decision(
+        options=[
+            _opt(
+                "opt_a",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={"routine_id": "dow1-h09-meeting", "make_cron": True, "cron_expr": "0 9 * * 1"},
+                source="routine",
+                priority="high",
+            ),
+            _opt("opt_b", exec_kind="spawn", exec_payload={"task_description": "research X", "max_iterations": 5}),
+        ]
+    )
     store.put(d)
 
     got = store.get_recent("feishu", "ou_xxx", now_ms=d.created_at_ms + 100)

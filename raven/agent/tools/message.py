@@ -52,9 +52,7 @@ class MessageTool(Tool):
 
     def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Set the current message context (turn-local)."""
-        self._turn.set(
-            replace(self._cur(), channel=channel, chat_id=chat_id, message_id=message_id)
-        )
+        self._turn.set(replace(self._cur(), channel=channel, chat_id=chat_id, message_id=message_id))
 
     def set_send_callback(
         self,
@@ -88,25 +86,16 @@ class MessageTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The message content to send"
-                },
-                "channel": {
-                    "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)"
-                },
-                "chat_id": {
-                    "type": "string",
-                    "description": "Optional: target chat/user ID"
-                },
+                "content": {"type": "string", "description": "The message content to send"},
+                "channel": {"type": "string", "description": "Optional: target channel (telegram, discord, etc.)"},
+                "chat_id": {"type": "string", "description": "Optional: target chat/user ID"},
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional: list of file paths to attach (images, audio, documents)"
-                }
+                    "description": "Optional: list of file paths to attach (images, audio, documents)",
+                },
             },
-            "required": ["content"]
+            "required": ["content"],
         }
 
     async def execute(
@@ -116,7 +105,7 @@ class MessageTool(Tool):
         chat_id: str | None = None,
         message_id: str | None = None,
         media: list[str] | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> str:
         st = self._cur()
         channel = channel or st.channel

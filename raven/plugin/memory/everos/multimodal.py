@@ -26,9 +26,23 @@ logger = logging.getLogger("raven.plugin.memory.everos")
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".svg"}
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".amr", ".aiff", ".aac", ".ogg", ".flac"}
 _DOC_EXTS = {
-    ".pdf", ".html", ".htm", ".eml",
-    ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls",
-    ".odt", ".ods", ".odp", ".rtf", ".pages", ".key", ".numbers",
+    ".pdf",
+    ".html",
+    ".htm",
+    ".eml",
+    ".docx",
+    ".doc",
+    ".pptx",
+    ".ppt",
+    ".xlsx",
+    ".xls",
+    ".odt",
+    ".ods",
+    ".odp",
+    ".rtf",
+    ".pages",
+    ".key",
+    ".numbers",
 }
 
 
@@ -117,8 +131,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
         )
     except ImportError as e:
         raise MultimodalUnavailable(
-            f"EverOS multimodal parser not installed "
-            f"(`pip install 'everos[multimodal]'`): {e}"
+            f"EverOS multimodal parser not installed (`pip install 'everos[multimodal]'`): {e}"
         ) from e
 
     try:
@@ -135,10 +148,13 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             out.append({"path": p, "name": Path(p).name or p, "error": "file not found"})
             continue
         except OSError as e:
-            out.append({
-                "path": p, "name": Path(p).name or p,
-                "error": f"cannot read file: {e}",
-            })
+            out.append(
+                {
+                    "path": p,
+                    "name": Path(p).name or p,
+                    "error": f"cannot read file: {e}",
+                }
+            )
             continue
         name = item.get("name") or p
         try:
@@ -154,19 +170,25 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             continue
         except Exception as e:  # noqa: BLE001 — per-item isolation is the contract
             logger.warning("understand_media: failed to parse %r (%s)", name, e)
-            out.append({
-                "path": p, "name": name,
-                "error": str(e) or type(e).__name__,
-            })
+            out.append(
+                {
+                    "path": p,
+                    "name": name,
+                    "error": str(e) or type(e).__name__,
+                }
+            )
             continue
         parsed = item.get("parsed_content")
         if parsed:
             out.append({"path": p, "name": name, "text": parsed})
         else:
-            out.append({
-                "path": p, "name": name,
-                "error": item.get("parse_error") or "could not be understood",
-            })
+            out.append(
+                {
+                    "path": p,
+                    "name": name,
+                    "error": item.get("parse_error") or "could not be understood",
+                }
+            )
     return out
 
 

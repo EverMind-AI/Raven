@@ -50,15 +50,8 @@ class BehaviorPatternsProducer(AttentionProducer):
             for p in entries:
                 proj_str = ""
                 if p.supporting_projects:
-                    proj_str = (
-                        " · projects: "
-                        + ", ".join(
-                            f"`{pn}`" for pn in p.supporting_projects
-                        )
-                    )
-                parts.append(
-                    f"- {p.text} [{p.confidence}{proj_str}]"
-                )
+                    proj_str = " · projects: " + ", ".join(f"`{pn}`" for pn in p.supporting_projects)
+                parts.append(f"- {p.text} [{p.confidence}{proj_str}]")
             parts.append("")
         return "\n".join(parts).rstrip()
 

@@ -40,7 +40,6 @@ if str(THIS_DIR) not in sys.path:
 
 from _common import (  # noqa: E402
     BenchmarkDriver,
-    Sample,
     get_backend,
     get_driver,
     load_dotenvs,
@@ -55,24 +54,38 @@ load_dotenvs()
 def _backend_overrides(args: argparse.Namespace) -> dict[str, Any]:
     out: dict[str, Any] = {}
     # OpenClaw-specific
-    if args.thinking: out["thinking"] = args.thinking
-    if args.openclaw_cmd: out["openclaw_cmd"] = args.openclaw_cmd
-    if args.cli_timeout: out["cli_timeout_s"] = args.cli_timeout
-    if args.subprocess_timeout: out["subprocess_timeout_s"] = args.subprocess_timeout
+    if args.thinking:
+        out["thinking"] = args.thinking
+    if args.openclaw_cmd:
+        out["openclaw_cmd"] = args.openclaw_cmd
+    if args.cli_timeout:
+        out["cli_timeout_s"] = args.cli_timeout
+    if args.subprocess_timeout:
+        out["subprocess_timeout_s"] = args.subprocess_timeout
     # Hermes-specific
-    if args.hermes_src: out["hermes_src"] = args.hermes_src
-    if args.inherit_home is not None: out["inherit_home"] = args.inherit_home
+    if args.hermes_src:
+        out["hermes_src"] = args.hermes_src
+    if args.inherit_home is not None:
+        out["inherit_home"] = args.inherit_home
     # Raven-specific
-    if args.max_iter: out["max_iterations"] = args.max_iter
-    if args.agent_timeout: out["agent_timeout_s"] = args.agent_timeout
+    if args.max_iter:
+        out["max_iterations"] = args.max_iter
+    if args.agent_timeout:
+        out["agent_timeout_s"] = args.agent_timeout
     # Shared memory toggle (honored by Hermes + OpenClaw backends)
-    if args.with_memory: out["with_memory"] = True
+    if args.with_memory:
+        out["with_memory"] = True
     # Longrun-specific
-    if getattr(args, "day_limit", None): out["day_limit"] = args.day_limit
-    if getattr(args, "output_dir", None): out["output_dir"] = args.output_dir
-    if getattr(args, "simulator_model", None): out["simulator_model"] = args.simulator_model
-    if getattr(args, "planner_model", None): out["planner_model"] = args.planner_model
-    if getattr(args, "resume_from", None): out["resume_from"] = args.resume_from
+    if getattr(args, "day_limit", None):
+        out["day_limit"] = args.day_limit
+    if getattr(args, "output_dir", None):
+        out["output_dir"] = args.output_dir
+    if getattr(args, "simulator_model", None):
+        out["simulator_model"] = args.simulator_model
+    if getattr(args, "planner_model", None):
+        out["planner_model"] = args.planner_model
+    if getattr(args, "resume_from", None):
+        out["resume_from"] = args.resume_from
     # Shared timeout override from the legacy --timeout flag maps to Hermes
     # subprocess timeout (its per-record wall).
     if args.timeout:
@@ -84,6 +97,7 @@ def _backend_overrides(args: argparse.Namespace) -> dict[str, Any]:
 def _build_driver(args: argparse.Namespace) -> BenchmarkDriver:
     if args.benchmark == "pbench":
         from _common.drivers.pbench import PbenchDriver
+
         return PbenchDriver(
             agent_name=args.agent,
             context_mode=args.context_mode,
@@ -135,12 +149,14 @@ async def _run(args: argparse.Namespace) -> tuple[list[dict], dict[str, Any]]:
     }
 
     concurrency = max(1, int(args.concurrency or 1))
-    print(f"[run] agent={args.agent} mode={args.mode or '-'} "
-          f"benchmark={args.benchmark} samples={len(samples)} "
-          f"concurrency={concurrency}",
-          file=sys.stderr, flush=True)
-    print(f"[run] dataset: {driver.dataset_description()}",
-          file=sys.stderr, flush=True)
+    print(
+        f"[run] agent={args.agent} mode={args.mode or '-'} "
+        f"benchmark={args.benchmark} samples={len(samples)} "
+        f"concurrency={concurrency}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(f"[run] dataset: {driver.dataset_description()}", file=sys.stderr, flush=True)
 
     # Multi-tick drivers (timeline / simulation) own scenario lifecycle
     # themselves — they iterate ticks internally with FakeClock + persistent
@@ -151,22 +167,26 @@ async def _run(args: argparse.Namespace) -> tuple[list[dict], dict[str, Any]]:
     done_counter = {"n": 0}
 
     if use_run_scenario:
+
         async def _run_one(i: int, sample) -> dict:
             sid = sample.raw.get("id") or f"#{i}"
             async with sem:
-                print(f"[{i+1}/{len(samples)}] START {sid}",
-                      file=sys.stderr, flush=True)
+                print(f"[{i + 1}/{len(samples)}] START {sid}", file=sys.stderr, flush=True)
                 row = await driver.run_scenario(
-                    sample, args.agent, args.mode, overrides,
+                    sample,
+                    args.agent,
+                    args.mode,
+                    overrides,
                 )
                 done_counter["n"] += 1
                 passed = row.get("passed")
                 cat = row.get("category", "?")
                 tickn = row.get("tick_count", "?")
-                print(f"[{done_counter['n']}/{len(samples)}] DONE  {sid} "
-                      f"category={cat} ticks={tickn} "
-                      f"passed={passed}",
-                      file=sys.stderr, flush=True)
+                print(
+                    f"[{done_counter['n']}/{len(samples)}] DONE  {sid} category={cat} ticks={tickn} passed={passed}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return row
     else:
         backend = get_backend(args.agent, mode=args.mode, overrides=overrides)
@@ -174,23 +194,35 @@ async def _run(args: argparse.Namespace) -> tuple[list[dict], dict[str, Any]]:
         async def _run_one(i: int, sample) -> dict:
             cat_hint = sample.raw.get("category") or sample.raw.get("id") or f"#{i}"
             async with sem:
-                print(f"[{i+1}/{len(samples)}] START {cat_hint}",
-                      file=sys.stderr, flush=True)
+                print(f"[{i + 1}/{len(samples)}] START {cat_hint}", file=sys.stderr, flush=True)
                 outcome = await backend.run_one(
-                    sample, driver, session_id=sample.session_hint,
+                    sample,
+                    driver,
+                    session_id=sample.session_hint,
                 )
                 if outcome.meta:
-                    runtime_meta_i = {**runtime_meta, **{
-                        k: v for k, v in outcome.meta.items()
-                        if k in ("model", "route", "delivered", "fake_now",
-                                 "full_doc", "cron_prompt", "plausibility_note")
-                    }}
+                    runtime_meta_i = {
+                        **runtime_meta,
+                        **{
+                            k: v
+                            for k, v in outcome.meta.items()
+                            if k
+                            in (
+                                "model",
+                                "route",
+                                "delivered",
+                                "fake_now",
+                                "full_doc",
+                                "cron_prompt",
+                                "plausibility_note",
+                            )
+                        },
+                    }
                 else:
                     runtime_meta_i = runtime_meta
                 row = driver.make_row(sample, outcome, runtime_meta_i)
                 done_counter["n"] += 1
-                print(f"[{done_counter['n']}/{len(samples)}] DONE  {cat_hint}",
-                      file=sys.stderr, flush=True)
+                print(f"[{done_counter['n']}/{len(samples)}] DONE  {cat_hint}", file=sys.stderr, flush=True)
                 _print_row_summary(row, outcome)
                 return row
 
@@ -222,21 +254,21 @@ def _print_row_summary(row: dict[str, Any], outcome) -> None:
         match = "OK" if row["help_match"] else "MISS"
         pred = row.get("predicted_help")
         truth = row.get("truth_help_needed")
-        print(f"  {match}  pred={pred} truth={truth} "
-              f"status={status} elapsed={outcome.elapsed_s}s",
-              file=sys.stderr, flush=True)
+        print(
+            f"  {match}  pred={pred} truth={truth} status={status} elapsed={outcome.elapsed_s}s",
+            file=sys.stderr,
+            flush=True,
+        )
     else:
         act = row.get("action", "?")
         note = ""
         fr = row.get("final_response") or row.get("reason") or ""
         if fr:
             note = f" | {fr[:80].replace(chr(10), ' ')!r}"
-        print(f"  status={status} action={act} elapsed={outcome.elapsed_s}s{note}",
-              file=sys.stderr, flush=True)
+        print(f"  status={status} action={act} elapsed={outcome.elapsed_s}s{note}", file=sys.stderr, flush=True)
 
 
-def _write_output(rows: list[dict], meta: dict[str, Any],
-                  args: argparse.Namespace) -> None:
+def _write_output(rows: list[dict], meta: dict[str, Any], args: argparse.Namespace) -> None:
     # The cases benchmark historically used {run_at, system, mode, results}.
     # The pbench benchmark historically used a bare list of row dicts (so
     # pa_scorecard can json.load it directly). Preserve both shapes.
@@ -253,7 +285,7 @@ def _write_output(rows: list[dict], meta: dict[str, Any],
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding='utf-8')
+        out.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         print(f"Results written to {out}", file=sys.stderr)
     else:
         print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
@@ -264,93 +296,108 @@ def main() -> None:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--agent", required=True,
-                    choices=["raven", "hermes", "openclaw"])
-    ap.add_argument("--mode", default=None,
-                    choices=["planner", "agent", "sentinel"],
-                    help="Raven only: planner (decision layer) | "
-                         "agent (AgentLoop, default) | sentinel (full Phase 2).")
-    ap.add_argument("--benchmark", required=True,
-                    choices=["pbench", "longrun"])
+    ap.add_argument("--agent", required=True, choices=["raven", "hermes", "openclaw"])
+    ap.add_argument(
+        "--mode",
+        default=None,
+        choices=["planner", "agent", "sentinel"],
+        help="Raven only: planner (decision layer) | agent (AgentLoop, default) | sentinel (full Phase 2).",
+    )
+    ap.add_argument("--benchmark", required=True, choices=["pbench", "longrun"])
 
     # sample filters
-    ap.add_argument("--case",
-                    help="Run a single persona by id (longrun)")
-    ap.add_argument("--all", action="store_true",
-                    help="Run every sample (default if neither --n nor --limit set)")
-    ap.add_argument("--n", type=int, default=None,
-                    help="Total samples (stratified for pbench)")
-    ap.add_argument("--limit", type=int, default=None,
-                    help="First N samples (smoke runs)")
+    ap.add_argument("--case", help="Run a single persona by id (longrun)")
+    ap.add_argument("--all", action="store_true", help="Run every sample (default if neither --n nor --limit set)")
+    ap.add_argument("--n", type=int, default=None, help="Total samples (stratified for pbench)")
+    ap.add_argument("--limit", type=int, default=None, help="First N samples (smoke runs)")
 
     # pbench-specific
     ap.add_argument("--context-mode", choices=["cold", "warm"], default="cold")
     ap.add_argument("--synthesizer", default="keyword")
 
     # openclaw-specific
-    ap.add_argument("--thinking", default=None,
-                    choices=["off", "minimal", "low", "medium", "high", "xhigh"])
+    ap.add_argument("--thinking", default=None, choices=["off", "minimal", "low", "medium", "high", "xhigh"])
     ap.add_argument("--openclaw-cmd", default=None)
-    ap.add_argument("--cli-timeout", type=int, default=None,
-                    help="OpenClaw: --timeout passed to `openclaw agent`")
-    ap.add_argument("--subprocess-timeout", type=int, default=None,
-                    help="OpenClaw outer subprocess timeout")
+    ap.add_argument("--cli-timeout", type=int, default=None, help="OpenClaw: --timeout passed to `openclaw agent`")
+    ap.add_argument("--subprocess-timeout", type=int, default=None, help="OpenClaw outer subprocess timeout")
 
     # hermes-specific
-    ap.add_argument("--hermes-src", default=None,
-                    help="Override systems.hermes_src from runners config")
-    ap.add_argument("--inherit-home", dest="inherit_home",
-                    action=argparse.BooleanOptionalAction, default=None,
-                    help="Copy ~/.hermes/{config.yaml,.env,auth.json} into tmpdir")
+    ap.add_argument("--hermes-src", default=None, help="Override systems.hermes_src from runners config")
+    ap.add_argument(
+        "--inherit-home",
+        dest="inherit_home",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Copy ~/.hermes/{config.yaml,.env,auth.json} into tmpdir",
+    )
 
     # raven-specific
-    ap.add_argument("--max-iter", type=int, default=None,
-                    help="Raven AgentLoop max_iterations")
-    ap.add_argument("--agent-timeout", type=int, default=None,
-                    help="Raven agent per-sample wall timeout (s)")
+    ap.add_argument("--max-iter", type=int, default=None, help="Raven AgentLoop max_iterations")
+    ap.add_argument("--agent-timeout", type=int, default=None, help="Raven agent per-sample wall timeout (s)")
 
     # shared
-    ap.add_argument("--with-memory", action="store_true",
-                    help="Enable agent memory access. Hermes: prepends a "
-                         "<memory-context> block to cron prompt (simulates "
-                         "skip_memory=False). OpenClaw: plants memory/MEMORY.md "
-                         "+ memory/HISTORY.md in a seeded workspace with "
-                         "bootstrap raised so OpenClaw injects it into system "
-                         "prompt. No-op for Raven (AgentLoop already seeds).")
-    ap.add_argument("--timeout", type=int, default=None,
-                    help="Generic per-sample timeout; sets hermes subprocess "
-                         "+ raven agent timeout if either is unset")
-    ap.add_argument("--concurrency", type=int, default=1,
-                    help="Number of samples to run in parallel. Default 1 "
-                         "(sequential). For openclaw/hermes each parallel slot "
-                         "spawns its own subprocess; for raven in-process "
-                         "it multiplexes the provider. LAN vLLM handles "
-                         "batching well — 4-8 is usually safe.")
-    ap.add_argument("--output", default=None,
-                    help="Write JSON report here (required for downstream tools)")
+    ap.add_argument(
+        "--with-memory",
+        action="store_true",
+        help="Enable agent memory access. Hermes: prepends a "
+        "<memory-context> block to cron prompt (simulates "
+        "skip_memory=False). OpenClaw: plants memory/MEMORY.md "
+        "+ memory/HISTORY.md in a seeded workspace with "
+        "bootstrap raised so OpenClaw injects it into system "
+        "prompt. No-op for Raven (AgentLoop already seeds).",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Generic per-sample timeout; sets hermes subprocess + raven agent timeout if either is unset",
+    )
+    ap.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of samples to run in parallel. Default 1 "
+        "(sequential). For openclaw/hermes each parallel slot "
+        "spawns its own subprocess; for raven in-process "
+        "it multiplexes the provider. LAN vLLM handles "
+        "batching well — 4-8 is usually safe.",
+    )
+    ap.add_argument("--output", default=None, help="Write JSON report here (required for downstream tools)")
 
     # longrun-specific (LLM-simulator × 30-day trajectories)
-    ap.add_argument("--day-limit", type=int, default=None,
-                    help="longrun: stop after N simulated days (default 30). "
-                         "Use 1-3 for smoke tests.")
-    ap.add_argument("--output-dir", default=None,
-                    help="longrun: where to write trajectory/checkpoint/scorecard "
-                         "(default: proactivity-eval/output/longrun/)")
-    ap.add_argument("--simulator-model", default=None,
-                    help="longrun: override user-simulator model "
-                         "(default: openrouter/anthropic/claude-sonnet-4.5)")
-    ap.add_argument("--planner-model", default=None,
-                    help="longrun: override Sentinel ProactivePlanner model. "
-                         "Useful for ablating Planner LLM quality (e.g. "
-                         "openrouter/anthropic/claude-sonnet-4.5). When this "
-                         "is an OpenRouter model id, the driver builds a "
-                         "separate provider for the Planner; the Agent loop "
-                         "still uses the local qwen endpoint. Default: same "
-                         "model as the Agent (sentinel.evaluator_model or "
-                         "agents.defaults.model).")
-    ap.add_argument("--resume-from", default=None,
-                    help="longrun: resume from checkpoint tar "
-                         "(e.g. output/longrun/ckpt-dev-01-raven/day03.tar)")
+    ap.add_argument(
+        "--day-limit",
+        type=int,
+        default=None,
+        help="longrun: stop after N simulated days (default 30). Use 1-3 for smoke tests.",
+    )
+    ap.add_argument(
+        "--output-dir",
+        default=None,
+        help="longrun: where to write trajectory/checkpoint/scorecard (default: proactivity-eval/output/longrun/)",
+    )
+    ap.add_argument(
+        "--simulator-model",
+        default=None,
+        help="longrun: override user-simulator model (default: openrouter/anthropic/claude-sonnet-4.5)",
+    )
+    ap.add_argument(
+        "--planner-model",
+        default=None,
+        help="longrun: override Sentinel ProactivePlanner model. "
+        "Useful for ablating Planner LLM quality (e.g. "
+        "openrouter/anthropic/claude-sonnet-4.5). When this "
+        "is an OpenRouter model id, the driver builds a "
+        "separate provider for the Planner; the Agent loop "
+        "still uses the local qwen endpoint. Default: same "
+        "model as the Agent (sentinel.evaluator_model or "
+        "agents.defaults.model).",
+    )
+    ap.add_argument(
+        "--resume-from",
+        default=None,
+        help="longrun: resume from checkpoint tar (e.g. output/longrun/ckpt-dev-01-raven/day03.tar)",
+    )
     args = ap.parse_args()
 
     # Validation

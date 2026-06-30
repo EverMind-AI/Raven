@@ -1,4 +1,5 @@
 """Boxlite microVM-based SandboxExecutor implementation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 
 if TYPE_CHECKING:
-    import boxlite as _boxlite_t
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -179,9 +180,7 @@ class BoxliteExecutor(SandboxExecutor):
             return stdout_str, result.exit_code
 
         try:
-            stdout_str, exit_code = await asyncio.wait_for(
-                _check(), timeout=self._verify_timeout
-            )
+            stdout_str, exit_code = await asyncio.wait_for(_check(), timeout=self._verify_timeout)
         except asyncio.TimeoutError:
             if execution is not None:
                 try:
@@ -204,8 +203,7 @@ class BoxliteExecutor(SandboxExecutor):
             ) from exc
         if exit_code != 0 or stdout_str.strip() != "ok":
             raise SandboxInitError(
-                f"Sandbox verification returned unexpected result "
-                f"(exit_code={exit_code}, stdout={stdout_str!r})"
+                f"Sandbox verification returned unexpected result (exit_code={exit_code}, stdout={stdout_str!r})"
             )
 
     async def stop(self) -> None:
@@ -236,16 +234,16 @@ class BoxliteExecutor(SandboxExecutor):
 
             # boxlite 0.8.2: volumes are dicts, not tuples
             volumes = [
-                {'host': str(self._workspace), 'guest': self.WORKSPACE_MOUNT, 'readonly': False},
-                *[{'host': e[0], 'guest': e[1], 'readonly': e[2] == 'ro'} for e in self._extra_volumes],
+                {"host": str(self._workspace), "guest": self.WORKSPACE_MOUNT, "readonly": False},
+                *[{"host": e[0], "guest": e[1], "readonly": e[2] == "ro"} for e in self._extra_volumes],
             ]
             # boxlite 0.8.2: network is a string field; allow_net is a separate list field
             # (NetworkSpec does not exist in this version)
             extra_kwargs: dict = {}
             if self._allow_net is False:
-                extra_kwargs['network'] = 'none'
+                extra_kwargs["network"] = "none"
             elif isinstance(self._allow_net, list):
-                extra_kwargs['allow_net'] = self._allow_net
+                extra_kwargs["allow_net"] = self._allow_net
             # else: allow_net is True → fully open, no kwargs needed
 
             options = boxlite.BoxOptions(
@@ -418,7 +416,9 @@ class BoxliteExecutor(SandboxExecutor):
                             # Non-JSON stdout (e.g. startup banners). Log and skip.
                             logger.debug(
                                 "MCP stdout [%s]: skipping non-JSON line %r (%s)",
-                                command, line[:80], parse_exc,
+                                command,
+                                line[:80],
+                                parse_exc,
                             )
                 # Flush any remaining content after stream ends (no trailing newline)
                 line = buf.strip()
@@ -481,7 +481,5 @@ class BoxliteExecutor(SandboxExecutor):
             rel_str = str(rel)
             return self.WORKSPACE_MOUNT if rel_str == "." else f"{self.WORKSPACE_MOUNT}/{rel_str}"
         except ValueError:
-            logger.warning(
-                "cwd '%s' is outside workspace; falling back to /workspace", cwd
-            )
+            logger.warning("cwd '%s' is outside workspace; falling back to /workspace", cwd)
             return self.WORKSPACE_MOUNT

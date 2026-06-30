@@ -8,8 +8,6 @@ cannot preempt it. The guard + in-walk deadline live inside the tool.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from raven.agent.tools import file_search

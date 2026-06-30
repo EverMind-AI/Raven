@@ -30,7 +30,8 @@ def _write_manifest(
     sub = root / plugin_id
     sub.mkdir(parents=True, exist_ok=True)
     flags = f"bundled = {str(bundled).lower()}\nenabled_by_default = {str(enabled).lower()}\n"
-    (sub / "raven-plugin.toml").write_text(textwrap.dedent(f"""
+    (sub / "raven-plugin.toml").write_text(
+        textwrap.dedent(f"""
         [plugin]
         id = "{plugin_id}"
         version = "0.1.0"
@@ -39,7 +40,9 @@ def _write_manifest(
         [[plugin.contributes.memory_backends]]
         name = "{backend_name}"
         factory = "{factory_ref}"
-    """), encoding="utf-8")
+    """),
+        encoding="utf-8",
+    )
 
 
 def _install_test_module(name: str, attrs: dict[str, object]) -> None:
@@ -66,6 +69,7 @@ def _cleanup_modules():
 class TestEndToEnd:
     def test_discover_activate_build(self, tmp_path: Path) -> None:
         """A single bundled plugin reaches the constructed backend."""
+
         def fake_factory(ctx):
             return {"workspace": str(ctx.services.workspace), **ctx.config}
 
@@ -74,7 +78,8 @@ class TestEndToEnd:
         _write_manifest(bundled, "everos-memory", factory_ref="_test_eos:make_backend")
 
         registry = assemble_plugin_registry(
-            bundled_dir=bundled, entry_points_group=None,
+            bundled_dir=bundled,
+            entry_points_group=None,
         )
         assert registry.activated_ids() == ["everos-memory"]
 
@@ -89,7 +94,8 @@ class TestEndToEnd:
 
     def test_unknown_backend_name(self, tmp_path: Path) -> None:
         registry = assemble_plugin_registry(
-            bundled_dir=tmp_path, entry_points_group=None,
+            bundled_dir=tmp_path,
+            entry_points_group=None,
         )
         with pytest.raises(PluginNotFound):
             registry.build_memory_backend(
@@ -137,7 +143,9 @@ class TestCrossSource:
         _write_manifest(user, "everos-memory", factory_ref="_up:mk")
 
         registry = assemble_plugin_registry(
-            bundled_dir=bundled, user_dir=user, entry_points_group=None,
+            bundled_dir=bundled,
+            user_dir=user,
+            entry_points_group=None,
         )
         # Bundled wins — the user copy is shadowed and never imported.
         result = registry.build_memory_backend(
@@ -155,24 +163,32 @@ class TestCrossSource:
 
 class TestConflict:
     def test_two_plugins_same_backend_name_fails(self, tmp_path: Path) -> None:
-        def fa(ctx): return "a"
-        def fb(ctx): return "b"
+        def fa(ctx):
+            return "a"
+
+        def fb(ctx):
+            return "b"
 
         _install_test_module("_pa", {"mk": fa})
         _install_test_module("_pb", {"mk": fb})
 
         bundled = tmp_path / "bundled"
         _write_manifest(
-            bundled, "plug-a",
-            factory_ref="_pa:mk", backend_name="everos",
+            bundled,
+            "plug-a",
+            factory_ref="_pa:mk",
+            backend_name="everos",
         )
         _write_manifest(
-            bundled, "plug-b",
-            factory_ref="_pb:mk", backend_name="everos",
+            bundled,
+            "plug-b",
+            factory_ref="_pb:mk",
+            backend_name="everos",
         )
         with pytest.raises(PluginConflict, match="everos"):
             assemble_plugin_registry(
-                bundled_dir=bundled, entry_points_group=None,
+                bundled_dir=bundled,
+                entry_points_group=None,
             )
 
 

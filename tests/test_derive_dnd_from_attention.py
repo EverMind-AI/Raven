@@ -3,14 +3,11 @@
 
 from datetime import datetime
 
-import pytest
-
 from raven.config.raven import DndWindow, NudgePolicyConfig
 from raven.proactive_engine.sentinel.trigger_policy.derive_dnd import (
     parse_user_overrides_dnd,
 )
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
-
 
 _SAMPLE = """## User overrides
 - dnd: 22:30-06:00 reason=nighttime
@@ -84,12 +81,18 @@ def test_nudge_policy_uses_user_overrides_after_set():
     assert not policy._in_quiet_hours(datetime(2026, 5, 4, 12, 30))
 
     # Inject runtime override: 12:00-13:00 weekday lunch DND.
-    policy.set_user_override_dnd([
-        DndWindow(
-            start_hour=12, end_hour=13, start_minute=0, end_minute=0,
-            weekdays=[0, 1, 2, 3, 4], why="lunch",
-        ),
-    ])
+    policy.set_user_override_dnd(
+        [
+            DndWindow(
+                start_hour=12,
+                end_hour=13,
+                start_minute=0,
+                end_minute=0,
+                weekdays=[0, 1, 2, 3, 4],
+                why="lunch",
+            ),
+        ]
+    )
     assert policy._in_quiet_hours(datetime(2026, 5, 4, 12, 30))
     # Same time but a Saturday — weekday filter excludes us, allow.
     assert not policy._in_quiet_hours(datetime(2026, 5, 2, 12, 30))
@@ -98,9 +101,11 @@ def test_nudge_policy_uses_user_overrides_after_set():
 def test_nudge_policy_clears_when_set_empty():
     cfg = NudgePolicyConfig()
     policy = NudgePolicy(cfg, now_fn=lambda: datetime(2026, 5, 4, 12, 30))
-    policy.set_user_override_dnd([
-        DndWindow(start_hour=12, end_hour=13, weekdays=[0, 1, 2, 3, 4], why="x"),
-    ])
+    policy.set_user_override_dnd(
+        [
+            DndWindow(start_hour=12, end_hour=13, weekdays=[0, 1, 2, 3, 4], why="x"),
+        ]
+    )
     assert policy._in_quiet_hours(datetime(2026, 5, 4, 12, 30))
     policy.set_user_override_dnd([])
     assert not policy._in_quiet_hours(datetime(2026, 5, 4, 12, 30))

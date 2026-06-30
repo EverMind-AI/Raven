@@ -95,8 +95,7 @@ def build_plugin_registry(
         )
     except (PluginConflict, PluginFactoryImportError) as e:
         logger.warning(
-            "plugin activation failed (%s); continuing without plugins. "
-            "AgentLoop will use its legacy memory path.",
+            "plugin activation failed (%s); continuing without plugins. AgentLoop will use its legacy memory path.",
             e,
         )
         return PluginRegistry()
@@ -136,7 +135,9 @@ def maybe_build_memory_backend(
     services = ServiceLocator(workspace=workspace)
     try:
         backend = registry.build_memory_backend(
-            name, config=plugin_slice, services=services,
+            name,
+            config=plugin_slice,
+            services=services,
         )
     except PluginNotFound:
         logger.warning(
@@ -151,8 +152,9 @@ def maybe_build_memory_backend(
         # than fail the host boot. CLEANUP will tighten this once the
         # plugin path is the canonical one and a failure is fatal.
         logger.warning(
-            "memory backend %r factory raised at construction (%s); "
-            "continuing without backend.", name, e,
+            "memory backend %r factory raised at construction (%s); continuing without backend.",
+            name,
+            e,
         )
         return None
     return backend
@@ -188,17 +190,18 @@ def build_plugin_tools(
     tools = []
     for name in names:
         plugin_id = registry.tool_plugin_id(name)
-        plugin_slice = (
-            (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
-        )
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
         try:
             tool = registry.build_tool(
-                name, config=plugin_slice, services=services,
+                name,
+                config=plugin_slice,
+                services=services,
             )
         except Exception as e:
             logger.warning(
-                "plugin tool %r factory raised at construction (%s); "
-                "skipping it.", name, e,
+                "plugin tool %r factory raised at construction (%s); skipping it.",
+                name,
+                e,
             )
             continue
         # A factory may return None to decline contribution at runtime
@@ -206,8 +209,8 @@ def build_plugin_tools(
         # opt-out, not a failure — skip it without the warning.
         if tool is None:
             logger.debug(
-                "plugin tool %r factory opted out (returned None); "
-                "skipping it.", name,
+                "plugin tool %r factory opted out (returned None); skipping it.",
+                name,
             )
             continue
         tools.append(tool)

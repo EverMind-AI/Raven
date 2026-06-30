@@ -56,9 +56,14 @@ async def _search(
     from everos.memory.search.dto import SearchRequest
     from everos.service.search import search
 
-    resp = await search(SearchRequest(
-        user_id=user_id, agent_id=agent_id, query=query, top_k=top_k,
-    ))
+    resp = await search(
+        SearchRequest(
+            user_id=user_id,
+            agent_id=agent_id,
+            query=query,
+            top_k=top_k,
+        )
+    )
     return resp.data
 
 
@@ -68,11 +73,17 @@ async def _search(
 
 
 async def test_user_memory_extracted_and_matches(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], pipeline_drain: Any,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    pipeline_drain: Any,
 ) -> None:
     facts = corpus["user_facts"]
     result = await _memorize_session(
-        ids.session, facts["messages"], user_id=ids.user_id, agent_id=ids.agent_id,
+        ids.session,
+        facts["messages"],
+        user_id=ids.user_id,
+        agent_id=ids.agent_id,
     )
     assert result.status in ("extracted", "accumulated")
     await pipeline_drain()
@@ -83,15 +94,11 @@ async def test_user_memory_extracted_and_matches(
     assert data.episodes or data.profiles, "expected user episodes or profiles"
 
     blob = " ".join(
-        [getattr(e, "summary", "") + " " + getattr(e, "episode", "")
-         for e in data.episodes]
+        [getattr(e, "summary", "") + " " + getattr(e, "episode", "") for e in data.episodes]
         + [str(p.profile_data) for p in data.profiles]
     ).lower()
     matched = [k for k in facts["expect_keywords"] if k.lower() in blob]
-    assert matched, (
-        f"recalled user memory matched none of {facts['expect_keywords']}; "
-        f"got: {blob[:300]!r}"
-    )
+    assert matched, f"recalled user memory matched none of {facts['expect_keywords']}; got: {blob[:300]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -100,15 +107,20 @@ async def test_user_memory_extracted_and_matches(
 
 
 async def test_agent_skill_extracted_and_matches(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], pipeline_drain: Any,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    pipeline_drain: Any,
 ) -> None:
     demo = corpus["skill_demo"]
 
     # Repeat the same procedure across sessions so case clustering fires.
     for i, sess in enumerate(demo["sessions"]):
         await _memorize_session(
-            f"{ids.session}-{i}", sess["messages"],
-            user_id=ids.user_id, agent_id=ids.agent_id,
+            f"{ids.session}-{i}",
+            sess["messages"],
+            user_id=ids.user_id,
+            agent_id=ids.agent_id,
         )
     await pipeline_drain()
 
@@ -136,14 +148,19 @@ async def test_agent_skill_extracted_and_matches(
 
 
 async def test_agent_cases_recorded(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], pipeline_drain: Any,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    pipeline_drain: Any,
 ) -> None:
     """Cases are the raw material skills cluster from — assert they land."""
     demo = corpus["skill_demo"]
     for i, sess in enumerate(demo["sessions"]):
         await _memorize_session(
-            f"{ids.session}-case-{i}", sess["messages"],
-            user_id=ids.user_id, agent_id=ids.agent_id,
+            f"{ids.session}-case-{i}",
+            sess["messages"],
+            user_id=ids.user_id,
+            agent_id=ids.agent_id,
         )
     await pipeline_drain()
 

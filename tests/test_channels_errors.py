@@ -11,7 +11,7 @@ from raven.channels.errors import retryable_http, transient_network
 def test_transient_network_builtins():
     assert transient_network(TimeoutError()) is True
     assert transient_network(ConnectionError()) is True
-    assert transient_network(ConnectionResetError()) is True   # subclass
+    assert transient_network(ConnectionResetError()) is True  # subclass
 
 
 def test_transient_network_websockets():

@@ -73,10 +73,7 @@ describe('terminalSetup helpers', () => {
 // SSH-accessed so the suite is green on remote dev machines + CI runners
 // that proxy through SSH; they still execute on local checkouts and on
 // CI runners with no SSH_* env exposure.
-const _ssh =
-  Boolean(process.env.SSH_CONNECTION) ||
-  Boolean(process.env.SSH_TTY) ||
-  Boolean(process.env.SSH_CLIENT)
+const _ssh = Boolean(process.env.SSH_CONNECTION) || Boolean(process.env.SSH_TTY) || Boolean(process.env.SSH_CLIENT)
 
 describe.skipIf(_ssh)('configureTerminalKeybindings', () => {
   it('writes missing bindings into a VS Code style keybindings file', async () => {

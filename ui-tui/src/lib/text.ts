@@ -3,6 +3,8 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { ThinkingMode } from '../types.js'
+
 import {
   HISTORY_RENDER_MAX_CHARS,
   HISTORY_RENDER_MAX_LINES,
@@ -11,7 +13,6 @@ import {
   THINKING_COT_MAX
 } from '../config/limits.js'
 import { VERBS } from '../content/verbs.js'
-import type { ThinkingMode } from '../types.js'
 
 const ESC = String.fromCharCode(27)
 const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, 'g')

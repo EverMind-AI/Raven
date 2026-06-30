@@ -7,6 +7,8 @@ import { Box, Text, useStdout } from '@hermes/ink'
 import { useEffect, useState } from 'react'
 import unicodeSpinners from 'unicode-animations'
 
+import type { PanelSection, SessionInfo } from '../types.js'
+
 import {
   ravenHero,
   RAVEN_HERO_WIDTH,
@@ -18,7 +20,6 @@ import {
 } from '../banner.js'
 import { flat } from '../lib/text.js'
 import { DEFAULT_THEME, type Theme } from '../theme.js'
-import type { PanelSection, SessionInfo } from '../types.js'
 
 const LOADER_TICK_MS = 120
 
@@ -78,7 +79,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   openrouter: 'OpenRouter',
   qwen: 'Qwen',
   google: 'Google',
-  mistral: 'Mistral',
+  mistral: 'Mistral'
 }
 
 // formatProvider — Resolve a user-facing provider label.
@@ -100,7 +101,9 @@ export function formatProvider(slug?: string, modelId?: string): string {
     const id = modelId ?? ''
     effective = id.includes('/') ? (id.split('/')[0] ?? '') : ''
   }
-  if (!effective) return '—'
+  if (!effective) {
+    return '—'
+  }
   const key = effective.toLowerCase()
   return PROVIDER_LABELS[key] ?? effective.charAt(0).toUpperCase() + effective.slice(1)
 }
@@ -175,12 +178,8 @@ function CollapseToggle({
       <Text bold color={t.color.accent}>
         {title}
       </Text>
-      {typeof count === 'number' ? (
-        <Text color={t.color.muted}> ({count})</Text>
-      ) : null}
-      {suffix ? (
-        <Text color={t.color.muted}> {suffix}</Text>
-      ) : null}
+      {typeof count === 'number' ? <Text color={t.color.muted}> ({count})</Text> : null}
+      {suffix ? <Text color={t.color.muted}> {suffix}</Text> : null}
     </Box>
   )
 }
@@ -257,9 +256,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
             <Text color={t.color.text}>{truncLine(strip(k) + ': ', vs)}</Text>
           </Text>
         ))}
-        {overflow > 0 && (
-          <Text color={t.color.muted}>(and {overflow} more categories…)</Text>
-        )}
+        {overflow > 0 && <Text color={t.color.muted}>(and {overflow} more categories…)</Text>}
       </>
     )
   }
@@ -280,9 +277,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
             <Text color={t.color.text}>{truncLine(strip(k) + ': ', vs)}</Text>
           </Text>
         ))}
-        {overflow > 0 && (
-          <Text color={t.color.muted}>(and {overflow} more toolsets…)</Text>
-        )}
+        {overflow > 0 && <Text color={t.color.muted}>(and {overflow} more toolsets…)</Text>}
       </>
     )
   }
@@ -315,11 +310,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
       return <Text color={t.color.muted}>No system prompt loaded.</Text>
     }
 
-    return (
-      <Text color={t.color.muted}>
-        {info.system_prompt}
-      </Text>
-    )
+    return <Text color={t.color.muted}>{info.system_prompt}</Text>
   }
 
   return (
@@ -336,88 +327,92 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
             so the box keeps its content height when there is no hero (narrow
             mode) — flexBasis={0} would collapse it to nothing there. */}
         <Box flexDirection="column" flexGrow={1} width={w}>
+          <Box marginBottom={1}>
+            <Text bold color={t.color.primary}>
+              {t.brand.name}
+              {info.version ? ` v${info.version}` : ''}
+              {info.release_date ? ` (${info.release_date})` : ''}
+            </Text>
+          </Box>
 
-        <Box marginBottom={1}>
-          <Text bold color={t.color.primary}>
-            {t.brand.name}
-            {info.version ? ` v${info.version}` : ''}
-            {info.release_date ? ` (${info.release_date})` : ''}
-          </Text>
-        </Box>
-
-        {/* ── Tools (expanded by default) ── */}
-        <Box flexDirection="column" marginTop={1}>
-          <CollapseToggle
-            count={toolsTotal}
-            onToggle={() => setToolsOpen(v => !v)}
-            open={toolsOpen}
-            t={t}
-            title="Available Tools"
-          />
-          {toolsOpen && toolsBody()}
-        </Box>
-
-        {/* ── Skills (collapsed by default) ── */}
-        <Box flexDirection="column" marginTop={1}>
-          <CollapseToggle
-            count={skillsTotal}
-            onToggle={() => setSkillsOpen(v => !v)}
-            open={skillsOpen}
-            suffix={skillsCatCount > 0 ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}` : undefined}
-            t={t}
-            title="Available Skills"
-          />
-          {skillsOpen && skillsBody()}
-        </Box>
-
-        {/* ── System Prompt (collapsed by default) ── */}
-        {sysPromptLen > 0 && (
+          {/* ── Tools (expanded by default) ── */}
           <Box flexDirection="column" marginTop={1}>
             <CollapseToggle
-              onToggle={() => setSystemOpen(v => !v)}
-              open={systemOpen}
-              suffix={`— ${sysPromptLen.toLocaleString()} chars`}
+              count={toolsTotal}
+              onToggle={() => setToolsOpen(v => !v)}
+              open={toolsOpen}
               t={t}
-              title="System Prompt"
+              title="Available Tools"
             />
-            {systemOpen && systemBody()}
+            {toolsOpen && toolsBody()}
           </Box>
-        )}
 
-        {/* ── MCP Servers (collapsed by default) ── */}
-        {info.mcp_servers && info.mcp_servers.length > 0 && (
+          {/* ── Skills (collapsed by default) ── */}
           <Box flexDirection="column" marginTop={1}>
             <CollapseToggle
-              count={info.mcp_servers.length}
-              onToggle={() => setMcpOpen(v => !v)}
-              open={mcpOpen}
-              suffix="connected"
+              count={skillsTotal}
+              onToggle={() => setSkillsOpen(v => !v)}
+              open={skillsOpen}
+              suffix={
+                skillsCatCount > 0 ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}` : undefined
+              }
               t={t}
-              title="MCP Servers"
+              title="Available Skills"
             />
-            {mcpOpen && mcpBody()}
+            {skillsOpen && skillsBody()}
           </Box>
-        )}
 
-        {/* Divider above the footer. */}
-        <Box marginTop={1}>
-          <Text color={t.color.border} wrap="truncate">
-            {'─'.repeat(Math.max(1, w))}
-          </Text>
-        </Box>
+          {/* ── System Prompt (collapsed by default) ── */}
+          {sysPromptLen > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <CollapseToggle
+                onToggle={() => setSystemOpen(v => !v)}
+                open={systemOpen}
+                suffix={`— ${sysPromptLen.toLocaleString()} chars`}
+                t={t}
+                title="System Prompt"
+              />
+              {systemOpen && systemBody()}
+            </Box>
+          )}
 
-        {/* Footer: counts + /help on the left, model · session id on the right. */}
-        <Box flexDirection={footerInline ? 'row' : 'column'} justifyContent={footerInline ? 'space-between' : 'flex-start'}>
-          <Text color={t.color.muted}>
-            <Text color={t.color.accent}>/help</Text> for commands
-          </Text>
+          {/* ── MCP Servers (collapsed by default) ── */}
+          {info.mcp_servers && info.mcp_servers.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <CollapseToggle
+                count={info.mcp_servers.length}
+                onToggle={() => setMcpOpen(v => !v)}
+                open={mcpOpen}
+                suffix="connected"
+                t={t}
+                title="MCP Servers"
+              />
+              {mcpOpen && mcpBody()}
+            </Box>
+          )}
 
-          <Text color={t.color.muted} wrap="wrap">
-            {footerMeta}
-          </Text>
-        </Box>
+          {/* Divider above the footer. */}
+          <Box marginTop={1}>
+            <Text color={t.color.border} wrap="truncate">
+              {'─'.repeat(Math.max(1, w))}
+            </Text>
+          </Box>
 
-        {typeof info.update_behind === 'number' && info.update_behind > 0 && (
+          {/* Footer: counts + /help on the left, model · session id on the right. */}
+          <Box
+            flexDirection={footerInline ? 'row' : 'column'}
+            justifyContent={footerInline ? 'space-between' : 'flex-start'}
+          >
+            <Text color={t.color.muted}>
+              <Text color={t.color.accent}>/help</Text> for commands
+            </Text>
+
+            <Text color={t.color.muted} wrap="wrap">
+              {footerMeta}
+            </Text>
+          </Box>
+
+          {typeof info.update_behind === 'number' && info.update_behind > 0 && (
             <>
               <Box>
                 <Text color={t.color.border} wrap="truncate">
@@ -425,22 +420,21 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 </Text>
               </Box>
               <Text bold color={t.color.warn}>
-              ! {info.update_behind} {info.update_behind === 1 ? 'commit' : 'commits'} behind
-              <Text bold={false} color={t.color.warn} dimColor>
-                {' '}
-                - run{' '}
-              </Text>
-              <Text bold color={t.color.warn}>
-                {info.update_command || 'raven update'}
-              </Text>
-              <Text bold={false} color={t.color.warn} dimColor>
-                {' '}
-                to update
-              </Text>
+                ! {info.update_behind} {info.update_behind === 1 ? 'commit' : 'commits'} behind
+                <Text bold={false} color={t.color.warn} dimColor>
+                  {' '}
+                  - run{' '}
+                </Text>
+                <Text bold color={t.color.warn}>
+                  {info.update_command || 'raven update'}
+                </Text>
+                <Text bold={false} color={t.color.warn} dimColor>
+                  {' '}
+                  to update
+                </Text>
               </Text>
             </>
           )}
-
         </Box>
 
         <Box marginTop={1}>

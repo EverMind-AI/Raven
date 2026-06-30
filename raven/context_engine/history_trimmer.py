@@ -177,7 +177,10 @@ class HistoryTrimmer:
         messages = build_messages(history)
 
         estimated, source = estimate_prompt_tokens_chain(
-            self.provider, self.model, messages, self.get_tool_definitions(),
+            self.provider,
+            self.model,
+            messages,
+            self.get_tool_definitions(),
         )
         max_prompt = max(1, self.context_window_tokens - reserved_output)
         warnings: list[str] = []
@@ -191,7 +194,10 @@ class HistoryTrimmer:
             history = self.history_from_ids(session_messages, trimmed_ids)
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
-                self.provider, self.model, messages, self.get_tool_definitions(),
+                self.provider,
+                self.model,
+                messages,
+                self.get_tool_definitions(),
             )
 
         return messages, TrimOutcome(

@@ -15,15 +15,15 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.raven import NudgePolicyConfig
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
-from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
-from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
-from raven.proactive_engine.sentinel.types import PlannerContext, PlannerDecision
+from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
+from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
+from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
+from raven.proactive_engine.sentinel.types import PlannerDecision
 
 
 def _now():
@@ -46,12 +46,17 @@ class _Clock:
 
 def _cfg(**overrides) -> NudgePolicyConfig:
     defaults = dict(
-        max_nudges_per_hour=10, max_nudges_per_day=50,
-        min_interval_seconds=60, quiet_hours=(0, 0),
-        cooldown_on_dismiss_seconds=1800, high_priority_bypasses_limits=True,
+        max_nudges_per_hour=10,
+        max_nudges_per_day=50,
+        min_interval_seconds=60,
+        quiet_hours=(0, 0),
+        cooldown_on_dismiss_seconds=1800,
+        high_priority_bypasses_limits=True,
         dedup_window_seconds=3600,
-        inject_ttl_seconds=1800, inject_max_pending_per_session=3,
-        defer_idle_threshold_seconds=300, defer_max_wait_seconds=86400,
+        inject_ttl_seconds=1800,
+        inject_max_pending_per_session=3,
+        defer_idle_threshold_seconds=300,
+        defer_max_wait_seconds=86400,
     )
     defaults.update(overrides)
     return NudgePolicyConfig(**defaults)
@@ -105,15 +110,11 @@ def _build_runner(
         dispatcher = None
     injector = NudgeInjector(now_fn=now_fn) if include_injector else None
     sessions = FakeSessionStore()
-    defer_mgr = (
-        DeferManager(dispatcher, sessions, now_fn=now_fn)
-        if include_defer and dispatcher else None
-    )
+    defer_mgr = DeferManager(dispatcher, sessions, now_fn=now_fn) if include_defer and dispatcher else None
     subagent_mgr = MagicMock()
     subagent_mgr.spawn = AsyncMock(return_value="Subagent started (id: abc).")
     spawn = ProactiveSpawn(subagent_mgr, policy, now_fn=now_fn) if include_spawn else None
-    feedback = NudgeFeedbackTracker(tmp_path / "fb.jsonl", now_fn=now_fn) \
-        if include_feedback and tmp_path else None
+    feedback = NudgeFeedbackTracker(tmp_path / "fb.jsonl", now_fn=now_fn) if include_feedback and tmp_path else None
 
     runner = SentinelRunner(
         planner=_planner(decision),
@@ -127,10 +128,14 @@ def _build_runner(
         now_fn=now_fn,
     )
     return runner, {
-        "policy": policy, "dispatcher": dispatcher,
+        "policy": policy,
+        "dispatcher": dispatcher,
         "posted": posted,
-        "injector": injector, "defer_mgr": defer_mgr, "spawn": spawn,
-        "feedback": feedback, "sessions": sessions,
+        "injector": injector,
+        "defer_mgr": defer_mgr,
+        "spawn": spawn,
+        "feedback": feedback,
+        "sessions": sessions,
         "subagent_mgr": subagent_mgr,
     }
 
@@ -155,6 +160,7 @@ def _decision(action: str, **kwargs) -> PlannerDecision:
 # ---------------------------------------------------------------------------
 # Nudge target resolution (sentinel:direct fan-out + empty-list fallback)
 
+
 def test_resolve_nudge_targets_sentinel_fans_out_to_configured(tmp_path):
     # Regression: a daily-plan / deadline nudge targets sentinel:direct and
     # must resolve to the configured proactive targets even when the
@@ -163,7 +169,8 @@ def test_resolve_nudge_targets_sentinel_fans_out_to_configured(tmp_path):
     runner, _ = _build_runner(_decision("skip"), tmp_path=tmp_path)
     runner.task_discovery_targets = [("cli", "direct"), ("feishu", "ou_x")]
     assert runner._resolve_nudge_targets("sentinel:direct") == [
-        ("cli", "direct"), ("feishu", "ou_x"),
+        ("cli", "direct"),
+        ("feishu", "ou_x"),
     ]
 
 
@@ -182,10 +189,12 @@ def test_resolve_nudge_targets_empty_falls_back_to_single_recent(tmp_path):
     cm.enabled_channels = ["feishu", "telegram"]
     runner.set_channel_manager(cm)
     sm = MagicMock()
-    sm.list_sessions = MagicMock(return_value=[
-        {"key": "telegram:tg_99", "updated_at": "2026-04-21T10:00:00"},
-        {"key": "feishu:ou_1", "updated_at": "2026-04-20T10:00:00"},
-    ])
+    sm.list_sessions = MagicMock(
+        return_value=[
+            {"key": "telegram:tg_99", "updated_at": "2026-04-21T10:00:00"},
+            {"key": "feishu:ou_1", "updated_at": "2026-04-20T10:00:00"},
+        ]
+    )
     runner._delivery_session_manager = sm
     assert runner._resolve_nudge_targets("sentinel:direct") == [("telegram", "tg_99")]
 
@@ -200,16 +209,19 @@ def test_resolve_nudge_targets_empty_skips_disabled_channel(tmp_path):
     cm.enabled_channels = ["cli"]
     runner.set_channel_manager(cm)
     sm = MagicMock()
-    sm.list_sessions = MagicMock(return_value=[
-        {"key": "feishu:ou_stale", "updated_at": "2026-04-21T10:00:00"},
-        {"key": "cli:direct", "updated_at": "2026-04-20T10:00:00"},
-    ])
+    sm.list_sessions = MagicMock(
+        return_value=[
+            {"key": "feishu:ou_stale", "updated_at": "2026-04-21T10:00:00"},
+            {"key": "cli:direct", "updated_at": "2026-04-20T10:00:00"},
+        ]
+    )
     runner._delivery_session_manager = sm
     assert runner._resolve_nudge_targets("sentinel:direct") == [("cli", "direct")]
 
 
 # ---------------------------------------------------------------------------
 # Routing
+
 
 @pytest.mark.asyncio
 async def test_tick_skip_no_side_effects(tmp_path):
@@ -240,7 +252,7 @@ async def test_tick_inject_queues(tmp_path):
     runner, ctx = _build_runner(_decision("nudge_inject"), tmp_path=tmp_path)
     outcome = await runner.tick_once()
     assert outcome.route == "inject"
-    assert outcome.result.delivered is True    # queued counts as delivered
+    assert outcome.result.delivered is True  # queued counts as delivered
     assert ctx["injector"].size("cli:direct") == 1
     assert ctx["feedback"].counts()["dispatched"] == 1
 
@@ -250,7 +262,7 @@ async def test_tick_defer_registers(tmp_path):
     runner, ctx = _build_runner(_decision("nudge_defer"), tmp_path=tmp_path)
     outcome = await runner.tick_once()
     assert outcome.route == "defer"
-    assert outcome.result.delivered is False   # deferred, not yet delivered
+    assert outcome.result.delivered is False  # deferred, not yet delivered
     assert outcome.result.defer_id is not None
     assert ctx["defer_mgr"].pending_count() == 1
     # Quota NOT consumed yet — see runner docstring.
@@ -270,6 +282,7 @@ async def test_tick_spawn_dispatches(tmp_path):
 # ---------------------------------------------------------------------------
 # Policy gating
 
+
 @pytest.mark.asyncio
 async def test_tick_nudge_denied_by_policy(tmp_path):
     runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
@@ -286,10 +299,10 @@ async def test_tick_nudge_denied_by_policy(tmp_path):
 # ---------------------------------------------------------------------------
 # Graceful degradation
 
+
 @pytest.mark.asyncio
 async def test_tick_inject_without_injector_degrades(tmp_path):
-    runner, ctx = _build_runner(_decision("nudge_inject"), tmp_path=tmp_path,
-                                 include_injector=False)
+    runner, ctx = _build_runner(_decision("nudge_inject"), tmp_path=tmp_path, include_injector=False)
     outcome = await runner.tick_once()
     assert outcome.route == "inject_degraded"
     assert outcome.result.delivered is False
@@ -297,24 +310,21 @@ async def test_tick_inject_without_injector_degrades(tmp_path):
 
 @pytest.mark.asyncio
 async def test_tick_defer_without_manager_degrades(tmp_path):
-    runner, ctx = _build_runner(_decision("nudge_defer"), tmp_path=tmp_path,
-                                 include_defer=False)
+    runner, ctx = _build_runner(_decision("nudge_defer"), tmp_path=tmp_path, include_defer=False)
     outcome = await runner.tick_once()
     assert outcome.route == "defer_degraded"
 
 
 @pytest.mark.asyncio
 async def test_tick_spawn_without_spawner_degrades(tmp_path):
-    runner, ctx = _build_runner(_decision("spawn_agent"), tmp_path=tmp_path,
-                                 include_spawn=False)
+    runner, ctx = _build_runner(_decision("spawn_agent"), tmp_path=tmp_path, include_spawn=False)
     outcome = await runner.tick_once()
     assert outcome.route == "spawn_degraded"
 
 
 @pytest.mark.asyncio
 async def test_tick_without_feedback_still_works(tmp_path):
-    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path,
-                                 include_feedback=False)
+    runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path, include_feedback=False)
     outcome = await runner.tick_once()
     assert outcome.result.delivered is True
     assert len(ctx["posted"]) == 1
@@ -322,6 +332,7 @@ async def test_tick_without_feedback_still_works(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Error isolation
+
 
 @pytest.mark.asyncio
 async def test_tick_planner_error_becomes_skip(tmp_path):
@@ -345,6 +356,7 @@ async def test_tick_dispatcher_error_caught(tmp_path):
 # ---------------------------------------------------------------------------
 # last_decision propagation
 
+
 @pytest.mark.asyncio
 async def test_last_decision_flows_to_next_tick(tmp_path):
     runner, ctx = _build_runner(_decision("skip"), tmp_path=tmp_path)
@@ -357,6 +369,7 @@ async def test_last_decision_flows_to_next_tick(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Lifecycle
+
 
 @pytest.mark.asyncio
 async def test_start_and_stop_without_crashing(tmp_path):
@@ -384,6 +397,7 @@ async def test_trigger_loop_drains_cli_triggers_within_seconds(tmp_path):
     from raven.proactive_engine.sentinel.discover_triggers import (
         DiscoverTriggerStore,
     )
+
     runner, _ = _build_runner(_decision("skip"), tmp_path=tmp_path)
     runner.interval_s = 10000  # prove the fix isn't relying on tick
     store = DiscoverTriggerStore(tmp_path / "discover_triggers.json")
@@ -411,6 +425,7 @@ async def test_trigger_loop_stops_cleanly(tmp_path):
     from raven.proactive_engine.sentinel.discover_triggers import (
         DiscoverTriggerStore,
     )
+
     runner, _ = _build_runner(_decision("skip"), tmp_path=tmp_path)
     runner.interval_s = 10000
     runner._discover_trigger_store = DiscoverTriggerStore(
@@ -457,12 +472,13 @@ def _FakeInbound(
     return TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM,
+            channel=channel,
+            chat_id=chat_id,
+            sender_id="user",
+            chat_type=ChatType.DM,
         ),
         text=content,
-        sentinel=(
-            SentinelExtras(action_origin=True) if sentinel_action_origin else None
-        ),
+        sentinel=(SentinelExtras(action_origin=True) if sentinel_action_origin else None),
     )
 
 
@@ -476,8 +492,7 @@ async def test_on_user_inbound_defers_non_dismiss_to_llm(tmp_path):
     direction)."""
     runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
     await runner.tick_once()  # dispatch one nudge
-    runner.on_user_inbound(_FakeInbound(channel="cli", chat_id="direct",
-                                         content="thanks!"))
+    runner.on_user_inbound(_FakeInbound(channel="cli", chat_id="direct", content="thanks!"))
     counts = ctx["feedback"].counts()
     # Crucially: no accepted/dismissed/neutral on the inbound hook
     # itself — the LLM hasn't run yet.
@@ -500,9 +515,9 @@ async def test_on_user_inbound_skips_action_origin_turn(tmp_path):
     guard is what restores the legacy whole-chain-skip behavior for it."""
     runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
     await runner.tick_once()  # dispatch one nudge
-    runner.on_user_inbound(_FakeInbound(channel="cli", chat_id="direct",
-                                        content="请帮我草拟回复",
-                                        sentinel_action_origin=True))
+    runner.on_user_inbound(
+        _FakeInbound(channel="cli", chat_id="direct", content="请帮我草拟回复", sentinel_action_origin=True)
+    )
     counts = ctx["feedback"].counts()
     # No engagement recorded; the pending nudge is NOT moved/dismissed.
     assert counts["accepted"] == 0
@@ -518,7 +533,9 @@ async def test_consume_feedback_via_tool_records_accepted(tmp_path):
     await runner.tick_once()
     runner.on_user_inbound(_FakeInbound(content="great, thanks"))
     outcome = runner.consume_feedback_via_tool(
-        "cli:direct", sentiment="accepted", reason="thanked us",
+        "cli:direct",
+        sentiment="accepted",
+        reason="thanked us",
     )
     assert outcome["recorded"] is True
     assert outcome["signal"] == "accepted"
@@ -538,7 +555,9 @@ async def test_consume_feedback_via_tool_records_dismissed(tmp_path):
     await runner.tick_once()
     runner.on_user_inbound(_FakeInbound(content="不要提醒了"))
     outcome = runner.consume_feedback_via_tool(
-        "cli:direct", sentiment="dismissed", reason="不要提醒了",
+        "cli:direct",
+        sentiment="dismissed",
+        reason="不要提醒了",
     )
     assert outcome["signal"] == "dismissed"
     counts = ctx["feedback"].counts()
@@ -557,7 +576,9 @@ async def test_consume_feedback_via_tool_records_neutral_on_irrelevant(tmp_path)
     await runner.tick_once()
     runner.on_user_inbound(_FakeInbound(content="oh by the way, what's the weather"))
     outcome = runner.consume_feedback_via_tool(
-        "cli:direct", sentiment="irrelevant", reason="user switched topic",
+        "cli:direct",
+        sentiment="irrelevant",
+        reason="user switched topic",
     )
     assert outcome["signal"] == "neutral"
     counts = ctx["feedback"].counts()
@@ -570,7 +591,8 @@ async def test_consume_feedback_via_tool_records_neutral_on_irrelevant(tmp_path)
 async def test_consume_feedback_via_tool_no_awaiting_is_noop(tmp_path):
     runner, ctx = _build_runner(_decision("skip"), tmp_path=tmp_path)
     outcome = runner.consume_feedback_via_tool(
-        "cli:direct", sentiment="accepted",
+        "cli:direct",
+        sentiment="accepted",
     )
     assert outcome["recorded"] is False
     assert outcome["reason"] == "no_awaiting_nudge"
@@ -635,8 +657,7 @@ async def test_on_user_inbound_outside_window_ignored(tmp_path):
 async def test_on_user_inbound_different_session_untouched(tmp_path):
     runner, ctx = _build_runner(_decision("nudge"), tmp_path=tmp_path)
     await runner.tick_once()  # dispatch on cli:direct
-    runner.on_user_inbound(_FakeInbound(channel="telegram", chat_id="home",
-                                         content="reply on different session"))
+    runner.on_user_inbound(_FakeInbound(channel="telegram", chat_id="home", content="reply on different session"))
     assert ctx["feedback"].counts()["accepted"] == 0
     # Original pending is still there — different session, untouched.
     assert len(runner._pending_engagement.get("cli:direct", [])) == 1
@@ -647,6 +668,7 @@ async def test_on_user_inbound_different_session_untouched(tmp_path):
 @pytest.mark.asyncio
 async def test_on_user_inbound_handles_missing_session_key(tmp_path):
     runner, _ = _build_runner(_decision("skip"), tmp_path=tmp_path)
+
     # Object without session_key property — falls back to channel+chat_id.
     @_dc
     class MinimalMsg:
@@ -654,6 +676,7 @@ async def test_on_user_inbound_handles_missing_session_key(tmp_path):
         chat_id: str = ""
         content: str = ""
         metadata: dict | None = None
+
     runner.on_user_inbound(MinimalMsg())  # should not raise
 
 
@@ -671,7 +694,11 @@ from raven.proactive_engine.sentinel.feedback.persistence import JsonStateStore
 
 
 def _build_runner_with_store(
-    decision: PlannerDecision, *, tmp_path, store: JsonStateStore, clock=None,
+    decision: PlannerDecision,
+    *,
+    tmp_path,
+    store: JsonStateStore,
+    clock=None,
 ):
     """Like ``_build_runner`` but threads ``store`` so engagement state
     persists across constructions."""
@@ -682,14 +709,23 @@ def _build_runner_with_store(
     dispatcher.set_post(AsyncMock())
     injector = NudgeInjector(store=store, now_fn=now_fn)
     defer_mgr = DeferManager(
-        dispatcher, FakeSessionStore(), store=store, now_fn=now_fn,
+        dispatcher,
+        FakeSessionStore(),
+        store=store,
+        now_fn=now_fn,
     )
     feedback = NudgeFeedbackTracker(tmp_path / "fb.jsonl", now_fn=now_fn)
     runner = SentinelRunner(
         planner=_planner(decision),
-        assembler=assembler, policy=policy,
-        dispatcher=dispatcher, injector=injector, defer_manager=defer_mgr,
-        spawn=None, feedback=feedback, store=store, now_fn=now_fn,
+        assembler=assembler,
+        policy=policy,
+        dispatcher=dispatcher,
+        injector=injector,
+        defer_manager=defer_mgr,
+        spawn=None,
+        feedback=feedback,
+        store=store,
+        now_fn=now_fn,
     )
     return runner, {"policy": policy, "feedback": feedback}
 
@@ -704,18 +740,21 @@ async def test_engagement_persists_across_runner_instances(tmp_path):
     store_b = JsonStateStore(state_path)
 
     runner_a, _ = _build_runner_with_store(
-        _decision("nudge"), tmp_path=tmp_path, store=store_a,
+        _decision("nudge"),
+        tmp_path=tmp_path,
+        store=store_a,
     )
     await runner_a.tick_once()  # dispatches one nudge → writes engagement
     assert "cli:direct" in runner_a._pending_engagement
 
     # Fresh runner with the same store — hydrates engagement from disk.
     runner_b, _ = _build_runner_with_store(
-        _decision("skip"), tmp_path=tmp_path, store=store_b,
+        _decision("skip"),
+        tmp_path=tmp_path,
+        store=store_b,
     )
     assert "cli:direct" in runner_b._pending_engagement, (
-        "engagement state should be visible to a peer runner via the "
-        "shared JsonStateStore"
+        "engagement state should be visible to a peer runner via the shared JsonStateStore"
     )
     assert len(runner_b._pending_engagement["cli:direct"]) == 1
 
@@ -728,21 +767,29 @@ async def test_cross_instance_dismiss(tmp_path):
     state_path = tmp_path / "state.json"
     store_a = JsonStateStore(state_path)
     runner_a, _ = _build_runner_with_store(
-        _decision("nudge"), tmp_path=tmp_path, store=store_a, clock=clock,
+        _decision("nudge"),
+        tmp_path=tmp_path,
+        store=store_a,
+        clock=clock,
     )
     await runner_a.tick_once()
 
     store_b = JsonStateStore(state_path)
     runner_b, ctx_b = _build_runner_with_store(
-        _decision("skip"), tmp_path=tmp_path, store=store_b, clock=clock,
+        _decision("skip"),
+        tmp_path=tmp_path,
+        store=store_b,
+        clock=clock,
     )
     runner_b.on_user_inbound(_FakeInbound(content="/dismiss not helpful"))
     counts = ctx_b["feedback"].counts()
     assert counts["dismissed"] == 1
     # And the pending queue is now empty in the shared store.
     runner_c, _ = _build_runner_with_store(
-        _decision("skip"), tmp_path=tmp_path,
-        store=JsonStateStore(state_path), clock=clock,
+        _decision("skip"),
+        tmp_path=tmp_path,
+        store=JsonStateStore(state_path),
+        clock=clock,
     )
     assert runner_c._pending_engagement.get("cli:direct", []) == []
 
@@ -754,12 +801,16 @@ async def test_cross_instance_consume_feedback_via_tool(tmp_path):
     and finds the awaiting entry."""
     state_path = tmp_path / "state.json"
     runner_a, _ = _build_runner_with_store(
-        _decision("nudge"), tmp_path=tmp_path, store=JsonStateStore(state_path),
+        _decision("nudge"),
+        tmp_path=tmp_path,
+        store=JsonStateStore(state_path),
     )
     await runner_a.tick_once()
 
     runner_b, _ = _build_runner_with_store(
-        _decision("skip"), tmp_path=tmp_path, store=JsonStateStore(state_path),
+        _decision("skip"),
+        tmp_path=tmp_path,
+        store=JsonStateStore(state_path),
     )
     runner_b.on_user_inbound(_FakeInbound(content="thanks!"))
     # Deferred — neither accepted nor dismissed yet.
@@ -768,10 +819,14 @@ async def test_cross_instance_consume_feedback_via_tool(tmp_path):
 
     # New instance C: simulates the in-ReAct nudge_feedback tool call.
     runner_c, ctx_c = _build_runner_with_store(
-        _decision("skip"), tmp_path=tmp_path, store=JsonStateStore(state_path),
+        _decision("skip"),
+        tmp_path=tmp_path,
+        store=JsonStateStore(state_path),
     )
     outcome = runner_c.consume_feedback_via_tool(
-        "cli:direct", sentiment="accepted", reason="thanked",
+        "cli:direct",
+        sentiment="accepted",
+        reason="thanked",
     )
     assert outcome["recorded"] is True
     assert outcome["signal"] == "accepted"

@@ -37,7 +37,8 @@ def _get_task_score(model: ModelBenchmark, task_id: str) -> float | None:
         _warned_missing.add(key)
         logger.warning(
             "No task-specific score for '{}' on '{}' — excluded from routing for this task",
-            task_id, model.model,
+            task_id,
+            model.model,
         )
     return None
 
@@ -99,10 +100,7 @@ def select_model(
 ) -> SelectionResult:
     """Return primary + 2 fallback models for the given category and profile."""
     # Filter valid models
-    models = [
-        m for m in benchmark_data.values()
-        if m.cost is not None and m.cost > 0 and "/" in m.model
-    ]
+    models = [m for m in benchmark_data.values() if m.cost is not None and m.cost > 0 and "/" in m.model]
     if not models:
         raise ValueError("No eligible models in benchmark data")
 

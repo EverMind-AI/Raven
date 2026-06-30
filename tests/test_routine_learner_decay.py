@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-import pytest
-
 from raven.proactive_engine.sentinel.predictor.routine_learner import (
-    DEFAULT_DECAY_HALF_LIFE_DAYS,
     RoutineLearner,
     _decay_factor,
 )
-
 
 _NOW = datetime(2026, 5, 8, 12, 0)
 
@@ -57,7 +53,8 @@ def test_decay_factor_zero_half_life_is_one():
 def test_learn_with_decay_recent_routine_outweighs_stale_one():
     """Two routines with same occurrence_count: recent fresh > stale old."""
     learner = RoutineLearner(
-        min_occurrences=3, learning_window_days=60,
+        min_occurrences=3,
+        learning_window_days=60,
         now_fn=lambda: _NOW,
     )
 
@@ -74,8 +71,7 @@ def test_learn_with_decay_recent_routine_outweighs_stale_one():
     ]
     # Use different days-of-week so they're separate bins
     # fresh: Friday 9am (weekday 4), stale: Tuesday 9am (weekday 1)
-    fresh_tuesdays = [d.replace(hour=9, minute=0)
-                     for d in [_NOW - timedelta(days=0)]]
+    fresh_tuesdays = [d.replace(hour=9, minute=0) for d in [_NOW - timedelta(days=0)]]
     # Build entries for two clearly-distinct bins:
     fresh_entries = []
     stale_entries = []
@@ -107,7 +103,8 @@ def test_learn_with_decay_recent_routine_outweighs_stale_one():
 
 def test_learn_with_decay_skips_below_min_occurrences():
     learner = RoutineLearner(
-        min_occurrences=3, learning_window_days=60,
+        min_occurrences=3,
+        learning_window_days=60,
         now_fn=lambda: _NOW,
     )
     # Only 2 occurrences in same bin — below threshold
@@ -132,10 +129,7 @@ def test_learn_with_decay_outside_learning_window_drops_entries():
         now_fn=lambda: _NOW,
     )
     # 4 entries 30 days ago — outside window
-    old = [
-        _history_line(_NOW - timedelta(days=30 + i), f"old activity {i}")
-        for i in range(4)
-    ]
+    old = [_history_line(_NOW - timedelta(days=30 + i), f"old activity {i}") for i in range(4)]
     routines = learner.learn_with_decay(_history_md(*old))
     assert routines == []
 
@@ -174,13 +168,13 @@ def test_tfidf_keywords_downweights_common_terms():
     # 'work' should be dropped or at least not first in any bin's keywords
     for r in by_dow.values():
         if r.keywords:
-            assert r.keywords[0] != "work", \
-                f"TF-IDF should downweight common 'work' term, got {r.keywords}"
+            assert r.keywords[0] != "work", f"TF-IDF should downweight common 'work' term, got {r.keywords}"
 
 
 def test_learn_with_decay_sets_weight_field():
     learner = RoutineLearner(
-        min_occurrences=3, learning_window_days=60,
+        min_occurrences=3,
+        learning_window_days=60,
         now_fn=lambda: _NOW,
     )
     # 3 fresh Tuesday 9am entries
@@ -202,7 +196,8 @@ def test_legacy_learn_still_works():
     """`learn` (without decay) shouldn't have regressed — existing
     ContextAssembler paths still call it."""
     learner = RoutineLearner(
-        min_occurrences=3, learning_window_days=60,
+        min_occurrences=3,
+        learning_window_days=60,
         now_fn=lambda: _NOW,
     )
     entries = []

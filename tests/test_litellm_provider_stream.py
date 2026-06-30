@@ -22,7 +22,6 @@ import pytest
 from raven.providers.base import StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
-
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
 
 

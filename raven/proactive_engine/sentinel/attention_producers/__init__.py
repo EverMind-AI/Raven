@@ -33,6 +33,9 @@ from raven.proactive_engine.sentinel.attention_producers.behavior_patterns impor
 from raven.proactive_engine.sentinel.attention_producers.currently_focused import (
     CurrentlyFocusedProducer,
 )
+from raven.proactive_engine.sentinel.attention_producers.daily_plan import (
+    DailyPlanProducer,
+)
 from raven.proactive_engine.sentinel.attention_producers.pending_proposals import (
     PendingProposalsProducer,
 )
@@ -56,9 +59,6 @@ from raven.proactive_engine.sentinel.attention_producers.sentinel_observations i
 )
 from raven.proactive_engine.sentinel.attention_producers.stance_log import (
     StanceLogProducer,
-)
-from raven.proactive_engine.sentinel.attention_producers.daily_plan import (
-    DailyPlanProducer,
 )
 
 __all__ = [

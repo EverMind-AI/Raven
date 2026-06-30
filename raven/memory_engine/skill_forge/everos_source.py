@@ -88,17 +88,15 @@ class EverosSkillSource:
         del history
 
         hits = await self._backend.recall(
-            query, agent_id=self._agent_id, top_k=k,
+            query,
+            agent_id=self._agent_id,
+            top_k=k,
         )
 
         out: list[RouterHit] = []
         for m in hits:
-            native_id = (
-                m.metadata.get("id") if m.metadata else None
-            ) or _stable_id_for(m.text)
-            name = (
-                m.metadata.get("name") if m.metadata else None
-            ) or _short_name_for(m.text)
+            native_id = (m.metadata.get("id") if m.metadata else None) or _stable_id_for(m.text)
+            name = (m.metadata.get("name") if m.metadata else None) or _short_name_for(m.text)
             out.append(
                 RouterHit(
                     qualified_id=f"everos/{native_id}",

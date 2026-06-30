@@ -169,8 +169,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
-                    "Optional input images to edit/vary: local file paths, http(s) "
-                    "URLs, or data: URIs (max 6)"
+                    "Optional input images to edit/vary: local file paths, http(s) URLs, or data: URIs (max 6)"
                 ),
             },
         },
@@ -241,9 +240,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             paths.append(str(path))
 
         if not paths:
-            return json.dumps(
-                {"error": "image payload was not a data URI", "model": model_id}, ensure_ascii=False
-            )
+            return json.dumps({"error": "image payload was not a data URI", "model": model_id}, ensure_ascii=False)
 
         logger.info("image_generate: {} image(s) via {} -> {}", len(paths), model_id, paths)
         return json.dumps({"success": True, "model": model_id, "paths": paths}, ensure_ascii=False)
@@ -340,7 +337,10 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
 
         logger.info("text_to_speech: via {} -> {}", model_id, out_path)
         result: dict[str, Any] = {
-            "success": True, "model": model_id, "path": str(out_path), "format": out_fmt,
+            "success": True,
+            "model": model_id,
+            "path": str(out_path),
+            "format": out_fmt,
         }
         if transcript:
             result["transcript"] = transcript
@@ -362,16 +362,14 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
             "Content-Type": "application/json",
         }
         async with httpx.AsyncClient(proxy=self._proxy, timeout=180.0) as client:
-            async with client.stream(
-                "POST", f"{self.api_base}/chat/completions", headers=headers, json=payload
-            ) as r:
+            async with client.stream("POST", f"{self.api_base}/chat/completions", headers=headers, json=payload) as r:
                 if r.status_code >= 400:
                     await r.aread()  # load body so .text/raise_for_status carry the error
                     r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data:"):
                         continue
-                    data = line[len("data:"):].strip()
+                    data = line[len("data:") :].strip()
                     if data == "[DONE]":
                         break
                     try:
@@ -407,8 +405,13 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
             return wav_path, "wav", f"ffmpeg not on PATH; saved as wav instead of {fmt}"
         out = wav_path.with_suffix(f".{fmt}")
         proc = await asyncio.create_subprocess_exec(
-            ffmpeg, "-y", "-i", str(wav_path), str(out),
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            ffmpeg,
+            "-y",
+            "-i",
+            str(wav_path),
+            str(out),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
         _, err = await proc.communicate()
         if proc.returncode != 0 or not out.exists():
@@ -568,9 +571,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         logger.info("video_generate: {} bytes via {} -> {}", len(data), model_id, path)
         return json.dumps({"success": True, "model": model_id, "path": str(path)}, ensure_ascii=False)
 
-    async def _poll(
-        self, client: httpx.AsyncClient, poll_url: str, headers: dict[str, str]
-    ) -> dict[str, Any]:
+    async def _poll(self, client: httpx.AsyncClient, poll_url: str, headers: dict[str, str]) -> dict[str, Any]:
         """Poll until the job leaves the pending/processing state or times out."""
         waited = 0.0
         while waited < self._POLL_TIMEOUT_S:

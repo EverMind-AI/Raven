@@ -50,9 +50,7 @@ def test_load_absent_returns_empty(everos_home: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_configure_everos_env_points_at_raven_home(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_configure_everos_env_points_at_raven_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
     monkeypatch.delenv("EVEROS_CONFIG_FILE", raising=False)
     monkeypatch.delenv("EVEROS_MEMORY__ROOT", raising=False)
@@ -66,9 +64,7 @@ def test_configure_everos_env_points_at_raven_home(
     assert os.environ["EVEROS_MEMORY__ROOT"] == str(base)
 
 
-def test_configure_everos_env_respects_explicit_override(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_configure_everos_env_respects_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # An operator-set EVEROS_* env must win (setdefault, not overwrite).
     monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
     monkeypatch.setenv("EVEROS_CONFIG_FILE", "/custom/everos.toml")
@@ -84,9 +80,7 @@ def test_configure_everos_env_respects_explicit_override(
 
 def test_default_config_path_under_raven_home() -> None:
     # The production default lives under ~/.everos/raven, not bare ~/.everos.
-    assert ue.get_everos_config_path() == (
-        Path("~/.everos/raven/config.toml").expanduser()
-    )
+    assert ue.get_everos_config_path() == (Path("~/.everos/raven/config.toml").expanduser())
 
 
 def test_load_round_trips_written_content(everos_home: Path) -> None:

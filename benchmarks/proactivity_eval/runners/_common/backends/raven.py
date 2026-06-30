@@ -64,22 +64,20 @@ class RavenAgentBackend(AgentBackend):
     def __init__(self, overrides: dict[str, Any] | None = None):
         overrides = overrides or {}
         agent_cfg = get_agent_config("raven")
-        self.max_iterations = int(
-            overrides.get("max_iterations")
-            or agent_cfg.get("max_iterations") or 10
-        )
-        self.agent_timeout_s = int(
-            overrides.get("agent_timeout_s")
-            or agent_cfg.get("agent_timeout_s") or 180
-        )
+        self.max_iterations = int(overrides.get("max_iterations") or agent_cfg.get("max_iterations") or 10)
+        self.agent_timeout_s = int(overrides.get("agent_timeout_s") or agent_cfg.get("agent_timeout_s") or 180)
         self._raven_repo = _resolve_raven_repo()
         # Model is captured only for the ``meta`` field on the outcome —
         # the subprocess uses whatever model raven is configured for.
         self._model = overrides.get("model") or agent_cfg.get("model") or "subprocess"
 
     async def run_one(
-        self, sample: Sample, driver, *,
-        session_id: str, ctx: dict[str, Any] | None = None,
+        self,
+        sample: Sample,
+        driver,
+        *,
+        session_id: str,
+        ctx: dict[str, Any] | None = None,
     ) -> AgentOutcome:
         from ..raven_driver import RavenDriver
 
@@ -126,19 +124,22 @@ class RavenAgentBackend(AgentBackend):
         elapsed = round(time.monotonic() - started, 2)
         if response.returncode == -1 and "timed out" in response.stderr:
             return AgentOutcome(
-                status="timeout", elapsed_s=elapsed,
+                status="timeout",
+                elapsed_s=elapsed,
                 error=f"timeout after {self.agent_timeout_s}s",
                 meta={"model": self._model},
             )
         if not response.ok:
             return AgentOutcome(
-                status="exception", elapsed_s=elapsed,
+                status="exception",
+                elapsed_s=elapsed,
                 text=response.stdout.strip() or None,
                 error=f"rc={response.returncode}: {response.stderr[:400].strip()}",
                 meta={"model": self._model},
             )
         return AgentOutcome(
-            status="ok", elapsed_s=elapsed,
+            status="ok",
+            elapsed_s=elapsed,
             text=response.stdout.strip() or None,
             error=None,
             meta={"model": self._model},
@@ -154,11 +155,16 @@ class _DeferredRavenBackend(AgentBackend):
         self._mode = mode
 
     async def run_one(
-        self, sample: Sample, driver, *,
-        session_id: str, ctx: dict[str, Any] | None = None,
+        self,
+        sample: Sample,
+        driver,
+        *,
+        session_id: str,
+        ctx: dict[str, Any] | None = None,
     ) -> AgentOutcome:
         return AgentOutcome(
-            status="exception", elapsed_s=0.0,
+            status="exception",
+            elapsed_s=0.0,
             error=(
                 f"raven --mode {self._mode} is not available in the "
                 "subprocess-driven port. Phase 4b only ported --mode agent "
@@ -170,7 +176,8 @@ class _DeferredRavenBackend(AgentBackend):
 
 
 def make_raven_backend(
-    mode: str, overrides: dict[str, Any] | None = None,
+    mode: str,
+    overrides: dict[str, Any] | None = None,
 ) -> AgentBackend:
     mode = (mode or "agent").lower()
     if mode == "agent":

@@ -26,9 +26,7 @@ class ArchivedPatternsProducer(AttentionProducer):
         self._store = routine_store
 
     async def compute_body(self, now: datetime) -> str:
-        retired = [
-            r for r in self._store.all_routines() if r.status == "retired"
-        ]
+        retired = [r for r in self._store.all_routines() if r.status == "retired"]
         if not retired:
             return ""
         retired.sort(key=lambda r: r.dismissed_at_ms or 0, reverse=True)
@@ -36,12 +34,9 @@ class ArchivedPatternsProducer(AttentionProducer):
         for r in retired:
             dismissed_str = ""
             if r.dismissed_at_ms:
-                dismissed_str = (
-                    f" · dismissed "
-                    + datetime.fromtimestamp(
-                        r.dismissed_at_ms / 1000,
-                    ).strftime("%Y-%m-%d")
-                )
+                dismissed_str = " · dismissed " + datetime.fromtimestamp(
+                    r.dismissed_at_ms / 1000,
+                ).strftime("%Y-%m-%d")
             lines.append(f"- **{r.id}**: {r.pattern}{dismissed_str}")
         return "\n".join(lines)
 

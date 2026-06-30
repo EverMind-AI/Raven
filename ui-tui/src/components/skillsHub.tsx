@@ -7,9 +7,9 @@ import { Box, Text, useInput, useStdout } from '@hermes/ink'
 import { useEffect, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
-import { rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
+import { rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
 
 const VISIBLE = 12

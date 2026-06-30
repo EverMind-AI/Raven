@@ -14,7 +14,6 @@ import pytest
 
 from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
 from raven.proactive_engine.sentinel.types import (
-    ActiveSession,
     NudgePolicyState,
     PlannerContext,
     PlannerDecision,
@@ -25,19 +24,28 @@ def _mk_runner(decide_return: PlannerDecision | None = None) -> SentinelRunner:
     """Build a SentinelRunner with mocked planner/assembler/policy."""
     planner = MagicMock()
     if decide_return is not None:
+
         async def _decide(ctx):
             return decide_return
+
         planner.decide.side_effect = _decide
     assembler = MagicMock()
     policy = MagicMock()
     return SentinelRunner(
-        planner=planner, assembler=assembler, policy=policy,
+        planner=planner,
+        assembler=assembler,
+        policy=policy,
     )
 
 
-def _mk_ctx(*, quiet: bool = False, memory: str = "",
-            history: str = "", last_decision: PlannerDecision | None = None,
-            active_sessions=None) -> PlannerContext:
+def _mk_ctx(
+    *,
+    quiet: bool = False,
+    memory: str = "",
+    history: str = "",
+    last_decision: PlannerDecision | None = None,
+    active_sessions=None,
+) -> PlannerContext:
     return PlannerContext(
         now=datetime(2026, 4, 22, 14, 0),
         memory_md=memory,
@@ -49,6 +57,7 @@ def _mk_ctx(*, quiet: bool = False, memory: str = "",
 
 
 # ── Rule (a): quiet hours ─────────────────────────────────────────────────
+
 
 def test_fast_path_quiet_hours_returns_skip():
     runner = _mk_runner()
@@ -66,6 +75,7 @@ def test_fast_path_not_quiet_returns_none():
 
 # ── Rule (b): context-unchanged dedup ─────────────────────────────────────
 
+
 def test_fast_path_repeat_context_skips_on_same_signature():
     runner = _mk_runner()
     ctx1 = _mk_ctx(memory="hello", history="[14:00] event", quiet=False)
@@ -74,8 +84,7 @@ def test_fast_path_repeat_context_skips_on_same_signature():
     last = PlannerDecision(action="skip", reason="nothing to do")
     setattr(last, "_ctx_signature", sig)
 
-    ctx2 = _mk_ctx(memory="hello", history="[14:00] event",
-                    quiet=False, last_decision=last)
+    ctx2 = _mk_ctx(memory="hello", history="[14:00] event", quiet=False, last_decision=last)
     dec = runner._fast_path_rules(ctx2)
     assert dec is not None
     assert dec.action == "skip"
@@ -103,8 +112,7 @@ def test_fast_path_last_decision_nudge_does_not_dedup():
 
     # Last decision was a nudge, not a skip — dedup shouldn't apply
     # (we only dedup skip outcomes).
-    last = PlannerDecision(action="nudge", reason="sent a nudge",
-                            nudge_message="hi", target_session="cli:direct")
+    last = PlannerDecision(action="nudge", reason="sent a nudge", nudge_message="hi", target_session="cli:direct")
     setattr(last, "_ctx_signature", sig)
 
     ctx2 = _mk_ctx(memory="hello", quiet=False, last_decision=last)
@@ -122,11 +130,12 @@ def test_fast_path_last_decision_no_signature_no_dedup():
 
 # ── Integration: tick_with_context uses fast-path ─────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_tick_with_context_fast_path_shortcircuits_planner():
-    runner = _mk_runner(decide_return=PlannerDecision(
-        action="nudge", reason="should not be reached", nudge_message="x"
-    ))
+    runner = _mk_runner(
+        decide_return=PlannerDecision(action="nudge", reason="should not be reached", nudge_message="x")
+    )
     outcome = await runner.tick_with_context(_mk_ctx(quiet=True))
     assert outcome.decision.action == "skip"
     assert outcome.route == "fast_path_skip"
@@ -136,14 +145,17 @@ async def test_tick_with_context_fast_path_shortcircuits_planner():
 @pytest.mark.asyncio
 async def test_tick_with_context_falls_through_to_planner_when_no_rule_fires():
     planner_decision = PlannerDecision(
-        action="skip", reason="planner said skip",
+        action="skip",
+        reason="planner said skip",
     )
     runner = _mk_runner(decide_return=planner_decision)
     runner._route = MagicMock()  # we don't care about routing here
 
     async def _fake_route(dec):
         from raven.proactive_engine.sentinel.executor.runner import TickOutcome
+
         return TickOutcome(decision=dec, result=None, route="skip")
+
     runner._route = _fake_route
 
     outcome = await runner.tick_with_context(_mk_ctx(quiet=False))
@@ -159,7 +171,9 @@ async def test_tick_with_context_stashes_signature_on_planner_skip():
 
     async def _fake_route(dec):
         from raven.proactive_engine.sentinel.executor.runner import TickOutcome
+
         return TickOutcome(decision=dec, result=None, route="skip")
+
     runner._route = _fake_route
 
     ctx = _mk_ctx(memory="hello", quiet=False)
@@ -277,6 +291,7 @@ async def test_tick_fallback_fires_high_deadline_when_planner_errors(tmp_path):
 
     async def _boom(ctx):
         raise RuntimeError("llm down")
+
     runner.planner.decide.side_effect = _boom
 
     _wire_attention(runner, tmp_path, _HIGH_DEADLINE)
@@ -287,8 +302,10 @@ async def test_tick_fallback_fires_high_deadline_when_planner_errors(tmp_path):
 
     async def _fake_route(dec):
         from raven.proactive_engine.sentinel.executor.runner import TickOutcome
+
         routed["dec"] = dec
         return TickOutcome(decision=dec, result=None, route="nudge")
+
     runner._route = _fake_route
 
     outcome = await runner.tick_with_context(_mk_ctx(quiet=False))
@@ -303,6 +320,7 @@ async def test_tick_skips_when_planner_errors_and_deadline_not_high(tmp_path):
 
     async def _boom(ctx):
         raise RuntimeError("llm down")
+
     runner.planner.decide.side_effect = _boom
 
     _wire_attention(runner, tmp_path, _MID_DEADLINE)
@@ -326,6 +344,7 @@ def test_warns_when_planner_skips_due_deadline(tmp_path, monkeypatch):
     runner = _mk_runner()
     _wire_attention(runner, tmp_path, _HIGH_DEADLINE)
     import raven.proactive_engine.sentinel.executor.runner as runner_mod
+
     fake_logger = MagicMock()
     monkeypatch.setattr(runner_mod, "logger", fake_logger)
 
@@ -340,11 +359,14 @@ def test_no_warn_when_planner_fires_the_deadline(tmp_path, monkeypatch):
     runner = _mk_runner()
     _wire_attention(runner, tmp_path, _HIGH_DEADLINE)
     import raven.proactive_engine.sentinel.executor.runner as runner_mod
+
     fake_logger = MagicMock()
     monkeypatch.setattr(runner_mod, "logger", fake_logger)
 
     decision = PlannerDecision(
-        action="nudge", topic_tag="deadline_tax_filing", nudge_message="x",
+        action="nudge",
+        topic_tag="deadline_tax_filing",
+        nudge_message="x",
     )
     runner._warn_unfired_due_deadline(decision, datetime(2026, 6, 26, 9, 0))
 
@@ -384,6 +406,7 @@ async def test_tick_quiet_hours_high_deadline_reaches_fallback_when_planner_down
 
     async def _boom(ctx):
         raise RuntimeError("llm down")
+
     runner.planner.decide.side_effect = _boom
 
     _wire_attention(runner, tmp_path, _HIGH_DEADLINE)
@@ -394,8 +417,10 @@ async def test_tick_quiet_hours_high_deadline_reaches_fallback_when_planner_down
 
     async def _fake_route(dec):
         from raven.proactive_engine.sentinel.executor.runner import TickOutcome
+
         routed["dec"] = dec
         return TickOutcome(decision=dec, result=None, route="nudge")
+
     runner._route = _fake_route
 
     # Quiet hours True: the old rule (a) would have skipped before the Planner
