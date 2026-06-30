@@ -3,15 +3,15 @@ Raven — Agent framework with intelligent context management, proactivity,
 token efficiency, and skill self-evolution.
 
 Four feature pillars:
-    1. Context Management   — context/      (Curator engine)
-    2. Proactivity           — sentinel/
-    3. Token Efficiency      — token_wise/
-    4. Skill Self-Evolution  — skill_forge/
+    1. Context Management   — context_engine/          (Curator engine)
+    2. Proactivity          — proactive_engine/        (Sentinel + Scheduler)
+    3. Token Efficiency     — token_wise/
+    4. Skill Self-Evolution — memory_engine/skill_forge/
 
-The base agent runtime (agent/, channels/, cli/, config/, cron/,
-memory/, providers/, routing/, session/, skills/, templates/, utils/)
-originated from the MIT-licensed nanobot project by HKUDS. Feature pillars
-listed above are new to Raven. See LICENSE for attribution.
+The base agent runtime (agent/, channels/, cli/, config/, providers/,
+routing/, session/, templates/, utils/) originated from the MIT-licensed
+nanobot project by HKUDS. Feature pillars listed above are new to Raven.
+See LICENSE for attribution.
 """
 
 import logging as _logging
