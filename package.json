@@ -2,7 +2,7 @@
   "name": "raven-repo",
   "private": true,
   "description": "Repository-level tooling for Raven.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "commitlint": "commitlint --config commitlint.config.cjs"
   },
