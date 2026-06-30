@@ -36,6 +36,10 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.0.0",
     "tomli-w>=1.2.0",
+    # OAuth provider login (Codex / GitHub Copilot) imports this during onboard,
+    # so it must be a runtime dep -- otherwise `uv tool install raven` users hit
+    # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
+    "oauth-cli-kit>=0.1.3,<1.0.0",
 ]
 
 [project.optional-dependencies]

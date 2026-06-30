@@ -2969,11 +2969,20 @@ def _run_wizard_body(
     while index < len(screens):
         result = screens[index]()
         if result is _BACK:
-            # Back never advances. On the first screen there's nowhere earlier
-            # to go, so we re-display the same (required) screen rather than
-            # skipping past it — skipping Step 1 would leave provider/model
-            # unwritten and re-trip the startup gate into an infinite loop.
-            index = max(0, index - 1)
+            if index == 0:
+                # The language picker ran before the state machine, so Step 1
+                # is the first *numbered* screen but not the first screen the
+                # user saw. Backing out of it returns to the language picker:
+                # re-pick (persisting the choice) and then re-display Step 1 in
+                # the chosen language. Step 1 stays required -- we never skip
+                # past it, which would leave provider/model unwritten and
+                # re-trip the startup gate into an infinite loop.
+                _pick_language()
+                from raven.config.update import set_language
+
+                set_language(_LANG)
+            else:
+                index -= 1
         else:
             index += 1
 
