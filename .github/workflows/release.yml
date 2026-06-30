@@ -1,0 +1,76 @@
+# Release build — DRAFT.
+#
+# Goal: produce a wheel that ships a fresh, self-contained TUI bundle
+# (ui-tui/dist/entry.js) so `pip`/`uv tool install` yields a working
+# `raven tui` with no source checkout and no npm build on the user's machine.
+#
+# This is the "self-maintaining" piece: every tagged release rebuilds
+# entry.js from the current ui-tui/ source, so the packaged TUI can never drift
+# behind the Python code. Do NOT commit dist/entry.js to git — it is a build
+# artifact produced here.
+#
+# Trigger: push a version tag (v1.2.3) or run manually.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Node toolchain to build the TUI bundle.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 2) Build the self-contained bundle into ui-tui/dist/entry.js.
+      #    esbuild bundles react/ink in — no node_modules ships in the wheel.
+      - name: Build TUI bundle
+        working-directory: ui-tui
+        run: |
+          npm ci
+          npm run build
+          test -f dist/entry.js  # fail fast if the bundle didn't land
+
+      # 3) uv builds the wheel; pyproject force-includes ui-tui/dist -> raven/ui-tui/dist.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      # 4) Sanity gate: the wheel MUST contain the bundle and MUST NOT carry
+      #    node_modules or src (keeps the wheel lean and the smoke honest).
+      - name: Verify wheel contents
+        run: |
+          python3 - <<'PY'
+          import glob, sys, zipfile
+          whl = sorted(glob.glob("dist/*.whl"))[-1]
+          names = zipfile.ZipFile(whl).namelist()
+          assert "raven/ui-tui/dist/entry.js" in names, "entry.js missing from wheel"
+          assert not any("node_modules" in n for n in names), "node_modules leaked into wheel"
+          # The only ui-tui/ entry must be the bundle — no TS source, no stray files.
+          ui = [n for n in names if "ui-tui/" in n]
+          assert ui == ["raven/ui-tui/dist/entry.js"], f"unexpected ui-tui entries: {ui}"
+          assert not any(n.endswith(".tsx") or n.endswith(".ts") for n in names), "TS source leaked into wheel"
+          print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules/src")
+          PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+      # 5) (Optional, wire up when ready) publish to PyPI on tag:
+      # - name: Publish to PyPI
+      #   if: startsWith(github.ref, 'refs/tags/v')
+      #   run: uv publish
+      #   env:
+      #     UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
