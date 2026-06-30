@@ -4,6 +4,10 @@ This directory holds **evaluation harnesses** that are deliberately decoupled
 from the runtime package. They are not imported by `raven/` and are
 excluded from the wheel build — keep it that way.
 
+Use this area for reproducible evaluation work: capability suites, agent
+comparisons, context stress tests, and proactivity runs that should not ship as
+part of the end-user CLI package.
+
 ## Layout
 
 ```
