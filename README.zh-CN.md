@@ -2,18 +2,14 @@
 
 <img src="https://github.com/user-attachments/assets/224c1623-2705-4a48-8a60-fd5681ca0cb2" alt="Raven banner" width="100%">
 
-# Raven
-
-### 为终端重度用户打造的 AI-native Command Line Agent。
-
 <p align="center">
-  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI&style=for-the-badge" alt="CI"></a>
-  <a href="https://github.com/EverMind-AI/raven/blob/main/LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven?style=for-the-badge" alt="License"></a>
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
-  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge" alt="HuggingFace"></a>
+  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/🤗_HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge" alt="HuggingFace"></a>
+  <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-[Website](https://evermind.ai) · [Documentation](https://docs.evermind.ai) · [EverOS](https://github.com/EverMind-AI/EverOS) · [English](README.md)
+[官网](https://raven.evermind.ai) · [EverOS](https://github.com/EverMind-AI/EverOS) · [English](README.md)
 
 </div>
 
