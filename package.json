@@ -1,0 +1,12 @@
+{
+  "name": "raven-repo",
+  "private": true,
+  "description": "Repository-level tooling for Raven.",
+  "license": "MIT",
+  "scripts": {
+    "commitlint": "commitlint --config commitlint.config.cjs"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.8.1"
+  }
+}
