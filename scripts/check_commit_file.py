@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,7 +13,21 @@ def main(argv: list[str] | None = None) -> int:
         print("Usage: check_commit_file.py <commit-msg-file>", file=sys.stderr)
         return 2
 
-    message = Path(args[0]).read_text()
+    path = Path(args[0])
+    subprocess.run(
+        [
+            "npx",
+            "--no-install",
+            "commitlint",
+            "--edit",
+            str(path),
+            "--config",
+            "commitlint.config.cjs",
+        ],
+        check=True,
+    )
+
+    message = path.read_text()
     result = check_commit_message(message)
     if result.ok:
         return 0

@@ -24,6 +24,7 @@ install-deps:
 install: install-deps
 	uv run pre-commit install
 	uv run pre-commit install --hook-type commit-msg
+	npm ci
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
@@ -58,6 +59,7 @@ build-bridge:
 	npm run build --prefix bridge
 
 check-commits:
+	npx commitlint --from origin/main --to HEAD --config commitlint.config.cjs
 	uv run --extra dev python scripts/check_commit_messages.py $(COMMIT_RANGE)
 
 check-pr-title:

@@ -40,7 +40,7 @@ jobs:
           node-version: 22
 
       - name: Install commitlint
-        run: npm install --no-save @commitlint/cli@19
+        run: npm ci
 
       - name: Validate commit messages
         run: |

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
+from scripts import check_commit_file
 from scripts.commit_lint import (
     CommitLintConfig,
     check_commit_message,
@@ -67,3 +71,28 @@ def test_pr_title_rejects_subject_over_pr_limit() -> None:
 
     assert not result.ok
     assert "subject must be 90 characters or fewer" in result.errors
+
+
+def test_commit_msg_hook_runs_commitlint_before_python_checker(monkeypatch, tmp_path: Path) -> None:
+    message_file = tmp_path / "COMMIT_EDITMSG"
+    message_file.write_text("docs: add launch notes\n")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], check: bool) -> subprocess.CompletedProcess:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(check_commit_file.subprocess, "run", fake_run)
+
+    assert check_commit_file.main([str(message_file)]) == 0
+    assert calls == [
+        [
+            "npx",
+            "--no-install",
+            "commitlint",
+            "--edit",
+            str(message_file),
+            "--config",
+            "commitlint.config.cjs",
+        ]
+    ]
