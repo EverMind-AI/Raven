@@ -317,7 +317,7 @@ export function StatusRule({
           {busy ? (
             <FaceTicker color={statusColor} startedAt={turnStartedAt} />
           ) : (
-            <Text backgroundColor={statusColor} color={t.color.statusBg}>{` ${status} `}</Text>
+            <Text color={statusColor}>{`● ${status} `}</Text>
           )}
           <Text color={t.color.muted}> {" "} {modelLabel(model, modelReasoningEffort, modelFast)}</Text>
           {ctxLabel ? <Text color={t.color.muted}> {" "} {ctxLabel}</Text> : null}

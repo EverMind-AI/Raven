@@ -80,6 +80,32 @@ describe('LIGHT_THEME', () => {
   })
 })
 
+describe('brand yellow ramp (title-gradient-table.md)', () => {
+  // Ramp order is [.50, .100, .300, .500, .700, .900, .950, .990]; the doc
+  // pins the .50/.300/.500/.700/.900 title bands per scheme.
+  it('keeps the documented dark title bands', async () => {
+    const { DARK_THEME } = await importThemeWithCleanEnv()
+
+    expect(DARK_THEME.yellow[0]).toBe('#fff7c2')
+    expect(DARK_THEME.yellow[2]).toBe('#FFE573')
+    expect(DARK_THEME.yellow[3]).toBe('#fbe23f')
+    expect(DARK_THEME.yellow[4]).toBe('#c8a900')
+    expect(DARK_THEME.yellow[5]).toBe('#8a6d00')
+  })
+
+  it('gives light its own gold ramp re-derived around #B87900, not the dark scale', async () => {
+    const { DARK_THEME, LIGHT_THEME } = await importThemeWithCleanEnv()
+
+    expect(LIGHT_THEME.yellow[0]).toBe('#F6DA8B')
+    expect(LIGHT_THEME.yellow[2]).toBe('#D9A83A')
+    expect(LIGHT_THEME.yellow[3]).toBe('#B87900')
+    expect(LIGHT_THEME.yellow[4]).toBe('#935F00')
+    expect(LIGHT_THEME.yellow[5]).toBe('#684300')
+
+    expect(LIGHT_THEME.yellow).not.toEqual(DARK_THEME.yellow)
+  })
+})
+
 describe('DEFAULT_THEME aliasing', () => {
   it('defaults to DARK_THEME when nothing signals light', async () => {
     const { DEFAULT_THEME, DARK_THEME: DARK } = await importThemeWithCleanEnv()

@@ -119,11 +119,17 @@ const cleanPromptSymbol = (s: string | undefined, fallback: string) => {
 // ── Brand yellow ramp (gradient logo / 3D shadow) ────────────────────
 //
 // A brand asset (raven-tui-design-system, "Brand ramp"). Ordered light →
-// dark: [yellow.50, .100, .300, .500, .700, .900, .950, .990]. Shared across
-// dark and light schemes (same truecolor values); only the tier representation
-// differs. Used for the gradient banner art.
+// dark: [yellow.50, .100, .300, .500, .700, .900, .950, .990]. Used for the
+// gradient banner art.
+//
+// Dark and light schemes carry DISTINCT truecolor ramps: the light scale is
+// re-derived around the #B87900 title color, not a dimmed copy of the dark
+// bright-yellow scale (see docs/tui-color-problem/title-gradient-table.md).
+// The .50/.300/.500/.700/.900 stops are the documented title bands; .100/.950/
+// .990 are interpolated to keep the 8-stop shape the banner code expects.
+// Reduced tiers (256/16) stay scheme-agnostic — the doc only specifies hex.
 
-const YELLOW_RAMP_TC: readonly string[] = [
+const YELLOW_RAMP_TC_DARK: readonly string[] = [
   '#fff7c2',
   '#fff0a4',
   '#FFE573',
@@ -132,6 +138,17 @@ const YELLOW_RAMP_TC: readonly string[] = [
   '#8a6d00',
   '#594600',
   '#2d2300'
+]
+
+const YELLOW_RAMP_TC_LIGHT: readonly string[] = [
+  '#F6DA8B',
+  '#EBC76C',
+  '#D9A83A',
+  '#B87900',
+  '#935F00',
+  '#684300',
+  '#432B00',
+  '#221600'
 ]
 
 const YELLOW_RAMP_256: readonly string[] = [
@@ -156,10 +173,10 @@ const YELLOW_RAMP_16: readonly string[] = [
   'ansi:yellow'
 ]
 
-function yellowRamp(tier: 0 | 1 | 2 | 3): readonly string[] {
+function yellowRamp(tier: 0 | 1 | 2 | 3, scheme: ColorScheme): readonly string[] {
   if (tier === 2) return YELLOW_RAMP_256
   if (tier === 1) return YELLOW_RAMP_16
-  return YELLOW_RAMP_TC
+  return scheme === 'light' ? YELLOW_RAMP_TC_LIGHT : YELLOW_RAMP_TC_DARK
 }
 
 // ── Tier 3: truecolor (source of truth) ──────────────────────────────
@@ -204,7 +221,7 @@ export const DARK_THEME: Theme = {
 
   bannerLogo: '',
   bannerHero: '',
-  yellow: YELLOW_RAMP_TC
+  yellow: YELLOW_RAMP_TC_DARK
 }
 
 // Light-terminal palette: darker, higher-contrast values that stay legible on
@@ -250,7 +267,7 @@ export const LIGHT_THEME: Theme = {
 
   bannerLogo: '',
   bannerHero: '',
-  yellow: YELLOW_RAMP_TC
+  yellow: YELLOW_RAMP_TC_LIGHT
 }
 
 // ── Tier 2: 256-color (per design tokens, docs/tui-color-problem/tokens.md) ──
@@ -709,5 +726,5 @@ export function fromSkin(
   const tier = activeColorTier()
   const color = tier === 1 || tier === 2 ? resolveTheme(currentScheme(), tier).color : skinColors(colors)
 
-  return { color, brand, bannerLogo, bannerHero, yellow: yellowRamp(tier) }
+  return { color, brand, bannerLogo, bannerHero, yellow: yellowRamp(tier, currentScheme()) }
 }
