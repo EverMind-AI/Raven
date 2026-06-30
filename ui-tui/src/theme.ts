@@ -118,35 +118,37 @@ const cleanPromptSymbol = (s: string | undefined, fallback: string) => {
 
 // ── Brand yellow ramp (gradient logo / 3D shadow) ────────────────────
 //
-// A brand asset (raven-tui-design-system, "Brand ramp"). Ordered light →
-// dark: [yellow.50, .100, .300, .500, .700, .900, .950, .990]. Used for the
-// gradient banner art.
+// A brand asset (raven-tui-design-system, "Brand ramp"), ordered light → dark.
+// Used for the gradient banner art. The .50/.300/.500/.700/.900 stops are the
+// documented title bands (docs/tui-color-problem/title-gradient-table.md);
+// other stops are interpolated. The banner only reads the first few entries
+// (hero bands) and falls back to the last, so ramp length isn't load-bearing.
 //
-// Dark and light schemes carry DISTINCT ramps at truecolor AND 256-color: the
-// light scale is re-derived around the #B87900 title color, not a dimmed copy
-// of the dark bright-yellow scale (see
-// docs/tui-color-problem/title-gradient-table.md). 16-color is `yellow` in both
-// schemes (no usable gold there). The .50/.300/.500/.700/.900 stops are the
-// documented title bands; .100/.950/.990 are interpolated to keep the 8-stop
-// shape the banner code expects.
+// Truecolor carries an extra .600 stop for a smoother hero gradient (9 entries:
+// [.50,.100,.300,.500,.600,.700,.900,.950,.990]); the reduced 256/16 tiers keep
+// the 8-stop set ([.50,.100,.300,.500,.700,.900,.950,.990]) — the doc defines
+// no .600 there. Dark and light carry DISTINCT scales at truecolor and 256
+// (light re-derived around #B87900, not a dimmed dark scale); 16 is `yellow`.
 
 const YELLOW_RAMP_TC_DARK: readonly string[] = [
-  '#fff7c2',
-  '#fff0a4',
-  '#FFE573',
-  '#fbe23f',
-  '#c8a900',
-  '#8a6d00',
-  '#594600',
-  '#2d2300'
+  '#fff7c2', // 50
+  '#fff0a4', // 100
+  '#FFE573', // 300
+  '#fbe23f', // 500
+  '#e1c405', // 600
+  '#c8a900', // 700
+  '#8a6d00', // 900
+  '#594600', // 950
+  '#2d2300' // 990
 ]
 
 const YELLOW_RAMP_TC_LIGHT: readonly string[] = [
   '#F6DA8B',
   '#EBC76C',
   '#D9A83A',
-  '#B87900',
-  '#935F00',
+  '#B87900', // 500
+  '#935F00', // 600
+  '#935F00', // 700
   '#684300',
   '#432B00',
   '#221600'
@@ -155,8 +157,8 @@ const YELLOW_RAMP_TC_LIGHT: readonly string[] = [
 const YELLOW_RAMP_256_DARK: readonly string[] = [
   'ansi256(229)',
   'ansi256(229)',
-  'ansi256(221)',
-  'ansi256(221)',
+  'ansi256(228)',
+  'ansi256(220)', // 500
   'ansi256(178)',
   'ansi256(94)',
   'ansi256(58)',
