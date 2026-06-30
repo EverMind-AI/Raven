@@ -6,6 +6,8 @@ import globals from "globals";
 export default [
   {
     ignores: ["**/dist/**", "**/coverage/**", "**/.vitest-cache/**"],
+  },
+  {
     linterOptions: {
       reportUnusedDisableDirectives: "off",
     },

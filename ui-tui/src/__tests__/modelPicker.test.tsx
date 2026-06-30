@@ -14,6 +14,14 @@ import { DEFAULT_THEME } from '../theme.js'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+const waitForFrame = async (h: Pick<Harness, 'frame'>, text: string) => {
+  for (let i = 0; i < 20; i++) {
+    if (h.frame().includes(text)) return
+    await delay(30)
+  }
+  expect(h.frame()).toContain(text)
+}
+
 const ESC_RE = new RegExp(String.fromCharCode(27), 'g')
 
 // ink emits cursor-forward moves (CSI nC) in place of spaces for alignment, so
@@ -192,7 +200,7 @@ describe('ModelPicker', () => {
 
     // Enter the authenticated anthropic provider's model stage.
     await h.type(ENTER)
-    expect(h.frame()).toContain('step 2/2')
+    await waitForFrame(h, 'step 2/2')
 
     // 'a' opens the add-model sub-input.
     await h.type('a')
@@ -221,6 +229,7 @@ describe('ModelPicker', () => {
     await delay(60)
 
     await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
     expect(h.frame()).toContain('claude-sonnet-4-6')
 
     // Delete the highlighted (first) model.
