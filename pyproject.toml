@@ -58,7 +58,7 @@ channel-matrix = [
 channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
 channel-wecom = ["wecom-aibot-sdk-python>=0.1.5"]
 channel-mochat = [
-    "python-socketio>=5.16.0,<6.0.0",
+    "python-socketio>=5.16.2,<6.0.0",
     "msgpack>=1.1.0,<2.0.0",
     "websocket-client>=1.9.0,<2.0.0",
 ]
