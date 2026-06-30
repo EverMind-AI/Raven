@@ -23,6 +23,10 @@ describe('terminal mode reset', () => {
     expect(TERMINAL_MODE_RESET).toContain('\x1b[>4m')
   })
 
+  it('resets the cursor color (OSC 112) so a recolored cursor is restored on exit', () => {
+    expect(TERMINAL_MODE_RESET).toContain('\x1b]112\x07')
+  })
+
   it('writes reset sequence to TTY streams without fds', () => {
     const write = vi.fn()
 

@@ -594,6 +594,16 @@ export function resolveCurrentDefaultTheme(): Theme {
   return resolveTheme(currentScheme(), activeColorTier())
 }
 
+/** Truecolor hex for the OSC 12 hardware-cursor color. OSC 12 takes an RGB
+ *  value, so we use the hex primary regardless of the text color tier — a
+ *  256/16 terminal still renders its cursor in truecolor. A skin's hex primary
+ *  (tier 3) is honored; otherwise the curated per-scheme title color. */
+export function cursorColorHex(theme: Theme): string {
+  const p = theme.color.primary
+
+  return p.startsWith('#') ? p : currentScheme() === 'light' ? LIGHT_THEME.color.primary : DARK_THEME.color.primary
+}
+
 // Parse an OSC 11 background reply payload into a #rrggbb hex string.
 // xterm-class terminals answer `rgb:RRRR/GGGG/BBBB` (1-4 hex digits per
 // channel, scaled to that channel's max); a few reply `#RRGGBB`. Anything

@@ -138,6 +138,25 @@ describe('brand yellow ramp (title-gradient-table.md)', () => {
   })
 })
 
+describe('cursorColorHex (OSC 12 hardware cursor)', () => {
+  it('returns a truecolor hex even when the theme tier is 256/16 (default dark)', async () => {
+    const { cursorColorHex, resolveTheme } = await importThemeWithCleanEnv()
+
+    // tiers 1/2 store ansi indices, but OSC 12 needs an RGB color.
+    expect(cursorColorHex(resolveTheme('dark', 3))).toBe('#fbe23f') // truecolor primary passed through
+    expect(cursorColorHex(resolveTheme('dark', 2))).toBe('#fbe23f')
+    expect(cursorColorHex(resolveTheme('dark', 1))).toBe('#fbe23f')
+  })
+
+  it('uses the light title color across all tiers when the scheme is light', async () => {
+    const { cursorColorHex, resolveTheme } = await importThemeWithEnv({ RAVEN_TUI_THEME: 'light' })
+
+    expect(cursorColorHex(resolveTheme('light', 3))).toBe('#B87900')
+    expect(cursorColorHex(resolveTheme('light', 2))).toBe('#B87900')
+    expect(cursorColorHex(resolveTheme('light', 1))).toBe('#B87900')
+  })
+})
+
 describe('DEFAULT_THEME aliasing', () => {
   it('defaults to DARK_THEME when nothing signals light', async () => {
     const { DEFAULT_THEME, DARK_THEME: DARK } = await importThemeWithCleanEnv()

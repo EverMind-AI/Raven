@@ -24,6 +24,7 @@ export const TERMINAL_MODE_RESET =
   '\x1b[<u' + // kitty keyboard
   '\x1b[>4m' + // modifyOtherKeys
   '\x1b[0m' + // attributes
+  '\x1b]112\x07' + // reset cursor color (OSC 112) — see useHardwareCursorColor
   '\x1b[?25h' // cursor visible
 
 type ResettableStream = Pick<NodeJS.WriteStream, 'isTTY' | 'write'> & {
