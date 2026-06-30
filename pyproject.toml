@@ -92,7 +92,7 @@ retrieval = [
     "transformers>=4.45.0",
 ]
 sandbox = [
-    "boxlite==0.8.2",
+    "boxlite==0.9.0",
     "anyio>=4.0",
 ]
 dev = [
