@@ -7,6 +7,6 @@
     "commitlint": "commitlint --config commitlint.config.cjs"
   },
   "devDependencies": {
-    "@commitlint/cli": "^19.8.1"
+    "@commitlint/cli": "^21.1.0"
   }
 }
