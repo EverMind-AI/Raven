@@ -382,7 +382,7 @@ Before opening a PR:
 
 ### License
 
-Raven is MIT-licensed. The base agent runtime originated from the
-MIT-licensed [nanobot](https://github.com/HKUDS/nanobot) project by HKUDS.
-See [LICENSE](LICENSE), [NOTICES.md](NOTICES.md), and [LICENSES/](LICENSES/)
-for details.
+Raven is licensed under the Apache License 2.0. Portions of the runtime and
+TUI layer originated from MIT-licensed upstream projects; their copyright
+notices and license texts are retained in [NOTICES.md](NOTICES.md) and
+[LICENSES/](LICENSES/).

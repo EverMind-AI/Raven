@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "description": "Raven native TUI (Ink + React). See ../docs/openspec/changes/tui-fork-hermes-import/.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22"

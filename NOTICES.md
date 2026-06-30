@@ -1,7 +1,8 @@
 # Third-Party Notices
 
-Raven incorporates code from the following MIT-licensed projects.
-Their copyright notices and license texts are retained in `LICENSES/`.
+Raven is licensed under the Apache License 2.0. It incorporates code from the
+following MIT-licensed projects. Their copyright notices and license texts are
+retained in `LICENSES/`.
 
 ## nanobot (base agent runtime)
 - Source: https://github.com/HKUDS/nanobot
