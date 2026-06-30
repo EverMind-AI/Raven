@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.config.update import (
+    init_extension_block_defaults,
     reset_cron_config,
     set_default_model,
     set_memory_backend,
@@ -249,3 +250,91 @@ def test_set_memory_backend_preserves_siblings(cfg_path: Path) -> None:
     data = _read(cfg_path)
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
     assert data["memory"]["backend"] == "everos"
+
+
+# ---------------------------------------------------------------------------
+# init_extension_block_defaults
+# ---------------------------------------------------------------------------
+
+
+def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
+    init_extension_block_defaults(config_path=cfg_path)
+    data = _read(cfg_path)
+
+    assert data["memory"] == {
+        "backend": "everos",
+        "userId": "default",
+        "agentId": "default",
+        "memoryTopK": 5,
+    }
+    assert data["plugins"]["disabled"] == []
+    # plugins.config is never empty — it carries the everos-memory identity
+    # wiring (snake_case, verbatim pass-through to the plugin factory).
+    assert data["plugins"]["config"]["everos-memory"] == {
+        "mode": "embedded",
+        "base_url": "http://localhost:1995",
+        "user_id": "default",
+        "agent_id": "default",
+    }
+    assert data["skillForge"]["enabled"] is True
+    assert data["skillForge"]["everos"] == {"enabled": True}
+    assert data["skillForge"]["router"]["weights"] == {
+        "local": 1.0, "everos": 0.9, "hub": 0.85,
+    }
+    assert data["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://skillhub.evermind.ai",
+        "apiKey": None,
+        "timeoutS": 2.0,
+        "minSafety": 0.7,
+    }
+
+
+def test_init_extension_defaults_plugin_identity_matches_memory(cfg_path: Path) -> None:
+    # The everos-memory user_id / agent_id must equal memory.userId / agentId,
+    # otherwise stored memory is stamped under one identity and recalled under
+    # another (silently empty recall).
+    init_extension_block_defaults(config_path=cfg_path)
+    data = _read(cfg_path)
+    em = data["plugins"]["config"]["everos-memory"]
+    assert em["user_id"] == data["memory"]["userId"]
+    assert em["agent_id"] == data["memory"]["agentId"]
+
+
+def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> None:
+    # The hardcoded intranet endpoints + Bearer token on SkillForgeConfig must
+    # never be materialized into a user's plaintext config; they stay at their
+    # schema defaults and only the safe subset is written.
+    init_extension_block_defaults(config_path=cfg_path)
+    sf = _read(cfg_path)["skillForge"]
+    for leaked in (
+        "embeddingUrl", "embeddingApiKey", "rerankerUrl", "rerankerApiKey",
+        "massLibraryDb", "embedding_url", "embedding_api_key",
+    ):
+        assert leaked not in sf
+
+
+def test_init_extension_defaults_is_idempotent_and_non_clobbering(cfg_path: Path) -> None:
+    # An existing memory.backend (the bootstrap safety pin) and any user-set
+    # value must survive — setdefault only fills what's absent.
+    cfg_path.write_text(
+        json.dumps({"memory": {"backend": None, "memoryTopK": 20}})
+    )
+    init_extension_block_defaults(config_path=cfg_path)
+    first = _read(cfg_path)
+    assert first["memory"]["backend"] is None       # not overwritten
+    assert first["memory"]["memoryTopK"] == 20       # user value kept
+    assert first["memory"]["userId"] == "default"    # filled in
+
+    init_extension_block_defaults(config_path=cfg_path)
+    assert _read(cfg_path) == first                  # second run is a no-op
+
+
+def test_init_extension_defaults_round_trips_through_loader(cfg_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    init_extension_block_defaults(config_path=cfg_path)
+    rc = load_raven_config(cfg_path)
+    assert rc.memory.memory_top_k == 5
+    assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
+    # The non-written internal field still resolves to its schema default.
+    assert rc.skill_forge.embedding_url.startswith("http://")

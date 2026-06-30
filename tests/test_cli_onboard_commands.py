@@ -187,9 +187,15 @@ def test_onboard_non_interactive_minimum_flags(
 
 
 def test_onboard_non_interactive_skips_optional_steps(
-    tmp_env: Path, stub_verify, stub_step3
+    tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3
 ) -> None:
-    """Non-interactive mode auto-skips sandbox / channel / memory steps."""
+    """Non-interactive mode auto-skips sandbox / channel / memory steps.
+
+    ``everos_isolated`` keeps ``_memory_enabled`` from reading the dev
+    machine's real ``~/.everos/config.toml``: the seeded backend="everos" is
+    only kept when an llm model is configured, so an empty (isolated) EverOS
+    config makes the skip-guard deterministically resolve it back to None.
+    """
     r = runner.invoke(
         app,
         [
@@ -204,7 +210,7 @@ def test_onboard_non_interactive_skips_optional_steps(
     assert "Keeping run location: host" in r.stdout
     assert "Keeping native Markdown memory" in r.stdout
     assert "Setup complete" in r.stdout
-    # Optional steps don't touch their config sections.
+    # Memory left unconfigured (no llm model) → backend resolves to None.
     data = json.loads(tmp_env.read_text())
     assert data.get("memory", {}).get("backend") != "everos"
 
@@ -1481,13 +1487,59 @@ def test_skip_memory_disables_backend_effective(
     assert load_raven_config().memory.backend is None
 
 
-def test_fresh_bootstrap_pins_memory_backend_none(
+def test_fresh_bootstrap_defaults_memory_backend_everos(
     tmp_env: Path, stub_verify, stub_step3, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A fresh config pins memory.backend=None so a Ctrl+C mid-wizard can't
-    leave EverOS active without models."""
-    # Simulate Ctrl+C right after bootstrap (before Step 4) by bailing in Step 1.
+    """A fresh config seeds memory.backend="everos" (schema default). EverOS
+    degrades gracefully without models, and Step 4 / the skip-guard resolve it
+    back to None when memory is opted out or left unconfigured."""
     onboard_commands._bootstrap_empty_config()
     from raven.config.raven import load_raven_config
 
-    assert load_raven_config().memory.backend is None
+    assert load_raven_config().memory.backend == "everos"
+
+
+def test_fresh_bootstrap_seeds_extension_blocks(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bootstrap materializes the memory / plugins / skillForge safe subset so a
+    fresh config exposes the knobs — without leaking the hardcoded intranet
+    endpoints / Bearer token from SkillForgeConfig's schema defaults."""
+    onboard_commands._bootstrap_empty_config()
+    data = json.loads(tmp_env.read_text())
+
+    assert data["memory"]["backend"] == "everos"  # schema default seeded
+    assert data["memory"]["memoryTopK"] == 5
+    assert data["plugins"]["config"]["everos-memory"]["mode"] == "embedded"
+    assert data["skillForge"]["everos"] == {"enabled": True}
+    assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
+    assert data["skillForge"]["router"]["hub"]["apiKey"] is None
+    # No internal infra fields written to the user's plaintext config.
+    for leaked in ("embeddingApiKey", "rerankerApiKey", "massLibraryDb"):
+        assert leaked not in data["skillForge"]
+
+
+def test_bootstrap_backfills_preexisting_config(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config that predates the extension blocks gets them backfilled on the
+    next onboard — without clobbering values the user already set."""
+    # Simulate an older config: populated, memory.backend set, but no plugins
+    # / skillForge blocks and a hand-tuned memoryTopK.
+    tmp_env.write_text(json.dumps({
+        "providers": {"openai": {"apiKey": "sk-keep"}},
+        "agents": {"defaults": {"model": "openai/gpt-4o"}},
+        "memory": {"backend": "everos", "memoryTopK": 20},
+    }))
+
+    onboard_commands._bootstrap_empty_config()
+    data = json.loads(tmp_env.read_text())
+
+    # Pre-existing values untouched.
+    assert data["providers"]["openai"]["apiKey"] == "sk-keep"
+    assert data["memory"]["backend"] == "everos"
+    assert data["memory"]["memoryTopK"] == 20
+    # Missing blocks / keys backfilled.
+    assert data["memory"]["userId"] == "default"
+    assert data["plugins"]["config"]["everos-memory"]["mode"] == "embedded"
+    assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"

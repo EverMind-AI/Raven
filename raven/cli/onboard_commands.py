@@ -2,7 +2,7 @@
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
-``~/.everos/config.toml``.
+``~/.everos/raven/config.toml``.
 
 Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   0. Welcome
@@ -193,12 +193,20 @@ def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) ->
 def _bootstrap_empty_config() -> None:
     """Make sure ``~/.raven/config.json`` + workspace dir exist before we patch.
 
-    On a fresh config we pin ``memory.backend = None`` (native Markdown).
-    ``MemoryConfig.backend`` defaults to ``"everos"`` in the schema, so an
-    absent ``memory`` section would activate EverOS at runtime with no
-    llm/embedding configured. Pinning it disabled makes the safe baseline
-    survive a Ctrl+C mid-wizard; Step 4 flips it to ``everos`` only once the
-    required models are written.
+    We seed the user-facing extension defaults (memory / plugins / skillForge),
+    including ``memory.backend = "everos"`` (the schema default). EverOS
+    degrades gracefully when its models aren't configured yet (empty recall + a
+    warning, never a crash), so an enabled-but-modelless install is safe. The
+    wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
+    back to ``None`` when the user opts out or never configures the required
+    models (``_memory_enabled`` gates on the llm model being present, not just
+    the backend name).
+
+    Seeding runs on EVERY onboard, not just a brand-new config: the writer is
+    ``setdefault``-based (non-clobbering), so it backfills these blocks into a
+    pre-existing config that predates them without touching any value the user
+    already set. The base ``Config()`` is only written when the file is absent —
+    overwriting an existing file there would clobber it.
     """
     from raven.config.loader import get_config_path, load_config, save_config
     from raven.config.paths import get_workspace_path
@@ -207,7 +215,7 @@ def _bootstrap_empty_config() -> None:
     path = get_config_path()
     if not path.exists():
         save_config(load_config())  # writes default Config() to disk
-        _set_memory_backend(None)
+    _init_extension_block_defaults()
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace)
@@ -1314,6 +1322,13 @@ def _set_memory_backend(backend: Optional[str]) -> None:
     set_memory_backend(backend)
 
 
+def _init_extension_block_defaults() -> None:
+    """Seed the memory / plugins / skillForge extension defaults via the ops layer."""
+    from raven.config.update import init_extension_block_defaults
+
+    init_extension_block_defaults()
+
+
 def _everos_section(section: str) -> dict[str, Any]:
     """Current values of an EverOS section, or ``{}``."""
     from raven.config.update_everos import load_everos_config
@@ -1322,9 +1337,18 @@ def _everos_section(section: str) -> dict[str, Any]:
 
 
 def _memory_enabled() -> bool:
-    """True iff ``memory.backend`` is ``everos`` on disk."""
+    """True iff EverOS memory is both selected AND usable on disk.
+
+    "Usable" requires an llm model in the EverOS toml: the seed/schema default
+    sets ``memory.backend="everos"`` before any models exist, so a bare backend
+    check would mis-report a fresh, modelless install as "enabled" and make
+    Step 4 offer "keep current" over a non-functional setup. Gating on the llm
+    model keeps the wizard's enabled-detection aligned with "actually works".
+    """
     data = _load_raw_config()
-    return (data.get("memory") or {}).get("backend") == "everos"
+    if (data.get("memory") or {}).get("backend") != "everos":
+        return False
+    return bool(_everos_section("llm").get("model"))
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -1739,22 +1763,22 @@ def _config_memory_multimodal(*, non_interactive: bool) -> None:
 def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str]) -> object:
     """Step 4 — EverOS long-term memory (enable + model sub-screens).
 
-    Critical invariant: EVERY exit path must leave ``memory.backend`` written
-    explicitly. The schema default is ``"everos"``, so any path that returns
-    without setting it would activate EverOS at runtime with no llm/embedding
-    configured (a broken state). We therefore default to ``None`` (native
-    Markdown) on skip / non-interactive / decline, and only flip to ``everos``
-    once the required models are configured. The one exception is the
-    already-enabled "keep current" path: backend is already ``everos`` and the
-    models are already on disk, so it's left untouched.
+    The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
+    step's job is to either confirm it by configuring the required models or
+    resolve it back to ``None`` (native Markdown) on skip / non-interactive /
+    decline. ``_memory_enabled`` gates on the llm model being present, so a
+    fresh modelless seed is treated as "not yet enabled" (the user still sees
+    the enable prompt) and the "keep current" path only triggers once models
+    are actually on disk.
     """
     _step_header(4, "EverOS long-term memory")
 
     if skip or non_interactive:
         # Never configured the required models here → disable backend-driven
         # memory so runtime doesn't activate EverOS without an llm/embedding.
-        # (Only flip an already-enabled+configured setup is preserved.)
-        if not (_memory_enabled() and _everos_section("llm").get("model")):
+        # (``_memory_enabled`` already gates on the llm model, so an
+        # already-enabled+configured setup is preserved.)
+        if not _memory_enabled():
             _set_memory_backend(None)
         console.print("  [dim]Keeping native Markdown memory.[/dim]")
         return None
