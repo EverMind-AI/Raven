@@ -104,6 +104,38 @@ describe('brand yellow ramp (title-gradient-table.md)', () => {
 
     expect(LIGHT_THEME.yellow).not.toEqual(DARK_THEME.yellow)
   })
+
+  it('carries scheme-specific 256-color ramps for the documented title bands', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    const dark = resolveTheme('dark', 2).yellow
+    const light = resolveTheme('light', 2).yellow
+
+    // .50/.300/.500/.700/.900 → ramp indices 0/2/3/4/5.
+    expect([dark[0], dark[2], dark[3], dark[4], dark[5]]).toEqual([
+      'ansi256(229)',
+      'ansi256(221)',
+      'ansi256(221)',
+      'ansi256(178)',
+      'ansi256(94)'
+    ])
+    expect([light[0], light[2], light[3], light[4], light[5]]).toEqual([
+      'ansi256(222)',
+      'ansi256(179)',
+      'ansi256(136)',
+      'ansi256(94)',
+      'ansi256(58)'
+    ])
+
+    expect(light).not.toEqual(dark)
+  })
+
+  it('keeps 16-color yellow for both schemes', async () => {
+    const { resolveTheme } = await importThemeWithCleanEnv()
+
+    expect(resolveTheme('light', 1).yellow).toEqual(resolveTheme('dark', 1).yellow)
+    expect(resolveTheme('light', 1).yellow[0]).toBe('ansi:yellow')
+  })
 })
 
 describe('DEFAULT_THEME aliasing', () => {

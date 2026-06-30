@@ -122,12 +122,13 @@ const cleanPromptSymbol = (s: string | undefined, fallback: string) => {
 // dark: [yellow.50, .100, .300, .500, .700, .900, .950, .990]. Used for the
 // gradient banner art.
 //
-// Dark and light schemes carry DISTINCT truecolor ramps: the light scale is
-// re-derived around the #B87900 title color, not a dimmed copy of the dark
-// bright-yellow scale (see docs/tui-color-problem/title-gradient-table.md).
-// The .50/.300/.500/.700/.900 stops are the documented title bands; .100/.950/
-// .990 are interpolated to keep the 8-stop shape the banner code expects.
-// Reduced tiers (256/16) stay scheme-agnostic — the doc only specifies hex.
+// Dark and light schemes carry DISTINCT ramps at truecolor AND 256-color: the
+// light scale is re-derived around the #B87900 title color, not a dimmed copy
+// of the dark bright-yellow scale (see
+// docs/tui-color-problem/title-gradient-table.md). 16-color is `yellow` in both
+// schemes (no usable gold there). The .50/.300/.500/.700/.900 stops are the
+// documented title bands; .100/.950/.990 are interpolated to keep the 8-stop
+// shape the banner code expects.
 
 const YELLOW_RAMP_TC_DARK: readonly string[] = [
   '#fff7c2',
@@ -151,13 +152,24 @@ const YELLOW_RAMP_TC_LIGHT: readonly string[] = [
   '#221600'
 ]
 
-const YELLOW_RAMP_256: readonly string[] = [
+const YELLOW_RAMP_256_DARK: readonly string[] = [
   'ansi256(229)',
   'ansi256(229)',
   'ansi256(221)',
   'ansi256(221)',
   'ansi256(178)',
   'ansi256(94)',
+  'ansi256(58)',
+  'ansi256(234)'
+]
+
+const YELLOW_RAMP_256_LIGHT: readonly string[] = [
+  'ansi256(222)',
+  'ansi256(222)',
+  'ansi256(179)',
+  'ansi256(136)',
+  'ansi256(94)',
+  'ansi256(58)',
   'ansi256(58)',
   'ansi256(234)'
 ]
@@ -174,7 +186,7 @@ const YELLOW_RAMP_16: readonly string[] = [
 ]
 
 function yellowRamp(tier: 0 | 1 | 2 | 3, scheme: ColorScheme): readonly string[] {
-  if (tier === 2) return YELLOW_RAMP_256
+  if (tier === 2) return scheme === 'light' ? YELLOW_RAMP_256_LIGHT : YELLOW_RAMP_256_DARK
   if (tier === 1) return YELLOW_RAMP_16
   return scheme === 'light' ? YELLOW_RAMP_TC_LIGHT : YELLOW_RAMP_TC_DARK
 }
@@ -404,9 +416,9 @@ const LIGHT_16_COLORS: ThemeColors = {
   shellDollar: 'ansi:yellow'
 }
 
-const DARK_256: Theme = { ...DARK_THEME, color: DARK_256_COLORS, yellow: YELLOW_RAMP_256 }
+const DARK_256: Theme = { ...DARK_THEME, color: DARK_256_COLORS, yellow: YELLOW_RAMP_256_DARK }
 const DARK_16: Theme = { ...DARK_THEME, color: DARK_16_COLORS, yellow: YELLOW_RAMP_16 }
-const LIGHT_256: Theme = { ...LIGHT_THEME, color: LIGHT_256_COLORS, yellow: YELLOW_RAMP_256 }
+const LIGHT_256: Theme = { ...LIGHT_THEME, color: LIGHT_256_COLORS, yellow: YELLOW_RAMP_256_LIGHT }
 const LIGHT_16: Theme = { ...LIGHT_THEME, color: LIGHT_16_COLORS, yellow: YELLOW_RAMP_16 }
 
 /**
