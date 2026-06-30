@@ -4,19 +4,64 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - security
+    groups:
+      github-actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - security
+    groups:
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - security
+    groups:
+      npm-root-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /ui-tui
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - security
+    groups:
+      tui-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   - package-ecosystem: npm
     directory: /bridge
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    labels:
+      - dependencies
+      - security
+    groups:
+      bridge-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
