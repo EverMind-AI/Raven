@@ -3,6 +3,10 @@
 Each subdirectory is one self-contained showcase: an inputs-+-runner-+-output
 bundle that should be reproducible from a fresh checkout.
 
+Keep demos focused on user-visible behavior. A good demo should explain what it
+proves, how to run it, and what a successful output looks like without relying
+on private EverMind infrastructure.
+
 | Demo | What it shows |
 |------|---------------|
 | [skill_retrieval/](skill_retrieval/) | An agent reads a SKILL.md, follows it, and generates an image via Nano Banana on OpenRouter. |
