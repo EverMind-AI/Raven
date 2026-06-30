@@ -126,6 +126,11 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     only the static "is the parser installed" fact decides registration.
     """
     del ctx
+    # Point EverOS at raven's ~/.everos/raven home before any everos import
+    # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
+    from raven.config.update_everos import configure_everos_env
+
+    configure_everos_env()
     if not _multimodal_available():
         return None
     return UnderstandMediaTool()
