@@ -24,6 +24,7 @@
 - [Quick Install](#quick-install)
 - [Getting Started](#getting-started)
 - [What Raven Is Built For](#what-raven-is-built-for)
+- [Raven Templates and Ecosystem](#raven-templates-and-ecosystem)
 - [Architecture](#architecture)
 - [Developer Workflow](#developer-workflow)
 - [Status](#status)
@@ -37,9 +38,10 @@
 
 ## Why Raven
 
-Raven is a **memory-first**, self-improving agent OS built by EverMind on top
-of [EverOS](https://github.com/EverMind-AI/EverOS), the memory layer that gives
-Raven durable agent memory, user memory, and world knowledge across sessions.
+Raven is a **memory-first**, self-improving agent library and template system
+built by EverMind on top of [EverOS](https://github.com/EverMind-AI/EverOS),
+the memory layer that gives Raven durable agent memory, user memory, and world
+knowledge across sessions.
 Unlike a chat box wrapped around a shell, Raven is a native command line agent
 whose model, code, modules, and policy are decoupled so it can improve across
 the whole stack, not just the skills layer. With 100,000 built-in skills, Raven
@@ -171,6 +173,27 @@ notifications; the point is an agent that can notice.
 SkillForge treats skills as procedural memory. It can detect reusable workflows,
 write skill files, track execution feedback, and evolve instructions when they
 stop working.
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## Raven Templates and Ecosystem
+
+Raven is an Apache-2.0 licensed, memory-first agent library built by EverMind.
+It provides the runtime, memory layer, tools, and Agent Templates for building
+custom agents and digital workers.
+
+Agents, templates, skills, workflows, and modules created with Raven belong to
+their creators. Builders may use, modify, commercialize, and share agents built
+with Raven or based on Raven Agent Templates under the Apache-2.0 license.
+
+We encourage builders to say "Built with Raven" and link back to this
+repository. The Raven and EverMind names and logos may not be used to imply
+official endorsement unless explicitly approved by EverMind.
 
 <br>
 <div align="right">
