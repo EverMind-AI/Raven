@@ -13,6 +13,7 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 | 3 | [Commits](#3-commits-conventional-commits) | Conventional Commits, all-English, `Co-authored-by` trailer |
 | 4 | [Dependencies](#4-dependencies-uv-only) | `uv` only — never `pip` / hand-edit lockfile |
 | 5 | [Tests](#5-tests) | `uv run pytest`; strict file-naming |
+| 6 | [Domain terms](#6-domain-terms) | Consult `CONTEXT-MAP.md` before naming; use canonical terms |
 
 ---
 
@@ -372,6 +373,13 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 - when changing/adding a CLI command, update the matching `test_cli_<module>_commands.py` — **don't create a new file**;
 - when you spot a legacy file violating §5.1 / §5.2, **report it to the user first** — don't rename it unprompted (renames touch git history and may collide with follow-up PRs);
 - always run tests via `uv run pytest ...`, never bare `pytest` (per §4).
+
+---
+
+## 6. Domain terms
+
+- Naming a domain concept tracked in `CONTEXT-MAP.md` (the entry point — it routes to `CONTEXT.md` for Runtime terms and `ui-tui/CONTEXT.md` for TUI)? Use the canonical term, not a synonym.
+- Coining a new domain term: define it in the matching `CONTEXT.md` in the same change, with a definition verifiable against the code (not guessed) — add an `_Avoid_` list only if a confusable synonym exists.
 
 ---
 
