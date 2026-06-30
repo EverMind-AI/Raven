@@ -21,7 +21,8 @@
 <br>
 
 - [为什么是 Raven](#为什么是-raven)
-- [快速开始](#快速开始)
+- [快速安装](#快速安装)
+- [开始使用](#开始使用)
 - [Raven 适合什么](#raven-适合什么)
 - [架构](#架构)
 - [开发工作流](#开发工作流)
@@ -86,64 +87,44 @@ Raven 把这些问题当成产品本身，而不是边缘 case。
 
 <br>
 
-## 快速开始
+## 快速安装
 
-> 目标：从源码启动 Raven，完成 onboarding，然后进入原生 TUI。
+```bash
+curl -fsSL http://raven.evermind.ai/install.sh | bash
+```
 
-### 0. 前置条件
+安装后重新加载 shell，并运行 setup wizard：
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 22+，用于原生 TUI
-- 一个模型 provider key，或通过 onboarding 配置 OAuth provider
+```bash
+source ~/.bashrc    # 或：source ~/.zshrc
+raven onboard
+```
 
 Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
 OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoint。
 
-### 1. 从源码安装
+## 开始使用
 
 ```bash
-git clone https://github.com/EverMind-AI/raven.git
-cd raven
-uv sync --extra dev --dev
+raven                  # 原生 TUI，开始一段对话
+raven tui              # 显式启动原生 TUI
+raven tui --check      # 启动前检查 TUI runtime
+raven onboard          # 配置 provider、sandbox、channels 和 memory
+raven agent -m "..."   # 从 shell 里执行一次性任务
+raven provider list    # 查看 LLM providers 与模型配置
+raven channels list    # 列出可用消息渠道
+raven gateway          # 启动 messaging gateway
+raven sessions list    # 列出、恢复、fork、导出或删除 sessions
+raven cron list        # 查看 scheduled jobs 与 automations
+raven skill list       # 浏览 SkillForge skills
+raven sentinel status  # 查看主动记忆与 nudge 状态
+raven plugins          # 列出已安装插件和当前 memory backend
+raven sandbox list     # sandbox debug 开启时查看 sandbox VMs
+raven status           # 查看本地配置与运行状态
+raven doctor           # 诊断 config、routing 和 LLM readiness
 ```
 
-安装 TUI 依赖：
-
-```bash
-npm ci --prefix ui-tui
-```
-
-### 2. 运行 Onboarding
-
-```bash
-uv run raven onboard
-```
-
-Wizard 会配置：
-
-- LLM provider 和默认模型；
-- 可选 sandbox 执行环境；
-- 可选聊天 channel；
-- 可选 EverOS 长期记忆。
-
-### 3. 启动 Raven
-
-```bash
-uv run raven
-```
-
-裸 `raven` 会打开原生 TUI。也可以直接执行一次任务：
-
-```bash
-uv run raven agent -m "Inspect this repo and tell me what to improve first."
-```
-
-对接 Telegram、Slack、Discord、Matrix、WhatsApp、WeCom 等平台时：
-
-```bash
-uv run raven gateway
-```
+源码开发请看 [开发工作流](#开发工作流)。
 
 <br>
 <div align="right">

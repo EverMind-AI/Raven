@@ -21,7 +21,8 @@
 <br>
 
 - [Why Raven](#why-raven)
-- [Quick Start](#quick-start)
+- [Quick Install](#quick-install)
+- [Getting Started](#getting-started)
 - [What Raven Is Built For](#what-raven-is-built-for)
 - [Architecture](#architecture)
 - [Developer Workflow](#developer-workflow)
@@ -88,65 +89,44 @@ Raven treats those problems as the product, not edge cases.
 
 <br>
 
-## Quick Start
+## Quick Install
 
-> Goal: start Raven from source, run onboarding, and open the native TUI.
+```bash
+curl -fsSL http://raven.evermind.ai/install.sh | bash
+```
 
-### 0. Prerequisites
+After installation, reload your shell and run the setup wizard:
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
-- Node.js 22+ for the native TUI
-- One model provider key, or an OAuth provider configured through onboarding
+```bash
+source ~/.bashrc    # or: source ~/.zshrc
+raven onboard
+```
 
 Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
 OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.
 
-### 1. Install From Source
+## Getting Started
 
 ```bash
-git clone https://github.com/EverMind-AI/raven.git
-cd raven
-uv sync --extra dev --dev
+raven                  # Native TUI - start a conversation
+raven tui              # Explicitly launch the native TUI
+raven tui --check      # Verify the TUI runtime before launching
+raven onboard          # Configure provider, sandbox, channels, and memory
+raven agent -m "..."   # Run a one-shot task from the shell
+raven provider list    # Review LLM providers and model configuration
+raven channels list    # List available messaging channels
+raven gateway          # Start the messaging gateway
+raven sessions list    # List, resume, fork, export, or delete sessions
+raven cron list        # Inspect scheduled jobs and automations
+raven skill list       # Browse SkillForge skills
+raven sentinel status  # Inspect proactive memory and nudge state
+raven plugins          # List installed plugins and the active memory backend
+raven sandbox list     # Inspect sandbox VMs when sandbox debugging is enabled
+raven status           # Show local config and runtime status
+raven doctor           # Diagnose config, routing, and LLM readiness
 ```
 
-Install the TUI dependencies:
-
-```bash
-npm ci --prefix ui-tui
-```
-
-### 2. Run Onboarding
-
-```bash
-uv run raven onboard
-```
-
-The wizard configures:
-
-- an LLM provider and default model;
-- optional sandbox execution;
-- optional chat channels;
-- optional EverOS long-term memory.
-
-### 3. Launch Raven
-
-```bash
-uv run raven
-```
-
-Bare `raven` opens the native TUI. For a direct one-shot turn:
-
-```bash
-uv run raven agent -m "Inspect this repo and tell me what to improve first."
-```
-
-For platform adapters such as Telegram, Slack, Discord, Matrix, WhatsApp, and
-WeCom:
-
-```bash
-uv run raven gateway
-```
+For source-based development, use the [Developer Workflow](#developer-workflow).
 
 <br>
 <div align="right">
