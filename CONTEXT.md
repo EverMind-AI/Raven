@@ -303,13 +303,14 @@ adapter. The same plugin also contributes the `understand_media` multimodal-pars
 
 **SkillForge** (`memory_engine/skill_forge/`):
 A skill retrieval and injection subsystem — it fuses candidates from three sources
-(local BM25-indexed files, self-evolved skills recalled from the EverOS memory backend,
-and remote skills from the Skill Hub) via weighted RRF, with optional LLM gating and
-query rewriting before injecting them into the agent prompt. Skill distillation/evolution
-is handled by the embedded EverOS extraction pipeline (`skillForge.everos`), not by
-SkillForge itself — there is no feedback-driven evolution or versioning, and retirement is
-a confidence-floor soft-delete. The name is retained; it is now a live module under the
-Memory Engine, not the old top-level husk.
+(local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
+— typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
+with optional LLM gating and query rewriting before injecting them into the agent prompt.
+Skill distillation/evolution is handled by the embedded EverOS extraction pipeline
+(`skillForge.everos`), not by SkillForge itself — there is no feedback-driven evolution or
+versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days`) are
+unwired config placeholders, not active behavior. The name is retained; it is now a live
+module under the Memory Engine, not the old top-level husk.
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
