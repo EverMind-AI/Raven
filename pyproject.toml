@@ -40,7 +40,7 @@ dependencies = [
 
 [project.optional-dependencies]
 channel-telegram = [
-    "python-telegram-bot[socks]>=22.6,<23.0",
+    "python-telegram-bot[socks]>=22.8,<23.0",
     "socksio>=1.0.0,<2.0.0",
     "python-socks[asyncio]>=2.8.0,<3.0.0; sys_platform != 'win32'",
 ]

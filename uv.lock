@@ -3002,15 +3002,15 @@ wheels = [
 
 [[package]]
 name = "python-telegram-bot"
-version = "22.7"
+version = "22.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpcore", marker = "python_full_version >= '3.14'" },
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/25/2258161b1069e66d6c39c0a602dbe57461d4767dc0012539970ea40bc9d6/python_telegram_bot-22.7.tar.gz", hash = "sha256:784b59ea3852fe4616ad63b4a0264c755637f5d725e87755ecdee28300febf61", size = 1516454, upload-time = "2026-03-16T09:36:03.174Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/77/153517bb1ac1bba670c6fb1dbf09e1fd0730494b1705934e715391413a0d/python_telegram_bot-22.8.tar.gz", hash = "sha256:f9d3847fcb23ee603477e442800b33bb4adf851a73e0619d2050be879decf1ef", size = 1551700, upload-time = "2026-06-12T08:10:29.1Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/f7/0e2f89dd62f45d46d4ea0d8aec5893ce5b37389638db010c117f46f11450/python_telegram_bot-22.7-py3-none-any.whl", hash = "sha256:d72eed532cf763758cd9331b57a6d790aff0bb4d37d8f4e92149436fe21c6475", size = 745365, upload-time = "2026-03-16T09:36:01.498Z" },
+    { url = "https://files.pythonhosted.org/packages/60/7c/ed7d4dd94280bd434173cae9f7a7aedaaab9af128ae4f494423a5687c820/python_telegram_bot-22.8-py3-none-any.whl", hash = "sha256:42373918097f1b837cc4e717d588c19ea79651497ec712bb5b0c76e5e63c50e1", size = 769397, upload-time = "2026-06-12T08:10:27.066Z" },
 ]
 
 [package.optional-dependencies]
@@ -3267,7 +3267,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "python-socketio", marker = "extra == 'channel-mochat'", specifier = ">=5.16.0,<6.0.0" },
     { name = "python-socks", extras = ["asyncio"], marker = "sys_platform != 'win32' and extra == 'channel-telegram'", specifier = ">=2.8.0,<3.0.0" },
-    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'channel-telegram'", specifier = ">=22.6,<23.0" },
+    { name = "python-telegram-bot", extras = ["socks"], marker = "extra == 'channel-telegram'", specifier = ">=22.8,<23.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "qq-botpy", marker = "extra == 'channel-qq'", specifier = ">=1.2.0,<2.0.0" },
     { name = "qrcode", extras = ["pil"], marker = "extra == 'channel-weixin'", specifier = ">=8.0" },
