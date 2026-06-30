@@ -34,11 +34,11 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 
 ### §1.2 When a comment is required, write it in English
 
-- Repo source comments **must not be Chinese** — keep comment language consistent across the repo.
+- Repo source comments **must not be in another language** — keep comment language consistent across the repo.
 
 ### §1.3 Examples
 
-❌ Chinese review comment copied straight into source:
+❌ Non-English review comment copied straight into source:
 
 ```python
 self.logger = logger.bind(channel=self.name)   # ← new
@@ -144,20 +144,20 @@ self.logger = logger.bind(channel=self.name)
 
 ### §3.1.1 Top rule: the whole message is English (subject + body + footer)
 
-No Chinese anywhere in the message — not just the subject; body and footer too.
+No other languages anywhere in the message — not just the subject; body and footer too.
 
 | Part | Rule |
 |---|---|
 | subject | English, lowercase start, ≤ 72 chars, no period |
-| body | **All English**; when citing a Chinese plan / discussion, **translate** it, don't paste |
-| punctuation | No full-width punctuation (`：`,`，`,`。`,`「」`,`""` …), no `§`-numbering, no Chinese path names; the latin part of a §N.M anchor is fine |
+| body | **All English**; when citing a non-English plan / discussion, **translate** it, don't paste |
+| punctuation | No full-width punctuation (`：`,`，`,`。`,`「」`,`""` …), no `§`-numbering, no non-English path names; the latin part of a §N.M anchor is fine |
 | trailer | `Co-authored-by: ...` is ASCII by format |
 
-**Why:** Conventional-Commits tooling (commitlint / semantic-release / changelog generators) parses ASCII grammar and mis-lints on Chinese; cross-language reviewers and a public commit history both need English.
+**Why:** Conventional-Commits tooling (commitlint / semantic-release / changelog generators) parses ASCII grammar and mis-lints on non-English text; cross-language reviewers and a public commit history both need English.
 
 **Process:**
-1. **Before writing:** translate the points in your head to English first — don't write a Chinese body then translate (that leaves full-width residue).
-2. **After writing:** self-check with `git log -1`; any Chinese char → rewrite.
+1. **Before writing:** translate the points in your head to English first — don't write a non-English body then translate (that leaves full-width residue).
+2. **After writing:** self-check with `git log -1`; any non-English char → rewrite.
 3. **Already committed but violating:** rewrite the message with `git rebase -i` **only after explicit user authorization**; don't rewrite history unprompted (see §3.4).
 
 ### §3.2 ✅ Good / ❌ Bad
@@ -171,9 +171,9 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 ```
 
 ❌ Bad:
-- `更新代码` (Chinese + no type/scope);
+- `更新代码` (non-English + no type/scope);
 - `update` (no type/scope);
-- `feat: Cron 命令重命名为 get 和 delete.` (uppercase + period + Chinese + no scope).
+- `feat: Cron 命令重命名为 get 和 delete.` (uppercase + period + non-English + no scope).
 
 ### §3.3 Trailer rules (commit message + PR description)
 
@@ -284,7 +284,7 @@ Filling rules:
 - internal branch names / commit-hash references (no reviewer context).
 
 **Preview-verification (required):**
-1. After drafting, **grep for full-width / Chinese chars first**:
+1. After drafting, **grep for full-width / non-English chars first**:
    ```bash
    grep -cP "[\x{4E00}-\x{9FFF}]|[\x{3000}-\x{303F}]|[\x{FF00}-\x{FFEF}]" /tmp/pr_description.md
    # must be 0
@@ -296,7 +296,7 @@ Filling rules:
 **Not allowed:**
 - pushing and walking away, leaving PR creation to the user;
 - running `gh pr create` without letting the user preview the description (they must get a chance to edit);
-- delivering a description without grepping for Chinese residue.
+- delivering a description without grepping for non-English residue.
 
 ---
 
