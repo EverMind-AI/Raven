@@ -145,8 +145,14 @@ function Install-Raven {
         $npm = Join-Path $nodeDir 'npm.cmd'
         if (Test-Path $npm) {
           Write-Info 'Building the TUI bundle (ui-tui\dist\entry.js)...'
+          # npm runs lifecycle scripts that spawn `node` from PATH. When the only
+          # Node is the private runtime (the case that triggered the download),
+          # it is not on PATH, so prepend its dir for the build -- parity with
+          # install.sh, which exports PATH="$node_dir:$PATH" around the npm calls.
+          $savedPath = $env:Path
+          $env:Path = "$nodeDir;$env:Path"
           Push-Location (Join-Path $scriptDir 'ui-tui')
-          try { & $npm ci; & $npm run build } finally { Pop-Location }
+          try { & $npm ci; & $npm run build } finally { Pop-Location; $env:Path = $savedPath }
         } else { Write-Warn 'Found node but not npm; skipping TUI build; raven tui may not work' }
       } else { Write-Warn 'No usable node found; skipping TUI build; raven tui may not work' }
     }

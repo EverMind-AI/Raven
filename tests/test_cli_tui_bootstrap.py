@@ -293,12 +293,13 @@ def test_rpc_handshake_timeout_helper_real(tmp_path, monkeypatch):
 # Python-only tests above; do NOT remove those.
 
 
-def test_rpc_socket_dir_constants_exposed():
-    """Sanity: the production socket helper exposes its tempdir prefix so
-    integration smoke can clean stale dirs."""
+def test_rpc_socket_env_constants_exposed():
+    """Sanity: the production transport exposes the env var names the Node
+    child reads -- the TCP-loopback address and the auth token."""
     from raven.cli import tui_commands
 
-    assert tui_commands._RPC_SOCKET_DIR_PREFIX.startswith("eve-rpc-")
+    assert tui_commands._RPC_SOCKET_ENV == "RAVEN_RPC_SOCKET"
+    assert tui_commands._RPC_TOKEN_ENV == "RAVEN_RPC_TOKEN"
 
 
 def test_production_dispatcher_includes_all_umbrella_methods():
@@ -348,8 +349,7 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     # production. These are the ones the dogfood bug surfaced.
     for required in ("slash.exec", "session.status", "complete.slash", "complete.path"):
         assert required in production_methods, (
-            f"{required} missing from production dispatcher — "
-            f"`raven tui` will return -32601 for it"
+            f"{required} missing from production dispatcher — `raven tui` will return -32601 for it"
         )
 
 
@@ -377,13 +377,14 @@ def test_confirm_registered_when_broker_present():
 
 
 def test_rpc_socket_transport_handshake_ok(tmp_path, monkeypatch):
-    """End-to-end: spawn a tiny Python child that connects to the unix socket
-    via the `RAVEN_RPC_SOCKET` env var and sends ``system.hello`` — the
-    parent helper must complete the handshake and the child must exit 0.
+    """End-to-end: spawn a tiny Python child that connects to the TCP-loopback
+    address in `RAVEN_RPC_SOCKET`, sends the `RAVEN_RPC_TOKEN` auth line, then
+    ``system.hello`` — the parent helper must complete the handshake and the
+    child must exit 0.
 
     We use a Python child rather than the real Node demo here so the test
-    doesn't depend on the ui-tui build artifact; the wire protocol (newline
-    JSON over the socket) is identical regardless of language.
+    doesn't depend on the ui-tui build artifact; the wire protocol (an auth
+    line then newline JSON over the socket) is identical regardless of language.
     """
     from raven.cli import tui_commands
 
@@ -393,9 +394,12 @@ def test_rpc_socket_transport_handshake_ok(tmp_path, monkeypatch):
     child_src = """
 import json, os, socket, sys
 
-sock_path = os.environ["RAVEN_RPC_SOCKET"]
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.connect(sock_path)
+host, port = os.environ["RAVEN_RPC_SOCKET"].rsplit(":", 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect((host, int(port)))
+tok = os.environ.get("RAVEN_RPC_TOKEN")
+if tok:
+    s.sendall((tok + "\\n").encode("utf-8"))
 req = {"jsonrpc": "2.0", "id": 1, "method": "system.hello",
        "params": {"client_version": "0.1.0"}}
 s.sendall((json.dumps(req) + "\\n").encode("utf-8"))

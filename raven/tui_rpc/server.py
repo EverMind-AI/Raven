@@ -1,9 +1,12 @@
-"""asyncio JSON-RPC 2.0 server loop bound to two POSIX pipe FDs.
+"""asyncio JSON-RPC 2.0 server loop over a full-duplex socket (or, for tests, a
+POSIX pipe pair).
 
-Topology (design.md §1):
-
-    Node child writes requests  → FD 3 → Python parent reads here
-    Python parent writes resp/notif → FD 4 → Node child reads here
+Topology: the parent listens on a TCP-loopback socket; the Node child connects,
+sends an auth token line, then exchanges newline-JSON frames over the same
+connection. ``RpcServer`` is given the accepted socket *object* and wires it via
+``loop.connect_accepted_socket`` (cross-platform: selector + proactor loops).
+A legacy pipe path (``request_fd``/``notify_fd`` + ``connect_read/write_pipe``)
+is retained for the ``--check`` smoke and unit tests.
 
 `RpcServer` owns the read pump (one line-delimited JSON frame per iteration),
 dispatches concurrently via `asyncio.create_task` so a long-running streaming
@@ -46,13 +49,25 @@ class RpcServer:
 
     def __init__(
         self,
-        request_fd: int,
-        notify_fd: int,
-        dispatcher: "Dispatcher",
+        request_fd: int = -1,
+        notify_fd: int = -1,
+        dispatcher: "Dispatcher | None" = None,
+        *,
+        sock: "socket.socket | None" = None,
+        auth_token: str | None = None,
     ) -> None:
         self._request_fd = request_fd
         self._notify_fd = notify_fd
         self._dispatcher = dispatcher
+        # Cross-platform production transport: a single connected TCP-loopback
+        # socket passed as an object (no os.dup of a socket fd, which is not
+        # supported on Windows). When set it takes precedence over the fd pair.
+        self._sock = sock
+        # Optional shared-secret line the peer MUST send first. TCP loopback is
+        # reachable by any local process (unlike an AF_UNIX file guarded by
+        # 0600 perms), so the token restores the "only our spawned child can
+        # talk to us" trust boundary. None disables the check (pipe/test paths).
+        self._auth_token = auth_token
 
         self._reader: asyncio.StreamReader | None = None
         self._write_transport: asyncio.WriteTransport | None = None
@@ -107,13 +122,25 @@ class RpcServer:
         # the same fd instead. The transport's ``.write()`` works without
         # the spurious peer-close detection. We keep the pipe-based path as a
         # fallback for tests/CI that wire bare ``os.pipe()`` pairs.
-        try:
-            req_is_sock = stat.S_ISSOCK(os.fstat(self._request_fd).st_mode)
-            notif_is_sock = stat.S_ISSOCK(os.fstat(self._notify_fd).st_mode)
-        except OSError:
-            req_is_sock = notif_is_sock = False
+        req_is_sock = notif_is_sock = False
+        if self._sock is None:
+            try:
+                req_is_sock = stat.S_ISSOCK(os.fstat(self._request_fd).st_mode)
+                notif_is_sock = stat.S_ISSOCK(os.fstat(self._notify_fd).st_mode)
+            except OSError:
+                req_is_sock = notif_is_sock = False
 
-        if req_is_sock and notif_is_sock:
+        if self._sock is not None:
+            # Cross-platform production path: full-duplex transport over a single
+            # connected socket object (TCP loopback). connect_accepted_socket is
+            # implemented on both the selector (POSIX) and proactor (Windows)
+            # event loops, and passing the socket object avoids os.dup of a
+            # socket fd -- which is unsupported on Windows.
+            self._sock.setblocking(False)
+            transport, _ = await loop.connect_accepted_socket(lambda: reader_protocol, self._sock)
+            self._write_transport = transport
+            self._write_protocol = reader_protocol
+        elif req_is_sock and notif_is_sock:
             # Both fds are dups of the same accepted socket. Close the read
             # dup and reclaim the write dup as a ``socket.socket`` — only one
             # handle is needed for a full-duplex transport.
@@ -148,8 +175,25 @@ class RpcServer:
             os.getpid(),
             self._request_fd,
             self._notify_fd,
-            "socket" if req_is_sock and notif_is_sock else "pipe",
+            "socket-obj" if self._sock is not None else ("socket" if req_is_sock else "pipe"),
         )
+
+        # Trust-boundary gate for the TCP-loopback transport: the peer must send
+        # the shared secret as the very first newline-terminated line before any
+        # JSON-RPC frame. Only our spawned Node child knows it (passed via env),
+        # so a rogue local process that connects to the port is rejected here
+        # before any dispatch. Disabled (None) for the pipe/test paths.
+        if self._auth_token is not None:
+            try:
+                first = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=10.0)
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+                logger.error("tui_rpc: auth token not received; closing connection")
+                self._stopped.set()
+                return
+            if first.rstrip(b"\n") != self._auth_token.encode("utf-8"):
+                logger.error("tui_rpc: auth token mismatch; closing connection")
+                self._stopped.set()
+                return
 
         try:
             while not self._stopped.is_set():
