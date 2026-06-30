@@ -1,414 +1,398 @@
-# Raven 🦞
+<div align="center" id="readme-top">
 
-> 围绕四大支柱设计的 Agent 框架:**智能上下文管理**、**主动性**、**Token 效率**、**Skill 自进化**。
+# Raven
 
-[English](README.md) | 简体中文
+### 为终端重度用户打造的 AI-native Command Line Agent。
 
-Raven 是对 Agent 运行时的一次自底向上的重新设计 —— 基于经过实战验证的基座(Fork 自 MIT 协议的 [nanobot](https://github.com/HKUDS/nanobot) 项目),针对每个严肃 Agent 产品最终都会撞上的四大难题,给出有明确主张的解决方案:
+<p align="center">
+  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI&style=for-the-badge" alt="CI"></a>
+  <a href="https://github.com/EverMind-AI/raven/blob/main/LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven?style=for-the-badge" alt="License"></a>
+  <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
+  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge" alt="HuggingFace"></a>
+</p>
 
-1. **上下文管理 · Context Management** —— *Curator* 引擎自主决定哪些消息留在上下文窗口,其余无损归档,按需检索。
-2. **主动性 · Proactivity** —— *Sentinel* 子系统与主 Agent 循环并行运行,监听事件,决定何时由 Agent 主动开口(且不惹人烦)。
-3. **节省 Token · Token Efficiency** —— *TokenWise* 层的一组跨切面策略:Prompt 缓存优化、工具结果生命周期管理、智能模型路由、实时预算追踪。
-4. **Skill 自进化 · Skill Self-Evolution** —— *SkillForge* 闭环:从对话中自动识别可复用模式,为 Skill 做版本管理与性能追踪,并基于执行反馈持续进化。
+[Website](https://evermind.ai) · [Documentation](https://docs.evermind.ai) · [EverOS](https://github.com/EverMind-AI/EverOS) · [English](README.md)
 
----
+</div>
 
-## 当前状态
+<br>
 
-**Pre-alpha**,活跃开发中。
+<details>
+  <summary><kbd>目录</kbd></summary>
 
-| 层级 | 状态 |
-|------|------|
-| 基础 Agent 运行时(Fork 自 nanobot) | ✅ 可用 —— CLI、Channels、Tools、Cron、Providers |
-| 核心抽象(`raven/core/`) | ✅ Tier 1 完成 —— 接口、事件总线、配置 |
-| 特性支柱:Curator 上下文引擎 | 🚧 已设计,尚未实现 |
-| 特性支柱:Sentinel 主动性 | 🚧 已设计,尚未实现 |
-| 特性支柱:TokenWise 效率 | 🚧 已设计,部分实现 |
-| 特性支柱:SkillForge 自进化 | 🚧 已设计,部分实现 |
+<br>
 
-实施计划见下文 [Roadmap](#roadmap)。
+- [为什么是 Raven](#为什么是-raven)
+- [快速开始](#快速开始)
+- [Raven 适合什么](#raven-适合什么)
+- [架构](#架构)
+- [开发工作流](#开发工作流)
+- [当前状态](#当前状态)
+- [Star 支持](#star-支持)
+- [EverMind 生态](#evermind-生态)
+- [参与贡献](#参与贡献)
 
----
+<br>
+
+</details>
 
 ## 为什么是 Raven
 
-大多数开源 Agent 框架都止步于 "LLM + 工具 + 循环"。这套在生产前够用,但一到生产就会遇到:
+Raven 是一个原生 Command Line Agent，不是给 shell 套了一层聊天框。
+它面向已经生活在终端、仓库、日志、脚本、会话和长流程里的用户。
+目标很直接：让你的终端拥有一个会记忆、会行动、会使用工具、会管理
+上下文，并且能持续沉淀自身技能的 Agent。
 
-- 上下文越来越臃肿,窗口溢出,信息开始丢失 —— 于是做摘要,信息进一步丢失。
-- 每一轮都在重复发送同样的 System Prompt、同样的 Skill 摘要、同样的工具定义 —— 烧 Token。
-- Agent 只会被动等指令,从不说 "嘿,我发现部署卡住了" 或 "你让我提醒你的 X 来了"。
-- Skill 是静态 Markdown 文件,遇到新的边缘 case 匹配不上,就永远静默失败。
+大多数 Agent CLI 只做到 "LLM + tools + loop"。Demo 阶段够用，但一旦进入
+真实日常工作就会遇到这些问题：
 
-Raven 针对这四个问题各给出正面解法。**四大支柱不是可有可无的附加项,它们就是这个框架本身。**
+- 长会话撑爆上下文，重要信息开始丢失。
+- 每轮都重复发送 system prompt、skills 和工具定义，Token 成本失控。
+- Agent 永远被动等待输入，即使它已经看到有事需要处理。
+- 有用的工作流留在聊天记录里，没有变成可复用技能。
 
----
+Raven 把这些问题当成产品本身，而不是边缘 case。
 
-## 架构
+<table>
+<tr>
+<th width="28%">能力</th>
+<th width="36%">Raven</th>
+<th width="36%">常见 Agent CLI</th>
+</tr>
+<tr>
+<td><strong>原生终端产品</strong></td>
+<td>交互式 TUI、CLI、Gateway 模式，以及 Python 与 React/Ink 之间的 typed RPC</td>
+<td>通常只是聊天循环外面的一层命令包装</td>
+</tr>
+<tr>
+<td><strong>长期记忆</strong></td>
+<td>EverOS-backed memory、本地 skills、session history 和 workspace templates</td>
+<td>通常是临时上下文或 provider 侧聊天历史</td>
+</tr>
+<tr>
+<td><strong>上下文控制</strong></td>
+<td>Curator 与 legacy context engines，显式 token budgets 和 fail-safes</td>
+<td>通常是截断、摘要或隐藏 prompt heuristic</td>
+</tr>
+<tr>
+<td><strong>主动性</strong></td>
+<td>Sentinel、scheduler、nudge policy 和 deferred decision flow</td>
+<td>通常等用户再次输入</td>
+</tr>
+<tr>
+<td><strong>Skill 进化</strong></td>
+<td>识别可复用流程，生成 skill，追踪反馈，并在失效时进化</td>
+<td>通常是静态 markdown prompt 或手动安装插件</td>
+</tr>
+</table>
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                            Event Bus                              │
-│  (inbound, outbound, generic pub/sub for BusEvent / TriggerEvent) │
-└─────┬───────────┬───────────┬──────────┬──────────┬───────────────┘
-      │           │           │          │          │
-┌─────▼─────┐┌────▼────┐┌─────▼────┐┌────▼────┐┌────▼─────┐
-│  Channels ││  Agent  ││ Sentinel ││TokenWise││SkillForge│
-│   Layer   ││  Loop   ││(proactive)││(token  ││(evolving)│
-│           ││         ││          ││ hooks) ││          │
-│ telegram  ││ tools   ││ monitors ││ cache  ││  stats   │
-│ discord   ││ session ││ evaluator││ routing││  evolve  │
-│ slack …   ││ memory  ││ nudges   ││ tracker││  detect  │
-└───────────┘└────┬────┘└──────────┘└────────┘└──────────┘
-                  │
-         ┌────────▼─────────┐
-         │  ContextEngine   │  ← 可插拔
-         │                  │      legacy = 基线
-         │   [legacy]       │      curator = 自主
-         │   [curator]      │
-         └────────┬─────────┘
-                  │
-         ┌────────▼─────────┐
-         │   LLM Providers  │
-         │ Anthropic / OAI  │
-         │  Gemini / OR …   │
-         └──────────────────┘
-```
-
-**设计原则:通过接口解耦。** 每个特性支柱都在 `raven/core/interfaces.py` 中以抽象基类形式定义,实现通过配置挂载。你完全可以设 `context.engine = "legacy"`、`sentinel.enabled = false`,此时 Raven 就等价于基础 Agent —— 也可以逐个开启支柱。
-
-### 仓库结构
-
-```
-raven/
-├── core/               # 抽象接口 + 通用事件总线
-│   ├── events.py       # BusEvent, EventType, TriggerEvent
-│   ├── event_bus.py    # EventBus (inbound/outbound + pub/sub)
-│   └── interfaces.py   # ContextEngine, Monitor, SkillHandler, TokenStrategy
-│
-├── context/            # Curator —— 智能上下文管理
-├── sentinel/           # Sentinel —— 主动监听器与 Nudge
-├── token_wise/         # TokenWise —— 缓存、路由、裁剪、预算
-├── skill_forge/        # SkillForge —— Skill 自动识别、进化、退役
-│
-├── agent/              # 基础 Agent 循环、工具、Skill、记忆
-├── bus/                # 基础 MessageBus (InboundMessage / OutboundMessage)
-├── channels/           # 平台集成(telegram, discord, slack, …)
-├── cli/                # `raven` 命令行入口
-├── config/             # 配置 schema(基础)+ Raven 特性块
-├── cron/               # 定时任务
-├── memory/             # 双层记忆(MEMORY.md + HISTORY.md)
-├── providers/          # LLM Provider 适配
-├── routing/            # 基于 PinchBench 基准的模型路由
-├── session/            # 会话管理(append-only JSONL)
-├── skills/             # 内置 Skill
-├── templates/          # 默认 SOUL.md / USER.md / AGENTS.md
-└── utils/              # 共享工具
-```
-
----
+<br>
 
 ## 快速开始
 
-### 环境要求
+> 目标：从源码启动 Raven，完成 onboarding，然后进入原生 TUI。
 
-- Python **3.11+**
-- 至少一个 LLM Provider 的 API Key(Anthropic、OpenAI、OpenRouter、Gemini、DeepSeek 等)
+### 0. 前置条件
 
-### 安装
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 22+，用于原生 TUI
+- 一个模型 provider key，或通过 onboarding 配置 OAuth provider
+
+Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
+OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoint。
+
+### 1. 从源码安装
 
 ```bash
 git clone https://github.com/EverMind-AI/raven.git
-cd Raven
-pip install -e .
+cd raven
+uv sync --extra dev --dev
 ```
 
-需要 Channel 集成(Telegram、Discord、Slack、WhatsApp 等):
+安装 TUI 依赖：
 
 ```bash
-pip install -e ".[channels]"
+npm ci --prefix ui-tui
 ```
 
-开发环境(测试、Lint):
+### 2. 运行 Onboarding
 
 ```bash
-pip install -e ".[dev]"
+uv run raven onboard
 ```
 
-### 初始化工作空间
+Wizard 会配置：
+
+- LLM provider 和默认模型；
+- 可选 sandbox 执行环境；
+- 可选聊天 channel；
+- 可选 EverOS 长期记忆。
+
+### 3. 启动 Raven
 
 ```bash
-raven onboard
+uv run raven
 ```
 
-会创建 `~/.raven/config.json`,并在 `~/.raven/workspace/` 下生成默认的 `SOUL.md`、`USER.md`、`AGENTS.md` 模板。
-
-### 配置 API Key
-
-编辑 `~/.raven/config.json`:
-
-```json
-{
-  "providers": {
-    "anthropic": { "api_key": "sk-ant-..." }
-  },
-  "agents": {
-    "defaults": {
-      "model": "anthropic/claude-opus-4-6"
-    }
-  }
-}
-```
-
-### 开始对话
+裸 `raven` 会打开原生 TUI。也可以直接执行一次任务：
 
 ```bash
-raven agent -m "你好,你是谁?"
+uv run raven agent -m "Inspect this repo and tell me what to improve first."
 ```
 
-或交互模式:
+对接 Telegram、Slack、Discord、Matrix、WhatsApp、WeCom 等平台时：
 
 ```bash
-raven agent
+uv run raven gateway
 ```
 
-### 作为网关运行(对接聊天平台)
+<br>
+<div align="right">
 
-在配置中启用 Channel(例如 `channels.telegram.enabled = true` 并填入 token),然后:
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## Raven 适合什么
+
+Raven 面向那些普通聊天 Agent 显得太轻、太浅、太短的工作流。
+
+### 1. 终端原生日常工作
+
+Raven 可以作为 native TUI、直接 CLI agent 或 gateway-backed agent 运行。
+TUI 不是网页 shell，而是一个 React/Ink 应用，通过 typed RPC 与 Python
+runtime 通信。
+
+### 2. 会变得有用的记忆
+
+Raven 连接 EverOS 作为长期用户记忆与 Agent 记忆层。Sessions、procedures
+和可复用模式可以转成本地 skill 材料，而不是消失在旧 transcript 里。
+
+### 3. 不会在压力下崩掉的上下文
+
+Context stack 有 legacy path 和 Curator path。在 token 压力下，Raven 可以
+归档、检索并组装上下文，而不是盲目裁掉最旧消息。
+
+### 4. 会主动开口的 Agent
+
+Sentinel 监听事件、调度检查、判断 nudge 是否有用，并通过 guardrails 路由
+主动动作。目标不是制造通知噪音，而是让 Agent 真的能 notice。
+
+### 5. 会进化的 Skills
+
+SkillForge 把 skills 当成 procedural memory。它可以识别可复用工作流、写入
+skill 文件、追踪执行反馈，并在 instruction 失效时进化它。
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## 架构
+
+每个 turn 都流经 Spine：一个入口 `submit`，一个出口 `emit`，并用
+per-conversation lanes 处理顺序与取消。各个 feature engine 通过显式 handoff
+接入 Agent loop，而不是互相 import。
+
+```text
+Channels / TUI / Gateway
+        |
+        v
+   Raven Spine
+ submit -> lanes -> emit
+        |
+        v
+   Agent Loop
+ tools · skills · providers
+        |
+        +--> Context Engine   legacy / curator
+        +--> Memory Engine    EverOS / local skills / SkillForge
+        +--> Proactive Engine Sentinel / scheduler / nudge policy
+        +--> TokenWise        usage tracking / cache placement / routing
+        +--> Eval Engine      task judgement and coordination
+```
+
+### 仓库结构
+
+```text
+raven/
+├── spine/              # Per-turn backbone: submit -> lanes -> emit
+├── agent/              # Agent loop, tools, hooks, subagents, context builder
+├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
+├── tui_rpc/            # Native TUI protocol 的 Python 侧
+├── providers/          # LLM provider adapters
+├── context_engine/     # Context assembly 与 Curator path
+├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
+├── memory_engine/      # EverOS memory, local skills, SkillForge
+├── token_wise/         # Usage tracking, cache placement, routing
+├── sandbox/            # Isolated command execution
+├── security/           # Trust boundaries and network checks
+├── cli/                # `raven` command line entry point
+└── config/             # Config schema and update helpers
+
+ui-tui/                 # React/Ink 原生终端 UI
+bridge/                 # WhatsApp TypeScript bridge
+```
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## 开发工作流
+
+安装依赖并设置 hooks：
 
 ```bash
-raven gateway
+make install
 ```
 
----
-
-## 配置
-
-Raven 的配置在基础 Agent 配置之上增加了四个特性块。**所有新特性默认关闭** —— 新装 Raven 的行为与基础 Agent 完全一致,直到你主动启用。
-
-```json
-{
-  "agents":   { "defaults": { "model": "anthropic/claude-opus-4-6" } },
-  "channels": { "telegram": { "enabled": false } },
-  "providers": { "anthropic": { "api_key": "sk-ant-..." } },
-
-  "context": {
-    "engine": "legacy",
-    "fast_path_threshold": 0.60,
-    "curator_model": "gemini-2.5-flash"
-  },
-
-  "sentinel": {
-    "enabled": false,
-    "monitors": [],
-    "nudge_policy": {
-      "max_nudges_per_hour": 3,
-      "quiet_hours": [23, 7]
-    }
-  },
-
-  "token_wise": {
-    "enabled": true,
-    "usage_tracking": true,
-    "cache_optimization": true,
-    "smart_routing": { "enabled": false }
-  },
-
-  "skill_forge": {
-    "enabled": false,
-    "stats_tracking": true,
-    "auto_detect": false,
-    "auto_evolve": false
-  }
-}
-```
-
-完整字段定义见 `raven/config/raven.py`。
-
-### 启用 Skill 自进化
-
-完成的 `user → assistant` 轮次会以 session 为单位攒在本地抽取 pipeline 的
-缓冲里,**先做跨轮的任务边界检测,再决定要不要蒸馏**。每一轮都会触发一次
-轻量分类器,问一句"用户是不是刚开了个新任务";只有检测到边界(或 session
-结束)时,缓冲里的这一段才会被压成 `AgentCase`。太短的对话、没有工具调用
-的纯聊天、还没结束的轮次,会在任何 LLM 调用之前直接丢掉。低于质量门槛的
-case 停在这里,通过的继续进 skill 抽取。结果落到
-`<workspace>/.cache/skills.db`,物化的 `SKILL.md` 写到
-`<workspace>/skills/everos/<id>/`,本地 BM25 池自动 pickup。无需外部
-服务,只用 SQLite + 现有 LLM provider。
-
-```json
-{
-  "skill_forge": {
-    "enabled": true,
-    "evolve_model": "claude-opus-4-6",
-    "detect_model": "gemini-2.5-flash",
-    "everos": {
-      "enabled": true
-    }
-  }
-}
-```
-
-Pipeline 用到两个模型:
-
-- `skill_forge.evolve_model` —— 重量级 LLM,负责把 `AgentCase` 蒸馏成
-  skill、以及对已有 skill 做重写。不设置时回落到当前 agent model;想要
-  更高质量的重写就在这里钉一个更强的模型。
-- `skill_forge.detect_model` —— 每轮 boundary detector(多轮任务切分)
-  用的轻量分类器。因为它会在每个累计轮次上运行,默认 `gemini-2.5-flash`
-  这种小而快的模型是有意为之。
-
-### 配置媒体生成(图片 / 语音 / 视频)
-
-三个媒体工具通过 [OpenRouter](https://openrouter.ai) 生成媒体,**按工具
-逐个 opt-in**:只有当你在 `tools.media.<tool>` 下给某个工具配了 `model`
-或 `api_key`,它才会暴露给 agent。**仅把 OpenRouter 配成 chat provider
-并不会启用它们** —— 不主动配置,agent 永远看不到图片/语音/视频工具。
-
-```json
-{
-  "providers": { "openrouter": { "api_key": "sk-or-..." } },
-  "tools": {
-    "media": {
-      "image":  { "model": "google/gemini-2.5-flash-image" },
-      "speech": { "model": "openai/gpt-audio-mini" },
-      "video":  { "model": "kwaivgi/kling-v3.0-std" },
-      "proxy": null,
-      "output_subdir": "generated"
-    }
-  }
-}
-```
-
-- **Key** —— 已配置的工具若没单独设 key,会回落到
-  `providers.openrouter.api_key`,所以通常只需配一个 `model` 就能开启某个
-  工具。想用独立的 key,就在 `tools.media.<tool>.api_key` 单独覆盖。
-- `image_generate` —— 文生图(及图片编辑),用 Nano Banana
-  (`google/gemini-2.5-flash-image`)。在 workspace 下保存 PNG。
-- `text_to_speech` —— 语音合成,用 `openai/gpt-audio-mini`。零依赖输出
-  WAV;mp3/opus/flac 需要 PATH 上有 `ffmpeg`,没有时回退 WAV。
-- `video_generate` —— 文生视频,用 Kling(`kwaivgi/kling-v3.0-std`),
-  异步任务、耗时较长,且**需要 OpenRouter 账户开通后付费 / credits**。
-
-生成的文件落在 `<workspace>/<output_subdir>`(默认 `generated/`)。设置
-`tools.media.proxy` 可让媒体调用走 HTTP/SOCKS 代理。
-
----
-
-## 四大支柱详解
-
-### 1. 上下文管理 —— *Curator* 引擎
-
-`ContextEngine` 抽象基类定义了可插拔的上下文层。规划了两个实现:
-
-- **`legacy`** *(默认)* —— 基础 Agent 的 `ContextBuilder` + Consolidator。当 Prompt 接近上下文窗口上限时,老消息会被摘要并移出活跃上下文。
-- **`curator`** *(进行中)* —— 一个自主管理自身上下文的 Agent。在压力下,它会将消息无损归档到磁盘、需要时再检索回来,并通过 11 个内部工具(`curator_check_budget`、`curator_archive_messages`、`curator_retrieve_archived`、`curator_build_context` 等)组装最终窗口。采用快慢双路设计:
-  - **Fast Path**(历史 < 60% 预算):零 LLM 直通,仅注入工作态。
-  - **Slow Path**(压力态):运行一个小模型 Agent 循环(默认 `gemini-2.5-flash`)决定保留什么。
-  - **Fail-Safe**:若 Slow Path 的 LLM 失败或超时,一个确定性 Python 降级方案会产出有效上下文。
-
-设计文档给出的基准目标:
-- **PinchBench 连续评测,16K 窗口**:Legacy 86% → Curator 96% 整体成功率。
-- **DeepResearch-Bench-II,32K 窗口,10 项研究任务**:Legacy 43% → Curator 50% 整体成功率。
-
-### 2. 主动性 —— *Sentinel* 子系统
-
-Sentinel **与主 Agent 循环并行**运行,订阅事件总线,决定 Agent 何时无需提示即可主动发声。关键组件:
-
-- **Monitors**(`Monitor` ABC)—— 订阅事件类型,条件触发时产出 `TriggerEvent`。规划中的监听器:`IdleMonitor`、`CronMonitor`、`WorkspaceMonitor`、`MemoryMonitor`、`FollowUpMonitor`、`TaskMonitor`。
-- **Evaluator** —— 双层决策。规则层以零成本处理高确定性 case;可选的 LLM Evaluator 用小模型(`gemini-2.5-flash`,3 秒超时)判定模糊场景。
-- **Nudge Policy** —— 反骚扰护栏:`max_nudges_per_hour`、`quiet_hours`、`min_interval_seconds`、被 Dismiss 后的冷却。
-- **注入** —— Nudge 通过事件总线以普通 `InboundMessage`(`sender_id="sentinel"`)进入 Agent 循环,被路由为主动式上下文。
-
-### 3. Token 效率 —— *TokenWise* 层
-
-TokenWise 是一组跨切面的 `TokenStrategy` 钩子,而非单一模块。每个策略都可独立开关。
-
-| 策略 | 作用 | 典型节省 |
-|------|------|----------|
-| `UsageTracker` | 记录每次 LLM 调用的 tokens 和成本 | —(可观测性) |
-| `CacheOptimizer` | 在 Anthropic 请求中合理放置 `cache_control` 断点 | input 成本最多降 75% |
-| `ToolResultLifecycle` | 三阶段裁剪:保留最近 / 摘要中段 / 归档远端 | 30-60% 历史 tokens |
-| `SmartRouter` | 简单任务路由到廉价模型(`haiku`、`gemini-flash`) | 单请求降 40-70% |
-| `SkillLazyLoader` | 只注入与当前消息相关的 Skill 摘要 | 10-30% system prompt |
-| `BudgetAlerter` | 按会话/按天的可配置支出上限告警或阻断 | —(护栏) |
-
-### 4. Skill 自进化 —— *SkillForge*
-
-SkillForge 是一个闭环:`Detect → Create → Execute → Feedback → Evaluate → Evolve → Retire`。
-
-- Skill 存放在 `~/.raven/skills/<skill-name>/SKILL.md`,YAML frontmatter 扩展了 `version`、`stats`、`evolution_log`。
-- **Detect**:会话结束时,小模型判断该对话是否包含值得保存的可复用多步流程。
-- **Draft → Active 门槛**:自动创建的 Skill 以 `draft` 状态起步,直到至少成功一次才进入 Skill 摘要,避免噪声。
-- **Execute 追踪**:每次 Skill 调用都记录 `turns_used`、`tokens_consumed`、`outcome` 和 `user_feedback`(显式或隐式)。
-- **Evolve**:当 `success_rate` 在 `>= 10` 次调用内跌破阈值(默认 0.70),由强模型(`claude-opus-4-6`)重写该 Skill —— 保留可用逻辑并追加改进;版本递增,旧版本快照保留。
-- **Retire**:闲置 `retirement_idle_days` 天(默认 90)的 Skill 被标为 `deprecated`;再闲置 30 天 → `retired`(移入归档)。
-
----
-
-## Roadmap
-
-Raven 分六个 Tier 构建,按依赖关系与风险排序:
-
-| Tier | 范围 | 状态 |
-|------|------|------|
-| **1** | 骨架:仓库 Fork、核心接口、事件总线、配置 | ✅ 完成 |
-| **2** | 低风险高价值:使用量追踪、缓存优化、预算告警、Skill 统计 | 🚧 进行中 |
-| **3** | Curator Fast Path + Archive + 11 内部工具 + Slow Path | 规划中 |
-| **4** | TokenWise 高阶:工具结果生命周期、智能路由(规则层)、Skill 懒加载 | 规划中 |
-| **5** | SkillForge 闭环:识别、自动创建、执行追踪、进化、退役 | 规划中 |
-| **6** | Sentinel:Monitors、Evaluator、Nudge Policy、注入 | 规划中 |
-
-每个 Tier 的实施细节详见 [development docs](docs/)(补充中)。
-
----
-
-## 开发
-
-### 运行测试
+运行本地 CI gate：
 
 ```bash
-cd Raven
-PYTHONPATH=. pytest -v
+make ci
 ```
 
-Tier 1 提供 24 个测试,覆盖包骨架、事件总线 pub/sub 契约、四个抽象接口、配置 schema。
+常用命令：
 
-### 布局约定
+```bash
+make lint-python
+make lint-tui
+make lint-bridge
+make test-python
+make test-tui
+```
 
-- **`core/interfaces.py` 不放任何运行时逻辑** —— 只保留 ABC、dataclass、类型别名。避免循环导入。
-- **特性模块之间不直接互相 import** —— 通过事件总线或 Agent 循环中的显式交接通信。
-- **Fail-safe 是强制要求** —— 每个调用 LLM 的组件都必须有确定性降级。任何特性都不得导致主 Agent 循环崩溃。
-- **新特性默认关闭** —— 任何新增能力都以 `enabled = false` 发布;仅低成本、成熟的策略(缓存优化、使用量追踪)默认开启。
+仓库使用：
 
-### 代码风格
+- `uv` 管理 Python 依赖；
+- `ruff` 和 `pre-commit` 做 Python 与 repo hygiene；
+- `commitlint` 加 Python checker 校验 Conventional Commit subjects 和
+  ASCII-only public history；
+- `eslint`、`tsc`、`vitest` 和 RPC drift check 校验 TUI；
+- `npm ci`、`tsc` 和 `npm audit --audit-level=critical` 校验 bridge。
 
-- Python 3.11+,合适处使用 `from __future__ import annotations`
-- Ruff Lint(`ruff check raven tests`)
-- 全量类型标注(`Literal`、`Protocol` 按需使用)
-- 测试使用 `pytest` 搭配 `pytest-asyncio`(asyncio mode `auto`)
+`CLAUDE.md` 包含 branch naming、commit format、dependency update、testing 和
+PR hygiene 的完整协作规则。
 
----
+<br>
+<div align="right">
 
-## 致谢与许可
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
 
-Raven 采用 MIT 许可。基础 Agent 运行时(涉及 `raven/agent/`、`raven/bus/`、`raven/channels/`、`raven/cli/`、`raven/config/{loader,paths,schema}.py`、`raven/cron/`、`raven/memory/`、`raven/providers/`、`raven/routing/`、`raven/session/`、`raven/skills/`、`raven/templates/`、`raven/utils/`)来自 HKUDS 的 MIT 许可项目 [nanobot](https://github.com/HKUDS/nanobot),完整许可见 `LICENSE`。
+</div>
 
-四大特性支柱(`context/`、`sentinel/`、`token_wise/`、`skill_forge/`,以及 `core/` 接口与配置扩展)是 Raven 的新增内容。
+## 当前状态
 
-接口设计参考了生态内若干项目 —— [hermes-agent](https://github.com/NousResearch/hermes-agent)(Nous Research)、[Letta / MemGPT](https://github.com/letta-ai/letta)、[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) 等。
+Raven 仍处于 pre-alpha，变化会很快。API 可能调整，但核心产品面已经在仓库里。
 
----
+| 层级 | 状态 |
+| --- | --- |
+| Native TUI + CLI | 可用 |
+| Spine runtime | 可用 |
+| Base agent loop, tools, providers | 可用 |
+| Context engine | 已实现，持续演进 |
+| Sentinel proactivity | 已实现，持续演进 |
+| TokenWise strategies | 已实现 |
+| SkillForge | 已实现 |
+| Eval engine | 部分完成 |
 
-## 贡献
+<br>
+<div align="right">
 
-Raven 处于 pre-alpha 阶段,API 会持续演进。如果你有兴趣贡献:
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
 
-1. 动手前先开 Issue,我们对齐一下方向。
-2. 遵循上面的布局约定。
-3. 补测试 —— Tier 1 的 `tests/test_tier1_skeleton.py` 是模板。
-4. 在模块 docstring 中说明其契约,并同步更新 README 对应章节。
+</div>
 
----
+## Star 支持
 
-*Raven 由 EverMind 打造。*
+如果 Raven 是你希望存在的 Command Line Agent，请 Star 这个仓库。它会帮助更多
+terminal-native builders 发现项目，也会给 EverMind 生态一个更强的信号，继续
+投入开源 Agent。
+
+### Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## EverMind 生态
+
+EverMind 是一个面向长期记忆、自进化 Agent、AI-native interfaces 和记忆评测的开源生态。
+
+<table>
+<tr>
+<th colspan="2">EverMind Open-Source Ecosystem</th>
+</tr>
+<tr>
+<td><strong>Memory Runtime</strong></td>
+<td><a href="https://github.com/EverMind-AI/EverOS">EverOS</a> - 本地记忆操作系统，以及有研究支撑的 Agent 和用户记忆 runtime。</td>
+</tr>
+<tr>
+<td><strong>AI-Native CLI Agent</strong></td>
+<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - 把记忆、主动性、上下文控制和 skill evolution 带进终端的 native command line agent。</td>
+</tr>
+<tr>
+<td><strong>Algorithm Engine</strong></td>
+<td><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a> - stateless extraction、ranking、parsing 和 memory operators，为 EverOS 提供算法能力。</td>
+</tr>
+<tr>
+<td><strong>Hypergraph Memory</strong></td>
+<td><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a> - 面向长期对话的 hypergraph memory，拥有 benchmark-backed topic -> episode -> fact retrieval。</td>
+</tr>
+<tr>
+<td><strong>Benchmarks</strong></td>
+<td><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a> · <a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a> - conversational memory 和 Agent self-evolution 的评测套件。</td>
+</tr>
+<tr>
+<td><strong>Long-Context Research</strong></td>
+<td><a href="https://github.com/EverMind-AI/MSA">MSA</a> - Memory Sparse Attention，用于可扩展 latent memory 和 100M-token contexts。</td>
+</tr>
+<tr>
+<td><strong>Personal Memory Layer</strong></td>
+<td><a href="https://github.com/EverMind-AI/EverMe">EverMe</a> - CLI 和 Agent plugin suite，用于跨设备、跨 Agent 的个人记忆。</td>
+</tr>
+<tr>
+<td><strong>Developer Integrations</strong></td>
+<td><a href="https://github.com/EverMind-AI/evermem-claude-code">evermem-claude-code</a> · <a href="https://github.com/EverMind-AI/everos-plugins">everos-plugins</a> - AI coding agents 的 plugins、skills 和 migration tooling。</td>
+</tr>
+</table>
+
+这些仓库共同构成 EverMind 的 research-to-runtime stack：记忆方法、可复用算法、
+benchmark evidence、native agent products 和开发者集成。
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## 参与贡献
+
+Raven 还很早。欢迎在 runtime architecture、TUI polish、provider support、
+memory workflows、proactivity、benchmarks、documentation 和 issue reports 上贡献。
+
+提交 PR 前：
+
+1. 阅读 `CLAUDE.md`。
+2. 保持改动范围清晰。
+3. 行为变化需要添加或更新测试。
+4. 运行相关 `make` targets。
+5. 使用 Conventional Commit 标题。
+
+### 许可证
+
+Raven 使用 MIT License。基础 agent runtime 来自 HKUDS 的 MIT 协议项目
+[nanobot](https://github.com/HKUDS/nanobot)。第三方归属说明见
+[LICENSE](LICENSE)、[NOTICES.md](NOTICES.md) 和 [LICENSES/](LICENSES/)。
