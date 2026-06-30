@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
+    "dev": "tsc && node dist/index.js",
+    "lint": "eslint src/",
+    "fmt": "prettier --check 'src/**/*.{ts,tsx}'"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc13",

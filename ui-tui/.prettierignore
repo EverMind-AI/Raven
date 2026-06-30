@@ -1,0 +1,4 @@
+node_modules
+dist
+packages/hermes-ink
+src/rpc/generated.ts
