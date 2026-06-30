@@ -1,5 +1,7 @@
 <div align="center" id="readme-top">
 
+<img src="https://github.com/user-attachments/assets/224c1623-2705-4a48-8a60-fd5681ca0cb2" alt="Raven banner" width="100%">
+
 # Raven
 
 ### The AI-native command line agent for people who live in the terminal.
