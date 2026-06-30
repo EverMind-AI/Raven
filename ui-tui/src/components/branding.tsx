@@ -115,6 +115,10 @@ const LOGO_WORD_MIN_COLS = RAVEN_WORD_WIDTH + 5
 
 export function Branding({ t }: { t?: Theme } = {}) {
   const theme = t ?? DEFAULT_THEME
+  const yellow = theme.yellow
+  // Banner draws the .100/.300/.500/.600 stops (skip .50 so the top band isn't
+  // near-white); ravenLogo maps one ramp entry per vertical band.
+  const palette = [yellow[1], yellow[2], yellow[3], yellow[4]]
   const cols = useStdout().stdout?.columns ?? 80
 
   // Full single-line "RAVEN AGENT" when it fits; otherwise just the "RAVEN"
@@ -123,7 +127,7 @@ export function Branding({ t }: { t?: Theme } = {}) {
   if (cols >= LOGO_FULL_MIN_COLS) {
     return (
       <Box flexDirection="column" marginBottom={1}>
-        <ArtLines lines={ravenLogo(theme.yellow)} />
+        <ArtLines lines={ravenLogo(palette)} />
       </Box>
     )
   }
@@ -131,7 +135,7 @@ export function Branding({ t }: { t?: Theme } = {}) {
   if (cols >= LOGO_WORD_MIN_COLS) {
     return (
       <Box flexDirection="column" marginBottom={1}>
-        <ArtLines lines={ravenLogoWord(theme.yellow)} />
+        <ArtLines lines={ravenLogoWord(palette)} />
       </Box>
     )
   }

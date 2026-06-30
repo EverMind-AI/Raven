@@ -5,9 +5,11 @@
 
 import type { InputEvent, Key } from '@hermes/ink'
 import * as Ink from '@hermes/ink'
+import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from 'react'
 
 import { setInputSelection } from '../app/inputSelectionStore.js'
+import { $uiTheme } from '../app/uiStore.js'
 import { readClipboardText, writeClipboardText } from '../lib/clipboard.js'
 import { cursorLayout, offsetFromPosition } from '../lib/inputMetrics.js'
 import {
@@ -41,6 +43,13 @@ const MULTI_CLICK_MS = 500
 
 const invert = (s: string) => INV + s + INV_OFF
 const dim = (s: string) => DIM + s + DIM_OFF
+
+// Cursor cell: inverse video, optionally tinted. Setting the fg under inverse
+// makes the inverted block render in `color` (inverse swaps fg→bg), giving a
+// primary-colored block cursor with the glyph cut out — without it the cursor
+// is the plain text-colored inverse block.
+const cursorCell = (s: string, color?: string) =>
+  color ? INV + Ink.colorize(s, color, 'foreground') + INV_OFF : invert(s)
 
 let _seg: Intl.Segmenter | null = null
 const seg = () => (_seg ??= new Intl.Segmenter(undefined, { granularity: 'grapheme' }))
@@ -196,7 +205,7 @@ export function isLfReturn(sequence: string | undefined): boolean {
   return sequence === '\n'
 }
 
-function renderWithCursor(value: string, cursor: number) {
+function renderWithCursor(value: string, cursor: number, cursorColor?: string) {
   const pos = Math.max(0, Math.min(cursor, value.length))
 
   let out = '',
@@ -204,7 +213,7 @@ function renderWithCursor(value: string, cursor: number) {
 
   for (const { segment, index } of seg().segment(value)) {
     if (!done && index >= pos) {
-      out += invert(index === pos && segment !== '\n' ? segment : ' ')
+      out += cursorCell(index === pos && segment !== '\n' ? segment : ' ', cursorColor)
       done = true
 
       if (index === pos && segment !== '\n') {
@@ -215,7 +224,7 @@ function renderWithCursor(value: string, cursor: number) {
     out += segment
   }
 
-  return done ? out : out + invert(' ')
+  return done ? out : out + cursorCell(' ', cursorColor)
 }
 
 function renderWithSelection(value: string, start: number, end: number) {
@@ -272,6 +281,7 @@ export function TextInput({
   const fwdDel = useFwdDelete(focus)
   const termFocus = useTerminalFocus()
   const { stdout } = useStdout()
+  const cursorColor = useStore($uiTheme).color.primary
 
   const curRef = useRef(cur)
   const selRef = useRef<null | { end: number; start: number }>(null)
@@ -345,15 +355,17 @@ export function TextInput({
     }
 
     if (!display && placeholder) {
-      return nativeCursor ? dim(placeholder) : invert(placeholder[0] ?? ' ') + dim(placeholder.slice(1))
+      return nativeCursor
+        ? dim(placeholder)
+        : cursorCell(placeholder[0] ?? ' ', cursorColor) + dim(placeholder.slice(1))
     }
 
     if (selected) {
       return renderWithSelection(display, selected.start, selected.end)
     }
 
-    return nativeCursor ? display || ' ' : renderWithCursor(display, cur)
-  }, [cur, display, focus, nativeCursor, placeholder, selected])
+    return nativeCursor ? display || ' ' : renderWithCursor(display, cur, cursorColor)
+  }, [cur, cursorColor, display, focus, nativeCursor, placeholder, selected])
 
   useEffect(() => {
     if (self.current) {
