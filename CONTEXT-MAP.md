@@ -22,7 +22,7 @@ A full glossary↔code gap scan (2026-06-28) is under team review. Key open item
 - **Bus → Spine** — the `CONTEXT.md` "Bus" cluster (Message Bus / Event Bus) is being
   rewritten as a **Spine** term; `raven/bus/` was replaced by `raven/spine/`.
 - **Proposed missing Runtime terms** — Spine, Agent Loop, Turn Runner, Plugin, Skill Hub,
-  Agent Hook, Subagent, Routing Profile, Consolidator.
+  Agent Hook, Subagent, Routing Profile. (**Consolidator** landed — now defined in `CONTEXT.md` → Memory.)
 - **TUI side** — one correction (StatusRulePane → Status Bar) + candidate additions
   (Turn Cycle, Streaming Segment, RPC Client, Composer, Slash Command System, …).
 
