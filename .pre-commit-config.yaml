@@ -25,6 +25,6 @@ repos:
     hooks:
       - id: conventional-commit-message
         name: conventional commit message
-        entry: python scripts/check_commit_file.py
+        entry: env PYTHONPATH=. python3 scripts/check_commit_file.py
         language: system
         stages: [commit-msg]

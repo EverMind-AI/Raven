@@ -49,7 +49,7 @@ def _commit_messages(revision_range: str) -> list[tuple[str, str]]:
         text=True,
     )
     chunks = output.rstrip("\0").split("\0")
-    return list(zip(chunks[0::2], chunks[1::2], strict=False))
+    return list(zip(chunks[0::2], chunks[1::2]))
 
 
 if __name__ == "__main__":

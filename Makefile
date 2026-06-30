@@ -60,10 +60,10 @@ build-bridge:
 
 check-commits:
 	npx commitlint --from origin/main --to HEAD --config commitlint.config.cjs
-	uv run --extra dev python scripts/check_commit_messages.py $(COMMIT_RANGE)
+	PYTHONPATH=. uv run --extra dev python scripts/check_commit_messages.py $(COMMIT_RANGE)
 
 check-pr-title:
-	uv run --extra dev python scripts/check_pr_title.py
+	PYTHONPATH=. uv run --extra dev python scripts/check_pr_title.py
 
 ci: lint test build
 
