@@ -33,7 +33,7 @@ detect_platform() {
   case "$os" in
     Darwin) NODE_OS="darwin" ;;
     Linux)  NODE_OS="linux" ;;
-    *) die "不支持的操作系统：$os（仅支持 macOS / Linux；Windows 请用 install.ps1）" ;;
+    *) die "不支持的操作系统：$os（仅支持 macOS / Linux）。Windows 请在 PowerShell 运行：iex (irm https://raven.evermind.ai/install.ps1)" ;;
   esac
   case "$arch" in
     arm64|aarch64) NODE_ARCH="arm64" ;;

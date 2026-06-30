@@ -83,23 +83,35 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     else:
         # Priority 2: active venv
         if venv := os.environ.get("VIRTUAL_ENV"):
-            candidates.append(str(Path(venv) / "bin" / "node"))
+            if os.name == "nt":
+                candidates.append(str(Path(venv) / "Scripts" / "node.exe"))
+            else:
+                candidates.append(str(Path(venv) / "bin" / "node"))
 
         # Priority 3: PATH
         if path_node := shutil.which("node"):
             candidates.append(path_node)
 
-        # Priority 4: Raven-managed private runtime installed by install.sh
-        # into ~/.raven/runtime/. This is the zero-config fallback so a user
-        # who has no system Node still gets a working `raven tui` after the
-        # one-line installer provisioned a private Node here. Glob to tolerate
-        # the versioned dir name (e.g. node-v22.x.y-darwin-arm64/bin/node).
+        # Priority 4: Raven-managed private runtime installed by the one-line
+        # installer into ~/.raven/runtime/. This is the zero-config fallback so
+        # a user who has no system Node still gets a working `raven tui` after
+        # the installer provisioned a private Node here. Glob to tolerate the
+        # versioned dir name. The on-disk layout differs by OS: POSIX tarballs
+        # nest the binary under bin/ (node-v22.x.y-darwin-arm64/bin/node) while
+        # the Windows zip puts node.exe at the top level
+        # (node-v22.x.y-win-x64/node.exe) — install.ps1 provisions the latter.
         runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
         if runtime_root.is_dir():
-            direct = runtime_root / "node" / "bin" / "node"
-            if direct.exists():
-                candidates.append(str(direct))
-            candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
+            if os.name == "nt":
+                direct = runtime_root / "node" / "node.exe"
+                if direct.exists():
+                    candidates.append(str(direct))
+                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/node.exe")))
+            else:
+                direct = runtime_root / "node" / "bin" / "node"
+                if direct.exists():
+                    candidates.append(str(direct))
+                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
 
     for node_path in candidates:
         if not Path(node_path).exists():
