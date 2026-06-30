@@ -15,7 +15,6 @@
 set -eu
 
 # --- config ---------------------------------------------------------------
-REPO_URL="${RAVEN_REPO_URL:-git+https://github.com/EverMind-AI/raven.git}"
 MIN_NODE_MAJOR=22
 RAVEN_HOME="${RAVEN_HOME:-${HOME:?需要 HOME 环境变量，或显式设置 RAVEN_HOME}/.raven}"
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
@@ -173,8 +172,20 @@ install_raven() {
     fi
     uv tool install --force -e "$script_dir"
   else
-    info "从 GitHub 安装 raven：$REPO_URL"
-    uv tool install --force "$REPO_URL"
+    # Remote mode: install the latest published release wheel, which bundles
+    # the prebuilt ui-tui/dist/entry.js (built by CI). We deliberately do NOT
+    # install from git here -- the TUI bundle is a gitignored build artifact,
+    # so a git install would yield a raven whose `raven tui` cannot start.
+    # Override RAVEN_WHEEL_URL to pin a specific wheel.
+    wheel_url="${RAVEN_WHEEL_URL:-}"
+    if [ -z "$wheel_url" ]; then
+      info "Resolving the latest raven release from GitHub..."
+      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/raven/releases/latest" 2>/dev/null \
+        | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+    fi
+    [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
+    info "  installing $wheel_url"
+    uv tool install --force "$wheel_url"
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.
   uv tool update-shell || true
