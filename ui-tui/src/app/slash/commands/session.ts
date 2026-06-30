@@ -4,6 +4,7 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import { attachedImageNotice, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
+import { TUI_SESSION_MODEL_FLAG } from '../../../domain/slash.js'
 import type {
   BackgroundStartResponse,
   ConfigGetValueResponse,
@@ -23,17 +24,23 @@ import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 import type { SlashCommand } from '../types.js'
 
-// v1 model switch is global-scope only. The picker passes `<model> --provider
-// <slug>`; a bare `/model <name>` carries no provider. Parse both into the
-// structured config.set params {key:'model', value, provider?}.
-const parseModelArg = (arg: string): { provider?: string; value: string } => {
-  const m = arg.trim().match(/^(.*?)\s+--provider\s+(\S+)\s*$/)
+const TUI_SESSION_MODEL_RE = new RegExp(`(?:^|\\s)${TUI_SESSION_MODEL_FLAG}(?:\\s|$)`)
+const TUI_SESSION_STRIP_RE = new RegExp(`\\s*${TUI_SESSION_MODEL_FLAG}\\b\\s*`, 'g')
 
-  if (m) {
-    return { provider: m[2], value: m[1]!.trim() }
+const stripTuiSessionFlag = (trimmed: string) => trimmed.replace(TUI_SESSION_STRIP_RE, ' ').replace(/\s+/g, ' ').trim()
+
+const modelValueForConfigSet = (arg: string) => {
+  const trimmed = arg.trim()
+
+  if (!trimmed) {
+    return trimmed
   }
 
-  return { value: arg.trim() }
+  if (TUI_SESSION_MODEL_RE.test(trimmed)) {
+    return stripTuiSessionFlag(trimmed)
+  }
+
+  return trimmed
 }
 
 // The wire contract is the full `<channel>:<chat_id>` key; users naturally
@@ -76,15 +83,8 @@ export const sessionCommands: SlashCommand[] = [
         return patchOverlayState({ modelPicker: true })
       }
 
-      const { provider, value } = parseModelArg(arg)
-
       ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', {
-          key: 'model',
-          session_id: ctx.sid,
-          value,
-          ...(provider ? { provider } : {})
-        })
+        .rpc<ConfigSetResponse>('config.set', { key: 'model', session_id: ctx.sid, value: modelValueForConfigSet(arg) })
         .then(
           ctx.guarded<ConfigSetResponse>(r => {
             if (!r.value) {

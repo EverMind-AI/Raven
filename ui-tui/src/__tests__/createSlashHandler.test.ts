@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSlashHandler } from '../app/createSlashHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
+import { TUI_SESSION_MODEL_FLAG } from '../domain/slash.js'
 
 describe('createSlashHandler', () => {
   beforeEach(() => {
@@ -51,13 +52,13 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('sends a bare /model switch with no provider param', async () => {
+  it('keeps typed /model switches session-scoped by default', async () => {
     patchUiState({ sid: 'sid-abc' })
 
     const ctx = buildCtx({
       gateway: {
         ...buildGateway(),
-        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'x-model' }))
+        rpc: vi.fn(() => Promise.resolve({ value: 'x-model' }))
       }
     })
 
@@ -69,22 +70,35 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('parses a --provider suffix into a structured provider param', async () => {
+  it('honors TUI picker session scope without adding --global', async () => {
     patchUiState({ sid: 'sid-abc' })
 
     const ctx = buildCtx({
       gateway: {
         ...buildGateway(),
-        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'claude-sonnet-4.6' }))
+        rpc: vi.fn(() => Promise.resolve({ value: 'anthropic/claude-sonnet-4.6' }))
       }
     })
 
-    expect(createSlashHandler(ctx)('/model claude-sonnet-4.6 --provider openrouter')).toBe(true)
+    expect(
+      createSlashHandler(ctx)(`/model anthropic/claude-sonnet-4.6 --provider openrouter ${TUI_SESSION_MODEL_FLAG}`)
+    ).toBe(true)
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
-      provider: 'openrouter',
       session_id: 'sid-abc',
-      value: 'claude-sonnet-4.6'
+      value: 'anthropic/claude-sonnet-4.6 --provider openrouter'
+    })
+  })
+
+  it('does not duplicate --global for explicit persistent model switches', () => {
+    patchUiState({ sid: 'sid-abc' })
+    const ctx = buildCtx()
+
+    createSlashHandler(ctx)('/model x-model --global')
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
+      key: 'model',
+      session_id: 'sid-abc',
+      value: 'x-model --global'
     })
   })
 

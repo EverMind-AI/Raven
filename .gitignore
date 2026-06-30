@@ -1,8 +1,6 @@
 .worktrees/
 .assets
 .env
-node_modules/
-bridge/dist/
 # Generated architecture/diagram SVGs at repo root (not source)
 /*.svg
 

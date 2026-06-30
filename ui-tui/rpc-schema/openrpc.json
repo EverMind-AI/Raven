@@ -666,27 +666,20 @@
       ]
     },
     {
-      "name": "model.options",
-      "summary": "List providers, their curated models, and the current selection.",
-      "params": [
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
+      "name": "model.list",
+      "summary": "List available routable models.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['model', 'list'], width=W).",
+      "params": [],
       "result": {
-        "name": "ModelOptionsResult",
+        "name": "ModelListResult",
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["model", "provider", "providers"],
+          "required": ["models"],
           "properties": {
-            "model": { "type": "string" },
-            "provider": { "type": "string" },
-            "providers": {
+            "models": {
               "type": "array",
-              "items": { "$ref": "#/components/schemas/ModelOptionProvider" }
+              "items": { "$ref": "#/components/schemas/ModelInfo" }
             }
           }
         }
@@ -694,142 +687,65 @@
       "errors": []
     },
     {
-      "name": "model.save_key",
-      "summary": "Store an API key (and optional api_base) for a provider.",
+      "name": "model.current",
+      "summary": "Get the currently selected model for a session or globally.",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['model', 'show'], width=W).",
       "params": [
         {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "api_key",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "api_base",
-          "required": false,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
+          "name": "session_key",
           "required": false,
           "schema": { "type": "string" }
         }
       ],
       "result": {
-        "name": "ModelSaveKeyResult",
+        "name": "ModelCurrentResult",
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider"],
+          "required": ["model"],
           "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
+            "model": { "$ref": "#/components/schemas/ModelInfo" }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/NotSupportedInV01" },
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        { "$ref": "#/components/errors/ModelNotAvailable" }
       ]
     },
     {
-      "name": "model.disconnect",
-      "summary": "Clear a provider's stored credentials.",
+      "name": "model.switch",
+      "summary": "Switch a session's model.",
       "params": [
         {
-          "name": "slug",
+          "name": "session_key",
           "required": true,
           "schema": { "type": "string" }
         },
         {
-          "name": "session_id",
-          "required": false,
+          "name": "model_id",
+          "required": true,
           "schema": { "type": "string" }
         }
       ],
       "result": {
-        "name": "ModelDisconnectResult",
+        "name": "ModelSwitchResult",
         "schema": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["disconnected"],
+          "required": ["model", "applied_at"],
           "properties": {
-            "disconnected": { "type": "boolean" }
-          }
-        }
-      },
-      "errors": []
-    },
-    {
-      "name": "model.add_model",
-      "summary": "Append a model id to a provider's curated picker list.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "model",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "ModelAddModelResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["provider"],
-          "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
+            "model": { "$ref": "#/components/schemas/ModelInfo" },
+            "applied_at": {
+              "type": "string",
+              "description": "ISO-8601 timestamp when switch was applied."
+            }
           }
         }
       },
       "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
-      ]
-    },
-    {
-      "name": "model.remove_model",
-      "summary": "Remove a model id from a provider's curated picker list.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "model",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "ModelRemoveModelResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["provider"],
-          "properties": {
-            "provider": { "$ref": "#/components/schemas/ModelOptionProvider" }
-          }
-        }
-      },
-      "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
+        { "$ref": "#/components/errors/SessionNotFound" },
+        { "$ref": "#/components/errors/ModelNotAvailable" },
+        { "$ref": "#/components/errors/ModelSwitchInTurn" }
       ]
     },
     {
@@ -1380,34 +1296,21 @@
           }
         }
       },
-      "ModelOptionProvider": {
+      "ModelInfo": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "slug",
-          "name",
-          "authenticated",
-          "is_current",
-          "auth_type",
-          "models",
-          "total_models",
-          "needs_api_base",
-          "warning"
-        ],
+        "required": ["model_id", "provider", "context_window", "available"],
         "properties": {
-          "slug": { "type": "string" },
-          "name": { "type": "string" },
-          "authenticated": { "type": "boolean" },
-          "is_current": { "type": "boolean" },
-          "auth_type": { "type": "string" },
-          "key_env": { "type": "string" },
-          "models": {
-            "type": "array",
-            "items": { "type": "string" }
+          "model_id": {
+            "type": "string",
+            "description": "e.g. 'claude-opus-4-7'"
           },
-          "total_models": { "type": "integer" },
-          "needs_api_base": { "type": "boolean" },
-          "warning": { "type": "string" }
+          "provider": {
+            "type": "string",
+            "description": "e.g. 'anthropic' / 'openai'"
+          },
+          "context_window": { "type": "integer" },
+          "available": { "type": "boolean" }
         }
       },
       "UsageSnapshot": {

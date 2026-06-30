@@ -56,14 +56,10 @@ describe('slashCompletions', () => {
     expect(slashCompletions('  ', MINI_REGISTRY)).toEqual([])
   })
 
-  it('/model behaves like any command: matches on name, closes on args', () => {
-    const reg: SlashCommand[] = [
-      { name: 'model', help: 'change or show model', run: vi.fn() }
-    ]
-    expect(slashCompletions('/model', reg).map(i => i.display)).toEqual(['/model'])
-    // close-on-args still applies once a space (argument) is typed.
-    expect(slashCompletions('/model ', reg)).toEqual([])
-    expect(slashCompletions('/model gpt-4', reg)).toEqual([])
+  it('returns [] for /model short-circuit', () => {
+    expect(slashCompletions('/model', MINI_REGISTRY)).toEqual([])
+    expect(slashCompletions('/model ', MINI_REGISTRY)).toEqual([])
+    expect(slashCompletions('/model gpt-4', MINI_REGISTRY)).toEqual([])
   })
 
   it('returns [] when no commands match the prefix', () => {
@@ -203,7 +199,8 @@ describe('slashCompletions supported filter', () => {
   const KEEP_NAMES = [
     'help', 'quit', 'mouse', 'new', 'status', 'resume', 'title', 'compact',
     'details', 'copy', 'paste', 'logs', 'history', 'undo', 'retry',
-    'sessions', 'branch', 'export', 'model'
+    'sessions', 'branch', 'export'
+    // '/model' is a keep command but excluded from completion by MODEL_RE.
   ]
 
   it('hides every drop command from the real registry (bare /)', () => {
