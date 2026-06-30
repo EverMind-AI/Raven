@@ -231,7 +231,7 @@ After pushing a new feature branch, **proactively ask** whether to open the PR w
 
 **Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Title length may relax to ≤ 90 chars** (the 72 limit is for `git log --oneline` wrapping; web-UI titles don't wrap) — but shorter is better.
 
-**Description must be all English** (same as §3.1.1): no Chinese / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist); translate cited Chinese plans, don't paste.
+**Description must be all English** (same as §3.1.1): no other languages / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist).
 
 **Description structure: use the repo PR template** at `.github/pull_request_template.md` if present (`gh pr create` picks it up automatically); otherwise fill the structure below into `--body` by hand (all English):
 
