@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-<img src="https://github.com/user-attachments/assets/224c1623-2705-4a48-8a60-fd5681ca0cb2" alt="Raven banner" width="100%">
+![Raven banner](https://github.com/user-attachments/assets/224c1623-2705-4a48-8a60-fd5681ca0cb2)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-[Website](https://raven.evermind.ai) · [EverOS](https://github.com/EverMind-AI/EverOS) · [中文](README.zh-CN.md)
+[Website](https://raven.evermind.ai) · [中文](README.zh-CN.md)
 
 </div>
 
@@ -38,10 +38,14 @@
 ## Why Raven
 
 Raven is a native command line agent, not a chat box wrapped around a shell.
-It is built for users who already think in terminals, repos, logs, scripts,
-sessions, and long-running workflows. The goal is simple: give your terminal an
-agent that can remember, act, use tools, manage context, and improve its own
-procedural skills over time.
+Built by EverMind, Raven is the first memory-first, self-improving agent OS:
+its model, code, modules, and policy are decoupled so it can improve across the
+whole stack, not just the skills layer. Layered memory and 100,000 built-in
+skills let Raven serve personal agents, cloud fleets, and reusable digital
+workers that get better with every session. It is built for users who already
+think in terminals, repos, logs, scripts, sessions, and long-running workflows.
+The goal is simple: give your terminal an agent that can remember, act, use
+tools, manage context, and improve its own procedural skills over time.
 
 Most agent CLIs stop at "LLM + tools + loop." That works for demos, but it
 breaks down when the agent becomes part of your daily environment:
