@@ -42,5 +42,5 @@ class _LiteLLMBotocorePreloadFilter(_logging.Filter):
 
 _logging.getLogger("LiteLLM").addFilter(_LiteLLMBotocorePreloadFilter())
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __logo__ = "🐦‍⬛"
