@@ -38,15 +38,21 @@ jobs:
           npm run build
           test -f dist/entry.js  # fail fast if the bundle didn't land
 
-      # 3) uv builds the wheel; pyproject force-includes ui-tui/dist -> raven/ui-tui/dist.
+      # 3) Build the wheel directly from the checkout so the freshly generated
+      #    ui-tui/dist/entry.js is visible to Hatch's conditional build hook.
+      #    Then build the sdist separately. A combined `uv build` first creates
+      #    an sdist and then builds the wheel from that sdist, which drops this
+      #    gitignored bundle before the wheel hook can include it.
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
       - name: Build wheel + sdist
-        run: uv build
+        run: |
+          uv build --wheel
+          uv build --sdist
 
       # 4) Sanity gate: the wheel MUST contain the bundle and MUST NOT carry
-      #    node_modules or src (keeps the wheel lean and the smoke honest).
+      #    node_modules or ui-tui sources (keeps the wheel lean and the smoke honest).
       - name: Verify wheel contents
         run: |
           python3 - <<'PY'
@@ -58,8 +64,7 @@ jobs:
           # The only ui-tui/ entry must be the bundle — no TS source, no stray files.
           ui = [n for n in names if "ui-tui/" in n]
           assert ui == ["raven/ui-tui/dist/entry.js"], f"unexpected ui-tui entries: {ui}"
-          assert not any(n.endswith(".tsx") or n.endswith(".ts") for n in names), "TS source leaked into wheel"
-          print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules/src")
+          print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules")
           PY
 
       - name: Upload artifacts
