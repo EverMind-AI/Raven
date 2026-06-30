@@ -1556,8 +1556,8 @@ def test_fresh_bootstrap_seeds_extension_blocks(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Bootstrap materializes the memory / plugins / skillForge safe subset so a
-    fresh config exposes the knobs — without leaking the hardcoded intranet
-    endpoints / Bearer token from SkillForgeConfig's schema defaults."""
+    fresh config exposes the knobs without writing optional service endpoints
+    or bearer tokens into the user's plaintext config."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
 
@@ -1567,7 +1567,7 @@ def test_fresh_bootstrap_seeds_extension_blocks(
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
     assert data["skillForge"]["router"]["hub"]["apiKey"] is None
-    # No internal infra fields written to the user's plaintext config.
+    # No optional service fields written to the user's plaintext config.
     for leaked in ("embeddingApiKey", "rerankerApiKey", "massLibraryDb"):
         assert leaked not in data["skillForge"]
 
