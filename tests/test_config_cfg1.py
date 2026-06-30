@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import json
+import re
 import warnings
 from pathlib import Path
 
 import pytest
 
+from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
-    RavenConfig,
     HubSourceConfig,
     MemoryConfig,
     PluginsConfig,
+    RavenConfig,
+    SkillForgeConfig,
     SkillForgeRouterConfig,
     load_raven_config,
 )
-from raven.config.loader import EXTENSION_KEYS
-
 
 # ---------------------------------------------------------------------------
 # Default-construction sanity
@@ -56,6 +57,22 @@ class TestDefaults:
         assert c.hub.timeout_s == pytest.approx(2.0)
         assert c.hub.min_safety == pytest.approx(0.7)
 
+    def test_skill_forge_public_defaults(self) -> None:
+        c = SkillForgeConfig()
+        assert c.embedding_model == "default"
+        assert c.embedding_url == "http://localhost:1357"
+        assert c.embedding_api_key is None
+        assert c.reranker_model == "default"
+        assert c.reranker_url == "http://localhost:1357"
+        assert c.reranker_api_key is None
+        assert c.mass_library_db is None
+
+        exported = c.model_dump_json()
+        assert not re.search(
+            r"https?://(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[0-1])\.)",
+            exported,
+        )
+
     def test_root_default_factories_wired(self) -> None:
         c = RavenConfig()
         assert isinstance(c.plugins, PluginsConfig)
@@ -70,28 +87,33 @@ class TestDefaults:
 
 class TestKeyAliasing:
     def test_camel_keys_accepted(self) -> None:
-        c = MemoryConfig.model_validate({
-            "userId": "alice",
-            "agentId": "alpha",
-            "memoryTopK": 7,
-        })
+        c = MemoryConfig.model_validate(
+            {
+                "userId": "alice",
+                "agentId": "alpha",
+                "memoryTopK": 7,
+            }
+        )
         assert c.user_id == "alice"
         assert c.agent_id == "alpha"
         assert c.memory_top_k == 7
 
     def test_snake_keys_accepted(self) -> None:
-        c = MemoryConfig.model_validate({
-            "user_id": "bob",
-            "memory_top_k": 3,
-        })
+        c = MemoryConfig.model_validate(
+            {
+                "user_id": "bob",
+                "memory_top_k": 3,
+            }
+        )
         assert c.user_id == "bob"
         assert c.memory_top_k == 3
 
     def test_router_hub_subblock_camel(self) -> None:
-        c = SkillForgeRouterConfig.model_validate({
-            "hub": {"endpoint": "http://hub.test", "timeoutS": 5.0,
-                    "minSafety": 0.8},
-        })
+        c = SkillForgeRouterConfig.model_validate(
+            {
+                "hub": {"endpoint": "http://hub.test", "timeoutS": 5.0, "minSafety": 0.8},
+            }
+        )
         assert c.hub.endpoint == "http://hub.test"
         assert c.hub.timeout_s == pytest.approx(5.0)
         assert c.hub.min_safety == pytest.approx(0.8)
@@ -132,25 +154,28 @@ def _write_config(tmp_path: Path, body: dict) -> Path:
 
 class TestLoaderIntegration:
     def test_loads_new_sections_from_file(self, tmp_path: Path) -> None:
-        path = _write_config(tmp_path, {
-            "plugins": {
-                "disabled": ["mem0-memory"],
-                "config": {"everos-memory": {"mode": "embedded"}},
+        path = _write_config(
+            tmp_path,
+            {
+                "plugins": {
+                    "disabled": ["mem0-memory"],
+                    "config": {"everos-memory": {"mode": "embedded"}},
+                },
+                "memory": {
+                    "backend": "everos",
+                    "userId": "alice",
+                    "memoryTopK": 10,
+                },
+                # Legacy top-level skillRouter is migrated into skillForge.router;
+                # the retired ``mass`` sub-block is dropped during migration.
+                "skillRouter": {
+                    "weights": {"local": 1.5, "everos": 1.0, "hub": 0.7},
+                    "topK": 8,
+                    "mass": {"endpoint": "http://mass.internal:9001"},
+                    "hub": {"endpoint": "http://hub.internal:9001"},
+                },
             },
-            "memory": {
-                "backend": "everos",
-                "userId": "alice",
-                "memoryTopK": 10,
-            },
-            # Legacy top-level skillRouter is migrated into skillForge.router;
-            # the retired ``mass`` sub-block is dropped during migration.
-            "skillRouter": {
-                "weights": {"local": 1.5, "everos": 1.0, "hub": 0.7},
-                "topK": 8,
-                "mass": {"endpoint": "http://mass.internal:9001"},
-                "hub": {"endpoint": "http://hub.internal:9001"},
-            },
-        })
+        )
         cfg = load_raven_config(path)
         assert cfg.plugins.disabled == ["mem0-memory"]
         assert cfg.plugins.config["everos-memory"]["mode"] == "embedded"
@@ -170,13 +195,17 @@ class TestLoaderIntegration:
         assert cfg.skill_forge.router.enabled is True
 
     def test_explicit_null_section_uses_defaults(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
-        path = _write_config(tmp_path, {
-            "plugins": None,
-            "memory": None,
-            "skillForge": None,
-        })
+        path = _write_config(
+            tmp_path,
+            {
+                "plugins": None,
+                "memory": None,
+                "skillForge": None,
+            },
+        )
         cfg = load_raven_config(path)
         # ``None`` is treated as "use default" rather than rejected.
         assert isinstance(cfg.plugins, PluginsConfig)
@@ -191,11 +220,15 @@ class TestLoaderIntegration:
 
 class TestMassLibraryDbDeprecation:
     def test_legacy_only_emits_deprecation_warning(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
-        path = _write_config(tmp_path, {
-            "skill_forge": {"mass_library_db": "/tmp/old.db"},
-        })
+        path = _write_config(
+            tmp_path,
+            {
+                "skill_forge": {"mass_library_db": "/tmp/old.db"},
+            },
+        )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             load_raven_config(path)
@@ -205,16 +238,20 @@ class TestMassLibraryDbDeprecation:
         assert "skillForge.router.hub.endpoint" in str(deps[0].message)
 
     def test_both_old_and_new_no_deprecation_warning(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """When the user has set the new Hub endpoint, the legacy field
         becomes a no-op — info log only, no warning."""
-        path = _write_config(tmp_path, {
-            "skill_forge": {
-                "mass_library_db": "/tmp/old.db",
-                "router": {"hub": {"endpoint": "http://hub.test"}},
+        path = _write_config(
+            tmp_path,
+            {
+                "skill_forge": {
+                    "mass_library_db": "/tmp/old.db",
+                    "router": {"hub": {"endpoint": "http://hub.test"}},
+                },
             },
-        })
+        )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             load_raven_config(path)
@@ -222,9 +259,12 @@ class TestMassLibraryDbDeprecation:
         assert deps == []
 
     def test_no_legacy_field_no_warning(self, tmp_path: Path) -> None:
-        path = _write_config(tmp_path, {
-            "skill_router": {"mass": {"endpoint": "http://m"}},
-        })
+        path = _write_config(
+            tmp_path,
+            {
+                "skill_router": {"mass": {"endpoint": "http://m"}},
+            },
+        )
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             load_raven_config(path)
@@ -241,9 +281,13 @@ class TestStrictness:
     def test_unknown_field_in_plugins_rejected(self) -> None:
         with pytest.raises(Exception):
             # ``extra='forbid'`` — typo catches at startup
-            PluginsConfig.model_validate({
-                "disabled": [], "config": {}, "unknown_field": True,
-            })
+            PluginsConfig.model_validate(
+                {
+                    "disabled": [],
+                    "config": {},
+                    "unknown_field": True,
+                }
+            )
 
     def test_unknown_field_in_memory_rejected(self) -> None:
         with pytest.raises(Exception):

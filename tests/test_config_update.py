@@ -41,7 +41,8 @@ def test_nudge_quota_writes_camel_into_empty_config(cfg_path: Path) -> None:
     changed = set_sentinel_nudge_quota(per_hour=1, per_day=3, config_path=cfg_path)
     data = _read(cfg_path)
     assert data["sentinel"]["nudgePolicy"] == {
-        "maxNudgesPerHour": 1, "maxNudgesPerDay": 3,
+        "maxNudgesPerHour": 1,
+        "maxNudgesPerDay": 3,
     }
     assert changed == {
         "max_nudges_per_hour": (None, 1),
@@ -59,9 +60,14 @@ def test_nudge_quota_partial_update_returns_prev(cfg_path: Path) -> None:
 
 
 def test_nudge_quota_respects_existing_snake_casing(cfg_path: Path) -> None:
-    cfg_path.write_text(json.dumps({
-        "sentinel": {"nudge_policy": {"max_nudges_per_hour": 9}},
-    }), encoding="utf-8")
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "sentinel": {"nudge_policy": {"max_nudges_per_hour": 9}},
+            }
+        ),
+        encoding="utf-8",
+    )
     set_sentinel_nudge_quota(per_hour=1, per_day=3, config_path=cfg_path)
     np = _read(cfg_path)["sentinel"]["nudge_policy"]
     # no duplicate camel keys introduced alongside the snake ones
@@ -210,9 +216,7 @@ def test_set_sandbox_backend_writes_and_returns_prev(cfg_path: Path) -> None:
 
 
 def test_set_sandbox_backend_preserves_siblings(cfg_path: Path) -> None:
-    cfg_path.write_text(
-        json.dumps({"providers": {"openai": {"apiKey": "sk-keep"}}})
-    )
+    cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-keep"}}}))
     set_sandbox_backend("boxlite", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["providers"]["openai"]["apiKey"] == "sk-keep"
@@ -243,9 +247,7 @@ def test_set_memory_backend_everos_then_none(cfg_path: Path) -> None:
 
 
 def test_set_memory_backend_preserves_siblings(cfg_path: Path) -> None:
-    cfg_path.write_text(
-        json.dumps({"agents": {"defaults": {"model": "openai/gpt-4o"}}})
-    )
+    cfg_path.write_text(json.dumps({"agents": {"defaults": {"model": "openai/gpt-4o"}}}))
     set_memory_backend("everos", config_path=cfg_path)
     data = _read(cfg_path)
     assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
@@ -279,7 +281,9 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["weights"] == {
-        "local": 1.0, "everos": 0.9, "hub": 0.85,
+        "local": 1.0,
+        "everos": 0.9,
+        "hub": 0.85,
     }
     assert data["skillForge"]["router"]["hub"] == {
         "endpoint": "https://skillhub.evermind.ai",
@@ -301,14 +305,18 @@ def test_init_extension_defaults_plugin_identity_matches_memory(cfg_path: Path) 
 
 
 def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> None:
-    # The hardcoded intranet endpoints + Bearer token on SkillForgeConfig must
-    # never be materialized into a user's plaintext config; they stay at their
-    # schema defaults and only the safe subset is written.
+    # Service endpoints and optional tokens must never be materialized into a
+    # user's plaintext config by onboarding; only the safe subset is written.
     init_extension_block_defaults(config_path=cfg_path)
     sf = _read(cfg_path)["skillForge"]
     for leaked in (
-        "embeddingUrl", "embeddingApiKey", "rerankerUrl", "rerankerApiKey",
-        "massLibraryDb", "embedding_url", "embedding_api_key",
+        "embeddingUrl",
+        "embeddingApiKey",
+        "rerankerUrl",
+        "rerankerApiKey",
+        "massLibraryDb",
+        "embedding_url",
+        "embedding_api_key",
     ):
         assert leaked not in sf
 
@@ -316,17 +324,15 @@ def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> 
 def test_init_extension_defaults_is_idempotent_and_non_clobbering(cfg_path: Path) -> None:
     # An existing memory.backend (the bootstrap safety pin) and any user-set
     # value must survive — setdefault only fills what's absent.
-    cfg_path.write_text(
-        json.dumps({"memory": {"backend": None, "memoryTopK": 20}})
-    )
+    cfg_path.write_text(json.dumps({"memory": {"backend": None, "memoryTopK": 20}}))
     init_extension_block_defaults(config_path=cfg_path)
     first = _read(cfg_path)
-    assert first["memory"]["backend"] is None       # not overwritten
-    assert first["memory"]["memoryTopK"] == 20       # user value kept
-    assert first["memory"]["userId"] == "default"    # filled in
+    assert first["memory"]["backend"] is None  # not overwritten
+    assert first["memory"]["memoryTopK"] == 20  # user value kept
+    assert first["memory"]["userId"] == "default"  # filled in
 
     init_extension_block_defaults(config_path=cfg_path)
-    assert _read(cfg_path) == first                  # second run is a no-op
+    assert _read(cfg_path) == first  # second run is a no-op
 
 
 def test_init_extension_defaults_round_trips_through_loader(cfg_path: Path) -> None:
@@ -336,5 +342,7 @@ def test_init_extension_defaults_round_trips_through_loader(cfg_path: Path) -> N
     rc = load_raven_config(cfg_path)
     assert rc.memory.memory_top_k == 5
     assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
-    # The non-written internal field still resolves to its schema default.
-    assert rc.skill_forge.embedding_url.startswith("http://")
+    # Non-written service fields still resolve to public schema defaults.
+    assert rc.skill_forge.embedding_url == "http://localhost:1357"
+    assert rc.skill_forge.embedding_api_key is None
+    assert rc.skill_forge.mass_library_db is None

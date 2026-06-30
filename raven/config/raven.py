@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Literal
-
 import warnings
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -113,9 +113,9 @@ class DndWindow(_Base):
     """
 
     start_hour: int  # 0-23
-    end_hour: int    # 1-24 (24 = end-of-day; wraps to next day if < start_hour)
+    end_hour: int  # 1-24 (24 = end-of-day; wraps to next day if < start_hour)
     start_minute: int = 0  # 0-59
-    end_minute: int = 0    # 0-59
+    end_minute: int = 0  # 0-59
     weekdays: list[int] | None = None
     """List of 0=Mon .. 6=Sun. None means every day."""
     why: str = ""
@@ -171,7 +171,7 @@ class NudgePolicyConfig(_Base):
     min_interval_seconds: int = 300
 
     # Quiet hours — 24h tuple (start_hour, end_hour); nudges outside high priority suppressed
-    quiet_hours: tuple[int, int] = (23, 7)   # (start_hour_24, end_hour_24), local time
+    quiet_hours: tuple[int, int] = (23, 7)  # (start_hour_24, end_hour_24), local time
 
     # Per-persona Do-Not-Disturb windows — additional quiet bands beyond
     # the global quiet_hours. Each window is matched only on its weekdays
@@ -220,8 +220,8 @@ class NudgePolicyConfig(_Base):
     #   - day:   stops "anniversary daily countdown" spam
     #   - week:  caps slow-burn topics (book reading reminder, fitness goal)
     # Set any cap to 0 to disable that layer.
-    max_per_topic_per_window: int = 1     # legacy alias for max_per_topic_per_hour
-    topic_dedup_window_seconds: int = 3600   # 1h
+    max_per_topic_per_window: int = 1  # legacy alias for max_per_topic_per_hour
+    topic_dedup_window_seconds: int = 3600  # 1h
     max_per_topic_per_day: int = 2
     # Weekly cap raised 4 → 8: deadline reminders (clawtrack 5/12-5/14,
     # birthday 5/20-5/24) need ~1 fire every 1-2 days across the
@@ -232,12 +232,12 @@ class NudgePolicyConfig(_Base):
     max_per_topic_per_week: int = 8
 
     # NudgeInjector settings
-    inject_ttl_seconds: int = 1800           # 30min — inject queued longer than this is stale
+    inject_ttl_seconds: int = 1800  # 30min — inject queued longer than this is stale
     inject_max_pending_per_session: int = 3  # cap queue growth
 
     # DeferManager settings
-    defer_idle_threshold_seconds: int = 300   # session must be idle this long before defer fires
-    defer_max_wait_seconds: int = 86400       # 24h — give up if never settled
+    defer_idle_threshold_seconds: int = 300  # session must be idle this long before defer fires
+    defer_max_wait_seconds: int = 86400  # 24h — give up if never settled
 
 
 # Single source of truth for the Planner's attention.md section allowlist.
@@ -588,11 +588,26 @@ class DailyAnalysisConfig(_Base):
     """Model for the daily analysis call. None → inherits
     ``SentinelConfig.evaluator_model``."""
 
-    stance_prefix_fallback: list[str] = Field(default_factory=lambda: [
-        "i prefer", "i like", "i don't like", "stop ", "avoid ", "never ",
-        "always ", "i want ", "from now on", "going forward",
-        "请", "别", "不要", "应该", "总是", "永远",
-    ])
+    stance_prefix_fallback: list[str] = Field(
+        default_factory=lambda: [
+            "i prefer",
+            "i like",
+            "i don't like",
+            "stop ",
+            "avoid ",
+            "never ",
+            "always ",
+            "i want ",
+            "from now on",
+            "going forward",
+            "请",
+            "别",
+            "不要",
+            "应该",
+            "总是",
+            "永远",
+        ]
+    )
     """Prefix list scanned against the inbound window when the LLM call
     fails and ``enable_prefix_fallback`` is True. Lowercase-matched;
     extend to support more languages or domain-specific stance verbs."""
@@ -813,50 +828,41 @@ class SkillForgeConfig(_Base):
     Prevents unbounded filesystem walks on huge mirrors."""
 
     # --- Retrieval / reranker knobs ---
-    embedding_model: str = "embedding-our-new"
+    embedding_model: str = "default"
     """Dense embedding model identifier. MUST match the embedding model
     that produced ``mass_library_db``'s stored vectors, otherwise dense
-    retrieval returns garbage (query vector lives in a different space).
-    Default ``embedding-our-new`` is our in-house self-trained model
-    (``/new`` endpoint) and matches the current ``mass_library.db``."""
+    retrieval returns garbage because the query vector lives in a different
+    space. Configure this to match the embedding service and corpus used by
+    your deployment."""
 
-    embedding_url: str = "http://192.168.0.172:1357/new"
-    """Remote embedding service URL — defaults to the shared in-house
-    embedding endpoint. The ``/new/`` path prefix is mandatory (calling
-    ``/embed`` directly without a prefix returns 404) and selects the
-    in-house self-trained model that matches the re-embedded
-    ``mass_library.db`` (label ``embedding-our-new``).
-    Retrieval calls ``POST <embedding_url>/embed``. Falls back to env
-    ``REMOTE_EMBEDDING_URL`` (update that env too on the deployed instance).
+    embedding_url: str = "http://localhost:1357"
+    """Remote embedding service base URL.
 
-    Endpoint history: 192.168.7.215:9000 → 192.168.5.57:9000 →
-    192.168.0.240:1357 → 192.168.0.152:1357 (/v6) →
-    192.168.0.172:1357/new (current, 2026-05-30, new self-trained model;
-    /v6 vectors are incompatible — corpus was fully re-embedded)."""
+    Retrieval calls ``POST <embedding_url>/embed``. Override this with
+    ``REMOTE_EMBEDDING_URL`` or user config when using a hosted embedding
+    service."""
 
     reranker_enabled: bool = True
     """Run a reranker pass after dense retrieval. On by default — adds
     200-500ms per query (cross-encoder GPU inference) but lifts mass-pool
     precision noticeably. Disable when latency matters more than ranking."""
 
-    reranker_model: str = "reranker-our-new"
-    """Reranker model label. Informational only — the active reranker
-    is fixed to the in-house model behind ``reranker_url``."""
+    reranker_model: str = "default"
+    """Reranker model label used for configuration and observability."""
 
-    reranker_url: str = "http://192.168.0.172:1357/new"
-    """Remote reranker service URL — defaults to the same in-house
-    endpoint as ``embedding_url``. Reranking calls ``POST /score`` against
-    this URL with ``{"prompts": [...]}`` and reads ``{"scores": [...]}``.
-    Falls back to env ``REMOTE_RERANKER_URL`` (update that env too on the
-    deployed instance)."""
+    reranker_url: str = "http://localhost:1357"
+    """Remote reranker service base URL.
 
-    embedding_api_key: str | None = "83a423b2-1da6-435c-b65c-b59ae286673d"
-    """API key for the shared in-house embedding/reranker endpoint
-    (Bearer token)."""
+    Reranking calls ``POST <reranker_url>/score`` with
+    ``{"prompts": [...]}`` and reads ``{"scores": [...]}``. Override this
+    with ``REMOTE_RERANKER_URL`` or user config when using a hosted reranker
+    service."""
 
-    reranker_api_key: str | None = "83a423b2-1da6-435c-b65c-b59ae286673d"
-    """API key for the shared in-house embedding/reranker endpoint
-    (Bearer token)."""
+    embedding_api_key: str | None = None
+    """Optional bearer token for the configured embedding service."""
+
+    reranker_api_key: str | None = None
+    """Optional bearer token for the configured reranker service."""
 
     embedding_dimensions: int | None = None
     """Request specific embedding dimensions (for models that support it)."""
@@ -890,13 +896,11 @@ class SkillForgeConfig(_Base):
     finish_reason=length truncations with empty visible content, which
     surfaced as 'Failed to parse rewrite response as JSON' fallbacks."""
 
-    mass_library_db: str | None = "/Evermind/bj_share/wangyanze/mass_library.db"
+    mass_library_db: str | None = None
     """Path to a pre-built SQLite skill library (the "mass pool").
-    Defaults to the shared in-house build at
-    ``/Evermind/bj_share/wangyanze/mass_library.db`` (intranet-accessible;
-    embeddings = ``embedding-our-new``, see ``embedding_model``).
     Set to ``None`` to disable the mass pool entirely — only the file-based
-    local pool (workspace + builtin + everos) will be used.
+    local pool (workspace + builtin + everos) will be used. Set this to a
+    deployment-specific database path when shipping a pre-built skill library.
 
     When set, ``SkillService`` attaches the file in **read-only** mode at
     startup and uses its (metadata + embedding) rows for dense retrieval
@@ -1066,9 +1070,7 @@ class SkillForgeConfig(_Base):
         if lw is not None:
             lw = float(lw)
             if lw < 1.0 or lw > 2.0:
-                raise ValueError(
-                    f"local_weight={lw} out of valid range [1.0, 2.0]"
-                )
+                raise ValueError(f"local_weight={lw} out of valid range [1.0, 2.0]")
         return data
 
 
@@ -1171,7 +1173,9 @@ class SkillForgeRouterConfig(_Base):
 
     weights: dict[str, float] = Field(
         default_factory=lambda: {
-            "local": 1.0, "everos": 0.9, "hub": 0.85,
+            "local": 1.0,
+            "everos": 0.9,
+            "hub": 0.85,
         },
     )
     """Per-source RRF weight. Higher = more rank mass when the same skill

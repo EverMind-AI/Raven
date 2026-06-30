@@ -259,12 +259,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
       - ``plugins.config["everos-memory"]`` is seeded with the plugin's identity
         wiring so the block is never empty and the user can see/edit it.
 
-    The internal-infra fields on ``SkillForgeConfig`` (``embedding_url`` /
+    The optional service fields on ``SkillForgeConfig`` (``embedding_url`` /
     ``embedding_api_key`` / ``reranker_url`` / ``reranker_api_key`` /
-    ``mass_library_db``) are deliberately NOT written — they carry hardcoded
-    intranet endpoints + a real Bearer token, which must never land in a user's
-    plaintext config. They stay at their schema defaults and the few who need
-    them add them by hand.
+    ``mass_library_db``) are deliberately NOT written. They stay at public
+    schema defaults and deployments that need hosted services add explicit
+    values by hand.
 
     Key casing follows each block's convention: ``memory`` / ``skillForge`` use
     camelCase (the file-level alias); ``plugins.config`` is a verbatim
