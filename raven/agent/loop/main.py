@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -230,8 +230,6 @@ class AgentLoop:
         model: str | None = None,
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
-        everos_consolidation_threshold_pct: int = 80,
-        everos_nightly_consolidation_hour: int | None = 0,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -310,8 +308,6 @@ class AgentLoop:
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
         self.context_window_tokens = context_window_tokens
-        self.everos_consolidation_threshold_pct = everos_consolidation_threshold_pct
-        self.everos_nightly_consolidation_hour = everos_nightly_consolidation_hour
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -335,10 +331,6 @@ class AgentLoop:
         # pipeline unchanged. See ``_dispatch_backend_store`` for the call
         # site that consumes it.
         self.backend: "MemoryBackend | None" = backend
-        # Background EverOS consolidation tasks (intra-day threshold trigger).
-        # Held in a set so they aren't garbage-collected mid-flight and can be
-        # drained on shutdown / awaited in tests.
-        self._everos_tasks: set[asyncio.Task] = set()
 
         # Tools contributed by activated plugins; registered into the
         # ToolRegistry by ``_register_default_tools``.
@@ -894,99 +886,6 @@ class AgentLoop:
                 "in session log, plugin-side indexing skipped",
                 session_key,
             )
-
-    async def _maybe_consolidate_everos(self, session: "Session") -> None:
-        """Intra-day EverOS long-term consolidation (safety valve).
-
-        Native short-term compaction (``maybe_consolidate_by_tokens``) owns the
-        per-turn context budget; this is a separate, additive long-term write
-        fired only when the session's estimated prompt crosses
-        ``everos_consolidation_threshold_pct`` of the context window. It runs as
-        a background task so the turn never blocks on long-term indexing. The
-        nightly offline run is the primary path; ``pct <= 0`` disables this.
-        """
-        if self.backend is None:
-            return
-        pct = self.everos_consolidation_threshold_pct
-        if pct <= 0 or self.context_window_tokens <= 0:
-            return
-        estimated, _ = self.memory_consolidator.estimate_session_prompt_tokens(session)
-        if estimated < self.context_window_tokens * pct / 100:
-            return
-        task = asyncio.create_task(self._consolidate_everos(session))
-        self._everos_tasks.add(task)
-        task.add_done_callback(self._everos_tasks.discard)
-
-    async def _consolidate_everos(self, session: "Session") -> None:
-        """Promote the messages accumulated since the last EverOS store into
-        long-term memory (force-flush).
-
-        Idempotent across the intra-day and nightly triggers via
-        ``metadata['last_everos_stored']`` — each call sends only the unsent
-        tail, so overlapping triggers never double-ingest. Exceptions are
-        swallowed: long-term indexing must never abort the turn (the raw turn
-        is already in the session log).
-        """
-        if self.backend is None:
-            return
-        start = int(session.metadata.get("last_everos_stored", 0))
-        pending = session.messages[start:]
-        if not pending:
-            return
-        try:
-            await self.backend.store(session.key, pending, force_flush=True)
-            session.metadata["last_everos_stored"] = len(session.messages)
-            self.sessions.save(session)
-        except Exception:
-            logger.exception(
-                "everos consolidation failed for session {}", session.key,
-            )
-
-    async def run_nightly_everos_consolidation(self) -> None:
-        """Background loop: once per day at the configured local hour, promote
-        every session's unsent tail into EverOS long-term memory (offline,
-        transparent to the user). This is the primary long-term path; the
-        intra-day threshold trigger is the safety valve. No-op when no backend
-        is wired or the hour is None. Started by the gateway runtime.
-        """
-        hour = self.everos_nightly_consolidation_hour
-        if self.backend is None or hour is None:
-            return
-        while True:
-            await asyncio.sleep(self._seconds_until_local_hour(hour))
-            try:
-                await self._consolidate_all_sessions()
-            except Exception:
-                logger.exception("nightly everos consolidation failed")
-
-    def _seconds_until_local_hour(self, hour: int) -> float:
-        """Seconds from now until the next local-time occurrence of ``hour:00``."""
-        now = self._now_fn()
-        target = now.replace(hour=hour % 24, minute=0, second=0, microsecond=0)
-        if target <= now:
-            target += timedelta(days=1)
-        return max(1.0, (target - now).total_seconds())
-
-    async def _consolidate_all_sessions(self) -> None:
-        """Force-flush every session's unsent tail into EverOS long-term memory.
-
-        Incremental per-session (``metadata['last_everos_stored']`` watermark),
-        so a session with nothing new is a no-op and the intra-day and nightly
-        triggers never double-ingest the same messages.
-        """
-        if self.backend is None:
-            return
-        for entry in self.sessions.list_sessions():
-            key = entry.get("key")
-            if not key:
-                continue
-            try:
-                session = self.sessions.get_or_create(key)
-                await self._consolidate_everos(session)
-            except Exception:
-                logger.exception(
-                    "nightly everos consolidation: session {} failed", key,
-                )
 
     def _collect_injected_skill_ids(
         self, selected: list[Any] | None,
@@ -2052,13 +1951,10 @@ class AgentLoop:
                 "messages": all_msgs[turn_start_idx:],
             },
         )
-        # EverOS long-term consolidation (intra-day safety valve): native
-        # short-term owns per-turn compaction (maybe_consolidate_by_tokens,
-        # below); everos is fired only when the session crosses the configured
-        # % of the context window, as a non-blocking background task. The
-        # nightly offline run is the primary long-term path. Normal turns,
-        # below the threshold, stay native-only.
-        await self._maybe_consolidate_everos(session)
+        # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
+        await self._dispatch_backend_store(
+            key, all_msgs[turn_start_idx:],
+        )
         # FB-1: forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.

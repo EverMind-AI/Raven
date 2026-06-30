@@ -157,7 +157,6 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def agent(
         message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-        message_file: str = typer.Option(None, "--message-file", help="Read the message from a file (for messages too long to pass as a shell argument)"),
         session_id: str | None = typer.Option(
             None,
             "--session",
@@ -331,7 +330,6 @@ def register(app: typer.Typer) -> None:
             max_iterations=config.agents.defaults.max_tool_iterations,
             empty_recovery=limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
-            everos_consolidation_threshold_pct=config.agents.defaults.everos_consolidation_threshold_pct,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             brave_api_key=config.tools.web.search.api_key or None,
@@ -383,10 +381,6 @@ def register(app: typer.Typer) -> None:
                 return nullcontext()
             # Animated spinner is safe to use with prompt_toolkit input handling
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
-
-        if message_file and not message:
-            from pathlib import Path as _Path
-            message = _Path(message_file).read_text()
 
         if message:
             # Single message mode — one USER turn through spine (submit -> lane ->

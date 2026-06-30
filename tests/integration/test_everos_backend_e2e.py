@@ -144,34 +144,3 @@ async def test_dual_track_isolation(
         assert await be.recall("anything", top_k=5) == []
     finally:
         await be.stop()
-
-
-async def test_force_flush_single_store_recall_through_backend(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], tmp_path: Path,
-    pipeline_drain: Any,
-) -> None:
-    """``store(force_flush=True)`` promotes a single batch to long-term in one
-    shot — the primitive the host's intra-day (80%) and nightly consolidation
-    triggers use. Unlike the volume-driven path above, ONE store call must be
-    enough for recall to read the fact back on the user track."""
-    be = _backend(tmp_path, agent_id=ids.agent_id)
-    await be.start()
-    try:
-        facts = _stamp_user(corpus["user_facts"]["messages"], ids.user_id)
-        await be.store(ids.session, facts, force_flush=True)  # single forced flush
-        await pipeline_drain()
-
-        hits = await be.recall("user preferences", user_id=ids.user_id, top_k=5)
-        assert isinstance(hits, list)
-        for h in hits:
-            assert isinstance(h, Memory)
-            assert h.metadata.get("owner_type") == "user"
-            assert h.metadata.get("type") in ("episode", "profile")
-        if not hits:
-            pytest.xfail(
-                "force_flush single-store extraction didn't surface "
-                "(everos extraction non-determinism); see "
-                "test_everos_extraction_real_llm for the authoritative check"
-            )
-    finally:
-        await be.stop()

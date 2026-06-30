@@ -219,8 +219,6 @@ def register(app: typer.Typer) -> None:
             max_iterations=config.agents.defaults.max_tool_iterations,
             empty_recovery=limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
-            everos_consolidation_threshold_pct=config.agents.defaults.everos_consolidation_threshold_pct,
-            everos_nightly_consolidation_hour=config.agents.defaults.everos_nightly_consolidation_hour,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
             brave_api_key=config.tools.web.search.api_key or None,
@@ -534,7 +532,6 @@ def register(app: typer.Typer) -> None:
                     agent.run(),
                     channels.start_all(),
                     _delayed_discover_trigger_drain(),
-                    agent.run_nightly_everos_consolidation(),
                 ]
                 if health_server is not None:
                     coros.append(health_server.serve_forever())

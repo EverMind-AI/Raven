@@ -256,16 +256,6 @@ class AgentDefaults(Base):
     )
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
-    # Intra-day safety valve: EverOS long-term consolidation fires when a
-    # session's estimated prompt reaches this percentage of
-    # context_window_tokens. The nightly offline consolidation is the primary
-    # path; native short-term compaction (MemoryConsolidator) is independent.
-    # 0 disables the intra-day trigger, leaving only the daily run.
-    everos_consolidation_threshold_pct: int = Field(default=80, ge=0, le=100)
-    # Local hour (0-23) for the nightly offline EverOS consolidation — the
-    # primary long-term path: force-flush each session's unsent tail into
-    # long-term memory once a day, transparent to the user. None disables it.
-    everos_nightly_consolidation_hour: int | None = 0
     temperature: float = 0.1
     max_tool_iterations: int = 40
     # Cap on subagent VMs running at once (excess spawns queue). ge=1: a

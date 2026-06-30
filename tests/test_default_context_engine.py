@@ -206,12 +206,10 @@ class TestTwoTrackConcurrency:
             user_id="alice",
         )
         await eng.assemble("s", [], _budget(), turn=_turn("git resolver"))
-        # Recall over-fetches memory_top_k * 2 (default 5 -> 10) so dropping
-        # current-session hits still leaves up to memory_top_k to inject.
         assert backend.recall_calls == [
             {
                 "query": "git resolver", "user_id": "alice",
-                "agent_id": None, "top_k": 10,
+                "agent_id": None, "top_k": 5,
             },
         ]
 
@@ -228,7 +226,7 @@ class TestTwoTrackConcurrency:
         # SkillForgeRouter applies an over-fetch factor; the source sees k*2
         # by default.
         assert source.calls[0][1] == 6  # 3 × default over_fetch_factor 2
-        assert backend.recall_calls[0]["top_k"] == 14  # memory_top_k 7 × over-fetch 2
+        assert backend.recall_calls[0]["top_k"] == 7
 
 
 # ---------------------------------------------------------------------------

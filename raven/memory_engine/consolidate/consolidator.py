@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import sys
 import weakref
@@ -158,32 +157,6 @@ def _normalize_save_memory_args(args: Any) -> dict[str, Any] | None:
 # minimal and tokens cheap.
 
 
-_PREFERENCE_ANNOTATE_ADDENDUM = (
-    "\n\nPREFERENCES & STANCES (in addition to work events) — when the user "
-    "reveals a preference, habit, stance, or routine, even implicitly through "
-    "what they do, the examples they give, or how they describe their habits, "
-    "record it as its own entry. Keep the SPECIFIC direction and polarity "
-    "verbatim; never neutralize or average it: "
-    "GOOD 'leaves home empty-handed, always uses store-provided bags'; "
-    "BAD 'has a shopping-bag routine'. Tag with #preference. Do NOT reconcile "
-    "competing stances seen across different chunks — record each exactly as "
-    "stated so any genuine conflict stays visible downstream. For these "
-    "preference/stance entries the <=100 char limit does NOT apply: include the "
-    "specific value, any qualifying condition that bounds when it holds (time, "
-    "scenario, role, scope), and the key verbatim phrasing — these "
-    "distinguishing details, not a tidy summary, are what later relational "
-    "reasoning (aggregate / pick-by-condition / detect-conflict) depends on."
-)
-_RECALLED_EPISODES_HEADER = (
-    "## Recalled Episodes\n"
-    "(Relevant past episodes. They may COMPLEMENT one another — aggregate all; "
-    "be NUANCED — prefer the one matching the current time/context; or "
-    "CONFLICT — if two assert mutually exclusive things about the same target "
-    "with no later correction, do NOT pick a side or merge them: surface the "
-    "unresolved conflict and ask to confirm.)\n\n"
-)
-
-
 def _build_annotate_tool(*, enable_foresight: bool) -> list[dict]:
     """Construct the ``annotate_conversation`` tool.
 
@@ -230,8 +203,6 @@ def _build_annotate_tool(*, enable_foresight: bool) -> list[dict]:
         },
     }
     required: list[str] = ["episode_summary"]
-    if os.environ.get("RAVEN_ANNOTATE_PREFS") == "1":
-        properties["episode_summary"]["description"] += _PREFERENCE_ANNOTATE_ADDENDUM
     description = (
         "Annotate this conversation chunk for episodic memory. Produces "
         "tagged episode lines. Does NOT update the user profile — that "
@@ -1023,59 +994,11 @@ class MemoryStore:
     # Section-aware read.
     _SECTION_READ_TOP_K = 2
     _NOTES_HEADING_PREFIX = "## Notes"
-    # Episode recall is OFF by default; opt in via RAVEN_EPISODIC_TOPK>0.
-    _EPISODIC_TOPK_ENV = "RAVEN_EPISODIC_TOPK"
 
-    def get_memory_context(self, current_message: str | None = None) -> str:
-        """Profile sections (_get_profile_context) plus, when RAVEN_EPISODIC_TOPK
-        is set >0, the top-K episodes from episodes.md most lexically relevant to
-        current_message."""
-        profile = self._get_profile_context(current_message)
-        try:
-            top_k = int(os.environ.get(self._EPISODIC_TOPK_ENV, "0"))
-        except ValueError:
-            top_k = 0
-        if not current_message or top_k <= 0:
-            return profile
-        episodes = self._recall_episodes(current_message, top_k)
-        if not episodes:
-            return profile
-        block = _RECALLED_EPISODES_HEADER + "\n".join(episodes)
-        return f"{profile}\n\n{block}" if profile else f"## Long-term Memory\n\n{block}\n"
-
-    def _recall_episodes(self, query: str, top_k: int) -> list[str]:
-        """Top-K episodes.md paragraphs by lexical token overlap with query
-        (same tokenizer as section relevance, no embeddings), in chronological order."""
-        if top_k <= 0 or not self.history_file.exists():
-            return []
-        try:
-            raw = self.history_file.read_text(encoding="utf-8")
-        except OSError:
-            return []
-        episodes = [p.strip() for p in raw.split("\n\n") if p.strip()]
-        q = _tokenize_for_relevance(query)
-        if not q or not episodes:
-            return []
-        scored = [(i, len(q & _tokenize_for_relevance(ep))) for i, ep in enumerate(episodes)]
-        keep = {i for i, s in sorted(scored, key=lambda x: x[1], reverse=True)[:top_k] if s > 0}
-        # Tag-clustered expansion (opt-in): pull in episodes sharing a content tag
-        # with any hit, so complementary evidence and both sides of a conflict
-        # surface together instead of one-sided.
-        if keep and os.environ.get("RAVEN_EPISODIC_CLUSTER") == "1":
-            tags_of = [set(_TAG_RE.findall(ep)) - {"question", "answer", "habit"} for ep in episodes]
-            hit_tags = set().union(*(tags_of[i] for i in keep)) if keep else set()
-            cap = max(top_k * 2, 40)
-            for i, tags in enumerate(tags_of):
-                if len(keep) >= cap:
-                    break
-                if tags & hit_tags:
-                    keep.add(i)
-        return [ep for i, ep in enumerate(episodes) if i in keep]
-
-    def _get_profile_context(
+    def get_memory_context(
         self, current_message: str | None = None,
     ) -> str:
-        """Return the user.md profile block to embed in the agent's system prompt.
+        """Return the memory block to embed in the agent's system prompt.
 
         ``current_message=None`` (or empty) → full user.md dump. Useful
         for cold-start sessions or when the agent is being pinged without
@@ -1132,31 +1055,6 @@ class MemoryStore:
             if heading.startswith(cls._NOTES_HEADING_PREFIX):
                 keep_keys.add(heading)
         return {h: b for h, b in sections.items() if h in keep_keys}
-
-    def has_relevant_long_term(self, current_message: str | None) -> bool:
-        """Whether user.md has a section relevant to ``current_message``.
-
-        Drives the ``# Memory`` segment's EverOS (long-term) fallback: native
-        short-term owns the current session, so EverOS is queried only when
-        native surfaces nothing relevant to this query. With no query, any
-        stored long-term counts as relevant (a cold ping returns the full dump).
-        """
-        long_term = self.read_long_term()
-        if not long_term:
-            return False
-        if not current_message or not current_message.strip():
-            return True
-        sections = _parse_user_md_sections(long_term)
-        if not sections:
-            return True
-        selected = self._select_relevant_sections(
-            current_message, sections, top_k=self._SECTION_READ_TOP_K,
-        )
-        # A genuine hit = a non-Notes section scored > 0; Notes is always
-        # appended as a catchall, so its presence alone is not a relevance hit.
-        return any(
-            not h.startswith(self._NOTES_HEADING_PREFIX) for h in selected
-        )
 
     @staticmethod
     def _format_messages(messages: list[dict]) -> str:

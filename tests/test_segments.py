@@ -91,10 +91,8 @@ class TestMemory:
         assert "- likes espresso" in seg.text
         assert "# Recalled memory" not in seg.text
         assert seg.meta["memory_hits"] == 1
-        # Recall over-fetches ``memory_top_k * 2`` so that dropping
-        # current-session hits still leaves up to ``memory_top_k`` to inject.
         assert backend.calls == [
-            {"query": "coffee", "user_id": "alice", "agent_id": None, "top_k": 14},
+            {"query": "coffee", "user_id": "alice", "agent_id": None, "top_k": 7},
         ]
 
     async def test_no_backend_empty_text(self, tmp_path: Path) -> None:
