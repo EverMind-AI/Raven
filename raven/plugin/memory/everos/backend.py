@@ -740,6 +740,11 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
     after manifest activation. Sync construction only — async setup
     happens in ``EverosBackend.start()``."""
+    # Redirect EverOS to raven's ~/.everos/raven home BEFORE EverosBackend's
+    # constructor lazy-imports everos and calls its @cache-d load_settings().
+    from raven.config.update_everos import configure_everos_env
+
+    configure_everos_env()
     return EverosBackend(ctx)
 
 

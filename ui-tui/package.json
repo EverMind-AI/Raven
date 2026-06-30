@@ -1,9 +1,9 @@
 {
   "name": "raven-tui",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "description": "Raven native TUI (Ink + React). See ../docs/openspec/changes/tui-fork-hermes-import/.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -19,6 +19,7 @@
     "lint:fix": "eslint src/ packages/ --fix",
     "fmt": "prettier --write 'src/**/*.{ts,tsx}' 'packages/**/*.{ts,tsx}'",
     "fix": "npm run lint:fix && npm run fmt",
+    "pretest": "npm run build --prefix packages/hermes-ink",
     "test": "vitest run",
     "test:watch": "vitest",
     "gen:rpc": "node scripts/gen-rpc-types.mjs",

@@ -1,9 +1,10 @@
 """Full coverage for ``raven.config.update_everos``.
 
-The onboard memory step writes EverOS model settings to ``~/.everos/config.toml``
-through these ops. EverOS reads that file back via its own pydantic-settings
-loader, so a malformed / mislocated write silently breaks memory at runtime —
-hence the thorough round-trip + section-preservation coverage here.
+The onboard memory step writes EverOS model settings to
+``~/.everos/raven/config.toml`` through these ops. EverOS reads that file back
+via its own pydantic-settings loader, so a malformed / mislocated write silently
+breaks memory at runtime — hence the thorough round-trip + section-preservation
+coverage here.
 """
 
 from __future__ import annotations
@@ -42,6 +43,50 @@ def test_config_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 def test_load_absent_returns_empty(everos_home: Path) -> None:
     assert ue.load_everos_config() == {}
+
+
+# ---------------------------------------------------------------------------
+# configure_everos_env
+# ---------------------------------------------------------------------------
+
+
+def test_configure_everos_env_points_at_raven_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
+    monkeypatch.delenv("EVEROS_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("EVEROS_MEMORY__ROOT", raising=False)
+
+    ue.configure_everos_env()
+
+    base = tmp_path / ".everos" / "raven"
+    import os
+
+    assert os.environ["EVEROS_CONFIG_FILE"] == str(base / "config.toml")
+    assert os.environ["EVEROS_MEMORY__ROOT"] == str(base)
+
+
+def test_configure_everos_env_respects_explicit_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # An operator-set EVEROS_* env must win (setdefault, not overwrite).
+    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
+    monkeypatch.setenv("EVEROS_CONFIG_FILE", "/custom/everos.toml")
+    monkeypatch.setenv("EVEROS_MEMORY__ROOT", "/custom/data")
+
+    ue.configure_everos_env()
+
+    import os
+
+    assert os.environ["EVEROS_CONFIG_FILE"] == "/custom/everos.toml"
+    assert os.environ["EVEROS_MEMORY__ROOT"] == "/custom/data"
+
+
+def test_default_config_path_under_raven_home() -> None:
+    # The production default lives under ~/.everos/raven, not bare ~/.everos.
+    assert ue.get_everos_config_path() == (
+        Path("~/.everos/raven/config.toml").expanduser()
+    )
 
 
 def test_load_round_trips_written_content(everos_home: Path) -> None:

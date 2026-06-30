@@ -2,6 +2,7 @@
   "name": "raven-whatsapp-bridge",
   "version": "0.1.0",
   "description": "WhatsApp bridge for raven using Baileys",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -10,7 +11,7 @@
     "dev": "tsc && node dist/index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
     "ws": "^8.17.1",
     "qrcode-terminal": "^0.12.0",
     "pino": "^9.0.0"

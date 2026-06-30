@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +17,12 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.sandbox import SandboxConfig, build_executor
+from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import build_assistant_message
+
+# One hour: a runaway re-injection loop fires fast and trips the limit quickly,
+# while legitimate spawns spread over time and age out before it bites.
+_SPAWN_WINDOW_SECONDS = 3600
 
 
 class SubagentManager:
@@ -34,6 +41,7 @@ class SubagentManager:
         owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
         max_concurrent: int = 4,
+        max_spawns_per_hour: int = 30,
     ):
         from raven.config.schema import ExecToolConfig
         self.provider = provider
@@ -55,6 +63,11 @@ class SubagentManager:
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         self._gate = asyncio.Semaphore(max_concurrent)
+        self._max_spawns_per_hour = max_spawns_per_hour
+        # Per-session spawn timestamps (monotonic), kept per session (not
+        # per-process) so one busy session can't throttle others. Each deque is
+        # pruned to the rolling window on access, so it self-bounds.
+        self._session_spawn_times: dict[str, deque[float]] = {}
 
     async def spawn(
         self,
@@ -65,6 +78,24 @@ class SubagentManager:
         session_key: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background."""
+        quota_key = session_key or "default"
+        now = time.monotonic()
+        window = self._session_spawn_times.setdefault(quota_key, deque())
+        cutoff = now - _SPAWN_WINDOW_SECONDS
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= self._max_spawns_per_hour:
+            logger.warning(
+                "Spawn refused: session {!r} hit spawn rate limit ({}/hour)",
+                quota_key, self._max_spawns_per_hour,
+            )
+            return (
+                f"Spawn refused: this session hit its subagent spawn rate limit "
+                f"({self._max_spawns_per_hour} per hour). It recovers automatically "
+                f"as earlier spawns age out — if this is unexpected, the task may "
+                f"be looping; reconsider the approach instead of spawning again."
+            )
+        window.append(now)
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
@@ -173,11 +204,13 @@ class SubagentManager:
                         args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                         logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
                         result = await tools.execute(tool_call.name, tool_call.arguments)
+                        # The subagent's loop is an untrusted-data path too — fence its
+                        # tool output like the main loop does in add_tool_result.
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": tool_call.name,
-                            "content": result,
+                            "content": wrap_untrusted(result, source=tool_call.name),
                         })
                 else:
                     final_result = response.content
@@ -215,12 +248,16 @@ class SubagentManager:
         """
         status_text = "completed successfully" if status == "ok" else "failed"
 
+        # The subagent's result is attacker-influenceable (it may have fetched
+        # web pages / read files), so fence it as untrusted before it re-enters
+        # the main agent's context.
+        fenced_result = wrap_untrusted(result, source="subagent")
         announce_content = f"""[Subagent '{label}' {status_text}]
 
 Task: {task}
 
 Result:
-{result}
+{fenced_result}
 
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not mention technical details like "subagent" or task IDs."""
 
@@ -277,6 +314,10 @@ Stay focused on the assigned task. Your final response will be reported back to 
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        # Drop this session's rate-limit entry on teardown: pruning empties a
+        # deque but never removes the key, so without this the dict would keep
+        # one entry per session for the process's life.
+        self._session_spawn_times.pop(session_key, None)
         return len(tasks)
 
     def get_running_count(self) -> int:

@@ -1,4 +1,4 @@
-"""Atomic operations for EverOS memory settings (``~/.everos/config.toml``).
+"""Atomic operations for EverOS memory settings (``~/.everos/raven/config.toml``).
 
 This module is the ONLY write path for the EverOS memory-model sections
 (llm / embedding / rerank / multimodal). The onboard wizard's memory step
@@ -8,6 +8,11 @@ writes here; EverOS reads it back through its own pydantic-settings loader
 
 Only the four model sections are writable; other sections EverOS ships
 (memory / sqlite / lancedb / api) are preserved untouched on every write.
+
+EverOS home: raven scopes EverOS under ``~/.everos/raven`` (not the bare
+``~/.everos`` EverOS defaults to) so raven's instance keeps its config + data
+in one place, isolated from any other EverOS consumer. :func:`configure_everos_env`
+points EverOS there via ``EVEROS_CONFIG_FILE`` + ``EVEROS_MEMORY__ROOT``.
 """
 
 from __future__ import annotations
@@ -19,9 +24,11 @@ from typing import Any
 
 import tomli_w
 
-# EverOS resolves its user-level overrides from this path (overridable on
-# the EverOS side via EVEROS_CONFIG_FILE). Keep in sync with everos.config.
-_EVEROS_CONFIG = Path("~/.everos/config.toml")
+# raven's EverOS home. Both the user-level config toml and the data root
+# (sqlite / lancedb / .index / ome.db) live under here. EverOS itself defaults
+# to a bare ``~/.everos``; ``configure_everos_env`` redirects it.
+_EVEROS_BASE = Path("~/.everos/raven")
+_EVEROS_CONFIG = _EVEROS_BASE / "config.toml"
 
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
 
@@ -29,6 +36,24 @@ WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
 def get_everos_config_path() -> Path:
     """Path of the user-level EverOS config toml (``~`` expanded)."""
     return _EVEROS_CONFIG.expanduser()
+
+
+def configure_everos_env() -> None:
+    """Point embedded EverOS at raven's ``~/.everos/raven`` home.
+
+    Sets two env vars EverOS reads at settings-load time:
+      - ``EVEROS_CONFIG_FILE`` → the user-level toml raven manages;
+      - ``EVEROS_MEMORY__ROOT`` → the data root (overrides ``[memory].root``;
+        EverOS derives sqlite / lancedb / .index / ome.db paths from it).
+
+    Uses ``setdefault`` so an explicit operator override (a pre-set ``EVEROS_*``
+    env) still wins. Must run BEFORE EverOS's ``load_settings()`` — which is
+    ``@cache``-d — first executes; the everos backend factory / tool factory
+    call this as the earliest raven-controlled EverOS entry points.
+    """
+    base = _EVEROS_BASE.expanduser()
+    os.environ.setdefault("EVEROS_CONFIG_FILE", str(base / "config.toml"))
+    os.environ.setdefault("EVEROS_MEMORY__ROOT", str(base))
 
 
 def load_everos_config() -> dict[str, Any]:
