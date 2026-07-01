@@ -1069,12 +1069,20 @@ class AgentLoop:
                 self._mcp_stack = None
             raise
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(
+        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+    ) -> None:
         """Update context for all tools that need routing info."""
         for name in ("message", "spawn", "cron"):
             if tool := self.tools.get(name):
-                if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+                if not hasattr(tool, "set_context"):
+                    continue
+                if name == "message":
+                    tool.set_context(channel, chat_id, message_id)
+                elif name == "spawn":
+                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
+                else:
+                    tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1917,7 +1925,7 @@ class AgentLoop:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"))
+        self._set_tool_context(channel, chat_id, metadata.get("message_id"), session_key=key)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()

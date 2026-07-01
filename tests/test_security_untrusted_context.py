@@ -84,7 +84,7 @@ async def test_subagent_result_is_fenced(tmp_path: Path) -> None:
         "label",
         "do a thing",
         poison,
-        {"channel": "cli", "chat_id": "direct"},
+        {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"},
         "ok",
     )
 

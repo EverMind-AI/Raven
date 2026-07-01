@@ -168,3 +168,66 @@ async def test_cancel_by_session_clears_spawn_history(monkeypatch):
 
     await mgr.cancel_by_session("sessA")
     assert "sessA" not in mgr._session_spawn_times
+
+
+async def test_announce_result_routes_to_tui_session_key(monkeypatch):
+    """TUI origins pass an authoritative session_key distinct from channel:chat_id
+    (chat_id falls back to "default" while the live subscription is keyed by
+    session_key); the re-injected TurnRequest must land on that session, not on
+    the derived channel:chat_id."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    await mgr._announce_result(
+        task_id="t1",
+        label="label",
+        task="task",
+        result="result",
+        origin={"channel": "tui", "chat_id": "default", "session_key": "tui:sess123"},
+        status="ok",
+    )
+
+    assert len(submitted) == 1
+    assert submitted[0].conversation == "tui:sess123"
+
+
+async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
+    """Non-TUI origins (e.g. a channel with a real chat_id) still announce on
+    their existing channel:chat_id conversation — no regression."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted = []
+    mgr.set_submit(lambda req: submitted.append(req))
+
+    await mgr._announce_result(
+        task_id="t2",
+        label="label",
+        task="task",
+        result="result",
+        origin={"channel": "whatsapp", "chat_id": "12345", "session_key": "whatsapp:12345"},
+        status="ok",
+    )
+
+    assert len(submitted) == 1
+    assert submitted[0].conversation == "whatsapp:12345"
+
+
+def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
+    """_build_subagent_prompt uses a transient ContextBuilder just for
+    _build_runtime_context; it must not leave a skill-catalog file watcher
+    running behind it (one leaked watchfiles/inotify thread per spawn)."""
+    import raven.agent.context as context_mod
+
+    calls = []
+    real_init = context_mod.ContextBuilder.__init__
+
+    def _spy_init(self, workspace, *args, **kwargs):
+        calls.append(kwargs.get("start_watcher", True))
+        return real_init(self, workspace, *args, **kwargs)
+
+    monkeypatch.setattr(context_mod.ContextBuilder, "__init__", _spy_init)
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr._build_subagent_prompt()
+
+    assert calls == [False]
