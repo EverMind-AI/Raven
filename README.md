@@ -73,7 +73,7 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 Run this in PowerShell:
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/EverMind-AI/Raven/main/install.ps1)
+irm http://raven.evermind.ai/install.ps1 | iex
 ```
 
 The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
