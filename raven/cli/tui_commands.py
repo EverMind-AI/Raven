@@ -201,7 +201,7 @@ _RPC_HANDSHAKE_EXIT_CODE: int = 3
 # os.pipe variant is retained for `--check` smoke parity and the Python-only
 # handshake-timeout test.
 _RPC_SOCKET_ENV: str = "RAVEN_RPC_SOCKET"
-_RPC_TOKEN_ENV: str = "RAVEN_RPC_TOKEN"
+_RPC_TOKEN_ENV: str = "RAVEN_RPC_TOKEN"  # noqa: S105 -- env var name, not a secret
 
 
 def _suppress_noisy_watchers() -> None:
@@ -745,9 +745,7 @@ def run_subprocess_with_rpc(
         # Wait for child to connect within the handshake deadline. We race
         # `accept` against `proc.wait()` so an early-exiting child returns
         # immediately instead of stalling for the full 5 s.
-        accept_task = asyncio.create_task(
-            _accept_with_timeout(server_sock, _RPC_HANDSHAKE_TIMEOUT_S)
-        )
+        accept_task = asyncio.create_task(_accept_with_timeout(server_sock, _RPC_HANDSHAKE_TIMEOUT_S))
         proc_done_task = asyncio.create_task(proc_done.wait())
         done, pending = await asyncio.wait(
             {accept_task, proc_done_task},
@@ -774,9 +772,7 @@ def run_subprocess_with_rpc(
         # ownership of this one socket and closes it on teardown, so the outer
         # cleanup must not double-close it.
         _flags["handed_off"] = True
-        return await _run_rpc_server_until_done(
-            conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done
-        )
+        return await _run_rpc_server_until_done(conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done)
 
     waiter = threading.Thread(target=_waiter, daemon=True)
     waiter.start()
@@ -801,8 +797,7 @@ def run_subprocess_with_rpc(
 
     if not handshake_ok:
         print(
-            "✗ RPC handshake timeout "
-            f"({_RPC_HANDSHAKE_TIMEOUT_S:.0f}s); is the Node side using the new IPC bridge?",
+            f"✗ RPC handshake timeout ({_RPC_HANDSHAKE_TIMEOUT_S:.0f}s); is the Node side using the new IPC bridge?",
             file=sys.stderr,
         )
         try:
@@ -903,8 +898,7 @@ def tui(
     if version is None or version < _MIN_NODE_VERSION:
         ver_str = ".".join(map(str, version)) if version else "<unknown>"
         typer.echo(
-            f"✗ Node 版本过低（找到 {ver_str}，需要 >= 22）。\n"
-            f"  请升级：nvm install 22  或  brew upgrade node\n",
+            f"✗ Node 版本过低（找到 {ver_str}，需要 >= 22）。\n  请升级：nvm install 22  或  brew upgrade node\n",
         )
         raise typer.Exit(code=1)
 
