@@ -1,10 +1,10 @@
 """Crash-safe JSONL file primitives: locked append and atomic replace.
 
-Both helpers serialize cross-process writers with an advisory
-``fcntl.flock`` on a sidecar lock kept in a hidden ``.lock/`` subdir of the
-target's own parent (auto-released on process death, so no stale-lock
-cleanup is needed). On platforms without ``fcntl`` they degrade to unlocked
-operation.
+Both helpers serialize cross-process writers with an advisory lock on a
+sidecar lock kept in a hidden ``.lock/`` subdir of the target's own parent
+(auto-released on process death, so no stale-lock cleanup is needed). The
+lock is cross-platform (``portalocker``: POSIX ``fcntl`` + Windows
+``LockFileEx``), so concurrent writers are serialized on Windows too.
 """
 
 import os
@@ -12,27 +12,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
+from raven.utils.portable_lock import file_lock
 
 
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if fcntl is None:
+    lock_path = path.parent / ".lock" / (path.name + ".lock")
+    with file_lock(lock_path):
         yield
-        return
-    lock_dir = path.parent / ".lock"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / (path.name + ".lock")
-    with open(lock_path, "w") as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def locked_append(path: Path, lines: list[str]) -> None:

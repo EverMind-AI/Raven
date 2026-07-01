@@ -3,7 +3,6 @@
 import multiprocessing
 from pathlib import Path
 
-from raven.utils import atomic_io
 from raven.utils.atomic_io import atomic_replace, locked_append
 
 WRITERS = 2
@@ -83,9 +82,10 @@ def test_atomic_replace_creates_missing_file(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == "data\n"
 
 
-def test_degrades_without_fcntl(tmp_path: Path, monkeypatch):
-    """With fcntl unavailable (non-POSIX), both helpers still work unlocked."""
-    monkeypatch.setattr(atomic_io, "fcntl", None)
+def test_helpers_work_cross_platform(tmp_path: Path):
+    """Both helpers work on every platform. Locking is cross-platform via
+    portalocker (POSIX fcntl + Windows LockFileEx) — there is no longer an
+    fcntl-absent 'degrade to unlocked' path."""
     path = tmp_path / "s.jsonl"
     locked_append(path, ["x"])
     atomic_replace(path, "y\n")
