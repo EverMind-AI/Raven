@@ -76,6 +76,7 @@ class SubagentManager:
         label: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
+        origin_conversation: str | None = None,
         session_key: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background."""
@@ -100,7 +101,14 @@ class SubagentManager:
         window.append(now)
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
-        origin = {"channel": origin_channel, "chat_id": origin_chat_id}
+        origin = {
+            "channel": origin_channel,
+            "chat_id": origin_chat_id,
+            # Re-injection/emit key of the originating turn. Falls back to
+            # channel:chat_id when not supplied (channels/CLI), but the TUI
+            # passes its minted session key so the reply reaches the subscriber.
+            "conversation": origin_conversation or f"{origin_channel}:{origin_chat_id}",
+        }
 
         bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
         self._running_tasks[task_id] = bg_task
@@ -284,7 +292,9 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
                     chat_type=ChatType.DM,
                 ),
                 text=announce_content,
-                conversation=f"{origin['channel']}:{origin['chat_id']}",
+                # Emit key = originating turn's conversation (TUI mints its own,
+                # which the front-end subscribes on). Fall back to channel:chat_id.
+                conversation=origin.get("conversation") or f"{origin['channel']}:{origin['chat_id']}",
             )
         )
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin["channel"], origin["chat_id"])

@@ -168,3 +168,40 @@ async def test_cancel_by_session_clears_spawn_history(monkeypatch):
 
     await mgr.cancel_by_session("sessA")
     assert "sessA" not in mgr._session_spawn_times
+
+
+@pytest.mark.asyncio
+async def test_announce_result_reinjects_on_conversation_key():
+    """Regression: subagent results must re-inject on the originating turn's
+    conversation key. The TUI mints ``tui:<sid>`` and the front-end subscribes
+    on it; if the reply is emitted to a ``channel:chat_id`` fallback instead,
+    it lands on a key nobody is subscribed to and the user never sees the
+    subagent result (the TUI bug this fix addresses)."""
+    mgr = _make_manager(max_concurrent=2)
+    captured: dict = {}
+    mgr.set_submit(lambda req: captured.__setitem__("req", req))
+
+    # TUI-shaped origin: minted conversation differs from channel:chat_id.
+    origin = {"channel": "tui", "chat_id": "default", "conversation": "tui:sid_abc123"}
+    await mgr._announce_result("t1", "label", "do x", "the result", origin, "ok")
+
+    req = captured["req"]
+    # Fix: reply rides the minted conversation the front-end subscribes on.
+    assert req.conversation == "tui:sid_abc123"
+    # Source is unchanged, so gateway (routes by source.chat_id) stays correct.
+    assert req.source.chat_id == "default"
+    assert req.source.channel == "tui"
+
+
+@pytest.mark.asyncio
+async def test_announce_result_falls_back_to_channel_chatid():
+    """No conversation carried (channels/CLI) -> fall back to channel:chat_id,
+    preserving prior behavior for non-TUI paths."""
+    mgr = _make_manager(max_concurrent=2)
+    captured: dict = {}
+    mgr.set_submit(lambda req: captured.__setitem__("req", req))
+
+    origin = {"channel": "telegram", "chat_id": "42"}  # no 'conversation' key
+    await mgr._announce_result("t2", "label", "do y", "res", origin, "ok")
+
+    assert captured["req"].conversation == "telegram:42"

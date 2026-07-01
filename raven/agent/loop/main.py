@@ -1069,12 +1069,25 @@ class AgentLoop:
                 self._mcp_stack = None
             raise
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        conversation: str | None = None,
+    ) -> None:
         """Update context for all tools that need routing info."""
         for name in ("message", "spawn", "cron"):
             if tool := self.tools.get(name):
                 if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+                    if name == "message":
+                        tool.set_context(channel, chat_id, message_id)
+                    elif name == "spawn":
+                        # spawn carries the conversation so subagent results
+                        # re-inject on the originating turn's key (TUI mints one).
+                        tool.set_context(channel, chat_id, conversation)
+                    else:
+                        tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1917,7 +1930,7 @@ class AgentLoop:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"))
+        self._set_tool_context(channel, chat_id, metadata.get("message_id"), conversation=msg_session_key)
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()

@@ -19,10 +19,15 @@ class _SpawnOrigin:
 
     channel: str
     chat_id: str
+    # The originating turn's conversation key. For channels this equals
+    # ``channel:chat_id``, but the TUI mints a per-session key (``tui:<sid>``)
+    # that the front-end subscribes on, so it must be carried explicitly:
+    # subagent results re-inject on this key, and the reply is emitted to it.
+    conversation: str | None = None
 
     @property
     def session_key(self) -> str:
-        return f"{self.channel}:{self.chat_id}"
+        return self.conversation or f"{self.channel}:{self.chat_id}"
 
 
 class SpawnTool(Tool):
@@ -40,9 +45,9 @@ class SpawnTool(Tool):
     def _cur(self) -> _SpawnOrigin:
         return self._origin.get(None) or self._default
 
-    def set_context(self, channel: str, chat_id: str) -> None:
+    def set_context(self, channel: str, chat_id: str, conversation: str | None = None) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
-        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id))
+        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, conversation=conversation))
 
     @property
     def name(self) -> str:
@@ -81,5 +86,6 @@ class SpawnTool(Tool):
             label=label,
             origin_channel=org.channel,
             origin_chat_id=org.chat_id,
+            origin_conversation=org.session_key,
             session_key=org.session_key,
         )
