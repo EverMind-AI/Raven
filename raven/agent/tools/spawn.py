@@ -19,10 +19,7 @@ class _SpawnOrigin:
 
     channel: str
     chat_id: str
-
-    @property
-    def session_key(self) -> str:
-        return f"{self.channel}:{self.chat_id}"
+    session_key: str
 
 
 class SpawnTool(Tool):
@@ -34,15 +31,15 @@ class SpawnTool(Tool):
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager
-        self._default = _SpawnOrigin(channel="cli", chat_id="direct")
+        self._default = _SpawnOrigin(channel="cli", chat_id="direct", session_key="cli:direct")
         self._origin: ContextVar[_SpawnOrigin] = ContextVar("spawn_origin")
 
     def _cur(self) -> _SpawnOrigin:
         return self._origin.get(None) or self._default
 
-    def set_context(self, channel: str, chat_id: str) -> None:
+    def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
-        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id))
+        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key))
 
     @property
     def name(self) -> str:
