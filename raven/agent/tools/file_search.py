@@ -424,10 +424,7 @@ class FindTool(_FsTool):
         matches.sort(key=lambda p: self._mtime(p), reverse=True)
         total = len(matches)
         shown = matches[:cap]
-        lines = [
-            f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix()
-            for p in shown
-        ]
+        lines = [f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix() for p in shown]
         result = "\n".join(lines)
         if total > cap:
             result += f"\n\n(showing first {cap} of {total} results)"

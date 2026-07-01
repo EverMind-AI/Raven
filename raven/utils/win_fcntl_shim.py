@@ -91,6 +91,7 @@ def install() -> None:
         return
     try:
         import fcntl  # noqa: F401 — a real fcntl exists; prefer it
+
         return
     except ImportError:
         pass
