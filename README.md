@@ -24,13 +24,14 @@
 
 # Raven
 
-Raven is a **memory-first** Agent OS for personal agents and reusable Agent
-Templates.
+Raven is **The Self-Improving Agent Harness**, built on top of
+[EverOS](https://github.com/EverMind-AI/EverOS).
 
-Built by EverMind on top of [EverOS](https://github.com/EverMind-AI/EverOS),
-Raven gives agents durable user memory, agent memory, and world knowledge
-across sessions. It runs as a terminal-native TUI and CLI today, while giving
-builders a path to package repeatable workflows into shareable digital workers.
+Raven continuously improves the harness around an agent: tools, skills, memory,
+code execution runtime, policies, and working environment. EverOS gives Raven
+durable user memory, agent memory, and world knowledge across sessions, so each
+run can refine how the agent acts, what it knows, and how repeatable workflows
+become reusable Agent Templates and digital workers.
 
 <details>
   <summary><kbd>Table of Contents</kbd></summary>

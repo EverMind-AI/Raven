@@ -24,14 +24,13 @@
 
 # Raven
 
-Raven 是一个面向个人 Agent 和可复用 Agent Templates 的 **memory-first**
-Agent OS。
+Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
+**Self-Improving Agent Harness**。
 
-Raven 由 EverMind 构建，底层基于
-[EverOS](https://github.com/EverMind-AI/EverOS)。EverOS 为 Raven 提供跨会话
-持久存在的用户记忆、Agent 记忆和世界知识。今天你可以把 Raven 作为原生终端
-TUI 和 CLI 使用；如果你在构建自己的 Agent，也可以基于 Raven 把可重复工作流
-封装成可分享的 digital workers。
+Raven 会持续迭代 Agent 的 harness：tools、skills、memory、code execution
+runtime、policies 和工作环境。EverOS 为 Raven 提供跨会话持久存在的用户记忆、
+Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，并把
+可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
 
 <details>
   <summary><kbd>目录</kbd></summary>
