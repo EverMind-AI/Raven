@@ -35,8 +35,12 @@ import os
 import socket
 import sys
 
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.connect(os.environ["RAVEN_RPC_SOCKET"])
+host, port = os.environ["RAVEN_RPC_SOCKET"].rsplit(":", 1)
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.connect((host, int(port)))
+_tok = os.environ.get("RAVEN_RPC_TOKEN")
+if _tok:
+    sock.sendall((_tok + "\n").encode("utf-8"))
 buf = b""
 
 

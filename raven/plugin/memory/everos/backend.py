@@ -187,6 +187,13 @@ def _try_make_real_adapter() -> _Adapter:
     """Return a real adapter if everos imports cleanly; otherwise a
     no-op adapter. Failure is logged at WARNING level so a misconfigured
     deploy is visible without the host crashing."""
+    # everos hard-imports the POSIX ``fcntl`` module at import time. On Windows
+    # that raised ModuleNotFoundError and the whole memory backend silently
+    # degraded to a no-op (mis-logged as "everos not installed"). Install a
+    # Windows fcntl shim first so the bundled backend actually loads.
+    from raven.utils.win_fcntl_shim import install as _install_fcntl_shim
+
+    _install_fcntl_shim()
     try:
         return _RealEverosAdapter()
     except ModuleNotFoundError as e:

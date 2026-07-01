@@ -247,8 +247,8 @@ def _load_raw_config() -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text()) or {}
-    except (json.JSONDecodeError, OSError):
+        return json.loads(path.read_text(encoding="utf-8")) or {}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
 
 

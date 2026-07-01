@@ -1,8 +1,8 @@
 """DiscoverTriggerStore — file-based IPC for ad-hoc TaskDiscoverer fires.
 
 Mirrors cron's jobs.json mechanics: atomic write (tmp + os.replace) +
-fcntl advisory lock + caller-driven polling. CLI ``discover-now`` adds
-a trigger; gateway tick / startup drains it.
+cross-platform advisory lock + caller-driven polling. CLI ``discover-now``
+adds a trigger; gateway tick / startup drains it.
 
 Triggers are consume-and-delete (no retry on crash). For a separate
 PendingDecisionStore: that one holds **dispatched** menus the user can
@@ -11,11 +11,9 @@ pick from; a trigger is **pre-dispatch intent** with no options yet.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import secrets
-import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -54,21 +52,14 @@ class DiscoverTriggerStore:
     def __init__(self, store_path: Path) -> None:
         self.store_path = store_path
         self.lock_path = store_path.with_suffix(store_path.suffix + ".lock")
-        self._can_lock = sys.platform != "win32"
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
-        """Exclusive advisory lock. No-op on Windows."""
-        if not self._can_lock:
+        """Exclusive cross-platform advisory lock (POSIX + Windows)."""
+        from raven.utils.portable_lock import file_lock
+
+        with file_lock(self.lock_path):
             yield
-            return
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock_path.open("a") as lock_fd:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
     def _read(self) -> list[DiscoverTrigger]:
         """Read triggers from disk. Returns [] on missing or malformed file —

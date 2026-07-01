@@ -82,7 +82,10 @@ def resolve_refs(body: str, skill_dir: Path | str | None) -> tuple[str, bool]:
             return mo.group(0)
 
         body = _BASE_DIR_REF_RE.sub(_bd_sub, body)
-        body, bare_n = _BARE_BASE_DIR_RE.subn(base_dir, body)
+        # Use a function replacement, not a string: base_dir is a filesystem
+        # path and on Windows contains backslashes that re.subn would otherwise
+        # interpret as escape sequences (\U, \a, ...) → re.error "bad escape".
+        body, bare_n = _BARE_BASE_DIR_RE.subn(lambda _m: base_dir, body)
         if bare_n:
             any_resolved = True
 
