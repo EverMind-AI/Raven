@@ -77,7 +77,7 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 在 PowerShell 里运行：
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/EverMind-AI/Raven/main/install.ps1)
+irm http://raven.evermind.ai/install.ps1 | iex
 ```
 
 安装器会处理全部依赖：uv、Python 3.12、Node.js 22 和 Raven。
