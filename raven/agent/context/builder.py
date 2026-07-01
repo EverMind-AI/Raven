@@ -37,6 +37,8 @@ class ContextBuilder:
         skill_forge_config: Any = None,
         llm_provider: "LLMProvider | None" = None,
         now_fn: Callable[[], datetime] | None = None,
+        *,
+        start_watcher: bool = True,
     ):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
@@ -44,6 +46,7 @@ class ContextBuilder:
             workspace,
             config=skill_forge_config,
             llm_provider=llm_provider,
+            start_watcher=start_watcher,
         )
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, runtime "Current Time:" injected to LLM prompt

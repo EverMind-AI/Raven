@@ -210,3 +210,24 @@ async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
 
     assert len(submitted) == 1
     assert submitted[0].conversation == "whatsapp:12345"
+
+
+def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
+    """_build_subagent_prompt uses a transient ContextBuilder just for
+    _build_runtime_context; it must not leave a skill-catalog file watcher
+    running behind it (one leaked watchfiles/inotify thread per spawn)."""
+    import raven.agent.context as context_mod
+
+    calls = []
+    real_init = context_mod.ContextBuilder.__init__
+
+    def _spy_init(self, workspace, *args, **kwargs):
+        calls.append(kwargs.get("start_watcher", True))
+        return real_init(self, workspace, *args, **kwargs)
+
+    monkeypatch.setattr(context_mod.ContextBuilder, "__init__", _spy_init)
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr._build_subagent_prompt()
+
+    assert calls == [False]

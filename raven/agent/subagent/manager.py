@@ -296,7 +296,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
         # Use a transient ContextBuilder to access the runtime-context
         # builder; SubagentManager doesn't have its own ContextBuilder.
-        time_ctx = ContextBuilder(self.workspace)._build_runtime_context(None, None)
+        time_ctx = ContextBuilder(self.workspace, start_watcher=False)._build_runtime_context(None, None)
         parts = [
             f"""# Subagent
 
