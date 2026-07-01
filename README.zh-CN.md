@@ -89,16 +89,26 @@ Raven 把这些问题当成产品本身，而不是边缘 case。
 
 ## 快速安装
 
+**macOS / Linux：**
+
 ```bash
 curl -fsSL http://raven.evermind.ai/install.sh | bash
 ```
 
-安装后重新加载 shell，并运行 setup wizard：
+**Windows（PowerShell）：**
+
+```powershell
+iex (irm https://raven.evermind.ai/install.ps1)
+```
+
+安装后请开一个新终端（让 `PATH` 刷新），再运行 setup wizard：
 
 ```bash
-source ~/.bashrc    # 或：source ~/.zshrc
+source ~/.bashrc    # macOS / Linux（或：source ~/.zshrc）
 raven onboard
 ```
+
+Windows 上直接开一个新的 PowerShell 窗口，然后运行 `raven onboard`。
 
 Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
 OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoint。

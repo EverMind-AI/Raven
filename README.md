@@ -96,16 +96,26 @@ Raven treats those problems as the product, not edge cases.
 
 ## Quick Install
 
+**macOS / Linux:**
+
 ```bash
 curl -fsSL http://raven.evermind.ai/install.sh | bash
 ```
 
-After installation, reload your shell and run the setup wizard:
+**Windows (PowerShell):**
+
+```powershell
+iex (irm https://raven.evermind.ai/install.ps1)
+```
+
+After installation, start a fresh shell so `PATH` refreshes, then run the setup wizard:
 
 ```bash
-source ~/.bashrc    # or: source ~/.zshrc
+source ~/.bashrc    # macOS / Linux (or: source ~/.zshrc)
 raven onboard
 ```
+
+On Windows, just open a new PowerShell window, then run `raven onboard`.
 
 Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
 OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.
