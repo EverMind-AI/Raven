@@ -17,7 +17,7 @@ session key (`channel:chat_id`). Identity lives in the `chat_id` slot: a TUI/CLI
 session mints an opaque, sortable `chat_id` (`%Y%m%d_%H%M%S_xxxxxx`), so one surface
 can hold many sessions while the `session_key={channel}:{chat_id}` invariant is
 unchanged. Channel is a dimension (key prefix + store subdirectory + metadata
-field), not part of the user-facing identity. See `docs/adr/0001`.
+field), not part of the user-facing identity.
 
 **Session id** (user-facing term only):
 The bare `chat_id` value shown to and accepted from users (the channel prefix is
