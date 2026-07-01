@@ -25,7 +25,7 @@
 # Raven
 
 Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
-**Self-Improving Agent Harness**。
+**A First-of-Its-Kind Self-Improving Agent Harness**。
 
 Raven 会持续迭代 Agent 的 harness：tools、skills、memory、code execution
 runtime、policies 和工作环境。EverOS 为 Raven 提供跨会话持久存在的用户记忆、
