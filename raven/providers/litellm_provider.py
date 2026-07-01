@@ -4,6 +4,7 @@ import hashlib
 import os
 import secrets
 import string
+import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -14,6 +15,21 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.registry import find_by_model, find_gateway
+
+# LiteLLM's async logging worker (LoggingWorker) binds its queue to a single
+# event loop. Raven runs each turn under a fresh loop (asyncio.run per call), so
+# on the next turn the queue is reset and any pending ``Logging.async_*_handler``
+# coroutine is dropped without being awaited. Python then prints a
+# ``coroutine ... was never awaited`` RuntimeWarning that bleeds into the Ink TUI
+# render. The dropped callback is LiteLLM's own success/failure logging, which
+# Raven does not rely on. Scope the filter to LiteLLM's ``Logging`` handlers only
+# -- a bare ``coroutine '.*'`` pattern would also hide genuine never-awaited bugs
+# in Raven's own coroutines.
+warnings.filterwarnings(
+    "ignore",
+    message=r"coroutine 'Logging\.async_.*' was never awaited",
+    category=RuntimeWarning,
+)
 
 # Standard chat-completion message keys.
 _ALLOWED_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content"})
