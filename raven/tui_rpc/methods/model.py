@@ -30,6 +30,7 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
+from raven.providers.common_models import common_models_for
 from raven.providers.registry import find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -64,9 +65,14 @@ def _provider_models(slug: str) -> list[str]:
     try:
         cfg = get_provider_config(slug, redact_secrets=False)
     except KeyError:
-        return []
-    models = cfg.get("models", [])
-    return list(models) if isinstance(models, list) else []
+        cfg = {}
+    configured = cfg.get("models", [])
+    configured = list(configured) if isinstance(configured, list) else []
+    # Priority: the user's configured models first (manual entry via
+    # ``model.add_model`` writes here), then our curated "common" shortlist,
+    # deduped. Keeps the picker useful out of the box without a network call.
+    seen = set(configured)
+    return configured + [m for m in common_models_for(slug) if m not in seen]
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
