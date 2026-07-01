@@ -103,9 +103,7 @@ def test_tui_agent_loop_receives_non_none_backend(patched_tui_loop_deps) -> None
     _build_tui_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
-    assert kwargs.get("backend") is not None, (
-        "AgentLoop must receive backend= from _build_tui_agent_loop; got None"
-    )
+    assert kwargs.get("backend") is not None, "AgentLoop must receive backend= from _build_tui_agent_loop; got None"
     assert kwargs["backend"] is patched_tui_loop_deps["fake_backend"]
 
 
@@ -323,9 +321,7 @@ async def test_rpc_runner_calls_backend_start_before_serving(rpc_server_deps, mo
     entering the serve loop when ``agent_loop.backend`` is not None."""
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
-    assert rpc_server_deps["start_calls"] == ["start"], (
-        "backend.start() must be called exactly once before serving"
-    )
+    assert rpc_server_deps["start_calls"] == ["start"], "backend.start() must be called exactly once before serving"
 
 
 async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatch) -> None:
@@ -333,9 +329,7 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     block so the embedded index lock is released on normal exit."""
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
-    assert rpc_server_deps["stop_calls"] == ["stop"], (
-        "backend.stop() must be called exactly once in the finally block"
-    )
+    assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
 
 
 async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, monkeypatch) -> None:
@@ -390,9 +384,7 @@ async def test_rpc_runner_skips_lifecycle_when_no_backend(rpc_server_deps, monke
 # ---------------------------------------------------------------------------
 
 
-async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(
-    rpc_server_deps, monkeypatch
-) -> None:
+async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(rpc_server_deps, monkeypatch) -> None:
     """``_run_rpc_server_until_done`` must strip a root stdout StreamHandler
     installed during ``backend.start()`` (mimicking everos configure_logging)
     before the RPC server begins serving."""
@@ -424,9 +416,7 @@ async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(
 # ---------------------------------------------------------------------------
 
 
-async def test_rpc_runner_activates_fd_redirect_before_backend_start(
-    rpc_server_deps, monkeypatch, tmp_path
-) -> None:
+async def test_rpc_runner_activates_fd_redirect_before_backend_start(rpc_server_deps, monkeypatch, tmp_path) -> None:
     """``_run_rpc_server_until_done`` must activate redirect_terminal_fds_to_file
     before calling backend.start() so that everos structlog PrintLogger output
     during start and serve lands in the log file, not on the terminal.

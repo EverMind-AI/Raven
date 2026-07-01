@@ -724,9 +724,7 @@ class EverosBackend:
             if not content and not tool_calls:
                 continue
             entry: dict[str, Any] = {
-                "sender_id": agent_id
-                if role in ("assistant", "tool")
-                else (m.get("sender_id") or user_id),
+                "sender_id": agent_id if role in ("assistant", "tool") else (m.get("sender_id") or user_id),
                 "role": role,
                 "timestamp": m.get("timestamp") or now_ms,
                 "content": content,

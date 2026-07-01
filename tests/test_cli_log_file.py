@@ -181,9 +181,7 @@ def test_strip_tty_stream_handlers_removes_root_stdout_handler(tmp_logs: Path) -
 
     try:
         _strip_tty_stream_handlers()
-        assert stdout_handler not in root.handlers, (
-            "_strip_tty_stream_handlers must remove root stdout StreamHandler"
-        )
+        assert stdout_handler not in root.handlers, "_strip_tty_stream_handlers must remove root stdout StreamHandler"
     finally:
         root.removeHandler(stdout_handler)
 
@@ -199,9 +197,7 @@ def test_strip_tty_stream_handlers_keeps_root_non_tty_handler(tmp_logs: Path) ->
 
     try:
         _strip_tty_stream_handlers()
-        assert mem_handler in root.handlers, (
-            "_strip_tty_stream_handlers must not remove non-TTY root handlers"
-        )
+        assert mem_handler in root.handlers, "_strip_tty_stream_handlers must not remove non-TTY root handlers"
     finally:
         root.removeHandler(mem_handler)
 
@@ -221,7 +217,6 @@ def test_redirect_terminal_fds_captures_print_and_raw_fd_write(tmp_path, capfd) 
     the redirect — the fd-level dup2 takes exclusive effect.
     """
     import os
-    import sys
 
     from raven.cli._log_file import redirect_terminal_fds_to_file
 
