@@ -61,11 +61,7 @@ class CliOutlet:
 
     async def deliver(self, out: Deliverable) -> None:
         if isinstance(out, Text):
-            if (
-                self._render_marker is not None
-                and out.source is not None
-                and out.source.extras.get("_sentinel_origin")
-            ):
+            if self._render_marker is not None and out.source is not None and out.source.extras.get("_sentinel_origin"):
                 self._render_marker()
             self._render(out.content)
         elif isinstance(out, Notice) and self._render_notice is not None:
@@ -153,9 +149,7 @@ async def run_repl_loop(
             handle = submit(
                 TurnRequest(
                     origin=Origin.USER,
-                    source=Source(
-                        channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM
-                    ),
+                    source=Source(channel=channel, chat_id=chat_id, sender_id="user", chat_type=ChatType.DM),
                     text=user_input,
                     conversation=f"{channel}:{chat_id}",
                 )

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { estimatedMsgHeight, messageHeightKey, wrappedLines } from '../lib/virtualHeights.js'
 import type { Msg } from '../types.js'
+
+import { estimatedMsgHeight, messageHeightKey, wrappedLines } from '../lib/virtualHeights.js'
 
 describe('virtual height estimates', () => {
   it('uses stable content keys across resumed message objects', () => {

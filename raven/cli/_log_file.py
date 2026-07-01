@@ -102,10 +102,7 @@ def _strip_tty_stream_handlers() -> None:
         if not isinstance(obj, _stdlib_logging.Logger):
             continue  # skip PlaceHolder entries
         for handler in list(obj.handlers):
-            if (
-                isinstance(handler, _stdlib_logging.StreamHandler)
-                and getattr(handler, "stream", None) in tty_streams
-            ):
+            if isinstance(handler, _stdlib_logging.StreamHandler) and getattr(handler, "stream", None) in tty_streams:
                 obj.removeHandler(handler)
 
 

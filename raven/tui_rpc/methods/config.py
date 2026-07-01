@@ -200,9 +200,7 @@ async def config_get(params: dict) -> dict:
     if requested_raw is None:
         requested: list[str] = list(CONFIG_WRITABLE_KEYS)
     else:
-        if not isinstance(requested_raw, list) or not all(
-            isinstance(k, str) for k in requested_raw
-        ):
+        if not isinstance(requested_raw, list) or not all(isinstance(k, str) for k in requested_raw):
             raise ConfigValidationError(
                 "config.get params.keys must be a list[str] if provided",
                 data={"field": "keys", "got": repr(requested_raw)},

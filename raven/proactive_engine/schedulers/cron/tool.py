@@ -84,10 +84,7 @@ def resolve_cron_delivery(
     results: list[DeliveryTarget] = []
     warnings: list[str] = []
     for ch in targets_channels:
-        cid = (
-            session_manager.find_most_recent_chat_id(ch)
-            if session_manager is not None else None
-        )
+        cid = session_manager.find_most_recent_chat_id(ch) if session_manager is not None else None
         if cid:
             results.append(DeliveryTarget(channel=ch, chat_id=cid))
         else:

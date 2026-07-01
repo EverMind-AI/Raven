@@ -135,9 +135,7 @@ async def test_runner_no_synthetic_when_message_tool_did_not_fire():
     loop = _RunTurnLoop(tools={"message": MessageTool()})  # sent flag stays False
     runner = TuiTurnRunner(loop, FakeEmitter(), {}, {"tui:c1": "T7"}, {})
     events, emit = _collect()
-    await runner.run(
-        TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"), emit, lambda: []
-    )
+    await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"), emit, lambda: [])
     assert events == []  # no synthetic completion
 
 
@@ -148,9 +146,7 @@ async def test_runner_cron_captures_reply_non_streaming():
     loop = _RunTurnLoop(reply_text="reminder fired")
     readback: dict[str, str] = {}
     runner = TuiTurnRunner(loop, FakeEmitter(), {}, {}, readback)
-    req = TurnRequest(
-        origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1"
-    )
+    req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
     events, emit = _collect()
 
     await runner.run(req, emit, lambda: [])
@@ -172,15 +168,25 @@ async def test_outlet_deliver_reasoning_to_thinking_delta():
 async def test_outlet_deliver_tool_event_to_tool_start_and_complete():
     emitter = FakeEmitter()
     outlet = TuiOutlet("tui", emitter)
-    await outlet.deliver(ToolEvent(
-        phase=ToolPhase.START, tool_call_id="t1", name="shell", arguments={"cmd": "ls"}, conversation_id="tui:c1"
-    ))
-    await outlet.deliver(ToolEvent(
-        phase=ToolPhase.COMPLETE, tool_call_id="t1", result_preview="ok", truncated=False, conversation_id="tui:c1"
-    ))
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.START, tool_call_id="t1", name="shell", arguments={"cmd": "ls"}, conversation_id="tui:c1"
+        )
+    )
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE, tool_call_id="t1", result_preview="ok", truncated=False, conversation_id="tui:c1"
+        )
+    )
     assert emitter.emitted == [
-        ("tui:c1", {"type": "tool.start", "payload": {"tool_call_id": "t1", "name": "shell", "arguments": {"cmd": "ls"}}}),
-        ("tui:c1", {"type": "tool.complete", "payload": {"tool_call_id": "t1", "result_preview": "ok", "truncated": False}}),
+        (
+            "tui:c1",
+            {"type": "tool.start", "payload": {"tool_call_id": "t1", "name": "shell", "arguments": {"cmd": "ls"}}},
+        ),
+        (
+            "tui:c1",
+            {"type": "tool.complete", "payload": {"tool_call_id": "t1", "result_preview": "ok", "truncated": False}},
+        ),
     ]
 
 
@@ -198,7 +204,9 @@ async def test_outlet_deliver_eats_notice_and_media():
     emitter = FakeEmitter()
     outlet = TuiOutlet("tui", emitter)
     await outlet.deliver(Notice(kind=NoticeKind.PROGRESS, detail="working", conversation_id="tui:c1"))
-    await outlet.deliver(MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1"))
+    await outlet.deliver(
+        MediaOut(media=(Media(path="/tmp/x.png", mime="image/png", kind="image"),), conversation_id="tui:c1")
+    )
     assert emitter.emitted == []  # no wire event for either today
 
 
@@ -250,9 +258,7 @@ async def test_build_tui_defaults_to_single_slot_pools():
 
 
 async def test_build_tui_honors_configured_pool_sizes():
-    scheduler, _hub, _turn_ids, teardown = build_tui(
-        _RunTurnLoop(events=[]), FakeEmitter(), user_pool=6, system_pool=4
-    )
+    scheduler, _hub, _turn_ids, teardown = build_tui(_RunTurnLoop(events=[]), FakeEmitter(), user_pool=6, system_pool=4)
     try:
         assert scheduler._pools._user._value == 6
         assert scheduler._pools._system._value == 4
@@ -269,9 +275,7 @@ async def test_streaming_turn_emits_token_deltas_then_message_complete():
     scheduler, hub, turn_ids, teardown = build_tui(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"  # turn.send binds this; emulate here
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -291,25 +295,23 @@ async def test_interleaved_events_keep_emit_order_through_one_queue():
     # token/reasoning/tool share one per-outlet FIFO, so the wire order matches
     # the emit order — the cross-type ordering the earlier dual path could not promise.
     emitter = FakeEmitter()
-    loop = _RunTurnLoop(events=[
-        Reasoning(content="thinking"),
-        ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="shell", arguments={}),
-        StreamDelta(delta="answer"),
-        ToolEvent(phase=ToolPhase.COMPLETE, tool_call_id="t1", result_preview="ok", truncated=False),
-    ])
+    loop = _RunTurnLoop(
+        events=[
+            Reasoning(content="thinking"),
+            ToolEvent(phase=ToolPhase.START, tool_call_id="t1", name="shell", arguments={}),
+            StreamDelta(delta="answer"),
+            ToolEvent(phase=ToolPhase.COMPLETE, tool_call_id="t1", result_preview="ok", truncated=False),
+        ]
+    )
     scheduler, hub, turn_ids, teardown = build_tui(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
 
-    assert emitter.types() == [
-        "thinking.delta", "tool.start", "token.delta", "tool.complete", "message.complete"
-    ]
+    assert emitter.types() == ["thinking.delta", "tool.start", "token.delta", "tool.complete", "message.complete"]
 
 
 async def test_non_streamed_text_reaches_the_wire_as_a_token_delta():
@@ -320,9 +322,7 @@ async def test_non_streamed_text_reaches_the_wire_as_a_token_delta():
     scheduler, hub, turn_ids, teardown = build_tui(loop, emitter)
     try:
         turn_ids["tui:c1"] = "t1"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -338,9 +338,7 @@ async def test_empty_stream_turn_still_emits_message_complete():
     scheduler, hub, turn_ids, teardown = build_tui(_RunTurnLoop(events=[]), emitter)
     try:
         turn_ids["tui:c1"] = "t9"
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -386,9 +384,7 @@ async def test_failed_turn_emits_error():
     emitter = FakeEmitter()
     scheduler, hub, turn_ids, teardown = build_tui(_BoomLoop(), emitter)
     try:
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await handle.result()
     finally:
         await teardown()
@@ -413,9 +409,7 @@ async def test_cancelled_turn_does_not_emit_error():
     emitter = FakeEmitter()
     scheduler, hub, turn_ids, teardown = build_tui(_HangLoop(), emitter)
     try:
-        handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-        )
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
         await started.wait()
         handle.cancel()
         await handle.result()

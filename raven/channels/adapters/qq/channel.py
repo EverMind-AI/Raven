@@ -104,7 +104,9 @@ class QQChannel(ChannelBase):
             chat_id, user_id, chat_type = parsing.resolve_route(data, is_group)
             self._chat_type_cache[chat_id] = chat_type
             await self.intake.publish(
-                sender_id=user_id, chat_id=chat_id, content=content,
+                sender_id=user_id,
+                chat_id=chat_id,
+                content=content,
                 metadata={"message_id": data.id},
             )
         except Exception:
@@ -122,19 +124,27 @@ class QQChannel(ChannelBase):
             chat_type = self._chat_type_cache.get(chat_id, "c2c")
             if chat_type == "group":
                 await self._client.api.post_group_message(
-                    group_openid=chat_id, msg_type=2, markdown={"content": content},
-                    msg_id=None, msg_seq=self._msg_seq,
+                    group_openid=chat_id,
+                    msg_type=2,
+                    markdown={"content": content},
+                    msg_id=None,
+                    msg_seq=self._msg_seq,
                 )
             elif chat_type == "guild_dm":
                 # Guild DMs reply through the DM session (post_dms); the C2C
                 # endpoint rejects guild user ids. post_dms has no msg_seq.
                 await self._client.api.post_dms(
-                    guild_id=chat_id, content=content, msg_id=None,
+                    guild_id=chat_id,
+                    content=content,
+                    msg_id=None,
                 )
             else:
                 await self._client.api.post_c2c_message(
-                    openid=chat_id, msg_type=2, markdown={"content": content},
-                    msg_id=None, msg_seq=self._msg_seq,
+                    openid=chat_id,
+                    msg_type=2,
+                    markdown={"content": content},
+                    msg_id=None,
+                    msg_seq=self._msg_seq,
                 )
         except Exception as e:
             if isinstance(e, ServerError) or transient_network(e):

@@ -1,4 +1,5 @@
 """CLI subcommands for sandbox VM inspection and interaction."""
+
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +35,7 @@ sandbox_app = typer.Typer(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_socket_path() -> Path:
     """Resolve the debug socket path from config (falls back to defaults)."""
     from raven.config.paths import get_data_dir
@@ -42,6 +44,7 @@ def _get_socket_path() -> Path:
     debug_socket = "sandbox/debug.sock"
     try:
         from raven.config.loader import load_config
+
         cfg = load_config()
         debug_socket = cfg.tools.sandbox.debug.socket
     except FileNotFoundError:
@@ -109,6 +112,7 @@ def _close(writer: asyncio.StreamWriter) -> None:
 # list / ls
 # ---------------------------------------------------------------------------
 
+
 def _run_list() -> None:
     socket_path = _get_socket_path()
     _check_socket(socket_path)
@@ -135,7 +139,7 @@ def _run_list() -> None:
             return
 
         table = Table(title="Sandbox VMs")
-        table.add_column("", style="bold", no_wrap=True)   # owned marker
+        table.add_column("", style="bold", no_wrap=True)  # owned marker
         table.add_column("ID", style="cyan", no_wrap=True)
         # table.add_column("Name")  # VMs are not named today; restore when naming is supported
         table.add_column("State")
@@ -179,6 +183,7 @@ def sandbox_ls() -> None:
 # ---------------------------------------------------------------------------
 # exec
 # ---------------------------------------------------------------------------
+
 
 @sandbox_app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def sandbox_exec(
@@ -224,12 +229,15 @@ def sandbox_exec(
                 stderr_buf.clear()
 
         try:
-            await _send(writer, {
-                "cmd": "exec",
-                "vm_ref": vm,
-                "program": program,
-                "args": args,
-            })
+            await _send(
+                writer,
+                {
+                    "cmd": "exec",
+                    "vm_ref": vm,
+                    "program": program,
+                    "args": args,
+                },
+            )
             exit_code = 1
             while True:
                 try:
@@ -265,6 +273,7 @@ def sandbox_exec(
 # ---------------------------------------------------------------------------
 # shell
 # ---------------------------------------------------------------------------
+
 
 @sandbox_app.command("shell")
 def sandbox_shell(
@@ -382,10 +391,7 @@ def sandbox_shell(
                     # for a follow-up report instead of silently dropping the user
                     # back to a closed terminal with exit code 1.
                     _restore()
-                    console.print(
-                        f"\r\n[red]Internal error in sandbox shell: "
-                        f"{type(exc).__name__}: {exc}[/red]"
-                    )
+                    console.print(f"\r\n[red]Internal error in sandbox shell: {type(exc).__name__}: {exc}[/red]")
                     logger.exception("sandbox shell recv loop failed")
                 finally:
                     done.set()

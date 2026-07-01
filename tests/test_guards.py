@@ -4,6 +4,7 @@ Each guard is a pure function isolated from MemoryStore. These tests
 pin the contract so prompt-side regressions or stricter rules don't
 silently change behavior at 30-day scale.
 """
+
 from __future__ import annotations
 
 from raven.memory_engine.consolidate.consolidator import (
@@ -16,7 +17,6 @@ from raven.memory_engine.consolidate.consolidator import (
     _is_semantic_duplicate_foresight,
     _normalize_confidence,
 )
-
 
 # ---------- _is_process_only_episode --------------------------------
 
@@ -180,14 +180,8 @@ def test_semantic_dup_caregiver_medication_cluster():
     # Real longrun pattern (caregiver-01, day 20 vs day 22): same claim
     # reworded slightly. With s-stemming and Jaccard ≥ 0.6 the dedup
     # collapses them.
-    new = (
-        "User will set daily medication reminders for mom "
-        "(amlodipine, donepezil, metoprolol) at similar times"
-    )
-    existing = [
-        "Daily medication reminders for mom (amlodipine, donepezil, "
-        "metoprolol) - recurring care routine"
-    ]
+    new = "User will set daily medication reminders for mom (amlodipine, donepezil, metoprolol) at similar times"
+    existing = ["Daily medication reminders for mom (amlodipine, donepezil, metoprolol) - recurring care routine"]
     assert _is_semantic_duplicate_foresight(new, existing) is True
 
 
@@ -239,10 +233,7 @@ def test_drop_keeps_bullet_with_src_link():
 
 
 def test_drop_removes_bullet_missing_src_link():
-    body = (
-        "- **Status**: v1.0 released [src: episodes.md @ 2026-05-15 19:30]\n"
-        "- Senior developer working remotely"
-    )
+    body = "- **Status**: v1.0 released [src: episodes.md @ 2026-05-15 19:30]\n- Senior developer working remotely"
     cleaned, n_dropped = _drop_bullets_without_src(body)
     assert "- Senior developer" not in cleaned
     assert "v1.0 released" in cleaned
@@ -250,12 +241,7 @@ def test_drop_removes_bullet_missing_src_link():
 
 
 def test_drop_preserves_non_bullet_lines():
-    body = (
-        "### clawtrack\n"
-        "- **Status**: v1.0 released [src: episodes.md @ 2026-05-15 19:30]\n"
-        "\n"
-        "Some prose paragraph.\n"
-    )
+    body = "### clawtrack\n- **Status**: v1.0 released [src: episodes.md @ 2026-05-15 19:30]\n\nSome prose paragraph.\n"
     cleaned, n_dropped = _drop_bullets_without_src(body)
     assert "### clawtrack" in cleaned
     assert "Some prose paragraph." in cleaned
@@ -263,10 +249,7 @@ def test_drop_preserves_non_bullet_lines():
 
 
 def test_drop_handles_indented_bullets():
-    body = (
-        "  - **Status**: ok [src: episodes.md @ 2026-05-15 19:30]\n"
-        "  - missing-src bullet"
-    )
+    body = "  - **Status**: ok [src: episodes.md @ 2026-05-15 19:30]\n  - missing-src bullet"
     cleaned, n_dropped = _drop_bullets_without_src(body)
     assert "missing-src bullet" not in cleaned
     assert "ok" in cleaned

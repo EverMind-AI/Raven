@@ -6,7 +6,8 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from raven.proactive_engine.sentinel.attention_producers._base import (
-    AttentionProducer, WEEKDAY,
+    WEEKDAY,
+    AttentionProducer,
 )
 
 if TYPE_CHECKING:
@@ -55,10 +56,9 @@ class Predicted3DProducer(AttentionProducer):
             parts.append(header)
             for pred in by_day[day]:
                 parts.append(
-                    f"- {pred.text} "
-                    f"[{pred.confidence} — {pred.basis}]"
-                    if pred.basis else
-                    f"- {pred.text} [{pred.confidence}]"
+                    f"- {pred.text} [{pred.confidence} — {pred.basis}]"
+                    if pred.basis
+                    else f"- {pred.text} [{pred.confidence}]"
                 )
             parts.append("")
         return "\n".join(parts).rstrip()

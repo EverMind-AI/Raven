@@ -129,9 +129,7 @@ async def test_slash_exec_normal_channel_login_not_blacklisted(fake_app_patch):
     fallback; the salient assertion is the *absence* of the terminal-only toast,
     which the prior blanket 2-tuple would have produced for any channel name.
     """
-    result = await slash_exec(
-        {"command": "channels login telegram", "session_id": "sid-abc"}
-    )
+    result = await slash_exec({"command": "channels login telegram", "session_id": "sid-abc"})
     assert "requires a real terminal" not in result["output"].lower()
 
 

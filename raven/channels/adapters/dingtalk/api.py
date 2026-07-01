@@ -51,9 +51,7 @@ class DingTalkAPI:
             logger.warning("DingTalk HTTP client not initialized, cannot refresh token")
             return None
         try:
-            resp = await self._http.post(
-                _OAUTH, json={"appKey": self.robot_code, "appSecret": self.app_secret}
-            )
+            resp = await self._http.post(_OAUTH, json={"appKey": self.robot_code, "appSecret": self.app_secret})
             resp.raise_for_status()
             data = resp.json()
             self._token = data.get("accessToken")
@@ -148,12 +146,13 @@ class DingTalkAPI:
             body = resp.text
             payload = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
             if resp.status_code >= 400 or payload.get("errcode", 0) != 0:
-                logger.error("DingTalk media upload failed type={} status={} body={}", media_type, resp.status_code, body[:500])
+                logger.error(
+                    "DingTalk media upload failed type={} status={} body={}", media_type, resp.status_code, body[:500]
+                )
                 return None
             nested = payload.get("result") or {}
             media_id = (
-                payload.get("media_id") or payload.get("mediaId")
-                or nested.get("media_id") or nested.get("mediaId")
+                payload.get("media_id") or payload.get("mediaId") or nested.get("media_id") or nested.get("mediaId")
             )
             if not media_id:
                 logger.error("DingTalk media upload missing media_id body={}", body[:500])
@@ -172,7 +171,12 @@ class DingTalkAPI:
         encoded = json.dumps(msg_param, ensure_ascii=False)
         if chat_id.startswith("group:"):
             url = _GROUP_SEND
-            body = {"robotCode": self.robot_code, "openConversationId": chat_id[6:], "msgKey": msg_key, "msgParam": encoded}
+            body = {
+                "robotCode": self.robot_code,
+                "openConversationId": chat_id[6:],
+                "msgKey": msg_key,
+                "msgParam": encoded,
+            }
         else:
             url = _OTO_SEND
             body = {"robotCode": self.robot_code, "userIds": [chat_id], "msgKey": msg_key, "msgParam": encoded}
@@ -188,7 +192,9 @@ class DingTalkAPI:
             except Exception:
                 result = {}
             if result.get("errcode") not in (None, 0):
-                logger.error("DingTalk send api error msgKey={} errcode={} body={}", msg_key, result.get("errcode"), raw[:500])
+                logger.error(
+                    "DingTalk send api error msgKey={} errcode={} body={}", msg_key, result.get("errcode"), raw[:500]
+                )
                 return False
             logger.debug("DingTalk message sent to {} msgKey={}", chat_id, msg_key)
             return True

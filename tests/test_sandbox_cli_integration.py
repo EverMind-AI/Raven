@@ -7,6 +7,7 @@ Each test starts a real SandboxDebugServer, patches boxlite.Boxlite at the
 server side, and invokes the CLI via run_in_executor so the test event loop
 can still service the server while the CLI's asyncio.run() runs in a thread.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ runner = CliRunner(mix_stderr=False)
 
 
 # ── fixtures & helpers ─────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def sock_dir():
@@ -75,6 +77,7 @@ def _execution(stdout_chunks=(), stderr_chunks=(), exit_code=0):
 
 async def _invoke(args, socket_path):
     """Run CLI in executor so the test event loop can service the server."""
+
     def _run():
         with patch("raven.cli.sandbox_commands._get_socket_path", return_value=socket_path):
             return runner.invoke(sandbox_app, args)
@@ -130,6 +133,7 @@ def _mock_runtime(boxes=(), box=None, execution=None):
 
 # ── list / ls ──────────────────────────────────────────────────────────────────
 
+
 class TestListIntegration:
     async def test_running_vm_appears_in_table(self, server):
         path, _ = server
@@ -148,8 +152,8 @@ class TestListIntegration:
             cls.return_value = rt
             result = await _invoke(["list"], path)
         assert result.exit_code == 0
-        assert "*" in result.output   # owned marker for b1
-        assert "-" in result.output   # unowned marker for b2
+        assert "*" in result.output  # owned marker for b1
+        assert "-" in result.output  # unowned marker for b2
 
     async def test_empty_list_message(self, server):
         path, _ = server
@@ -195,6 +199,7 @@ class TestListIntegration:
 
 
 # ── exec ───────────────────────────────────────────────────────────────────────
+
 
 class TestExecIntegration:
     async def test_stdout_appears_in_output(self, server):
@@ -252,6 +257,7 @@ class TestExecIntegration:
 
 
 # ── shell ──────────────────────────────────────────────────────────────────────
+
 
 class TestShellIntegration:
     async def test_error_before_ready_shown(self, server):

@@ -30,6 +30,7 @@ _OPENROUTER_ATTRIBUTION: dict[str, str] = {
     "X-OpenRouter-Categories": "cli-agent,personal-agent",
 }
 
+
 def _short_tool_id() -> str:
     """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
@@ -186,7 +187,11 @@ class LiteLLMProvider(LLMProvider):
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
         """Return provider-specific extra keys to preserve in request messages."""
         spec = find_by_model(original_model) or find_by_model(resolved_model)
-        if (spec and spec.name == "anthropic") or "claude" in original_model.lower() or resolved_model.startswith("anthropic/"):
+        if (
+            (spec and spec.name == "anthropic")
+            or "claude" in original_model.lower()
+            or resolved_model.startswith("anthropic/")
+        ):
             return _ANTHROPIC_EXTRA_KEYS
         return frozenset()
 
@@ -200,7 +205,9 @@ class LiteLLMProvider(LLMProvider):
         return hashlib.sha1(tool_call_id.encode()).hexdigest()[:9]
 
     @staticmethod
-    def _sanitize_messages(messages: list[dict[str, Any]], extra_keys: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+    def _sanitize_messages(
+        messages: list[dict[str, Any]], extra_keys: frozenset[str] = frozenset()
+    ) -> list[dict[str, Any]]:
         """Strip non-standard keys and ensure assistant messages have a content key."""
         allowed = _ALLOWED_MSG_KEYS | extra_keys
         sanitized = LLMProvider._sanitize_request_messages(messages, allowed)
@@ -416,14 +423,16 @@ class LiteLLMProvider(LLMProvider):
                     try:
                         serialized.append(tc.model_dump())  # pydantic v2
                     except AttributeError:
-                        serialized.append({
-                            "index": getattr(tc, "index", None),
-                            "id": getattr(tc, "id", None),
-                            "function": {
-                                "name": getattr(getattr(tc, "function", None), "name", None),
-                                "arguments": getattr(getattr(tc, "function", None), "arguments", None),
-                            },
-                        })
+                        serialized.append(
+                            {
+                                "index": getattr(tc, "index", None),
+                                "id": getattr(tc, "id", None),
+                                "function": {
+                                    "name": getattr(getattr(tc, "function", None), "name", None),
+                                    "arguments": getattr(getattr(tc, "function", None), "arguments", None),
+                                },
+                            }
+                        )
                 tool_call_delta = {"tool_calls": serialized}
 
             usage_dict: dict[str, Any] | None = None
@@ -437,12 +446,7 @@ class LiteLLMProvider(LLMProvider):
                         "total_tokens": getattr(usage, "total_tokens", None),
                     }
 
-            if (
-                content is None
-                and tool_call_delta is None
-                and usage_dict is None
-                and reasoning_content is None
-            ):
+            if content is None and tool_call_delta is None and usage_dict is None and reasoning_content is None:
                 return None
 
             return StreamDelta(
@@ -474,8 +478,9 @@ class LiteLLMProvider(LLMProvider):
                 content = msg.content
 
         if len(response.choices) > 1:
-            logger.debug("LiteLLM response has {} choices, merged {} tool_calls",
-                         len(response.choices), len(raw_tool_calls))
+            logger.debug(
+                "LiteLLM response has {} choices, merged {} tool_calls", len(response.choices), len(raw_tool_calls)
+            )
 
         tool_calls = []
         for tc in raw_tool_calls:
@@ -485,17 +490,17 @@ class LiteLLMProvider(LLMProvider):
                 args = json_repair.loads(args)
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
-            function_provider_specific_fields = (
-                getattr(tc.function, "provider_specific_fields", None) or None
-            )
+            function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None
 
-            tool_calls.append(ToolCallRequest(
-                id=_short_tool_id(),
-                name=tc.function.name,
-                arguments=args,
-                provider_specific_fields=provider_specific_fields,
-                function_provider_specific_fields=function_provider_specific_fields,
-            ))
+            tool_calls.append(
+                ToolCallRequest(
+                    id=_short_tool_id(),
+                    name=tc.function.name,
+                    arguments=args,
+                    provider_specific_fields=provider_specific_fields,
+                    function_provider_specific_fields=function_provider_specific_fields,
+                )
+            )
 
         usage = {}
         if hasattr(response, "usage") and response.usage:

@@ -94,7 +94,8 @@ class MatrixChannel(ChannelBase):
         store_path.mkdir(parents=True, exist_ok=True)
 
         self.client = AsyncClient(
-            homeserver=self.config.homeserver, user=self.config.user_id,
+            homeserver=self.config.homeserver,
+            user=self.config.user_id,
             store_path=store_path,
             config=AsyncClientConfig(store_sync_tokens=True, encryption_enabled=self.config.e2ee_enabled),
         )
@@ -125,8 +126,7 @@ class MatrixChannel(ChannelBase):
             self.client.stop_sync_forever()
         if self._sync_task:
             try:
-                await asyncio.wait_for(asyncio.shield(self._sync_task),
-                                       timeout=self.config.sync_stop_grace_seconds)
+                await asyncio.wait_for(asyncio.shield(self._sync_task), timeout=self.config.sync_stop_grace_seconds)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self._sync_task.cancel()
                 try:
@@ -234,7 +234,11 @@ class MatrixChannel(ChannelBase):
         return min(local, server) if local else 0
 
     async def _upload_attachment(
-        self, room_id: str, path: Path, limit: int, relates_to: dict[str, Any] | None,
+        self,
+        room_id: str,
+        path: Path,
+        limit: int,
+        relates_to: dict[str, Any] | None,
     ) -> str | None:
         """Upload one local file and send it as media. Returns a failure marker or None."""
         if not self.client:
@@ -257,7 +261,9 @@ class MatrixChannel(ChannelBase):
         try:
             with resolved.open("rb") as f:
                 result = await self.client.upload(
-                    f, content_type=mime, filename=filename,
+                    f,
+                    content_type=mime,
+                    filename=filename,
                     encrypt=self.config.e2ee_enabled and self._is_encrypted_room(room_id),
                     filesize=size,
                 )
@@ -273,8 +279,11 @@ class MatrixChannel(ChannelBase):
             return fail
 
         payload = content.build_attachment_content(
-            filename=filename, mime=mime, size_bytes=size,
-            mxc_url=mxc_url, encryption_info=encryption_info,
+            filename=filename,
+            mime=mime,
+            size_bytes=size,
+            mxc_url=mxc_url,
+            encryption_info=encryption_info,
         )
         if relates_to:
             payload["m.relates_to"] = relates_to
@@ -358,8 +367,10 @@ class MatrixChannel(ChannelBase):
         await self._start_typing(room.room_id)
         try:
             await self.intake.publish(
-                sender_id=event.sender, chat_id=room.room_id,
-                content=event.body, metadata=self._base_metadata(room, event),
+                sender_id=event.sender,
+                chat_id=room.room_id,
+                content=event.body,
+                metadata=self._base_metadata(room, event),
             )
         except Exception:
             await self._stop_typing(room.room_id, clear=True)
@@ -374,7 +385,9 @@ class MatrixChannel(ChannelBase):
             parts.append(body.strip())
 
         if attachment and attachment.get("type") == "audio":
-            if transcription := await transcribe_audio(attachment["path"], self.transcription_api_key, channel=self.name):
+            if transcription := await transcribe_audio(
+                attachment["path"], self.transcription_api_key, channel=self.name
+            ):
                 parts.append(f"[transcription: {transcription}]")
             else:
                 parts.append(marker)
@@ -386,7 +399,8 @@ class MatrixChannel(ChannelBase):
             meta = self._base_metadata(room, event)
             meta["attachments"] = [attachment] if attachment else []
             await self.intake.publish(
-                sender_id=event.sender, chat_id=room.room_id,
+                sender_id=event.sender,
+                chat_id=room.room_id,
                 content="\n".join(parts),
                 media=[attachment["path"]] if attachment else [],
                 metadata=meta,
@@ -433,7 +447,8 @@ class MatrixChannel(ChannelBase):
             return None
 
     async def _fetch_attachment(
-        self, event: MatrixMediaEvent,
+        self,
+        event: MatrixMediaEvent,
     ) -> tuple[dict[str, Any] | None, str]:
         """Download, decrypt if needed, and persist a Matrix media attachment."""
         kind = content.attachment_kind(event)
@@ -469,9 +484,13 @@ class MatrixChannel(ChannelBase):
             return None, fail
 
         attachment = {
-            "type": kind, "mime": mime, "filename": filename,
+            "type": kind,
+            "mime": mime,
+            "filename": filename,
             "event_id": str(getattr(event, "event_id", "") or ""),
-            "encrypted": encrypted, "size_bytes": len(data),
-            "path": str(path), "mxc_url": mxc_url,
+            "encrypted": encrypted,
+            "size_bytes": len(data),
+            "path": str(path),
+            "mxc_url": mxc_url,
         }
         return attachment, _ATTACH_MARKER.format(path)

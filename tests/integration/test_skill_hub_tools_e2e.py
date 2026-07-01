@@ -36,9 +36,14 @@ def _make_zip() -> bytes:
 def _envelope(result: dict) -> bytes:
     # Mirror the dev/aws Hub, which uses ``error: "success"`` (not "ok") —
     # exercises SkillHubClient's lenient envelope-success check.
-    return json.dumps({
-        "error": "success", "status": 0, "requestId": "x", "result": result,
-    }).encode()
+    return json.dumps(
+        {
+            "error": "success",
+            "status": 0,
+            "requestId": "x",
+            "result": result,
+        }
+    ).encode()
 
 
 class _HubHandler(BaseHTTPRequestHandler):
@@ -55,12 +60,17 @@ class _HubHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if "/openapi/v1/skills/" in self.path:
-            body = _envelope({
-                "slug": "deploy", "skill_id": "deploy", "version": "v3",
-                "skill_md": _SKILL_MD, "name": "Deploy",
-                "scenario_tags": ["ops", "ship"],
-                "subscores": {"safety": 0.9},
-            })
+            body = _envelope(
+                {
+                    "slug": "deploy",
+                    "skill_id": "deploy",
+                    "version": "v3",
+                    "skill_md": _SKILL_MD,
+                    "name": "Deploy",
+                    "scenario_tags": ["ops", "ship"],
+                    "subscores": {"safety": 0.9},
+                }
+            )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -97,7 +107,8 @@ async def test_read_skill_fetches_body_from_hub(hub_server: str) -> None:
 
 
 async def test_use_skill_downloads_and_extracts(
-    hub_server: str, tmp_path: Path,
+    hub_server: str,
+    tmp_path: Path,
 ) -> None:
     cache = tmp_path / "skills" / "hub"
     client = SkillHubClient(hub_server, cache_dir=cache)
@@ -118,7 +129,8 @@ async def test_use_skill_downloads_and_extracts(
 
 
 async def test_use_skill_cache_hit_skips_redownload(
-    hub_server: str, tmp_path: Path,
+    hub_server: str,
+    tmp_path: Path,
 ) -> None:
     cache = tmp_path / "skills" / "hub"
     client = SkillHubClient(hub_server, cache_dir=cache)
@@ -171,7 +183,8 @@ def nested_hub_server():
 
 
 async def test_use_skill_resolves_scripts_in_nested_bundle(
-    nested_hub_server: str, tmp_path: Path,
+    nested_hub_server: str,
+    tmp_path: Path,
 ) -> None:
     cache = tmp_path / "skills" / "hub"
     client = SkillHubClient(nested_hub_server, cache_dir=cache)

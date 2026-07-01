@@ -38,9 +38,7 @@ class BeforeIterationHook(AgentHook):
     def name(self) -> str:
         return "EvalBeforeIterationHook"
 
-    async def before_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
         if not (self._config.enabled and self._config.on_iteration_gate):
             return HookDecision()
         messages = ctx.messages or []
@@ -53,7 +51,8 @@ class BeforeIterationHook(AgentHook):
 
         logger.info(
             "EvalEngine before_iteration: token estimate %d > budget %d; halting iteration",
-            estimate, self._config.max_iteration_tokens,
+            estimate,
+            self._config.max_iteration_tokens,
         )
         return HookDecision(
             short_circuit_result=(

@@ -39,7 +39,7 @@ class Capabilities:
     """
 
     interactive_login: bool = False  # QR / scan login (weixin, whatsapp); read by CLI `channel login`
-    streaming: bool = False          # SupportsStreaming slot; activated in B
+    streaming: bool = False  # SupportsStreaming slot; activated in B
 
 
 @runtime_checkable
@@ -193,7 +193,10 @@ class DeliveryHub:
                 if attempt == self._send_max_retries:
                     logger.error(
                         "delivery failed after {} retries: channel={!r} event={} reason={}",
-                        self._send_max_retries, outlet.name, type(out).__name__, exc,
+                        self._send_max_retries,
+                        outlet.name,
+                        type(out).__name__,
+                        exc,
                     )
                     return
                 await asyncio.sleep(delay)

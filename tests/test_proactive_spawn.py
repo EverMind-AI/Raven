@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.raven import NudgePolicyConfig
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PlannerDecision
 
 
@@ -23,12 +23,17 @@ def _now():
 
 def _cfg(**overrides) -> NudgePolicyConfig:
     defaults = dict(
-        max_nudges_per_hour=5, max_nudges_per_day=20,
-        min_interval_seconds=60, quiet_hours=(0, 0),
-        cooldown_on_dismiss_seconds=1800, high_priority_bypasses_limits=True,
+        max_nudges_per_hour=5,
+        max_nudges_per_day=20,
+        min_interval_seconds=60,
+        quiet_hours=(0, 0),
+        cooldown_on_dismiss_seconds=1800,
+        high_priority_bypasses_limits=True,
         dedup_window_seconds=3600,
-        inject_ttl_seconds=1800, inject_max_pending_per_session=3,
-        defer_idle_threshold_seconds=300, defer_max_wait_seconds=86400,
+        inject_ttl_seconds=1800,
+        inject_max_pending_per_session=3,
+        defer_idle_threshold_seconds=300,
+        defer_max_wait_seconds=86400,
     )
     defaults.update(overrides)
     return NudgePolicyConfig(**defaults)
@@ -67,6 +72,7 @@ def spawner(mock_subagent_mgr, policy):
 # ---------------------------------------------------------------------------
 # Happy path
 
+
 @pytest.mark.asyncio
 async def test_dispatch_happy_path(spawner, mock_subagent_mgr):
     result = await spawner.dispatch(_decision())
@@ -92,6 +98,7 @@ async def test_dispatch_records_in_policy(spawner, policy):
 
 # ---------------------------------------------------------------------------
 # Rejection paths
+
 
 @pytest.mark.asyncio
 async def test_dispatch_rejects_wrong_action(spawner, mock_subagent_mgr):
@@ -123,6 +130,7 @@ async def test_dispatch_blocked_by_policy(spawner, policy, mock_subagent_mgr):
 # ---------------------------------------------------------------------------
 # Error handling
 
+
 @pytest.mark.asyncio
 async def test_dispatch_handles_spawn_exception(policy):
     failing_mgr = MagicMock()
@@ -137,6 +145,7 @@ async def test_dispatch_handles_spawn_exception(policy):
 
 # ---------------------------------------------------------------------------
 # Session parsing
+
 
 @pytest.mark.asyncio
 async def test_dispatch_parses_session_key(spawner, mock_subagent_mgr):
@@ -156,6 +165,7 @@ async def test_dispatch_defaults_missing_target(spawner, mock_subagent_mgr):
 
 # ---------------------------------------------------------------------------
 # Details carry task_id
+
 
 @pytest.mark.asyncio
 async def test_result_details_contains_task_id(spawner, mock_subagent_mgr):

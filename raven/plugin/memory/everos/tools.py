@@ -71,10 +71,7 @@ class UnderstandMediaTool(Tool):
         try:
             results = await understand_files([str(p) for p in paths])
         except MultimodalUnavailable as e:
-            return (
-                "Error: multimodal understanding is unavailable. "
-                f"{e}"
-            )
+            return f"Error: multimodal understanding is unavailable. {e}"
 
         parts: list[str] = []
         for r in results:
@@ -82,9 +79,7 @@ class UnderstandMediaTool(Tool):
             if text:
                 parts.append(f"## {r['name']}\n{text}")
             else:
-                parts.append(
-                    f"## {r['name']}\n[could not understand: {r.get('error')}]"
-                )
+                parts.append(f"## {r['name']}\n[could not understand: {r.get('error')}]")
         return "\n\n".join(parts) if parts else "No files were provided."
 
 

@@ -60,16 +60,14 @@ class EvalAdapter:
         timestamp = self._now_fn().strftime("%Y-%m-%d %H:%M")
         # Keep the goal short so the HISTORY.md tail stays grep-friendly.
         truncated_goal = (user_goal or "").strip().splitlines()[0][:160]
-        entry = (
-            f"[{timestamp}] eval verdict={verdict.value} "
-            f"session={session_key} goal=\"{truncated_goal}\""
-        )
+        entry = f'[{timestamp}] eval verdict={verdict.value} session={session_key} goal="{truncated_goal}"'
         try:
             self._memory.append_history(entry)
         except Exception as exc:  # noqa: BLE001 — adapter must not crash AgentLoop
             logger.debug(
                 "EvalAdapter.append_history failed (%s): %s",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
 
 

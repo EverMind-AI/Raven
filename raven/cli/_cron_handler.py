@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from raven.agent.loop import AgentLoop
     from raven.channels.manager import ChannelManager
     from raven.proactive_engine.schedulers.cron.types import CronJob
-    from raven.proactive_engine.system_events import SystemEventQueue
     from raven.proactive_engine.sentinel.executor.runner import SentinelRunner
+    from raven.proactive_engine.system_events import SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
     from raven.session.manager import SessionManager
     from raven.spine import TurnHandle, TurnRequest
@@ -68,9 +68,7 @@ def _emit_cron_event(
             system_events.discard(f"cron:{job.id}:fail")
             text = f"Cron job '{job.name}' completed. Result: {detail}"
             context_key = f"cron:{job.id}"
-        system_events.enqueue(
-            SystemEvent(text=text, source="cron", context_key=context_key)
-        )
+        system_events.enqueue(SystemEvent(text=text, source="cron", context_key=context_key))
         wake.request_wake_now(context_key)
     except Exception as exc:  # noqa: BLE001 — event emit is best-effort
         logger.warning(
@@ -186,9 +184,7 @@ def make_on_cron_job(
         # ``cron config set`` take effect on the next fire) — response-independent,
         # so it can run before the turn; len(targets) decides the path.
         cron_cfg = load_config().cron
-        enabled_channels = (
-            set(channel_manager.enabled_channels) if channel_manager is not None else set()
-        )
+        enabled_channels = set(channel_manager.enabled_channels) if channel_manager is not None else set()
         targets, warnings = resolve_cron_delivery(
             channel=job.payload.channel or default_channel,
             chat_id=job.payload.to or "direct",
@@ -221,13 +217,14 @@ def make_on_cron_job(
                 logger.warning(
                     "Cron job '{}' ({}): silent job on non-ephemeral channel '{}' "
                     "is delivered under the spine (no outlet-less suppression for "
-                    "real channels)", job.name, job.id, src_channel,
+                    "real channels)",
+                    job.name,
+                    job.id,
+                    src_channel,
                 )
         req = TurnRequest(
             origin=Origin.CRON,
-            source=Source(
-                channel=src_channel, chat_id=src_chat, sender_id="cron", chat_type=ChatType.DM
-            ),
+            source=Source(channel=src_channel, chat_id=src_chat, sender_id="cron", chat_type=ChatType.DM),
             text=reminder_note,
             conversation=f"cron:{job.id}",
         )
@@ -240,9 +237,7 @@ def make_on_cron_job(
         # Read the reply back (for the system event and any broadcast) from the
         # gateway runner's capture, stored before result() resolved, and pop it so
         # the long-running map does not accumulate.
-        response: str | None = (
-            readback_texts.pop(f"cron:{job.id}", None) if readback_texts is not None else None
-        )
+        response: str | None = readback_texts.pop(f"cron:{job.id}", None) if readback_texts is not None else None
 
         # F-G: tell the L3 Sentinel this surface just nudged the user (topic_fired_at
         # + record_dispatched), so its next tick on the same topic skips via
@@ -254,9 +249,7 @@ def make_on_cron_job(
         # Event wake: let the main heartbeat session learn what this isolated cron
         # run produced (and end its sleep early).
         if system_events is not None and wake is not None:
-            _emit_cron_event(
-                system_events, wake, job, (response or "(no response)").strip(), failed=False
-            )
+            _emit_cron_event(system_events, wake, job, (response or "(no response)").strip(), failed=False)
 
         # Broadcast a multi-target delivering job to every resolved target: the hub
         # dropped the reply (no outlet for the ephemeral source), so this is the
@@ -327,9 +320,7 @@ def _record_cron_dispatch_to_ledger(
                 priority="low",  # user-scheduled — no quota pressure intended
                 proactivity_score=0.0,
                 source="cron",
-                details={"topic_tag": topic_tag, "cron_id": job.id}
-                if topic_tag
-                else {"cron_id": job.id},
+                details={"topic_tag": topic_tag, "cron_id": job.id} if topic_tag else {"cron_id": job.id},
             )
             # B4: cron fires don't count toward acceptance_rate (denominator
             # OR numerator). Mark NEUTRAL right away.

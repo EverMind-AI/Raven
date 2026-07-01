@@ -3,10 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { PassThrough } from 'stream'
-
 import { Box, renderSync } from '@hermes/ink'
 import React from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
 import { AUDIO_DIRECTIVE_RE, INLINE_RE, Md, MEDIA_LINE_RE, stripInlineMarkup } from '../components/markdown.js'

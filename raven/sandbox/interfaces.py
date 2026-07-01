@@ -3,6 +3,7 @@
 Import from here (or from raven.sandbox) — never from boxlite_executor.py
 or direct_executor.py directly, so callers remain decoupled from concrete backends.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -37,11 +38,7 @@ class ExecResult:
         result = "\n".join(parts)
         if len(result) > max_chars:
             half = max_chars // 2
-            result = (
-                result[:half]
-                + f"\n\n... ({len(result) - max_chars:,} chars truncated) ...\n\n"
-                + result[-half:]
-            )
+            result = result[:half] + f"\n\n... ({len(result) - max_chars:,} chars truncated) ...\n\n" + result[-half:]
         return result
 
 

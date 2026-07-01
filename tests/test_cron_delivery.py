@@ -236,12 +236,15 @@ def _seed_minted_tui(tmp_path: Path, chat_id: str, updated_at: str) -> None:
     tui_dir = tmp_path / "sessions" / "tui"
     tui_dir.mkdir(parents=True, exist_ok=True)
     (tui_dir / f"{chat_id}.jsonl").write_text(
-        json.dumps({
-            "_type": "metadata",
-            "key": f"tui:{chat_id}",
-            "updated_at": updated_at,
-            "metadata": {},
-        }) + "\n",
+        json.dumps(
+            {
+                "_type": "metadata",
+                "key": f"tui:{chat_id}",
+                "updated_at": updated_at,
+                "metadata": {},
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 

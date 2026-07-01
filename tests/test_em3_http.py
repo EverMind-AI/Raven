@@ -11,14 +11,12 @@ import pytest
 
 pytest.importorskip("raven.plugin.memory.everos")
 
-from raven.memory_engine import Memory
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (
     EverosBackend,
     _HttpEverosAdapter,
     _jsonify,
 )
-
 
 # ---------------------------------------------------------------------------
 # Mock-transport helpers
@@ -33,8 +31,10 @@ class _MockEverOS:
         self.search_response: dict = {
             "request_id": "test-req",
             "data": {
-                "episodes": [], "profiles": [],
-                "agent_cases": [], "agent_skills": [],
+                "episodes": [],
+                "profiles": [],
+                "agent_cases": [],
+                "agent_skills": [],
             },
         }
         self.add_response: dict = {
@@ -110,14 +110,19 @@ class TestJsonify:
 
 class TestHttpAdapterSearch:
     async def test_posts_to_search_endpoint(
-        self, mock, http_client,
+        self,
+        mock,
+        http_client,
     ) -> None:
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         await adapter.search(
-            user_id="alice", agent_id=None,
-            query="coffee", top_k=5,
+            user_id="alice",
+            agent_id=None,
+            query="coffee",
+            top_k=5,
         )
         assert len(mock.requests) == 1
         req = mock.requests[0]
@@ -126,7 +131,9 @@ class TestHttpAdapterSearch:
         body = json.loads(req.content.decode())
         # everos's SearchRequest wire contract is user_id XOR agent_id.
         assert body == {
-            "user_id": "alice", "query": "coffee", "top_k": 5,
+            "user_id": "alice",
+            "query": "coffee",
+            "top_k": 5,
         }
 
     async def test_returns_jsonified_data(self, mock, http_client) -> None:
@@ -134,8 +141,7 @@ class TestHttpAdapterSearch:
             "request_id": "x",
             "data": {
                 "episodes": [
-                    {"id": "ep1", "summary": "hi", "score": 0.7,
-                     "session_id": "s1"},
+                    {"id": "ep1", "summary": "hi", "score": 0.7, "session_id": "s1"},
                 ],
                 "profiles": [],
                 "agent_cases": [],
@@ -143,10 +149,14 @@ class TestHttpAdapterSearch:
             },
         }
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         data = await adapter.search(
-            user_id="x", agent_id=None, query="q", top_k=5,
+            user_id="x",
+            agent_id=None,
+            query="q",
+            top_k=5,
         )
         # The host's converter accesses via attributes — verify shape.
         assert data.episodes[0].id == "ep1"
@@ -156,26 +166,34 @@ class TestHttpAdapterSearch:
     async def test_5xx_raises(self, mock, http_client) -> None:
         mock.status_for_path["/api/v1/memory/search"] = 503
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         with pytest.raises(httpx.HTTPStatusError):
             await adapter.search(
-                user_id="x", agent_id=None, query="q", top_k=5,
+                user_id="x",
+                agent_id=None,
+                query="q",
+                top_k=5,
             )
 
     async def test_no_auth_header_when_no_key(
-        self, mock, http_client,
+        self,
+        mock,
+        http_client,
     ) -> None:
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         await adapter.search(
-            user_id="x", agent_id=None, query="q", top_k=1,
+            user_id="x",
+            agent_id=None,
+            query="q",
+            top_k=1,
         )
         # No Authorization header set.
-        assert "authorization" not in {
-            h.lower() for h in mock.requests[0].headers
-        }
+        assert "authorization" not in {h.lower() for h in mock.requests[0].headers}
 
 
 class TestHttpAdapterAuth:
@@ -183,10 +201,15 @@ class TestHttpAdapterAuth:
         mock = _MockEverOS()
         client = httpx.AsyncClient(transport=httpx.MockTransport(mock.handler))
         adapter = _HttpEverosAdapter(
-            "http://mem.test", api_key="secret-token", client=client,
+            "http://mem.test",
+            api_key="secret-token",
+            client=client,
         )
         await adapter.search(
-            user_id="a", agent_id=None, query="q", top_k=1,
+            user_id="a",
+            agent_id=None,
+            query="q",
+            top_k=1,
         )
         assert mock.requests[0].headers["Authorization"] == "Bearer secret-token"
         await client.aclose()
@@ -195,7 +218,8 @@ class TestHttpAdapterAuth:
 class TestHttpAdapterMemorize:
     async def test_posts_to_add_endpoint(self, mock, http_client) -> None:
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         msgs = [
             {"sender_id": "alice", "role": "user", "timestamp": 1, "content": "hi"},
@@ -209,13 +233,16 @@ class TestHttpAdapterMemorize:
     async def test_5xx_raises(self, mock, http_client) -> None:
         mock.status_for_path["/api/v1/memory/add"] = 500
         adapter = _HttpEverosAdapter(
-            "http://mem.test", client=http_client,
+            "http://mem.test",
+            client=http_client,
         )
         with pytest.raises(httpx.HTTPStatusError):
-            await adapter.memorize("s", [
-                {"sender_id": "a", "role": "user",
-                 "timestamp": 1, "content": "x"},
-            ])
+            await adapter.memorize(
+                "s",
+                [
+                    {"sender_id": "a", "role": "user", "timestamp": 1, "content": "x"},
+                ],
+            )
 
 
 class TestHttpAdapterLifecycle:
@@ -225,18 +252,21 @@ class TestHttpAdapterLifecycle:
         await adapter.aclose()  # second call must not raise
 
     async def test_injected_client_not_closed(self) -> None:
-        client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda r: httpx.Response(200, json={
-                "request_id": "x",
-                "data": {"episodes": [], "profiles": [],
-                         "agent_cases": [], "agent_skills": []},
-            }),
-        ))
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda r: httpx.Response(
+                    200,
+                    json={
+                        "request_id": "x",
+                        "data": {"episodes": [], "profiles": [], "agent_cases": [], "agent_skills": []},
+                    },
+                ),
+            )
+        )
         adapter = _HttpEverosAdapter("http://x", client=client)
         await adapter.aclose()
         # Caller-owned client still usable
-        resp = await client.post("http://x/api/v1/memory/search",
-                                  json={})
+        resp = await client.post("http://x/api/v1/memory/search", json={})
         assert resp.status_code == 200
         await client.aclose()
 
@@ -244,15 +274,17 @@ class TestHttpAdapterLifecycle:
 class TestEndpointNormalization:
     async def test_trailing_slash_stripped(self, mock, http_client) -> None:
         adapter = _HttpEverosAdapter(
-            "http://mem.test/", client=http_client,
+            "http://mem.test/",
+            client=http_client,
         )
         await adapter.search(
-            user_id="x", agent_id=None, query="q", top_k=1,
+            user_id="x",
+            agent_id=None,
+            query="q",
+            top_k=1,
         )
         # No double-slash in path.
-        assert str(mock.requests[0].url) == (
-            "http://mem.test/api/v1/memory/search"
-        )
+        assert str(mock.requests[0].url) == ("http://mem.test/api/v1/memory/search")
 
 
 # ---------------------------------------------------------------------------
@@ -269,9 +301,13 @@ def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
 
 class TestBackendHttpMode:
     def test_http_mode_constructs_http_adapter(self, tmp_path: Path) -> None:
-        b = EverosBackend(_ctx(
-            tmp_path, mode="http", base_url="http://x:9000",
-        ))
+        b = EverosBackend(
+            _ctx(
+                tmp_path,
+                mode="http",
+                base_url="http://x:9000",
+            )
+        )
         assert isinstance(b._adapter, _HttpEverosAdapter)
         assert b._adapter._base_url == "http://x:9000"
 
@@ -281,13 +317,18 @@ class TestBackendHttpMode:
         assert b._adapter._base_url == "http://localhost:1995"
 
     def test_api_key_threaded_through(self, tmp_path: Path) -> None:
-        b = EverosBackend(_ctx(
-            tmp_path, mode="http", api_key="my-key",
-        ))
+        b = EverosBackend(
+            _ctx(
+                tmp_path,
+                mode="http",
+                api_key="my-key",
+            )
+        )
         assert b._adapter._api_key == "my-key"
 
     async def test_end_to_end_recall_through_http(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Inject a MockTransport-backed client into a real
         EverosBackend.http adapter and verify the search → recall →
@@ -319,7 +360,8 @@ class TestBackendHttpMode:
 
         # Build the backend with the explicit adapter
         b = EverosBackend(
-            _ctx(tmp_path, mode="http"), adapter=adapter,
+            _ctx(tmp_path, mode="http"),
+            adapter=adapter,
         )
         hits = await b.recall("git", agent_id="agent:default", top_k=5)
 
@@ -332,7 +374,8 @@ class TestBackendHttpMode:
         await client.aclose()
 
     async def test_backend_stop_closes_http_adapter(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         b = EverosBackend(_ctx(tmp_path, mode="http"))
         # Get a handle to the adapter to verify close happens

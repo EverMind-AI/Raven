@@ -71,13 +71,15 @@ def _session_to_openclaw_transcript(
 
         if role == "user":
             text = content if isinstance(content, str) else str(content)
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "user",
-                    "content": [text],
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "user",
+                        "content": [text],
+                    },
+                }
+            )
 
         elif role == "assistant":
             items: List[Dict[str, Any]] = []
@@ -93,29 +95,35 @@ def _session_to_openclaw_transcript(
                     except (json.JSONDecodeError, TypeError):
                         args = {"raw": args}
 
-                items.append({
-                    "type": "toolCall",
-                    "name": func.get("name", ""),
-                    "arguments": args,
-                })
+                items.append(
+                    {
+                        "type": "toolCall",
+                        "name": func.get("name", ""),
+                        "arguments": args,
+                    }
+                )
 
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "assistant",
-                    "content": items,
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "assistant",
+                        "content": items,
+                    },
+                }
+            )
 
         elif role == "tool":
             result_text = content if isinstance(content, str) else str(content)
-            transcript.append({
-                "type": "message",
-                "message": {
-                    "role": "toolResult",
-                    "content": [result_text],
-                },
-            })
+            transcript.append(
+                {
+                    "type": "message",
+                    "message": {
+                        "role": "toolResult",
+                        "content": [result_text],
+                    },
+                }
+            )
 
     return transcript
 
@@ -172,6 +180,7 @@ async def execute_task(
     # etc. are honored under bot benchmark runs. Without this AgentLoop gets
     # skill_forge_config=None → SkillService falls back to dataclass defaults.
     from raven.config.raven import load_raven_config
+
     _ec_cfg = load_raven_config()
     skill_forge_cfg = getattr(_ec_cfg, "skill_forge", None)
 
@@ -200,7 +209,9 @@ async def execute_task(
 
     logger.info(
         "Executing task %s (%s) via bot mode — timeout %.0fs",
-        task.task_id, task.name, timeout_seconds,
+        task.task_id,
+        task.name,
+        timeout_seconds,
     )
 
     # --- Run one USER turn through the spine; accumulate the reply text ---
@@ -218,8 +229,10 @@ async def execute_task(
                 TurnRequest(
                     origin=Origin.USER,
                     source=Source(
-                        channel=CHANNEL_NAME, chat_id=task.task_id,
-                        sender_id="benchmark_user", chat_type=ChatType.DM,
+                        channel=CHANNEL_NAME,
+                        chat_id=task.task_id,
+                        sender_id="benchmark_user",
+                        chat_type=ChatType.DM,
                     ),
                     text=task.prompt,
                     conversation=session_key,
@@ -255,7 +268,9 @@ async def execute_task(
     transcript = _session_to_openclaw_transcript(raw_messages)
 
     if verbose:
-        logger.info("  Response: %s", (response_content[:500] + "...") if len(response_content) > 500 else response_content)
+        logger.info(
+            "  Response: %s", (response_content[:500] + "...") if len(response_content) > 500 else response_content
+        )
         logger.info("  Transcript entries: %d", len(transcript))
         logger.info("  Execution time: %.2fs", execution_time)
         if task_workspace.exists():

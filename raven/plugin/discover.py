@@ -100,7 +100,9 @@ class PluginDiscovery:
     # ── File-based sources ─────────────────────────────────────────
 
     def _scan_dir(
-        self, root: Path, source: Source,
+        self,
+        root: Path,
+        source: Source,
     ) -> list[DiscoveredPlugin]:
         """Look for ``<root>/<plugin_id>/raven-plugin.toml``.
 
@@ -122,17 +124,21 @@ class PluginDiscovery:
             except Exception as e:
                 logger.warning(
                     "plugin manifest %s failed to parse (%s); skipping",
-                    manifest_path, e,
+                    manifest_path,
+                    e,
                 )
                 continue
             if mf.id != sub.name:
                 logger.info(
                     "plugin %s lives in directory %s — id and dir name differ",
-                    mf.id, sub.name,
+                    mf.id,
+                    sub.name,
                 )
             out.append(
                 DiscoveredPlugin(
-                    manifest=mf, source=source, location=manifest_path,
+                    manifest=mf,
+                    source=source,
+                    location=manifest_path,
                 ),
             )
         return out
@@ -165,9 +171,10 @@ class PluginDiscovery:
                 with as_file(manifest_resource) as manifest_path:
                     if not manifest_path.is_file():
                         logger.warning(
-                            "entry-point %s points at package %s but "
-                            "no %s found; skipping",
-                            ep.name, package_name, _MANIFEST_FILENAME,
+                            "entry-point %s points at package %s but no %s found; skipping",
+                            ep.name,
+                            package_name,
+                            _MANIFEST_FILENAME,
                         )
                         continue
                     mf = PluginManifest.from_toml_path(manifest_path)
@@ -181,7 +188,8 @@ class PluginDiscovery:
             except Exception as e:
                 logger.warning(
                     "failed to load manifest for entry-point %s (%s); skipping",
-                    ep.name, e,
+                    ep.name,
+                    e,
                 )
         return out
 
@@ -203,13 +211,17 @@ class PluginDiscovery:
                 if current is not None:
                     logger.info(
                         "plugin %s: %s shadows %s",
-                        d.manifest.id, d.source.name, current.source.name,
+                        d.manifest.id,
+                        d.source.name,
+                        current.source.name,
                     )
                 by_id[d.manifest.id] = d
             elif d.source < current.source:
                 logger.info(
                     "plugin %s: %s shadowed by %s",
-                    d.manifest.id, d.source.name, current.source.name,
+                    d.manifest.id,
+                    d.source.name,
+                    current.source.name,
                 )
         # Stable sort by id so caller-side display order is deterministic.
         return sorted(by_id.values(), key=lambda p: p.manifest.id)

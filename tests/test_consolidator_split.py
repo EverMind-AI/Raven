@@ -37,7 +37,6 @@ from raven.memory_engine.consolidate.consolidator import (
 )
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
-
 _TAG_RE = re.compile(r"#[a-z][a-z0-9-]*")
 _EVIDENCE_RE = re.compile(r"\[src: episodes\.md @ [^\]]+\]")
 
@@ -46,12 +45,14 @@ _EVIDENCE_RE = re.compile(r"\[src: episodes\.md @ [^\]]+\]")
 # FakeProvider — multi-tool aware.
 # ===========================================================================
 
+
 class _FakeProvider(LLMProvider):
     """Stubs ``chat`` by looking up a canned response per tool name.
 
     Configure via ``set_response(tool_name, args_dict)``. Raises if a
     tool is invoked without a configured response — that's a test bug.
     """
+
     def __init__(self):
         super().__init__()
         self._responses: dict[str, dict[str, Any]] = {}
@@ -65,16 +66,16 @@ class _FakeProvider(LLMProvider):
             return LLMResponse(content=None)
         tool_name = tools[0]["function"]["name"]
         if tool_name not in self._responses:
-            raise RuntimeError(
-                f"FakeProvider received call to {tool_name!r} without canned response"
-            )
+            raise RuntimeError(f"FakeProvider received call to {tool_name!r} without canned response")
         return LLMResponse(
             content=None,
-            tool_calls=[ToolCallRequest(
-                id=f"call_{tool_name}",
-                name=tool_name,
-                arguments=self._responses[tool_name],
-            )],
+            tool_calls=[
+                ToolCallRequest(
+                    id=f"call_{tool_name}",
+                    name=tool_name,
+                    arguments=self._responses[tool_name],
+                )
+            ],
         )
 
     def get_default_model(self) -> str:
@@ -85,11 +86,10 @@ class _FakeProvider(LLMProvider):
 # Pure-helper tests.
 # ===========================================================================
 
+
 class TestParseEpisodeLine:
     def test_extracts_timestamp_summary_and_tags(self):
-        ts, summary, tags = _parse_episode_line(
-            "[2026-05-07 09:30] User raised Project A perf #project-a #perf"
-        )
+        ts, summary, tags = _parse_episode_line("[2026-05-07 09:30] User raised Project A perf #project-a #perf")
         assert ts == "2026-05-07 09:30"
         assert tags == ["project-a", "perf"]
         assert "#" not in summary
@@ -100,9 +100,7 @@ class TestParseEpisodeLine:
         assert _parse_episode_line("") is None
 
     def test_empty_tags_is_empty_list(self):
-        ts, summary, tags = _parse_episode_line(
-            "[2026-05-07 09:30] event with no tags at all"
-        )
+        ts, summary, tags = _parse_episode_line("[2026-05-07 09:30] event with no tags at all")
         assert tags == []
         assert summary == "event with no tags at all"
 
@@ -126,7 +124,8 @@ class TestSpliceH2Section:
 
     def test_replaces_target_section_only(self):
         new = _splice_h2_section(
-            self.USER_MD, "## Projects",
+            self.USER_MD,
+            "## Projects",
             "- new project bullet [src: episodes.md @ 2026-05-19 10:00]",
         )
         assert "old project bullet" not in new
@@ -139,13 +138,15 @@ class TestSpliceH2Section:
         new = _splice_h2_section(self.USER_MD, "## Projects", "- new\n")
         # Hash the bytes of `## Habits` onward — should equal the original
         # from `## Habits` onward.
-        orig_tail = self.USER_MD[self.USER_MD.index("## Habits"):]
-        new_tail = new[new.index("## Habits"):]
+        orig_tail = self.USER_MD[self.USER_MD.index("## Habits") :]
+        new_tail = new[new.index("## Habits") :]
         assert new_tail == orig_tail
 
     def test_appends_new_h2_when_heading_missing(self):
         new = _splice_h2_section(
-            self.USER_MD, "## Foresight", "- predicted X [src: episodes.md @ unknown]",
+            self.USER_MD,
+            "## Foresight",
+            "- predicted X [src: episodes.md @ unknown]",
         )
         assert "## Foresight" in new
         assert "predicted X" in new
@@ -160,14 +161,10 @@ class TestSpliceH2Section:
 # ===========================================================================
 
 CASE_06_MESSAGES: list[dict[str, Any]] = [
-    {"role": "user", "timestamp": "2026-05-07T09:30",
-     "content": "想优化 Project A 月报，30 秒太慢"},
-    {"role": "user", "timestamp": "2026-05-07T10:30",
-     "content": "Project A 先放，去修 Project B race condition"},
-    {"role": "user", "timestamp": "2026-05-07T11:30",
-     "content": "Redis 锁加在 deploy/tasks.py，失败率 20%"},
-    {"role": "user", "timestamp": "2026-05-07T12:30",
-     "content": "锁超时 30s→60s，明天看效果"},
+    {"role": "user", "timestamp": "2026-05-07T09:30", "content": "想优化 Project A 月报，30 秒太慢"},
+    {"role": "user", "timestamp": "2026-05-07T10:30", "content": "Project A 先放，去修 Project B race condition"},
+    {"role": "user", "timestamp": "2026-05-07T11:30", "content": "Redis 锁加在 deploy/tasks.py，失败率 20%"},
+    {"role": "user", "timestamp": "2026-05-07T12:30", "content": "锁超时 30s→60s，明天看效果"},
 ]
 
 ANNOTATE_RESPONSE: dict[str, Any] = {
@@ -180,7 +177,8 @@ ANNOTATE_RESPONSE: dict[str, Any] = {
     "foresight_hint": [
         {
             "prediction": "User likely returns to Project A index design tomorrow",
-            "window": "1-2 days", "confidence": "high",
+            "window": "1-2 days",
+            "confidence": "high",
             "src_ts": "2026-05-07 10:30",
         },
     ],
@@ -197,10 +195,7 @@ async def test_annotate_writes_tagged_episodes(tmp_path: Path):
     ok = await store.annotate(CASE_06_MESSAGES, provider, "fake-model")
     assert ok is True
 
-    episode_lines = [
-        ln for ln in store.history_file.read_text(encoding="utf-8").splitlines()
-        if ln.startswith("[")
-    ]
+    episode_lines = [ln for ln in store.history_file.read_text(encoding="utf-8").splitlines() if ln.startswith("[")]
     assert len(episode_lines) == 4
     assert all(_TAG_RE.search(ln) for ln in episode_lines)
 
@@ -231,14 +226,17 @@ async def test_annotate_default_omits_foresight_slot(tmp_path: Path):
             captured["tools"] = kwargs.get("tools")
             return LLMResponse(
                 content=None,
-                tool_calls=[ToolCallRequest(
-                    id="call_0", name="annotate_conversation",
-                    arguments={
-                        "episode_summary": [
-                            "[2026-05-07 09:30] x #project-a",
-                        ],
-                    },
-                )],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_0",
+                        name="annotate_conversation",
+                        arguments={
+                            "episode_summary": [
+                                "[2026-05-07 09:30] x #project-a",
+                            ],
+                        },
+                    )
+                ],
             )
 
         def get_default_model(self) -> str:
@@ -246,7 +244,9 @@ async def test_annotate_default_omits_foresight_slot(tmp_path: Path):
 
     store = MemoryStore(tmp_path)
     ok = await store.annotate(
-        CASE_06_MESSAGES, _CapturingProvider(), "fake-model",
+        CASE_06_MESSAGES,
+        _CapturingProvider(),
+        "fake-model",
     )
     assert ok is True
     tool = captured["tools"][0]["function"]
@@ -264,15 +264,18 @@ async def test_annotate_with_foresight_includes_slot(tmp_path: Path):
             captured["tools"] = kwargs.get("tools")
             return LLMResponse(
                 content=None,
-                tool_calls=[ToolCallRequest(
-                    id="call_0", name="annotate_conversation",
-                    arguments={
-                        "episode_summary": [
-                            "[2026-05-07 09:30] x #project-a",
-                        ],
-                        "foresight_hint": [],
-                    },
-                )],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="call_0",
+                        name="annotate_conversation",
+                        arguments={
+                            "episode_summary": [
+                                "[2026-05-07 09:30] x #project-a",
+                            ],
+                            "foresight_hint": [],
+                        },
+                    )
+                ],
             )
 
         def get_default_model(self) -> str:
@@ -280,7 +283,9 @@ async def test_annotate_with_foresight_includes_slot(tmp_path: Path):
 
     store = MemoryStore(tmp_path)
     ok = await store.annotate(
-        CASE_06_MESSAGES, _CapturingProvider(), "fake-model",
+        CASE_06_MESSAGES,
+        _CapturingProvider(),
+        "fake-model",
         enable_foresight=True,
     )
     assert ok is True
@@ -308,6 +313,7 @@ async def test_annotate_tolerates_string_episode_summary(tmp_path: Path):
 # Tag counting + hot-tag detection.
 # ===========================================================================
 
+
 def _seed_episodes(store: MemoryStore, lines: list[str]) -> None:
     """Append given lines (each one paragraph) to episodes.md."""
     for ln in lines:
@@ -317,32 +323,34 @@ def _seed_episodes(store: MemoryStore, lines: list[str]) -> None:
 class TestTagAccounting:
     def test_count_tags_aggregates_across_lines(self, tmp_path: Path):
         store = MemoryStore(tmp_path)
-        _seed_episodes(store, [
-            "[2026-05-01 09:00] foo #project-a #perf",
-            "[2026-05-02 09:00] bar #project-a",
-            "[2026-05-03 09:00] baz #project-b #bug",
-        ])
+        _seed_episodes(
+            store,
+            [
+                "[2026-05-01 09:00] foo #project-a #perf",
+                "[2026-05-02 09:00] bar #project-a",
+                "[2026-05-03 09:00] baz #project-b #bug",
+            ],
+        )
         counts = store.count_tags()
         assert counts == {"project-a": 2, "perf": 1, "project-b": 1, "bug": 1}
 
     def test_hot_tags_returns_tags_at_or_above_threshold(self, tmp_path: Path):
         store = MemoryStore(tmp_path)
-        _seed_episodes(store, [
-            f"[2026-05-{day:02d} 09:00] e{day} #project-b"
-            for day in range(1, 6)
-        ] + [
-            "[2026-05-06 09:00] x #project-a",
-            "[2026-05-07 09:00] y #project-a",
-        ])
+        _seed_episodes(
+            store,
+            [f"[2026-05-{day:02d} 09:00] e{day} #project-b" for day in range(1, 6)]
+            + [
+                "[2026-05-06 09:00] x #project-a",
+                "[2026-05-07 09:00] y #project-a",
+            ],
+        )
         hot = store.hot_tags(threshold=5)
         # project-b: 5 occurrences ≥ 5 → hot. project-a: 2 < 5 → not hot.
         assert [t for t, _, _ in hot] == ["project-b"]
 
     def test_hot_tags_respects_existing_offset(self, tmp_path: Path):
         store = MemoryStore(tmp_path)
-        _seed_episodes(store, [
-            f"[2026-05-{day:02d} 09:00] e{day} #project-b" for day in range(1, 8)
-        ])
+        _seed_episodes(store, [f"[2026-05-{day:02d} 09:00] e{day} #project-b" for day in range(1, 8)])
         # Offset already at 6, so only 1 new episode — below threshold 5.
         store.write_tag_offsets({"project-b": 6})
         assert store.hot_tags(threshold=5) == []
@@ -405,10 +413,13 @@ async def test_refresh_section_rewrites_target_only(tmp_path: Path):
         "[src: episodes.md @ 2026-05-07 12:30]\n"
     )
     provider = _FakeProvider()
-    provider.set_response("refresh_profile_section", {
-        "section_heading": "## Projects",
-        "section_body": new_project_body,
-    })
+    provider.set_response(
+        "refresh_profile_section",
+        {
+            "section_heading": "## Projects",
+            "section_body": new_project_body,
+        },
+    )
 
     ok = await store.refresh_section("project-b", provider, "fake-model")
     assert ok is True
@@ -416,10 +427,10 @@ async def test_refresh_section_rewrites_target_only(tmp_path: Path):
     new_user_md = store.read_long_term()
     # Hot section updated.
     assert "Status: lock fix verified" in new_user_md
-    assert "old A status" in new_user_md   # preserved inside the same H2
+    assert "old A status" in new_user_md  # preserved inside the same H2
     # ## Habits + ## Notes byte-identical from their headings to EOF.
-    habits_orig = SEEDED_USER_MD[SEEDED_USER_MD.index("## Habits"):]
-    habits_new = new_user_md[new_user_md.index("## Habits"):]
+    habits_orig = SEEDED_USER_MD[SEEDED_USER_MD.index("## Habits") :]
+    habits_new = new_user_md[new_user_md.index("## Habits") :]
     assert habits_new == habits_orig
 
 
@@ -433,7 +444,9 @@ async def test_maybe_refresh_hot_tags_fires_only_above_threshold(tmp_path: Path)
     provider = _FakeProvider()
     # No response configured: any LLM call will RAISE.
     refreshed = await store.maybe_refresh_hot_tags(
-        provider, "fake-model", threshold=5,
+        provider,
+        "fake-model",
+        threshold=5,
     )
     assert refreshed == 0
     # Offsets file should NOT have been written.
@@ -449,18 +462,20 @@ async def test_maybe_refresh_hot_tags_advances_offsets(tmp_path: Path):
     store.write_long_term(SEEDED_USER_MD)
     _seed_project_b_episodes(store, n=5)
 
-    new_body = (
-        "### Project B\n"
-        "- post-refresh bullet [src: episodes.md @ 2026-05-08 09:00]\n"
-    )
+    new_body = "### Project B\n- post-refresh bullet [src: episodes.md @ 2026-05-08 09:00]\n"
     provider = _FakeProvider()
-    provider.set_response("refresh_profile_section", {
-        "section_heading": "## Projects",
-        "section_body": new_body,
-    })
+    provider.set_response(
+        "refresh_profile_section",
+        {
+            "section_heading": "## Projects",
+            "section_body": new_body,
+        },
+    )
 
     refreshed = await store.maybe_refresh_hot_tags(
-        provider, "fake-model", threshold=5,
+        provider,
+        "fake-model",
+        threshold=5,
     )
     assert refreshed == 1
     offsets = store.read_tag_offsets()

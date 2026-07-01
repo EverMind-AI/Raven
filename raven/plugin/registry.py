@@ -104,8 +104,7 @@ class PluginRegistry:
                 continue
             if not mf.enabled_by_default:
                 logger.info(
-                    "plugin %s not enabled by default; skipping (use "
-                    "explicit opt-in once supported)",
+                    "plugin %s not enabled by default; skipping (use explicit opt-in once supported)",
                     mf.id,
                 )
                 continue
@@ -123,8 +122,7 @@ class PluginRegistry:
             if contribution.name in self._memory_backends:
                 prev = self._memory_backends[contribution.name]
                 raise PluginConflict(
-                    f"memory_backend {contribution.name!r} contributed by "
-                    f"both {prev.plugin_id!r} and {mf.id!r}",
+                    f"memory_backend {contribution.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
                 )
             factory = self._resolve_factory(mf.id, contribution.factory)
             self._memory_backends[contribution.name] = _ActivatedFactory(
@@ -134,15 +132,15 @@ class PluginRegistry:
             )
             logger.debug(
                 "registered memory_backend %s from %s",
-                contribution.name, mf.id,
+                contribution.name,
+                mf.id,
             )
 
         for tool in mf.contributes.tools:
             if tool.name in self._tools:
                 prev = self._tools[tool.name]
                 raise PluginConflict(
-                    f"tool {tool.name!r} contributed by both "
-                    f"{prev.plugin_id!r} and {mf.id!r}",
+                    f"tool {tool.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
                 )
             factory = self._resolve_factory(mf.id, tool.factory)
             self._tools[tool.name] = _ActivatedFactory(
@@ -170,13 +168,11 @@ class PluginRegistry:
             obj = getattr(mod, attr)
         except AttributeError as e:
             raise PluginFactoryImportError(
-                f"plugin {plugin_id!r}: {module_path!r} has no attribute "
-                f"{attr!r}",
+                f"plugin {plugin_id!r}: {module_path!r} has no attribute {attr!r}",
             ) from e
         if not callable(obj):
             raise PluginFactoryImportError(
-                f"plugin {plugin_id!r}: {ref} resolved to a non-callable "
-                f"{type(obj).__name__}",
+                f"plugin {plugin_id!r}: {ref} resolved to a non-callable {type(obj).__name__}",
             )
         return obj  # type: ignore[return-value]
 
@@ -196,8 +192,7 @@ class PluginRegistry:
             return self._memory_backends[name].factory
         except KeyError as e:
             raise PluginNotFound(
-                f"no memory_backend named {name!r} (registered: "
-                f"{self.memory_backend_names()})",
+                f"no memory_backend named {name!r} (registered: {self.memory_backend_names()})",
             ) from e
 
     def tool_names(self) -> list[str]:
@@ -245,8 +240,7 @@ class PluginRegistry:
         ctx = PluginContext(
             config=config,
             services=services,
-            logger=logger
-            or logging.getLogger(f"raven.plugin.{name}"),
+            logger=logger or logging.getLogger(f"raven.plugin.{name}"),
         )
         return factory(ctx)
 
@@ -282,7 +276,6 @@ class PluginRegistry:
 # the circular hit at module-load time (registry is imported from
 # __init__ before context is).
 from raven.plugin.context import ServiceLocator  # noqa: E402
-
 
 __all__ = [
     "MemoryBackendFactory",

@@ -275,18 +275,14 @@ def _auto_answer_broker(*, answer: bool | None = None, drop: bool = False) -> Co
 
 async def test_confirm_accept_runs_command(fake_confirm_app) -> None:
     broker = _auto_answer_broker(answer=True)
-    result = await cli_dispatch(
-        {"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker
-    )
+    result = await cli_dispatch({"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker)
     assert result["exit_code"] == 0
     assert "DID-IT" in result["stdout"]
 
 
 async def test_confirm_reject_aborts_command(fake_confirm_app) -> None:
     broker = _auto_answer_broker(answer=False)
-    result = await cli_dispatch(
-        {"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker
-    )
+    result = await cli_dispatch({"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker)
     assert result["exit_code"] == 0
     assert "ABORTED" in result["stdout"]
     assert "DID-IT" not in result["stdout"]
@@ -294,9 +290,7 @@ async def test_confirm_reject_aborts_command(fake_confirm_app) -> None:
 
 async def test_confirm_connection_drop_cancels(fake_confirm_app) -> None:
     broker = _auto_answer_broker(drop=True)
-    result = await cli_dispatch(
-        {"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker
-    )
+    result = await cli_dispatch({"argv": ["needs-confirm"], "width": 80}, confirm_broker=broker)
     # cancel_all → await_confirm returns default False → command aborts
     assert "ABORTED" in result["stdout"]
     assert "DID-IT" not in result["stdout"]

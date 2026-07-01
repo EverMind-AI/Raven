@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Callable, Iterator, Sequence, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Iterator, Sequence
 
 from loguru import logger
 
@@ -66,14 +66,18 @@ class AttentionUpdater:
                     continue
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "AttentionProducer {} should_run failed: {}", header, exc,
+                    "AttentionProducer {} should_run failed: {}",
+                    header,
+                    exc,
                 )
                 continue
             try:
                 body = await p.compute_body(now)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "AttentionProducer {} compute_body failed: {}", header, exc,
+                    "AttentionProducer {} compute_body failed: {}",
+                    header,
+                    exc,
                 )
                 continue
             bodies[header] = body
@@ -85,10 +89,7 @@ class AttentionUpdater:
             return {}
         with self._locked():
             attention_file = self.memory_store.attention_file
-            current = (
-                attention_file.read_text(encoding="utf-8")
-                if attention_file.exists() else ""
-            )
+            current = attention_file.read_text(encoding="utf-8") if attention_file.exists() else ""
             new_text = current
             changed: dict[str, bool] = {}
             for header, body in bodies.items():
@@ -106,7 +107,9 @@ class AttentionUpdater:
             n_changed = sum(1 for v in changed.values() if v)
             logger.debug(
                 "AttentionUpdater: refreshed {} of {} sections in {}",
-                n_changed, len(bodies), attention_file,
+                n_changed,
+                len(bodies),
+                attention_file,
             )
             return changed
 

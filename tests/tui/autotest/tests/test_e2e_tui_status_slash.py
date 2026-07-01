@@ -41,8 +41,7 @@ def test_tui_status_slash_round_trip(harness):
     # Ctrl+C twice — first cancels open status overlay / input, second exits
     harness.press("ctrl+c")
     import time as _t
+
     _t.sleep(0.5)
     harness.press("ctrl+c")
-    assert harness.expect_exit(0, timeout=10.0), (
-        f"TUI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"
-    )
+    assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"

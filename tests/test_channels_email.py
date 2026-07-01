@@ -19,11 +19,21 @@ from raven.channels.adapters.email.mailbox import EmailMailbox
 
 def _cfg(**overrides):
     cfg = SimpleNamespace(
-        imap_host="", imap_port=993, imap_use_ssl=True, imap_mailbox="INBOX",
-        imap_username="", imap_password="",
-        smtp_host="", smtp_port=587, smtp_use_ssl=False, smtp_use_tls=True,
-        smtp_username="", smtp_password="",
-        subject_prefix="Re: ", max_body_chars=4000, mark_seen=True,
+        imap_host="",
+        imap_port=993,
+        imap_use_ssl=True,
+        imap_mailbox="INBOX",
+        imap_username="",
+        imap_password="",
+        smtp_host="",
+        smtp_port=587,
+        smtp_use_ssl=False,
+        smtp_use_tls=True,
+        smtp_username="",
+        smtp_password="",
+        subject_prefix="Re: ",
+        max_body_chars=4000,
+        mark_seen=True,
         allow_from=["*"],
     )
     for k, v in overrides.items():
@@ -99,8 +109,8 @@ def test_extract_text_body_multipart_skips_attachment():
 
 def test_reply_subject():
     assert parsing.reply_subject("Hello") == "Re: Hello"
-    assert parsing.reply_subject("Re: Hello") == "Re: Hello"      # idempotent
-    assert parsing.reply_subject("RE: shouty") == "RE: shouty"    # case-insensitive
+    assert parsing.reply_subject("Re: Hello") == "Re: Hello"  # idempotent
+    assert parsing.reply_subject("RE: shouty") == "RE: shouty"  # case-insensitive
     assert parsing.reply_subject("") == "Re: Raven reply"
     assert parsing.reply_subject("x", "回复: ") == "回复: x"
 
@@ -109,16 +119,21 @@ def test_reply_subject():
 
 
 def test_parse_message_full():
-    raw = (b"From: Alice <a@x.com>\r\nSubject: Hi there\r\n"
-           b"Date: Mon, 01 Jun 2026 10:00:00 +0000\r\nMessage-ID: <mid-1>\r\n\r\nhello body")
+    raw = (
+        b"From: Alice <a@x.com>\r\nSubject: Hi there\r\n"
+        b"Date: Mon, 01 Jun 2026 10:00:00 +0000\r\nMessage-ID: <mid-1>\r\n\r\nhello body"
+    )
     item = parsing.parse_message(raw, 4000, uid="42")
     assert item["sender"] == "a@x.com"
     assert item["subject"] == "Hi there"
     assert item["message_id"] == "<mid-1>"
     assert "hello body" in item["content"]
     assert item["metadata"] == {
-        "message_id": "<mid-1>", "subject": "Hi there",
-        "date": "Mon, 01 Jun 2026 10:00:00 +0000", "sender_email": "a@x.com", "uid": "42",
+        "message_id": "<mid-1>",
+        "subject": "Hi there",
+        "date": "Mon, 01 Jun 2026 10:00:00 +0000",
+        "sender_email": "a@x.com",
+        "uid": "42",
     }
 
 
@@ -173,25 +188,28 @@ class _FakeIMAP:
 
 def test_mailbox_search_fetch_marks_seen(monkeypatch):
     created = {}
+
     def fake_ssl(host, port):
         created["client"] = _FakeIMAP(host, port)
         return created["client"]
+
     monkeypatch.setattr("raven.channels.adapters.email.mailbox.imaplib.IMAP4_SSL", fake_ssl)
 
     mb = EmailMailbox(_cfg(imap_use_ssl=True))
     out = mb.search_fetch(("UNSEEN",), mark_seen=True, limit=0)
     assert out == [("11", b"raw1"), ("12", b"raw2")]
-    assert len(created["client"].stored) == 2          # both marked seen
+    assert len(created["client"].stored) == 2  # both marked seen
     assert created["client"].logged_out is True
 
 
 def test_mailbox_search_fetch_limit_keeps_newest(monkeypatch):
     class _Many(_FakeIMAP):
         search_result = b"1 2 3 4 5"
+
     client = _Many("h", 1)
     monkeypatch.setattr("raven.channels.adapters.email.mailbox.imaplib.IMAP4_SSL", lambda h, p: client)
     out = EmailMailbox(_cfg()).search_fetch(("SINCE", "x"), mark_seen=False, limit=2)
-    assert client.fetched_ids == [b"4", b"5"]   # newest 2 only
+    assert client.fetched_ids == [b"4", b"5"]  # newest 2 only
     assert [uid for uid, _ in out] == ["14", "15"]
 
 
@@ -207,18 +225,30 @@ def test_mailbox_search_fetch_select_fails(monkeypatch):
     class _NoSelect(_FakeIMAP):
         def select(self, mailbox):
             return ("NO", [b""])
+
     monkeypatch.setattr("raven.channels.adapters.email.mailbox.imaplib.IMAP4_SSL", lambda h, p: _NoSelect(h, p))
     assert EmailMailbox(_cfg()).search_fetch(("UNSEEN",), mark_seen=True, limit=0) == []
 
 
 def test_mailbox_smtp_send_ssl(monkeypatch):
     sent = {}
+
     class _FakeSmtpSsl:
-        def __init__(self, host, port, timeout=0): sent["ssl"] = True
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def login(self, u, p): sent["login"] = (u, p)
-        def send_message(self, msg): sent["msg"] = msg
+        def __init__(self, host, port, timeout=0):
+            sent["ssl"] = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def login(self, u, p):
+            sent["login"] = (u, p)
+
+        def send_message(self, msg):
+            sent["msg"] = msg
+
     monkeypatch.setattr("raven.channels.adapters.email.mailbox.smtplib.SMTP_SSL", _FakeSmtpSsl)
 
     msg = EmailMessage()
@@ -228,13 +258,26 @@ def test_mailbox_smtp_send_ssl(monkeypatch):
 
 def test_mailbox_smtp_send_starttls(monkeypatch):
     calls = {"starttls": False}
+
     class _FakeSmtp:
-        def __init__(self, host, port, timeout=0): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def starttls(self, context=None): calls["starttls"] = True
-        def login(self, u, p): pass
-        def send_message(self, msg): calls["sent"] = True
+        def __init__(self, host, port, timeout=0):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, context=None):
+            calls["starttls"] = True
+
+        def login(self, u, p):
+            pass
+
+        def send_message(self, msg):
+            calls["sent"] = True
+
     monkeypatch.setattr("raven.channels.adapters.email.mailbox.smtplib.SMTP", _FakeSmtp)
 
     EmailMailbox(_cfg(smtp_use_ssl=False, smtp_use_tls=True)).smtp_send(EmailMessage())
@@ -250,8 +293,12 @@ def test_validate_config_missing():
 
 def test_validate_config_complete():
     ch = _channel(
-        imap_host="imap.x", imap_username="u", imap_password="p",
-        smtp_host="smtp.x", smtp_username="u", smtp_password="p",
+        imap_host="imap.x",
+        imap_username="u",
+        imap_password="p",
+        smtp_host="smtp.x",
+        smtp_username="u",
+        smtp_password="p",
     )
     assert ch._validate_config() is True
 
@@ -303,8 +350,7 @@ def test_fetch_messages_between_dates_delegates():
 
 
 def test_send_builds_reply(monkeypatch):
-    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True,
-                  from_address="bot@x.com")
+    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True, from_address="bot@x.com")
     ch._last_subject["to@x.com"] = "Question"
     ch._last_message_id["to@x.com"] = "<orig>"
     captured = {}
@@ -315,6 +361,7 @@ def test_send_builds_reply(monkeypatch):
     )
 
     import asyncio
+
     asyncio.run(ch.send("to@x.com", "answer"))
     m = captured["msg"]
     assert m["To"] == "to@x.com"
@@ -328,22 +375,22 @@ def test_send_skips_without_consent():
     ch = _channel(consent_granted=False, smtp_host="smtp.x")
     ch._mailbox.smtp_send = MagicMock()
     import asyncio
+
     asyncio.run(ch.send("to@x.com", "x"))
     ch._mailbox.smtp_send.assert_not_called()
 
 
 def _run_send(ch, chat_id, content, media=None):
     import asyncio
-    with patch("raven.channels.adapters.email.channel.asyncio.to_thread",
-               AsyncMock(side_effect=lambda fn, *a: fn(*a))):
+
+    with patch("raven.channels.adapters.email.channel.asyncio.to_thread", AsyncMock(side_effect=lambda fn, *a: fn(*a))):
         asyncio.run(ch.send(chat_id, content, media))
 
 
 def test_send_carries_no_threading_for_proactive():
     """A proactive send (recipient never mailed us) carries nothing extra: no
     In-Reply-To/References threading, default subject, plain content."""
-    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True,
-                  from_address="b@x.com")
+    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True, from_address="b@x.com")
     captured = {}
     ch._mailbox.smtp_send = MagicMock(side_effect=lambda m: captured.update(msg=m))
     _run_send(ch, "new@x.com", "hello")
@@ -355,8 +402,7 @@ def test_send_carries_no_threading_for_proactive():
 def test_send_media_only_still_sends():
     """send(chat_id, "", media=[path]) sends the mail (email ignores media
     payloads — carry-nothing default)."""
-    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True,
-                  from_address="b@x.com")
+    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True, from_address="b@x.com")
     captured = {}
     ch._mailbox.smtp_send = MagicMock(side_effect=lambda m: captured.update(msg=m))
     _run_send(ch, "to@x.com", "", media=["/tmp/img.png"])
@@ -366,7 +412,7 @@ def test_send_media_only_still_sends():
 
 def test_send_skips_auto_reply_when_disabled():
     ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=False)
-    ch._last_subject["to@x.com"] = "Q"          # makes this a reply
+    ch._last_subject["to@x.com"] = "Q"  # makes this a reply
     ch._mailbox.smtp_send = MagicMock()
     _run_send(ch, "to@x.com", "hi")
     ch._mailbox.smtp_send.assert_not_called()
@@ -390,8 +436,8 @@ def test_send_reraises_on_smtp_failure():
     """SMTP failures propagate (logged then re-raised) so the manager's
     send-retry can back off — email does not swallow like some channels."""
     import pytest
-    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True,
-                  from_address="b@x.com")
+
+    ch = _channel(consent_granted=True, smtp_host="smtp.x", auto_reply_enabled=True, from_address="b@x.com")
     ch._mailbox.smtp_send = MagicMock(side_effect=RuntimeError("smtp down"))
     with pytest.raises(RuntimeError):
         _run_send(ch, "to@x.com", "hi")
@@ -406,10 +452,18 @@ def test_process_item_denied_sender_does_not_poison_reply_state():
     ch = _channel(allow_from=["friend@x.com"])
     ch.intake.publish = AsyncMock()
     import asyncio
-    asyncio.run(ch._process_item({
-        "sender": "stranger@x.com", "subject": "spam", "message_id": "<spam-1>",
-        "content": "buy now", "metadata": {},
-    }))
+
+    asyncio.run(
+        ch._process_item(
+            {
+                "sender": "stranger@x.com",
+                "subject": "spam",
+                "message_id": "<spam-1>",
+                "content": "buy now",
+                "metadata": {},
+            }
+        )
+    )
     assert ch._last_subject == {} and ch._last_message_id == {}
     ch.intake.publish.assert_not_awaited()
 
@@ -418,10 +472,18 @@ def test_process_item_allowed_sender_records_and_publishes():
     ch = _channel(allow_from=["friend@x.com"])
     ch.intake.publish = AsyncMock()
     import asyncio
-    asyncio.run(ch._process_item({
-        "sender": "friend@x.com", "subject": "Hi", "message_id": "<m1>",
-        "content": "hello", "metadata": {"uid": "1"},
-    }))
+
+    asyncio.run(
+        ch._process_item(
+            {
+                "sender": "friend@x.com",
+                "subject": "Hi",
+                "message_id": "<m1>",
+                "content": "hello",
+                "metadata": {"uid": "1"},
+            }
+        )
+    )
     assert ch._last_subject == {"friend@x.com": "Hi"}
     ch.intake.publish.assert_awaited_once()
 
@@ -433,18 +495,23 @@ def test_stop_wakes_the_poll_immediately():
     """stop() must not wait out the poll interval (stop contract #5): the
     poll sleep is an Event wait that stop() sets."""
     ch = _channel(
-        consent_granted=True, poll_interval_seconds=3600,
-        imap_host="h", imap_username="u", imap_password="p",
-        smtp_host="h", smtp_username="u", smtp_password="p",
+        consent_granted=True,
+        poll_interval_seconds=3600,
+        imap_host="h",
+        imap_username="u",
+        imap_password="p",
+        smtp_host="h",
+        smtp_username="u",
+        smtp_password="p",
     )
     ch._fetch_new_messages = lambda: []
     import asyncio
 
     async def scenario():
         task = asyncio.create_task(ch.start())
-        await asyncio.sleep(0.05)          # let it enter the poll wait
+        await asyncio.sleep(0.05)  # let it enter the poll wait
         await ch.stop()
-        await asyncio.wait_for(task, timeout=2)   # returns now, not in 3600s
+        await asyncio.wait_for(task, timeout=2)  # returns now, not in 3600s
 
     asyncio.run(scenario())
 
@@ -455,9 +522,10 @@ def test_stop_wakes_the_poll_immediately():
 def test_email_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _channel()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_email_spec_import_is_cheap():
@@ -465,6 +533,7 @@ def test_email_spec_import_is_cheap():
     EmailChannel/mailbox import is deferred into SPEC.factory."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.email.spec as s;"
         "assert 'raven.channels.adapters.email.channel' not in sys.modules, "

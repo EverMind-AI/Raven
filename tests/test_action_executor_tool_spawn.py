@@ -15,14 +15,13 @@ import pytest
 
 from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
+from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.action_executor import ActionExecutor
-from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
-from raven.memory_engine.consolidate.consolidator import MemoryStore
-
 
 _NOW = datetime(2026, 5, 8, 9, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
@@ -35,8 +34,11 @@ def _option(
     title: str = "test option",
 ) -> TaskOption:
     return TaskOption(
-        id="opt_test", title=title, why="why",
-        type="ad_hoc", exec_kind=exec_kind,
+        id="opt_test",
+        title=title,
+        why="why",
+        type="ad_hoc",
+        exec_kind=exec_kind,
         exec_payload=exec_payload or {},
         created_at_ms=_NOW_MS,
     )
@@ -44,8 +46,12 @@ def _option(
 
 def _decision() -> PendingDecision:
     return PendingDecision(
-        decision_id="dec_x", channel="feishu", to="ou_xxx",
-        created_at_ms=_NOW_MS, ttl_min=60, options=[],
+        decision_id="dec_x",
+        channel="feishu",
+        to="ou_xxx",
+        created_at_ms=_NOW_MS,
+        ttl_min=60,
+        options=[],
     )
 
 
@@ -74,7 +80,8 @@ async def test_tool_exec_calls_registered_tool():
     registry = ToolRegistry()
     registry.register(_StubTool())
     executor = ActionExecutor(
-        tool_registry=registry, now_fn=lambda: _NOW,
+        tool_registry=registry,
+        now_fn=lambda: _NOW,
     )
     option = _option(
         exec_kind="tool",
@@ -90,8 +97,7 @@ async def test_tool_exec_calls_registered_tool():
 @pytest.mark.asyncio
 async def test_tool_exec_no_registry_errors():
     executor = ActionExecutor(now_fn=lambda: _NOW)
-    option = _option(exec_kind="tool",
-                     exec_payload={"tool": "noop", "args": {}})
+    option = _option(exec_kind="tool", exec_payload={"tool": "noop", "args": {}})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "tool_registry" in result.error.lower()
@@ -102,10 +108,10 @@ async def test_tool_exec_unknown_tool_errors():
     registry = ToolRegistry()
     registry.register(_StubTool())
     executor = ActionExecutor(
-        tool_registry=registry, now_fn=lambda: _NOW,
+        tool_registry=registry,
+        now_fn=lambda: _NOW,
     )
-    option = _option(exec_kind="tool",
-                     exec_payload={"tool": "missing", "args": {}})
+    option = _option(exec_kind="tool", exec_payload={"tool": "missing", "args": {}})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "not registered" in result.error.lower()
@@ -116,7 +122,8 @@ async def test_tool_exec_missing_tool_field_errors():
     registry = ToolRegistry()
     registry.register(_StubTool())
     executor = ActionExecutor(
-        tool_registry=registry, now_fn=lambda: _NOW,
+        tool_registry=registry,
+        now_fn=lambda: _NOW,
     )
     option = _option(exec_kind="tool", exec_payload={"args": {}})
     result = await executor.execute(option, decision=_decision())
@@ -129,10 +136,10 @@ async def test_tool_exec_args_must_be_dict():
     registry = ToolRegistry()
     registry.register(_StubTool())
     executor = ActionExecutor(
-        tool_registry=registry, now_fn=lambda: _NOW,
+        tool_registry=registry,
+        now_fn=lambda: _NOW,
     )
-    option = _option(exec_kind="tool",
-                     exec_payload={"tool": "noop", "args": "not a dict"})
+    option = _option(exec_kind="tool", exec_payload={"tool": "noop", "args": "not a dict"})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "object" in result.error.lower()
@@ -148,20 +155,26 @@ async def test_tool_exec_surfaces_tool_error_in_output():
 
     class _BoomTool(Tool):
         @property
-        def name(self): return "boom"
+        def name(self):
+            return "boom"
+
         @property
-        def description(self): return "always fails"
+        def description(self):
+            return "always fails"
+
         @property
-        def parameters(self): return {"type": "object"}
+        def parameters(self):
+            return {"type": "object"}
+
         async def execute(self, **kw):
             raise RuntimeError("kaboom")
 
     registry.register(_BoomTool())
     executor = ActionExecutor(
-        tool_registry=registry, now_fn=lambda: _NOW,
+        tool_registry=registry,
+        now_fn=lambda: _NOW,
     )
-    option = _option(exec_kind="tool",
-                     exec_payload={"tool": "boom", "args": {}})
+    option = _option(exec_kind="tool", exec_payload={"tool": "boom", "args": {}})
     result = await executor.execute(option, decision=_decision())
     # ToolRegistry returns "Error executing boom: kaboom..." as the
     # output string; ActionExecutor reports status=ok with the error
@@ -179,17 +192,23 @@ class _StubSubagentManager:
         self.calls: list[dict] = []
 
     async def spawn(
-        self, task: str, *, label: str | None = None,
+        self,
+        task: str,
+        *,
+        label: str | None = None,
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
     ) -> str:
-        self.calls.append({
-            "task": task, "label": label,
-            "origin_channel": origin_channel,
-            "origin_chat_id": origin_chat_id,
-            "session_key": session_key,
-        })
+        self.calls.append(
+            {
+                "task": task,
+                "label": label,
+                "origin_channel": origin_channel,
+                "origin_chat_id": origin_chat_id,
+                "session_key": session_key,
+            }
+        )
         return f"Subagent [{label or task[:30]}] started (id: stub-1234)."
 
 
@@ -197,7 +216,8 @@ class _StubSubagentManager:
 async def test_spawn_exec_calls_subagent_manager():
     sub = _StubSubagentManager()
     executor = ActionExecutor(
-        subagent_manager=sub, now_fn=lambda: _NOW,
+        subagent_manager=sub,
+        now_fn=lambda: _NOW,
     )
     option = _option(
         exec_kind="spawn",
@@ -217,8 +237,7 @@ async def test_spawn_exec_calls_subagent_manager():
 @pytest.mark.asyncio
 async def test_spawn_exec_no_manager_errors():
     executor = ActionExecutor(now_fn=lambda: _NOW)
-    option = _option(exec_kind="spawn",
-                     exec_payload={"task_description": "x"})
+    option = _option(exec_kind="spawn", exec_payload={"task_description": "x"})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "subagent_manager" in result.error.lower()
@@ -228,7 +247,8 @@ async def test_spawn_exec_no_manager_errors():
 async def test_spawn_exec_missing_task_description_errors():
     sub = _StubSubagentManager()
     executor = ActionExecutor(
-        subagent_manager=sub, now_fn=lambda: _NOW,
+        subagent_manager=sub,
+        now_fn=lambda: _NOW,
     )
     option = _option(exec_kind="spawn", exec_payload={})
     result = await executor.execute(option, decision=_decision())
@@ -244,10 +264,10 @@ async def test_spawn_exec_propagates_manager_exception():
             raise RuntimeError("subagent boom")
 
     executor = ActionExecutor(
-        subagent_manager=_BoomManager(), now_fn=lambda: _NOW,
+        subagent_manager=_BoomManager(),
+        now_fn=lambda: _NOW,
     )
-    option = _option(exec_kind="spawn",
-                     exec_payload={"task_description": "x"})
+    option = _option(exec_kind="spawn", exec_payload={"task_description": "x"})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "subagent boom" in result.error
@@ -259,11 +279,14 @@ async def test_spawn_exec_propagates_manager_exception():
 class _StubProvider:
     def __init__(self, options: list[dict]):
         args_str = json.dumps({"options": options})
+
         class _Call:
             arguments = args_str
+
         class _Resp:
             has_tool_calls = True
             tool_calls = [_Call()]
+
         self._resp = _Resp()
 
     async def chat_with_retry(self, **kw):
@@ -284,14 +307,18 @@ async def test_discoverer_records_dispatched_into_feedback(tmp_path: Path):
     dispatcher = NudgeDispatcher(now_fn=lambda: _NOW)
     dispatcher.set_post(AsyncMock())
 
-    provider = _StubProvider([
-        {
-            "title": f"task {i}", "why": "why",
-            "type": "ad_hoc", "exec_kind": "reply",
-            "exec_payload": {"prompt": f"do task {i}"},
-        }
-        for i in range(3)
-    ])
+    provider = _StubProvider(
+        [
+            {
+                "title": f"task {i}",
+                "why": "why",
+                "type": "ad_hoc",
+                "exec_kind": "reply",
+                "exec_payload": {"prompt": f"do task {i}"},
+            }
+            for i in range(3)
+        ]
+    )
 
     disco = TaskDiscoverer(
         memory_store=memory,

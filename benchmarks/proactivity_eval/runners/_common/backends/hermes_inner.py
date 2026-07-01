@@ -25,8 +25,7 @@ def main() -> None:
         hermes_home = Path(os.environ["HERMES_HOME"])
         hermes_src = os.environ["HERMES_AGENT_SRC"]
     except KeyError as exc:
-        print(json.dumps({"success": False,
-                          "error": f"missing env: {exc}"}), flush=True)
+        print(json.dumps({"success": False, "error": f"missing env: {exc}"}), flush=True)
         return
 
     hermes_home.mkdir(parents=True, exist_ok=True)
@@ -35,19 +34,25 @@ def main() -> None:
 
     fake_now = datetime.fromisoformat(fake_now_iso)
     if fake_now.tzinfo is None:
-        print(json.dumps({
-            "success": False,
-            "error": "fake_now must be tz-aware ISO (e.g. '+08:00')",
-        }), flush=True)
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": "fake_now must be tz-aware ISO (e.g. '+08:00')",
+                }
+            ),
+            flush=True,
+        )
         return
 
     # CRITICAL — patch hermes_time.now BEFORE importing cron modules.
     # cron.scheduler / cron.jobs do `from hermes_time import now as _hermes_now`,
     # binding the name at import time; patching after would be a no-op.
     import hermes_time  # noqa: E402
+
     hermes_time.now = lambda: fake_now  # noqa: E731
 
-    from cron import jobs as cron_jobs          # noqa: E402
+    from cron import jobs as cron_jobs  # noqa: E402
     from cron import scheduler as cron_scheduler  # noqa: E402
 
     job = cron_jobs.create_job(
@@ -58,27 +63,37 @@ def main() -> None:
     )
     job_for_run = cron_jobs.get_job(job["id"])
     if job_for_run is None:
-        print(json.dumps({"success": False,
-                          "error": "job_lookup_failed"}), flush=True)
+        print(json.dumps({"success": False, "error": "job_lookup_failed"}), flush=True)
         return
 
     try:
         success, full_doc, final_response, error = cron_scheduler.run_job(job_for_run)
     except Exception as exc:
-        print(json.dumps({
-            "success": False,
-            "error": f"run_job_exception: {type(exc).__name__}: {exc}",
-        }), flush=True)
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": f"run_job_exception: {type(exc).__name__}: {exc}",
+                }
+            ),
+            flush=True,
+        )
         return
 
-    print(json.dumps({
-        "success": bool(success),
-        "final_response": final_response or "",
-        "full_doc": full_doc,
-        "error": error,
-        "job_id": job["id"],
-        "fake_now": fake_now_iso,
-    }, ensure_ascii=False), flush=True)
+    print(
+        json.dumps(
+            {
+                "success": bool(success),
+                "final_response": final_response or "",
+                "full_doc": full_doc,
+                "error": error,
+                "job_id": job["id"],
+                "fake_now": fake_now_iso,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

@@ -82,7 +82,8 @@ def mgr(clock, sessions, posted):
 
     dispatcher.set_post(_post)
     m = DeferManager(
-        dispatcher, sessions,
+        dispatcher,
+        sessions,
         idle_threshold_seconds=300,
         max_wait_seconds=86400,
         now_fn=clock,
@@ -95,6 +96,7 @@ def mgr(clock, sessions, posted):
 
 # ---------------------------------------------------------------------------
 # Registration
+
 
 @pytest.mark.asyncio
 async def test_register_returns_id_and_tracks(mgr):
@@ -129,6 +131,7 @@ async def test_register_rejects_empty_target(mgr):
 
 # ---------------------------------------------------------------------------
 # Settled detection — time-based
+
 
 @pytest.mark.asyncio
 async def test_tick_before_idle_threshold_defers(mgr, clock, sessions):
@@ -192,6 +195,7 @@ async def test_no_session_treated_as_settled(mgr, clock, sessions, posted):
 # ---------------------------------------------------------------------------
 # max_wait expiry
 
+
 @pytest.mark.asyncio
 async def test_max_wait_expiry(mgr, clock, sessions, posted):
     # Session keeps being active → defer never settles → max_wait expires.
@@ -207,14 +211,16 @@ async def test_max_wait_expiry(mgr, clock, sessions, posted):
     # Also final tick to catch any still-pending.
     clock.advance(100)
     all_results.extend(await mgr.tick())
-    assert any(r.reason == "max_wait_expired" for r in all_results), \
+    assert any(r.reason == "max_wait_expired" for r in all_results), (
         f"expected max_wait_expired somewhere, got {[r.reason for r in all_results]}"
+    )
     assert mgr.pending_count() == 0
     assert len(posted) == 0  # nothing dispatched
 
 
 # ---------------------------------------------------------------------------
 # Cancel
+
 
 @pytest.mark.asyncio
 async def test_cancel_removes_pending(mgr, clock, sessions, posted):
@@ -237,6 +243,7 @@ async def test_cancel_returns_false_for_unknown_id(mgr):
 # ---------------------------------------------------------------------------
 # Priority queue ordering / multi-session
 
+
 @pytest.mark.asyncio
 async def test_multiple_defers_fire_in_order(mgr, clock, sessions, posted):
     # Both sessions stale from the start → both fire at first tick.
@@ -253,6 +260,7 @@ async def test_multiple_defers_fire_in_order(mgr, clock, sessions, posted):
 
 # ---------------------------------------------------------------------------
 # on_dispatch callback
+
 
 @pytest.mark.asyncio
 async def test_on_dispatch_callback_invoked(mgr, clock, sessions):

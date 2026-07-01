@@ -178,7 +178,9 @@ Skills with available="false" need dependencies installed first - you can try in
         """Get the core identity section."""
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
-        runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+        runtime = (
+            f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+        )
 
         platform_policy = ""
         if system == "Windows":
@@ -311,9 +313,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         reaches the model — every tool result funnels through here.
         """
         content = wrap_untrusted(result, source=tool_name)
-        messages.append(
-            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content}
-        )
+        messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
         return messages
 
     def add_assistant_message(

@@ -23,9 +23,19 @@ from raven.agent.tools.filesystem import _FsTool
 # Noise directories skipped by the pure-Python fallback / find. ripgrep handles
 # its own ignore logic via .gitignore, so this only gates the fallback path.
 _IGNORE_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", ".coverage", "htmlcov",
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".coverage",
+    "htmlcov",
 }
 
 # Pseudo / system filesystem roots that must never be tree-walked. A model that
@@ -33,9 +43,7 @@ _IGNORE_DIRS = {
 # — including slow network mounts under /proc, /sys, or /mnt — and hang the whole
 # run indefinitely (observed: a 47-min wedge in disk-sleep on a shared mount).
 # Searches must name a real subtree, not a system root.
-_DENY_TRAVERSAL_ROOTS = {
-    Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run", "/boot")
-}
+_DENY_TRAVERSAL_ROOTS = {Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run", "/boot")}
 # Wall-clock cap on the pure-Python os.walk fallback so an allowed-but-huge tree
 # still cannot hang the loop. ripgrep already has its own _RG_TIMEOUT.
 _WALK_DEADLINE_S = 20.0
@@ -52,6 +60,7 @@ def _denied_traversal_root(base: Path) -> bool:
 # ---------------------------------------------------------------------------
 # grep
 # ---------------------------------------------------------------------------
+
 
 class GrepTool(_FsTool):
     """Search file contents by regex, ripgrep-backed with a pure-Python fallback."""
@@ -113,9 +122,15 @@ class GrepTool(_FsTool):
         }
 
     async def execute(
-        self, pattern: str, path: str = ".", glob: str | None = None,
-        output_mode: str = "content", case_insensitive: bool = False,
-        context: int = 0, limit: int | None = None, **kwargs: Any,
+        self,
+        pattern: str,
+        path: str = ".",
+        glob: str | None = None,
+        output_mode: str = "content",
+        case_insensitive: bool = False,
+        context: int = 0,
+        limit: int | None = None,
+        **kwargs: Any,
     ) -> str:
         cap = limit or self._DEFAULT_LIMIT
         try:
@@ -138,20 +153,23 @@ class GrepTool(_FsTool):
         rg = shutil.which("rg")
         try:
             if rg:
-                return await self._run_rg(
-                    rg, pattern, base, glob, output_mode, case_insensitive, context, cap
-                )
-            return self._run_python(
-                pattern, base, glob, output_mode, case_insensitive, context, cap
-            )
+                return await self._run_rg(rg, pattern, base, glob, output_mode, case_insensitive, context, cap)
+            return self._run_python(pattern, base, glob, output_mode, case_insensitive, context, cap)
         except Exception as e:
             return f"Error running grep: {e}"
 
     # ── ripgrep backend ─────────────────────────────────────────────────
 
     async def _run_rg(
-        self, rg: str, pattern: str, base: Path, glob: str | None,
-        output_mode: str, case_insensitive: bool, context: int, cap: int,
+        self,
+        rg: str,
+        pattern: str,
+        base: Path,
+        glob: str | None,
+        output_mode: str,
+        case_insensitive: bool,
+        context: int,
+        cap: int,
     ) -> str:
         args = [rg, "--color=never"]
         if case_insensitive:
@@ -175,7 +193,9 @@ class GrepTool(_FsTool):
         args += ["-e", pattern, "--", str(base)]
 
         proc = await asyncio.create_subprocess_exec(
-            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=self._RG_TIMEOUT)
@@ -200,8 +220,14 @@ class GrepTool(_FsTool):
     # ── pure-Python fallback ────────────────────────────────────────────
 
     def _run_python(
-        self, pattern: str, base: Path, glob: str | None,
-        output_mode: str, case_insensitive: bool, context: int, cap: int,
+        self,
+        pattern: str,
+        base: Path,
+        glob: str | None,
+        output_mode: str,
+        case_insensitive: bool,
+        context: int,
+        cap: int,
     ) -> str:
         flags = re.IGNORECASE if case_insensitive else 0
         rx = re.compile(pattern, flags)
@@ -241,7 +267,11 @@ class GrepTool(_FsTool):
 
     @staticmethod
     def _collect_content(
-        out: list[str], rel: str, text_lines: list[str], hits: list[int], context: int,
+        out: list[str],
+        rel: str,
+        text_lines: list[str],
+        hits: list[int],
+        context: int,
     ) -> None:
         emitted: set[int] = set()
         for h in hits:
@@ -302,6 +332,7 @@ class GrepTool(_FsTool):
 # find
 # ---------------------------------------------------------------------------
 
+
 class FindTool(_FsTool):
     """Find files by glob pattern, sorted by recency. Pure-Python (pathlib)."""
 
@@ -343,7 +374,11 @@ class FindTool(_FsTool):
         }
 
     async def execute(
-        self, pattern: str, path: str = ".", limit: int | None = None, **kwargs: Any,
+        self,
+        pattern: str,
+        path: str = ".",
+        limit: int | None = None,
+        **kwargs: Any,
     ) -> str:
         cap = limit or self._DEFAULT_LIMIT
         try:
@@ -365,8 +400,7 @@ class FindTool(_FsTool):
         glob_expr = pattern if "/" in pattern else f"**/{pattern}"
         try:
             matches = [
-                p for p in base.glob(glob_expr)
-                if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
+                p for p in base.glob(glob_expr) if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
             ]
         except (ValueError, OSError) as e:
             return f"Error running find: {e}"
@@ -376,10 +410,7 @@ class FindTool(_FsTool):
         matches.sort(key=lambda p: self._mtime(p), reverse=True)
         total = len(matches)
         shown = matches[:cap]
-        lines = [
-            f"{p.relative_to(base)}/" if p.is_dir() else str(p.relative_to(base))
-            for p in shown
-        ]
+        lines = [f"{p.relative_to(base)}/" if p.is_dir() else str(p.relative_to(base)) for p in shown]
         result = "\n".join(lines)
         if total > cap:
             result += f"\n\n(showing first {cap} of {total} results)"

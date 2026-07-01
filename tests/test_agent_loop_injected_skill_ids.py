@@ -10,7 +10,6 @@ minimal stand-in object that exposes ``self.context.skills``.
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 
 from raven.agent.loop import AgentLoop
@@ -97,6 +96,7 @@ def test_collect_swallows_get_always_skills_exception() -> None:
     """If get_always_skills raises (e.g. corrupted SqliteStore), the
     helper falls back to selector-only — the agent loop must not crash
     on a telemetry path."""
+
     class _Boom:
         def get_always_skills(self) -> list[object]:
             raise RuntimeError("boom")
@@ -106,7 +106,8 @@ def test_collect_swallows_get_always_skills_exception() -> None:
         _last_injected_skill_ids=None,
     )
     out = AgentLoop._collect_injected_skill_ids(
-        fake_self, [_meta("alpha")],
+        fake_self,
+        [_meta("alpha")],
     )
     assert out == ["workspace/alpha"]
 
@@ -119,6 +120,7 @@ def test_collect_returns_empty_when_no_skill_service() -> None:
         _last_injected_skill_ids=None,
     )
     out = AgentLoop._collect_injected_skill_ids(
-        fake_self, [_meta("alpha")],
+        fake_self,
+        [_meta("alpha")],
     )
     assert out == []

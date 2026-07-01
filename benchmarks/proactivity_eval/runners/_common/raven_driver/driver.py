@@ -66,20 +66,20 @@ class SentinelTickResult:
     the time they passed in.
     """
 
-    action: str | None              # skip / nudge / nudge_inject / nudge_defer / spawn_agent
-    priority: str | None            # low / medium / high
+    action: str | None  # skip / nudge / nudge_inject / nudge_defer / spawn_agent
+    priority: str | None  # low / medium / high
     proactivity_score: float | None
     target_session: str | None
     reason: str | None
     nudge_message: str | None
     spawn_task: str | None
-    route: str | None               # fast_path_skip / skip / dispatched / injected / deferred / spawn
+    route: str | None  # fast_path_skip / skip / dispatched / injected / deferred / spawn
     delivered: bool | None
     raw_stdout: str
     raw_stderr: str
     returncode: int
-    fake_now: str | None = None     # populated only by sentinel_ticks (batch)
-    topic_tag: str | None = None    # Planner-supplied stable topic key
+    fake_now: str | None = None  # populated only by sentinel_ticks (batch)
+    topic_tag: str | None = None  # Planner-supplied stable topic key
 
     @property
     def ok(self) -> bool:
@@ -124,6 +124,7 @@ class RavenDriver:
         self.config = Path(config).resolve() if config else None
         if python_exe is None:
             import sys as _sys
+
             if _sys.platform == "win32":
                 python_exe = self.raven_repo / ".venv" / "Scripts" / "python.exe"
             else:
@@ -133,8 +134,7 @@ class RavenDriver:
 
         if not self.python_exe.exists():
             raise FileNotFoundError(
-                f"python_exe does not exist: {self.python_exe}. "
-                f"Make sure the raven checkout has a venv (uv sync)."
+                f"python_exe does not exist: {self.python_exe}. Make sure the raven checkout has a venv (uv sync)."
             )
 
     # ------------------------------------------------------------------
@@ -227,8 +227,7 @@ class RavenDriver:
         (None) uses the driver-level ``timeout_seconds``.
         """
         cmd = self._base_cmd("sentinel", "ticks")
-        cmd.extend(["--from", from_iso, "--to", to_iso,
-                    "--interval-seconds", str(interval_seconds)])
+        cmd.extend(["--from", from_iso, "--to", to_iso, "--interval-seconds", str(interval_seconds)])
         cmd.append("--live" if live else "--dry-run")
         r = self._run(cmd, override_timeout=timeout_seconds)
         ticks: list[SentinelTickResult] = []
@@ -242,22 +241,24 @@ class RavenDriver:
                 # Skip non-JSON noise (shouldn't happen, but don't crash
                 # the whole batch on one bad line).
                 continue
-            ticks.append(SentinelTickResult(
-                action=d.get("action"),
-                priority=d.get("priority"),
-                proactivity_score=d.get("proactivity_score"),
-                target_session=d.get("target_session"),
-                reason=d.get("reason"),
-                nudge_message=d.get("nudge_message"),
-                spawn_task=d.get("spawn_task"),
-                route=d.get("route"),
-                delivered=d.get("delivered"),
-                raw_stdout=line,        # per-tick raw JSON, not the whole batch
-                raw_stderr=r.stderr,
-                returncode=r.returncode,
-                fake_now=d.get("fake_now"),
-                topic_tag=d.get("topic_tag"),
-            ))
+            ticks.append(
+                SentinelTickResult(
+                    action=d.get("action"),
+                    priority=d.get("priority"),
+                    proactivity_score=d.get("proactivity_score"),
+                    target_session=d.get("target_session"),
+                    reason=d.get("reason"),
+                    nudge_message=d.get("nudge_message"),
+                    spawn_task=d.get("spawn_task"),
+                    route=d.get("route"),
+                    delivered=d.get("delivered"),
+                    raw_stdout=line,  # per-tick raw JSON, not the whole batch
+                    raw_stderr=r.stderr,
+                    returncode=r.returncode,
+                    fake_now=d.get("fake_now"),
+                    topic_tag=d.get("topic_tag"),
+                )
+            )
         return ticks
 
     def sentinel_discover_now(
@@ -294,11 +295,14 @@ class RavenDriver:
     # raven data dir (~/.raven/...) to the config's parent. For
     # parallel longrun this is the per-persona isolation mechanism — see
     # MIGRATION_STATUS.md Phase D.
-    _CONFIG_AWARE = frozenset({
-        "agent", "gateway",
-        ("sentinel", "ticks"),
-        ("sentinel", "tick"),         # supported via set_config_path inside _load_sentinel_config
-    })
+    _CONFIG_AWARE = frozenset(
+        {
+            "agent",
+            "gateway",
+            ("sentinel", "ticks"),
+            ("sentinel", "tick"),  # supported via set_config_path inside _load_sentinel_config
+        }
+    )
 
     def _base_cmd(self, *subcommands: str) -> list[str]:
         """Build ``python -m raven <subcommand...>`` with --workspace
@@ -325,7 +329,10 @@ class RavenDriver:
         return cmd
 
     def _run(
-        self, cmd: list[str], *, override_timeout: float | None = None,
+        self,
+        cmd: list[str],
+        *,
+        override_timeout: float | None = None,
     ) -> AgentResponse:
         """Spawn the subprocess and capture stdout/stderr/returncode.
 
@@ -339,14 +346,13 @@ class RavenDriver:
         the driver-level ``timeout_seconds`` default without mutating
         the driver instance.
         """
-        effective_timeout = (
-            override_timeout if override_timeout is not None else self.timeout_seconds
-        )
+        effective_timeout = override_timeout if override_timeout is not None else self.timeout_seconds
         # Disable Rich's terminal-width line wrapping. Without these env
         # vars the CLI rewraps long output (including JSON decision blocks)
         # to the parent terminal's width, which inserts literal newlines
         # INSIDE JSON string values — breaking ``json.loads`` downstream.
         import os
+
         env = {**os.environ, "COLUMNS": "200", "TERM": "dumb"}
         t0 = time.monotonic()
         try:
@@ -366,8 +372,11 @@ class RavenDriver:
                 + f"running: {' '.join(shlex.quote(c) for c in cmd)}"
             )
             return AgentResponse(
-                stdout=stdout, stderr=stderr, returncode=-1,
-                duration_seconds=time.monotonic() - t0, cmd=cmd,
+                stdout=stdout,
+                stderr=stderr,
+                returncode=-1,
+                duration_seconds=time.monotonic() - t0,
+                cmd=cmd,
             )
         return AgentResponse(
             stdout=proc.stdout.decode("utf-8", errors="replace"),

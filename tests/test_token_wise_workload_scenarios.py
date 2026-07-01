@@ -48,12 +48,7 @@ from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
 
 KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "raven"
-    / "token_wise"
-    / "EXPERIMENT_REPORT_WORKLOADS.md"
-)
+REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT_WORKLOADS.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 COST_GUARD_USD = 1.50
 _OPENROUTER_PIN = {"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
@@ -132,12 +127,8 @@ def _seed_workspace(workspace: Path, soul: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-_LOOKUP_FIXED_BLOB = (
-    "Item record:\n"
-    + "\n".join(
-        f"  field_{i:02d}: value_{i:02d}_aaaaaaaa_bbbbbbbb_cccccccc_dddddddd"
-        for i in range(40)
-    )
+_LOOKUP_FIXED_BLOB = "Item record:\n" + "\n".join(
+    f"  field_{i:02d}: value_{i:02d}_aaaaaaaa_bbbbbbbb_cccccccc_dddddddd" for i in range(40)
 )
 
 
@@ -334,8 +325,10 @@ async def _run_long_conversation(
     loop.sessions.save(session)
 
     result = VariantResult(
-        name=name, description=description,
-        sys_prompt_chars=sys_chars, history_chars_seed=seed_chars,
+        name=name,
+        description=description,
+        sys_prompt_chars=sys_chars,
+        history_chars_seed=seed_chars,
     )
     questions = [
         "Reply with only the word OK.",
@@ -352,11 +345,15 @@ async def _run_long_conversation(
                 pytest.fail(f"Cost guard tripped at ${sum(cost_so_far.values()):.4f}")
             await _run_user_turn(loop, q, session_key=session_key, chat_id=name)
             snap = tracker.history[-1]
-            result.calls.append(CallResult(
-                fresh_prompt=snap.input_tokens, cache_read=snap.cache_read_tokens,
-                cache_write=snap.cache_write_tokens, completion=snap.output_tokens,
-                cost_usd=snap.estimated_cost_usd,
-            ))
+            result.calls.append(
+                CallResult(
+                    fresh_prompt=snap.input_tokens,
+                    cache_read=snap.cache_read_tokens,
+                    cache_write=snap.cache_write_tokens,
+                    completion=snap.output_tokens,
+                    cost_usd=snap.estimated_cost_usd,
+                )
+            )
             cost_so_far[name] = result.total_cost
     except Exception as e:
         result.error = repr(e)
@@ -417,8 +414,10 @@ async def _run_tool_accumulation(
     sys_chars = len(sys_prompt)
 
     result = VariantResult(
-        name=name, description=description,
-        sys_prompt_chars=sys_chars, history_chars_seed=0,
+        name=name,
+        description=description,
+        sys_prompt_chars=sys_chars,
+        history_chars_seed=0,
     )
     session_key = f"sceneB:{name}"
 
@@ -434,11 +433,15 @@ async def _run_tool_accumulation(
             )
         # Each fresh turn should have produced (decide → respond) = 2 LLM calls.
         for snap in tracker.history:
-            result.calls.append(CallResult(
-                fresh_prompt=snap.input_tokens, cache_read=snap.cache_read_tokens,
-                cache_write=snap.cache_write_tokens, completion=snap.output_tokens,
-                cost_usd=snap.estimated_cost_usd,
-            ))
+            result.calls.append(
+                CallResult(
+                    fresh_prompt=snap.input_tokens,
+                    cache_read=snap.cache_read_tokens,
+                    cache_write=snap.cache_write_tokens,
+                    completion=snap.output_tokens,
+                    cost_usd=snap.estimated_cost_usd,
+                )
+            )
         cost_so_far[name] = result.total_cost
     except Exception as e:
         result.error = repr(e)
@@ -469,8 +472,12 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
         baseline = sc.variants[0]
 
         lines.append("### Aggregate\n")
-        lines.append("| Variant | LLM calls | Fresh prompt | Cache write | Cache read | Completion | Total cost | vs baseline |")
-        lines.append("|:--------|----------:|-------------:|------------:|-----------:|-----------:|-----------:|------------:|")
+        lines.append(
+            "| Variant | LLM calls | Fresh prompt | Cache write | Cache read | Completion | Total cost | vs baseline |"
+        )
+        lines.append(
+            "|:--------|----------:|-------------:|------------:|-----------:|-----------:|-----------:|------------:|"
+        )
         for v in sc.variants:
             if baseline.total_cost > 0:
                 delta_pct = (v.total_cost - baseline.total_cost) / baseline.total_cost * 100
@@ -485,7 +492,9 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
 
         lines.append("\n### Per-call detail\n")
         for v in sc.variants:
-            lines.append(f"#### {v.name} (sys={v.sys_prompt_chars:,} chars, seeded history={v.history_chars_seed:,} chars)\n")
+            lines.append(
+                f"#### {v.name} (sys={v.sys_prompt_chars:,} chars, seeded history={v.history_chars_seed:,} chars)\n"
+            )
             if v.error:
                 lines.append(f"**ERROR**: `{v.error}`\n")
             lines.append("| Call | Fresh | Cache R | Cache W | Completion | Cost (USD) |")
@@ -531,8 +540,10 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
                     },
                     "calls": [
                         {
-                            "fresh": c.fresh_prompt, "cache_read": c.cache_read,
-                            "cache_write": c.cache_write, "completion": c.completion,
+                            "fresh": c.fresh_prompt,
+                            "cache_read": c.cache_read,
+                            "cache_write": c.cache_write,
+                            "completion": c.completion,
                             "cost_usd": c.cost_usd,
                         }
                         for c in v.calls
@@ -565,23 +576,32 @@ async def test_workload_scenarios(api_key: str, tmp_path: Path):
 
     # ---- Scenario A: medium system + long pre-seeded history ----
     a_v1 = await _run_long_conversation(
-        name="V1_baseline", description="No cache_control. Provider auto-cache OFF.",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=False, disable_provider_auto_cache=True,
+        name="V1_baseline",
+        description="No cache_control. Provider auto-cache OFF.",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
     a_v2 = await _run_long_conversation(
-        name="V2_provider_auto", description="Provider built-in cache_control (system + last tool only).",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=False, disable_provider_auto_cache=False,
+        name="V2_provider_auto",
+        description="Provider built-in cache_control (system + last tool only).",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=False,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
     a_v3 = await _run_long_conversation(
-        name="V3_tokenwise", description="TokenWise CacheOptimizer (4 breakpoints incl. history).",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=True, disable_provider_auto_cache=True,
+        name="V3_tokenwise",
+        description="TokenWise CacheOptimizer (4 breakpoints incl. history).",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=True,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
 
@@ -599,23 +619,32 @@ async def test_workload_scenarios(api_key: str, tmp_path: Path):
 
     # ---- Scenario B: tool result accumulation ----
     b_v1 = await _run_tool_accumulation(
-        name="V1_baseline", description="No cache_control. Provider auto-cache OFF.",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=False, disable_provider_auto_cache=True,
+        name="V1_baseline",
+        description="No cache_control. Provider auto-cache OFF.",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
     b_v2 = await _run_tool_accumulation(
-        name="V2_provider_auto", description="Provider built-in cache_control (system + last tool only).",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=False, disable_provider_auto_cache=False,
+        name="V2_provider_auto",
+        description="Provider built-in cache_control (system + last tool only).",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=False,
+        disable_provider_auto_cache=False,
         cost_so_far=cost_so_far,
     )
     await asyncio.sleep(2)
     b_v3 = await _run_tool_accumulation(
-        name="V3_tokenwise", description="TokenWise CacheOptimizer (4 breakpoints incl. history).",
-        api_key=api_key, workspace_root=tmp_path,
-        install_cache_optimizer=True, disable_provider_auto_cache=True,
+        name="V3_tokenwise",
+        description="TokenWise CacheOptimizer (4 breakpoints incl. history).",
+        api_key=api_key,
+        workspace_root=tmp_path,
+        install_cache_optimizer=True,
+        disable_provider_auto_cache=True,
         cost_so_far=cost_so_far,
     )
 

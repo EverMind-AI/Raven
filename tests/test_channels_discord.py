@@ -11,7 +11,10 @@ from raven.channels.adapters.discord.channel import DiscordChannel
 
 def _channel(group_policy="open", allow_from=("*",)):
     cfg = SimpleNamespace(
-        group_policy=group_policy, token="t", gateway_url="wss://x", intents=0,
+        group_policy=group_policy,
+        token="t",
+        gateway_url="wss://x",
+        intents=0,
         allow_from=list(allow_from),
     )
     ch = DiscordChannel(cfg)
@@ -64,9 +67,7 @@ def test_fetch_attachment_no_url():
 def test_fetch_attachment_too_large():
     ch = _channel()
     ch._http = MagicMock()  # present so the size guard is reached
-    res = asyncio.run(ch._fetch_attachment(
-        {"url": "u", "filename": "big.zip", "size": 999 * 1024 * 1024}
-    ))
+    res = asyncio.run(ch._fetch_attachment({"url": "u", "filename": "big.zip", "size": 999 * 1024 * 1024}))
     assert res.path is None
     assert "too large" in res.text
 
@@ -79,6 +80,7 @@ def test_fetch_attachment_downloaded(monkeypatch, tmp_path):
     ch._http = MagicMock()
     ch._http.get = AsyncMock(return_value=resp)
     import raven.channels.adapters.discord.channel as disc
+
     saved = tmp_path / "saved.bin"
     monkeypatch.setattr(disc, "save_media_bytes", lambda _ch, _data, _name: saved)
 
@@ -113,13 +115,15 @@ def test_on_message_denies_disallowed_sender_before_side_effects():
     ch = _channel(allow_from=["only"])
     ch._fetch_attachment = AsyncMock()
     payload = {
-        "author": {"id": "other"}, "channel_id": "c", "content": "hi",
+        "author": {"id": "other"},
+        "channel_id": "c",
+        "content": "hi",
         "attachments": [{"url": "u", "filename": "f.bin"}],
     }
     asyncio.run(ch._on_message(payload))
     ch.intake.publish.assert_not_called()
-    ch._fetch_attachment.assert_not_called()   # denied sender → no download
-    ch._start_typing.assert_not_awaited()      # denied sender → no typing
+    ch._fetch_attachment.assert_not_called()  # denied sender → no download
+    ch._start_typing.assert_not_awaited()  # denied sender → no typing
 
 
 def test_on_message_group_not_mentioned_ignored():
@@ -176,7 +180,7 @@ def test_send_text_posts_content():
     ch._post_retry = fake_post_retry
     asyncio.run(ch.send("c", "hi"))
     url, body = posts[0]
-    assert "/channels/c/messages" in url            # chat_id reaches the REST URL
+    assert "/channels/c/messages" in url  # chat_id reaches the REST URL
     assert body["content"] == "hi"
 
 
@@ -259,7 +263,7 @@ def test_post_retry_returns_false_after_errors(monkeypatch):
     ch._http = MagicMock()
     ch._http.post = AsyncMock(side_effect=RuntimeError("boom"))
     assert asyncio.run(ch._post_retry("u", {})) is False
-    assert ch._http.post.await_count == 3   # 3 attempts then give up
+    assert ch._http.post.await_count == 3  # 3 attempts then give up
 
 
 # ── gateway resume / close-code handling (fake gateway frames) ────────
@@ -284,20 +288,26 @@ class _FakeWS:
 
 def _gateway_ch():
     ch = _channel()
-    ch._start_heartbeat = AsyncMock()   # isolate session logic from the beat loop
+    ch._start_heartbeat = AsyncMock()  # isolate session logic from the beat loop
     return ch
 
 
 def test_ready_stores_resume_state_and_identifies():
     ch = _gateway_ch()
-    ws = _FakeWS([
-        {"op": 10, "d": {"heartbeat_interval": 1000}},
-        {"op": 0, "t": "READY", "s": 1,
-         "d": {"user": {"id": "42"}, "session_id": "sess9", "resume_gateway_url": "wss://resume"}},
-    ])
+    ws = _FakeWS(
+        [
+            {"op": 10, "d": {"heartbeat_interval": 1000}},
+            {
+                "op": 0,
+                "t": "READY",
+                "s": 1,
+                "d": {"user": {"id": "42"}, "session_id": "sess9", "resume_gateway_url": "wss://resume"},
+            },
+        ]
+    )
     ch._ws = ws
     asyncio.run(ch._gateway_loop())
-    assert ws.sent[0]["op"] == 2                  # fresh start -> IDENTIFY
+    assert ws.sent[0]["op"] == 2  # fresh start -> IDENTIFY
     assert ch._session_id == "sess9" and ch._resume_url == "wss://resume"
     assert ch._seq == 1
 
@@ -308,7 +318,7 @@ def test_hello_resumes_when_session_known():
     ws = _FakeWS([{"op": 10, "d": {"heartbeat_interval": 1000}}])
     ch._ws = ws
     asyncio.run(ch._gateway_loop())
-    assert ws.sent[0]["op"] == 6                  # RESUME, not IDENTIFY
+    assert ws.sent[0]["op"] == 6  # RESUME, not IDENTIFY
     assert ws.sent[0]["d"] == {"token": "t", "session_id": "sess9", "seq": 41}
 
 
@@ -335,13 +345,14 @@ def test_identify_clears_stale_seq():
     ws = _FakeWS([])
     ch._ws = ws
     asyncio.run(ch._identify())
-    assert ch._seq is None                        # new session: no stale seq in heartbeats
+    assert ch._seq is None  # new session: no stale seq in heartbeats
     assert ws.sent[0]["op"] == 2
 
 
 def _closed_error(code: int):
     from websockets.exceptions import ConnectionClosedError
     from websockets.frames import Close
+
     return ConnectionClosedError(Close(code, "x"), None)
 
 
@@ -366,7 +377,7 @@ def test_fatal_close_code_stops_reconnecting(monkeypatch):
     """4004 (auth failed) must stop the channel, not loop re-IDENTIFY forever."""
     ch = _gateway_ch()
     _patch_connect(monkeypatch, [_closed_error(4004)])
-    asyncio.run(ch.start())                       # returns instead of looping
+    asyncio.run(ch.start())  # returns instead of looping
     assert ch._running is False
 
 
@@ -376,8 +387,8 @@ def test_new_session_close_code_resets_session(monkeypatch):
     ch = _gateway_ch()
     ch._session_id, ch._resume_url, ch._seq = "sess9", "wss://resume", 41
     _patch_connect(monkeypatch, [_closed_error(4009), asyncio.CancelledError()])
-    asyncio.run(ch.start())                       # second connect aborts the loop
-    assert ch._session_id is None                 # next HELLO would IDENTIFY
+    asyncio.run(ch.start())  # second connect aborts the loop
+    assert ch._session_id is None  # next HELLO would IDENTIFY
 
 
 # ── contract conformance ───────────────────────────────────────────────
@@ -386,9 +397,10 @@ def test_new_session_close_code_resets_session(monkeypatch):
 def test_discord_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _channel()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_discord_spec_import_is_cheap():
@@ -396,6 +408,7 @@ def test_discord_spec_import_is_cheap():
     SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.discord.spec as s;"
         "assert 'httpx' not in sys.modules and 'websockets' not in sys.modules, "

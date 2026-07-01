@@ -166,12 +166,62 @@ constraint-dependencies = [
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py312"
+extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W"]
+select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test conventions: asserts, hardcoded creds in fixtures, naming, redefinition,
+# unused variables, deferred imports, ambiguous names — idiomatic in tests, not
+# product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
+"tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
+
+# CLI startup-order / deferred imports, accepted long-term.
+"raven/cli/commands.py" = ["E402"]
+"raven/cli/cron_commands.py" = ["E402"]
+"raven/cli/sentinel_commands.py" = ["E402"]
+
+# Other deferred / startup-order imports, accepted.
+"benchmarks/skill_evals/fixtures/build_mock_library.py" = ["E402"]
+"raven/eval_engine/engine.py" = ["E402"]
+"raven/memory_engine/skill_local/registry.py" = ["E402"]
+"scripts/skill_forge_full_e2e.py" = ["E402"]
+
+# asserts; convert-vs-keep tracked in v2.
+"raven/agent/subagent/manager.py" = ["S101"]
+"raven/channels/adapters/discord/channel.py" = ["S101"]
+"raven/channels/adapters/weixin/channel.py" = ["S101"]
+"raven/cli/doctor_commands.py" = ["S101"]
+"raven/cli/onboard_commands.py" = ["S101"]
+"raven/memory_engine/contract_test.py" = ["S101"]
+"raven/proactive_engine/sentinel/executor/action_executor.py" = ["S101"]
+"raven/proactive_engine/sentinel/executor/defer_manager.py" = ["S101"]
+"raven/proactive_engine/sentinel/predictor/task_discoverer.py" = ["S101"]
+
+# exception naming; rename deferred to v2.
+"raven/cli/sandbox_commands.py" = ["N818"]
+"raven/plugin/memory/everos/multimodal.py" = ["N818"]
+"raven/plugin/registry.py" = ["N818"]
+
+# scripts/: dev utilities; partial-path subprocess, asserts.
+"scripts/check_commit_file.py" = ["S607"]
+"scripts/check_commit_messages.py" = ["S607"]
+"scripts/skill_hub_e2e.py" = ["S101"]
+
+# benchmarks/: eval harness; naming, ambiguous names, unused vars,
+# partial-path subprocess.
+"benchmarks/clawbench/stream.py" = ["S607"]
+"benchmarks/proactivity_eval/runners/_common/drivers/longrun.py" = ["F841"]
+"benchmarks/proactivity_eval/runners/_common/drivers/pbench.py" = ["E741", "N806"]
+"benchmarks/proactivity_eval/runners/_common/longrun_adapters.py" = ["N814", "S607"]
+"benchmarks/proactivity_eval/runners/_common/openclaw.py" = ["S607"]
+"benchmarks/proactivity_eval/runners/longrun_scorecard.py" = ["F841"]
+"benchmarks/proactivity_eval/runners/pa_scorecard.py" = ["N806"]
+"benchmarks/proactivity_eval/runners/synthesizers/keyword.py" = ["E741"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -188,10 +238,10 @@ dev = [
     "oauth-cli-kit>=0.1.3",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
-    "pre-commit>=4.5.0",
+    "pre-commit>=4.6.0",
     "pyte>=0.8",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.0",
+    "ruff>=0.15.11,<0.16",
 ]

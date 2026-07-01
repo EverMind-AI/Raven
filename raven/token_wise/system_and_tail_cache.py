@@ -24,8 +24,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.token_wise.base import TokenStrategy
 from raven.providers.registry import find_by_model
+from raven.token_wise.base import TokenStrategy
 
 _CACHE_CONTROL = {"type": "ephemeral"}
 
@@ -53,9 +53,7 @@ def _apply_cache_marker(msg: dict[str, Any]) -> None:
         return
 
     if isinstance(content, str):
-        msg["content"] = [
-            {"type": "text", "text": content, "cache_control": _CACHE_CONTROL}
-        ]
+        msg["content"] = [{"type": "text", "text": content, "cache_control": _CACHE_CONTROL}]
         return
 
     if isinstance(content, list) and content:
@@ -98,18 +96,13 @@ class SystemAndTailCacheStrategy(TokenStrategy):
 
         # bp2–4: last N non-system messages (N = 4 - breakpoints_used)
         remaining = 4 - breakpoints_used
-        non_sys_indices = [
-            i for i in range(len(new_messages))
-            if new_messages[i].get("role") != "system"
-        ]
+        non_sys_indices = [i for i in range(len(new_messages)) if new_messages[i].get("role") != "system"]
 
         for idx in non_sys_indices[-remaining:]:
             _apply_cache_marker(new_messages[idx])
 
         used = breakpoints_used + min(remaining, len(non_sys_indices))
-        logger.debug(
-            "SystemAndTailCacheStrategy: placed {} breakpoint(s) on model={}", used, model
-        )
+        logger.debug("SystemAndTailCacheStrategy: placed {} breakpoint(s) on model={}", used, model)
 
         # Hermes does NOT mark tools — all 4 breakpoints go to messages.
         return new_messages, tools, model

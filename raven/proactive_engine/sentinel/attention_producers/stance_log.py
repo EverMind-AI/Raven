@@ -68,7 +68,8 @@ def _load_entries(path) -> list[_Entry]:
 
 
 def _bootstrap_from_attention(
-    memory_store, section_header: str,
+    memory_store,
+    section_header: str,
 ) -> list[_Entry]:
     """One-time migration: pull stance bullets out of attention.md's
     legacy storage when the sidecar JSON doesn't exist yet.
@@ -93,6 +94,7 @@ def _bootstrap_from_attention(
     except OSError:
         return []
     from raven.memory_engine.consolidate.attention import parse_attention
+
     body = parse_attention(text).get(section_header, "")
     out: list[_Entry] = []
     for line in body.splitlines():
@@ -143,7 +145,8 @@ class StanceLogProducer(AttentionProducer):
                 existing = _load_entries(self._memory_store.stance_log_path)
             else:
                 existing = _bootstrap_from_attention(
-                    self._memory_store, self.SECTION_HEADER,
+                    self._memory_store,
+                    self.SECTION_HEADER,
                 )
             merged: list[_Entry] = []
             seen: set[tuple[str, str]] = set()

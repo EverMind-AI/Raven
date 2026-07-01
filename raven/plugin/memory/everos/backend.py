@@ -192,7 +192,8 @@ def _try_make_real_adapter() -> _Adapter:
     except ModuleNotFoundError as e:
         logger.warning(
             "everos not installed (%s); EverosBackend embedded mode "
-            "will degrade to no-op until the package is installed.", e,
+            "will degrade to no-op until the package is installed.",
+            e,
         )
         return _NoOpAdapter()
     except Exception as e:
@@ -203,7 +204,8 @@ def _try_make_real_adapter() -> _Adapter:
         logger.warning(
             "everos present but failed to initialize (%s); EverosBackend "
             "embedded mode will degrade to no-op. This is likely a "
-            "version mismatch or wiring bug, not a missing package.", e,
+            "version mismatch or wiring bug, not a missing package.",
+            e,
         )
         return _NoOpAdapter()
 
@@ -240,8 +242,8 @@ async def _acquire_embedded_everos(log: logging.Logger) -> None:
         log.info("EverosBackend: embedded everos runtime started")
     except Exception as e:
         log.warning(
-            "EverosBackend: embedded everos init failed (%s); store / "
-            "recall will degrade until it is available.", e,
+            "EverosBackend: embedded everos init failed (%s); store / recall will degrade until it is available.",
+            e,
         )
 
 
@@ -367,7 +369,8 @@ class _HttpEverosAdapter:
             # Promote accumulated raw messages to episodes / cases / skills.
             flush_url = f"{self._base_url}/api/v1/memory/flush"
             fr = await self._client.post(
-                flush_url, json={"session_id": session_id},
+                flush_url,
+                json={"session_id": session_id},
                 headers=self._headers(),
             )
             fr.raise_for_status()
@@ -432,8 +435,7 @@ class EverosBackend:
         """
         if self._mode not in _VALID_MODES:
             raise ValueError(
-                f"EverosBackend: invalid mode {self._mode!r}; expected "
-                f"one of {', '.join(_VALID_MODES)}",
+                f"EverosBackend: invalid mode {self._mode!r}; expected one of {', '.join(_VALID_MODES)}",
             )
 
     def _make_http_adapter(self) -> _Adapter:
@@ -450,7 +452,9 @@ class EverosBackend:
             self._config.get("timeout_s", _DEFAULT_HTTP_TIMEOUT_S),
         )
         return _HttpEverosAdapter(
-            base_url, api_key=api_key, timeout_s=timeout_s,
+            base_url,
+            api_key=api_key,
+            timeout_s=timeout_s,
         )
 
     # ── Lifecycle ───────────────────────────────────────────────────
@@ -458,7 +462,8 @@ class EverosBackend:
     async def start(self) -> None:
         self._logger.info(
             "EverosBackend.start (mode=%s, adapter=%s)",
-            self._mode, type(self._adapter).__name__,
+            self._mode,
+            type(self._adapter).__name__,
         )
         # Embedded real adapter: bring up the in-process everos runtime
         # (schema + OME engine) so store / recall actually work. HTTP and
@@ -481,7 +486,8 @@ class EverosBackend:
                 await aclose()
             except Exception as e:
                 self._logger.warning(
-                    "EverosBackend: adapter.aclose failed: %s", e,
+                    "EverosBackend: adapter.aclose failed: %s",
+                    e,
                 )
 
     # ── MemoryBackend Protocol ─────────────────────────────────────
@@ -507,7 +513,8 @@ class EverosBackend:
             self._logger.warning(
                 "EverosBackend.recall: expected exactly one of user_id / "
                 "agent_id (got user_id=%r, agent_id=%r); returning empty",
-                user_id, agent_id,
+                user_id,
+                agent_id,
             )
             return []
         owner_type: _OwnerType = "user" if user_id is not None else "agent"
@@ -520,7 +527,8 @@ class EverosBackend:
             )
         except Exception as e:
             self._logger.warning(
-                "EverosBackend.recall failed (%s); returning empty", e,
+                "EverosBackend.recall failed (%s); returning empty",
+                e,
             )
             return []
         if data is None:
@@ -548,7 +556,9 @@ class EverosBackend:
         if not messages:
             return
         payload = self._convert_messages(
-            messages, agent_id=self._agent_id, user_id=self._user_id,
+            messages,
+            agent_id=self._agent_id,
+            user_id=self._user_id,
         )
         if not payload:
             return
@@ -592,7 +602,8 @@ class EverosBackend:
 
     @staticmethod
     def _search_data_to_memories(
-        data: Any, owner_type: _OwnerType,
+        data: Any,
+        owner_type: _OwnerType,
     ) -> list[Memory]:
         """Flatten EverOS's typed result envelope into ``list[Memory]``.
 
@@ -604,41 +615,46 @@ class EverosBackend:
         out: list[Memory] = []
         if owner_type == "user":
             for ep in getattr(data, "episodes", None) or []:
-                text = (getattr(ep, "summary", "") or
-                        getattr(ep, "episode", "") or "")
-                out.append(Memory(
-                    text=text,
-                    score=float(getattr(ep, "score", 0.0) or 0.0),
-                    metadata={
-                        "id": ep.id,
-                        "session_id": getattr(ep, "session_id", None),
-                        "type": "episode",
-                        "owner_type": "user",
-                    },
-                ))
+                text = getattr(ep, "summary", "") or getattr(ep, "episode", "") or ""
+                out.append(
+                    Memory(
+                        text=text,
+                        score=float(getattr(ep, "score", 0.0) or 0.0),
+                        metadata={
+                            "id": ep.id,
+                            "session_id": getattr(ep, "session_id", None),
+                            "type": "episode",
+                            "owner_type": "user",
+                        },
+                    )
+                )
             for prof in getattr(data, "profiles", None) or []:
-                out.append(Memory(
-                    text=_flatten_profile(prof.profile_data),
-                    score=float(getattr(prof, "score", None) or 1.0),
-                    metadata={
-                        "id": prof.id,
-                        "type": "profile",
-                        "owner_type": "user",
-                    },
-                ))
+                out.append(
+                    Memory(
+                        text=_flatten_profile(prof.profile_data),
+                        score=float(getattr(prof, "score", None) or 1.0),
+                        metadata={
+                            "id": prof.id,
+                            "type": "profile",
+                            "owner_type": "user",
+                        },
+                    )
+                )
         else:  # agent
             for skill in getattr(data, "agent_skills", None) or []:
-                out.append(Memory(
-                    text=getattr(skill, "content", "") or "",
-                    score=float(getattr(skill, "score", 0.0) or 0.0),
-                    metadata={
-                        "id": skill.id,
-                        "name": getattr(skill, "name", ""),
-                        "type": "skill",
-                        "owner_type": "agent",
-                        "confidence": getattr(skill, "confidence", None),
-                    },
-                ))
+                out.append(
+                    Memory(
+                        text=getattr(skill, "content", "") or "",
+                        score=float(getattr(skill, "score", 0.0) or 0.0),
+                        metadata={
+                            "id": skill.id,
+                            "name": getattr(skill, "name", ""),
+                            "type": "skill",
+                            "owner_type": "agent",
+                            "confidence": getattr(skill, "confidence", None),
+                        },
+                    )
+                )
             for case in getattr(data, "agent_cases", None) or []:
                 # task_intent + key_insight makes a more useful prompt
                 # bullet than task_intent alone.
@@ -646,15 +662,17 @@ class EverosBackend:
                 insight = getattr(case, "key_insight", None)
                 if insight:
                     text = f"{text}\n\n{insight}" if text else insight
-                out.append(Memory(
-                    text=text,
-                    score=float(getattr(case, "score", 0.0) or 0.0),
-                    metadata={
-                        "id": case.id,
-                        "type": "case",
-                        "owner_type": "agent",
-                    },
-                ))
+                out.append(
+                    Memory(
+                        text=text,
+                        score=float(getattr(case, "score", 0.0) or 0.0),
+                        metadata={
+                            "id": case.id,
+                            "type": "case",
+                            "owner_type": "agent",
+                        },
+                    )
+                )
         out.sort(key=lambda m: m.score, reverse=True)
         return out
 
@@ -709,7 +727,8 @@ class EverosBackend:
             if not content and not tool_calls:
                 continue
             entry: dict[str, Any] = {
-                "sender_id": agent_id if role in ("assistant", "tool")
+                "sender_id": agent_id
+                if role in ("assistant", "tool")
                 else (m.get("sender_id") or user_id or "raven-user"),
                 "role": role,
                 "timestamp": m.get("timestamp") or now_ms,

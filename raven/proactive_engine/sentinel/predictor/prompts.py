@@ -66,8 +66,7 @@ _DISCOVERY_TOOL_SCHEMA: dict[str, Any] = {
                             },
                             "exec_kind": {
                                 "type": "string",
-                                "enum": ["reply", "tool", "spawn",
-                                         "routine_confirm"],
+                                "enum": ["reply", "tool", "spawn", "routine_confirm"],
                                 "description": (
                                     "How ActionExecutor should run the "
                                     "option if the user picks it: 'reply' "
@@ -107,8 +106,7 @@ _DISCOVERY_TOOL_SCHEMA: dict[str, Any] = {
                                 ),
                             },
                         },
-                        "required": ["title", "why", "type", "exec_kind",
-                                     "exec_payload"],
+                        "required": ["title", "why", "type", "exec_kind", "exec_payload"],
                     },
                 }
             },

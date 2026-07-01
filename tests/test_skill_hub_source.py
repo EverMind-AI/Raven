@@ -9,7 +9,6 @@ returns metadata-only RouterHits.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import httpx
@@ -30,10 +29,16 @@ def _item(id_: str, name: str, *, score=0.9, safety=None) -> dict:
     by default (the real catalog payload omits it — it's detail-only); pass
     ``safety=`` to exercise the optional safety guard."""
     it = {
-        "id": id_, "skill_id": f"acme/{name.lower().replace(' ', '-')}",
-        "name": name, "description": f"{name} does things.",
-        "source": "acme", "category": "ops", "tags": ["x"],
-        "quality_score": score, "body_tokens": 1000, "install_count": 10,
+        "id": id_,
+        "skill_id": f"acme/{name.lower().replace(' ', '-')}",
+        "name": name,
+        "description": f"{name} does things.",
+        "source": "acme",
+        "category": "ops",
+        "tags": ["x"],
+        "quality_score": score,
+        "body_tokens": 1000,
+        "install_count": 10,
         "download_url": f"https://hub.test/openapi/v1/skills/{id_}/download",
     }
     if safety is not None:
@@ -44,7 +49,8 @@ def _item(id_: str, name: str, *, score=0.9, safety=None) -> dict:
 def _client(handler) -> SkillHubClient:
     transport = httpx.MockTransport(handler)
     return SkillHubClient(
-        "https://hub.test", api_key="k",
+        "https://hub.test",
+        api_key="k",
         client=httpx.AsyncClient(transport=transport),
     )
 
@@ -70,7 +76,7 @@ class TestClientSearch:
         assert seen["path"] == "/openapi/v1/skills"
         assert seen["q"] == "calendar"
         assert seen["auth"] == "Bearer k"
-        assert seen["reqid"]                       # X-Request-ID present
+        assert seen["reqid"]  # X-Request-ID present
         assert [it["name"] for it in items] == ["Alpha"]
         await c.aclose()
 
@@ -92,20 +98,27 @@ class TestClientSearch:
 class TestHubSource:
     async def test_maps_items_to_router_hits(self) -> None:
         def handler(req):
-            return httpx.Response(200, json=_envelope({"items": [
-                _item("id1", "Calendar Scheduling", score=0.91),
-                _item("id2", "Email Triage", score=0.80),
-            ]}))
+            return httpx.Response(
+                200,
+                json=_envelope(
+                    {
+                        "items": [
+                            _item("id1", "Calendar Scheduling", score=0.91),
+                            _item("id2", "Email Triage", score=0.80),
+                        ]
+                    }
+                ),
+            )
 
         src = HubSkillSource(_client(handler), weight=0.85)
         hits = await src.search("schedule", [], k=10)
         assert len(hits) == 2
         h = hits[0]
         assert isinstance(h, RouterHit)
-        assert h.qualified_id == "hub/id1"         # UUID is the native id
+        assert h.qualified_id == "hub/id1"  # UUID is the native id
         assert h.name == "Calendar Scheduling"
-        assert h.content == ""                     # Tier 0: metadata only
-        assert h.score == pytest.approx(0.91)      # from quality_score
+        assert h.content == ""  # Tier 0: metadata only
+        assert h.score == pytest.approx(0.91)  # from quality_score
         assert h.meta["source"] == "hub"
         assert h.meta["id"] == "id1"
         assert h.meta["skill_id"] == "acme/calendar-scheduling"
@@ -114,10 +127,17 @@ class TestHubSource:
 
     async def test_filters_below_min_safety(self) -> None:
         def handler(req):
-            return httpx.Response(200, json=_envelope({"items": [
-                _item("ok", "Safe", safety=0.9),
-                _item("no", "Risky", safety=0.4),
-            ]}))
+            return httpx.Response(
+                200,
+                json=_envelope(
+                    {
+                        "items": [
+                            _item("ok", "Safe", safety=0.9),
+                            _item("no", "Risky", safety=0.4),
+                        ]
+                    }
+                ),
+            )
 
         src = HubSkillSource(_client(handler), min_safety=0.7)
         hits = await src.search("q", [], k=10)
@@ -125,10 +145,17 @@ class TestHubSource:
 
     async def test_missing_id_or_name_skipped(self) -> None:
         def handler(req):
-            return httpx.Response(200, json=_envelope({"items": [
-                {"id": "x"},                                   # no name
-                _item("good", "Good"),
-            ]}))
+            return httpx.Response(
+                200,
+                json=_envelope(
+                    {
+                        "items": [
+                            {"id": "x"},  # no name
+                            _item("good", "Good"),
+                        ]
+                    }
+                ),
+            )
 
         src = HubSkillSource(_client(handler))
         hits = await src.search("q", [], k=10)
@@ -139,11 +166,19 @@ class TestHubSource:
         in SkillsSegmentBuilder's pre-gate stage instead. Verifies the
         retired ``prefetch_bodies`` knob isn't silently re-introducing body
         fetches at the source layer."""
+
         def handler(req: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=_envelope({"items": [
-                _item("id1", "Top", score=0.95),
-                _item("id2", "Low", score=0.3),
-            ]}))
+            return httpx.Response(
+                200,
+                json=_envelope(
+                    {
+                        "items": [
+                            _item("id1", "Top", score=0.95),
+                            _item("id2", "Low", score=0.3),
+                        ]
+                    }
+                ),
+            )
 
         src = HubSkillSource(_client(handler))
         hits = await src.search("q", [], k=10)

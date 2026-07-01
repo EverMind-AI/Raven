@@ -21,8 +21,8 @@ from raven.proactive_engine.sentinel.attention_producers import (
     ArchivedPatternsProducer,
     PendingProposalsProducer,
     ProjectRhythmProducer,
-    RecentProactiveDecisionsProducer,
     RecentlyAbandonedProducer,
+    RecentProactiveDecisionsProducer,
     RejectedCooldownProducer,
 )
 from raven.proactive_engine.sentinel.attention_updater import AttentionUpdater
@@ -32,7 +32,9 @@ from raven.proactive_engine.sentinel.executor.pending_decision import (
 from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
 from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
 from raven.proactive_engine.sentinel.types import (
-    PendingDecision, Routine, TaskOption,
+    PendingDecision,
+    Routine,
+    TaskOption,
 )
 
 
@@ -57,7 +59,8 @@ def store(tmp_path: Path, clock: Clock) -> MemoryStore:
 @pytest.fixture
 def feedback(tmp_path: Path, clock: Clock) -> NudgeFeedbackTracker:
     return NudgeFeedbackTracker(
-        log_path=tmp_path / "feedback.jsonl", now_fn=clock,
+        log_path=tmp_path / "feedback.jsonl",
+        now_fn=clock,
     )
 
 
@@ -86,11 +89,16 @@ class TestRecentDecisions:
         assert _run(p.compute_body(clock())) == ""
 
     def test_dispatched_with_topic_score_and_outcome(
-        self, feedback, clock,
+        self,
+        feedback,
+        clock,
     ) -> None:
         feedback.record_dispatched(
-            "n1", action="nudge", session_key="cli:default",
-            priority="high", proactivity_score=0.8,
+            "n1",
+            action="nudge",
+            session_key="cli:default",
+            priority="high",
+            proactivity_score=0.8,
             details={"topic_tag": "deadline_x"},
         )
         feedback.record_accepted("n1")
@@ -104,17 +112,28 @@ class TestRecentDecisions:
 
     def test_skips_outside_window(self, feedback, clock) -> None:
         old_ts = (clock() - timedelta(days=30)).isoformat()
-        feedback._recent.append({
-            "ts": old_ts, "id": "old", "signal": "dispatched",
-            "priority": "low", "proactivity_score": 0.1,
-        })
-        feedback.record_dispatched(
-            "fresh", action="nudge", session_key="cli:default",
-            priority="medium", proactivity_score=0.5,
+        feedback._recent.append(
+            {
+                "ts": old_ts,
+                "id": "old",
+                "signal": "dispatched",
+                "priority": "low",
+                "proactivity_score": 0.1,
+            }
         )
-        body = _run(RecentProactiveDecisionsProducer(
-            feedback, since_days=14,
-        ).compute_body(clock()))
+        feedback.record_dispatched(
+            "fresh",
+            action="nudge",
+            session_key="cli:default",
+            priority="medium",
+            proactivity_score=0.5,
+        )
+        body = _run(
+            RecentProactiveDecisionsProducer(
+                feedback,
+                since_days=14,
+            ).compute_body(clock())
+        )
         assert "score=0.50" in body
         assert "score=0.10" not in body
 
@@ -125,19 +144,29 @@ class TestRecentDecisions:
 
 
 def _put_decision(
-    store: PendingDecisionStore, decision_id: str, *,
-    created_at_ms: int, channel: str = "cli", to: str = "default",
+    store: PendingDecisionStore,
+    decision_id: str,
+    *,
+    created_at_ms: int,
+    channel: str = "cli",
+    to: str = "default",
     title: str = "Sample option",
 ) -> PendingDecision:
     decision = PendingDecision(
         decision_id=decision_id,
-        channel=channel, to=to,
+        channel=channel,
+        to=to,
         created_at_ms=created_at_ms,
         ttl_min=60,
-        options=[TaskOption(
-            id="opt_1", title=title, why="why",
-            type="ad_hoc", exec_kind="message",
-        )],
+        options=[
+            TaskOption(
+                id="opt_1",
+                title=title,
+                why="why",
+                type="ad_hoc",
+                exec_kind="message",
+            )
+        ],
     )
     store.put(decision)
     return decision
@@ -151,7 +180,8 @@ class TestPendingProposalsProducer:
     def test_renders_active(self, pending_store, clock) -> None:
         now_ms = int(clock().timestamp() * 1000)
         _put_decision(
-            pending_store, "dec_a1b2",
+            pending_store,
+            "dec_a1b2",
             created_at_ms=now_ms - 5 * 60_000,
             title="Try planning",
         )
@@ -164,14 +194,18 @@ class TestPendingProposalsProducer:
     def test_skips_consumed_and_expired(self, pending_store, clock) -> None:
         now_ms = int(clock().timestamp() * 1000)
         _put_decision(
-            pending_store, "dec_active",
+            pending_store,
+            "dec_active",
             created_at_ms=now_ms - 5 * 60_000,
-            channel="cli", to="alice",
+            channel="cli",
+            to="alice",
         )
         _put_decision(
-            pending_store, "dec_old",
+            pending_store,
+            "dec_old",
             created_at_ms=now_ms - 24 * 3_600_000,
-            channel="telegram", to="bob",
+            channel="telegram",
+            to="bob",
         )
         body = _run(PendingProposalsProducer(pending_store).compute_body(clock()))
         assert "dec_active" in body
@@ -184,11 +218,14 @@ class TestRejectedCooldownProducer:
         assert body == ""
 
     def test_renders_dismissed_within_window(
-        self, pending_store, clock,
+        self,
+        pending_store,
+        clock,
     ) -> None:
         now_ms = int(clock().timestamp() * 1000)
         _put_decision(
-            pending_store, "dec_rejected",
+            pending_store,
+            "dec_rejected",
             created_at_ms=now_ms - 2 * 3_600_000,
             title="Try a new routine",
         )
@@ -197,9 +234,12 @@ class TestRejectedCooldownProducer:
             picked_option_id=None,
             consumed_at_ms=now_ms - 1 * 3_600_000,
         )
-        body = _run(RejectedCooldownProducer(
-            pending_store, cooldown_hours=24,
-        ).compute_body(clock()))
+        body = _run(
+            RejectedCooldownProducer(
+                pending_store,
+                cooldown_hours=24,
+            ).compute_body(clock())
+        )
         assert "dec_rejected" in body
         assert "Try a new routine" in body
         assert "cooldown until" in body
@@ -207,7 +247,8 @@ class TestRejectedCooldownProducer:
     def test_skips_picked(self, pending_store, clock) -> None:
         now_ms = int(clock().timestamp() * 1000)
         _put_decision(
-            pending_store, "dec_picked",
+            pending_store,
+            "dec_picked",
             created_at_ms=now_ms - 2 * 3_600_000,
         )
         pending_store.mark_consumed(
@@ -221,7 +262,8 @@ class TestRejectedCooldownProducer:
     def test_skips_outside_cooldown(self, pending_store, clock) -> None:
         now_ms = int(clock().timestamp() * 1000)
         _put_decision(
-            pending_store, "dec_old",
+            pending_store,
+            "dec_old",
             created_at_ms=now_ms - 48 * 3_600_000,
         )
         pending_store.mark_consumed(
@@ -229,9 +271,12 @@ class TestRejectedCooldownProducer:
             picked_option_id=None,
             consumed_at_ms=now_ms - 30 * 3_600_000,
         )
-        body = _run(RejectedCooldownProducer(
-            pending_store, cooldown_hours=24,
-        ).compute_body(clock()))
+        body = _run(
+            RejectedCooldownProducer(
+                pending_store,
+                cooldown_hours=24,
+            ).compute_body(clock())
+        )
         assert "dec_old" not in body
 
 
@@ -241,29 +286,41 @@ class TestRejectedCooldownProducer:
 
 
 def _add_routine(
-    store: RoutineStore, **overrides: Any,
+    store: RoutineStore,
+    **overrides: Any,
 ) -> None:
     defaults: dict[str, Any] = dict(
-        id="r_xyz", pattern="weekly_planning", keywords=[],
-        day_of_week=6, time_slot=(19, 21),
-        status="candidate", occurrence_count=4,
+        id="r_xyz",
+        pattern="weekly_planning",
+        keywords=[],
+        day_of_week=6,
+        time_slot=(19, 21),
+        status="candidate",
+        occurrence_count=4,
         last_triggered="2026-05-29T19:00:00",
-        user_confirmed=False, weight=2.5,
+        user_confirmed=False,
+        weight=2.5,
     )
     defaults.update(overrides)
     r = Routine(**defaults)
 
     def _mutate(state: dict[str, Any]) -> dict[str, Any]:
         routines_list = state.setdefault("routines", [])
-        routines_list.append({
-            "id": r.id, "pattern": r.pattern, "keywords": r.keywords,
-            "day_of_week": r.day_of_week,
-            "time_slot": list(r.time_slot) if r.time_slot else None,
-            "status": r.status, "occurrence_count": r.occurrence_count,
-            "last_triggered": r.last_triggered,
-            "user_confirmed": r.user_confirmed,
-            "weight": r.weight, "dismissed_at_ms": r.dismissed_at_ms,
-        })
+        routines_list.append(
+            {
+                "id": r.id,
+                "pattern": r.pattern,
+                "keywords": r.keywords,
+                "day_of_week": r.day_of_week,
+                "time_slot": list(r.time_slot) if r.time_slot else None,
+                "status": r.status,
+                "occurrence_count": r.occurrence_count,
+                "last_triggered": r.last_triggered,
+                "user_confirmed": r.user_confirmed,
+                "weight": r.weight,
+                "dismissed_at_ms": r.dismissed_at_ms,
+            }
+        )
         return state
 
     store._store.update(_mutate)
@@ -275,13 +332,9 @@ class TestActiveThreadsProducer:
         assert body == ""
 
     def test_renders_only_active_confirmed(self, routine_store, clock) -> None:
-        _add_routine(routine_store, id="r_active",
-                     status="active", user_confirmed=True,
-                     pattern="morning_standup")
-        _add_routine(routine_store, id="r_candidate",
-                     status="candidate", user_confirmed=False)
-        _add_routine(routine_store, id="r_retired",
-                     status="retired", user_confirmed=True)
+        _add_routine(routine_store, id="r_active", status="active", user_confirmed=True, pattern="morning_standup")
+        _add_routine(routine_store, id="r_candidate", status="candidate", user_confirmed=False)
+        _add_routine(routine_store, id="r_retired", status="retired", user_confirmed=True)
         body = _run(ActiveThreadsProducer(routine_store).compute_body(clock()))
         assert "r_active" in body
         assert "morning_standup" in body
@@ -296,15 +349,27 @@ class TestRecentlyAbandonedProducer:
 
     def test_silence_7_to_30d(self, routine_store, clock) -> None:
         now = clock()
-        _add_routine(routine_store, id="r_abandon", status="active",
-                     last_triggered=(now - timedelta(days=8)).isoformat(),
-                     pattern="abandoned 8d ago")
-        _add_routine(routine_store, id="r_archived", status="active",
-                     last_triggered=(now - timedelta(days=45)).isoformat(),
-                     pattern="too old")
-        _add_routine(routine_store, id="r_fresh", status="active",
-                     last_triggered=(now - timedelta(days=3)).isoformat(),
-                     pattern="still fresh")
+        _add_routine(
+            routine_store,
+            id="r_abandon",
+            status="active",
+            last_triggered=(now - timedelta(days=8)).isoformat(),
+            pattern="abandoned 8d ago",
+        )
+        _add_routine(
+            routine_store,
+            id="r_archived",
+            status="active",
+            last_triggered=(now - timedelta(days=45)).isoformat(),
+            pattern="too old",
+        )
+        _add_routine(
+            routine_store,
+            id="r_fresh",
+            status="active",
+            last_triggered=(now - timedelta(days=3)).isoformat(),
+            pattern="still fresh",
+        )
         body = _run(RecentlyAbandonedProducer(routine_store).compute_body(now))
         assert "r_abandon" in body
         assert "r_archived" not in body
@@ -318,11 +383,15 @@ class TestArchivedPatternsProducer:
 
     def test_renders_only_retired(self, routine_store, clock) -> None:
         now_ms = int(clock().timestamp() * 1000)
-        _add_routine(routine_store, id="r_retired", status="retired",
-                     user_confirmed=True, pattern="user said no",
-                     dismissed_at_ms=now_ms)
-        _add_routine(routine_store, id="r_active", status="active",
-                     user_confirmed=True, pattern="alive")
+        _add_routine(
+            routine_store,
+            id="r_retired",
+            status="retired",
+            user_confirmed=True,
+            pattern="user said no",
+            dismissed_at_ms=now_ms,
+        )
+        _add_routine(routine_store, id="r_active", status="active", user_confirmed=True, pattern="alive")
         body = _run(ArchivedPatternsProducer(routine_store).compute_body(clock()))
         assert "r_retired" in body
         assert "user said no" in body
@@ -347,15 +416,13 @@ class TestProjectRhythmProducer:
         for i, hour in enumerate((9, 10, 9, 10, 11)):
             ts = (base + timedelta(days=i)).replace(hour=hour, minute=0)
             lines.append(
-                f"[{ts.strftime('%Y-%m-%d %H:%M')}] worked on api "
-                f"#project-raven #design",
+                f"[{ts.strftime('%Y-%m-%d %H:%M')}] worked on api #project-raven #design",
             )
         sat = clock() - timedelta(days=1)
         for hour in (14, 15):
             ts = sat.replace(hour=hour, minute=0)
             lines.append(
-                f"[{ts.strftime('%Y-%m-%d %H:%M')}] tinkered "
-                f"#project-side-x #infra",
+                f"[{ts.strftime('%Y-%m-%d %H:%M')}] tinkered #project-side-x #infra",
             )
         ws.write_text("\n\n".join(lines) + "\n", encoding="utf-8")
         body = _run(ProjectRhythmProducer(store).compute_body(clock()))
@@ -370,7 +437,11 @@ class TestProjectRhythmProducer:
 
 
 def _build_updater(
-    store, feedback, pending_store, routine_store, clock,
+    store,
+    feedback,
+    pending_store,
+    routine_store,
+    clock,
 ) -> AttentionUpdater:
     return AttentionUpdater(
         memory_store=store,
@@ -389,10 +460,19 @@ def _build_updater(
 
 class TestAttentionUpdater:
     def test_all_empty_no_write(
-        self, store, feedback, pending_store, routine_store, clock,
+        self,
+        store,
+        feedback,
+        pending_store,
+        routine_store,
+        clock,
     ) -> None:
         updater = _build_updater(
-            store, feedback, pending_store, routine_store, clock,
+            store,
+            feedback,
+            pending_store,
+            routine_store,
+            clock,
         )
         changed = _run(updater.update())
         # All bodies empty → splice produces same text as on disk (which
@@ -401,15 +481,27 @@ class TestAttentionUpdater:
         assert not store.attention_file.exists()
 
     def test_writes_when_one_producer_has_data(
-        self, store, feedback, pending_store, routine_store, clock,
+        self,
+        store,
+        feedback,
+        pending_store,
+        routine_store,
+        clock,
     ) -> None:
         feedback.record_dispatched(
-            "n1", action="nudge", session_key="cli:default",
-            priority="medium", proactivity_score=0.5,
+            "n1",
+            action="nudge",
+            session_key="cli:default",
+            priority="medium",
+            proactivity_score=0.5,
             details={"topic_tag": "x"},
         )
         updater = _build_updater(
-            store, feedback, pending_store, routine_store, clock,
+            store,
+            feedback,
+            pending_store,
+            routine_store,
+            clock,
         )
         changed = _run(updater.update())
         assert changed["## Recent proactive decisions (14d)"] is True
@@ -420,14 +512,26 @@ class TestAttentionUpdater:
         assert "## Recent proactive decisions (14d)" in sections
 
     def test_idempotent_second_run(
-        self, store, feedback, pending_store, routine_store, clock,
+        self,
+        store,
+        feedback,
+        pending_store,
+        routine_store,
+        clock,
     ) -> None:
         feedback.record_dispatched(
-            "n1", action="nudge", session_key="cli:default",
-            priority="medium", proactivity_score=0.5,
+            "n1",
+            action="nudge",
+            session_key="cli:default",
+            priority="medium",
+            proactivity_score=0.5,
         )
         updater = _build_updater(
-            store, feedback, pending_store, routine_store, clock,
+            store,
+            feedback,
+            pending_store,
+            routine_store,
+            clock,
         )
         _run(updater.update())
         first = store.attention_file.read_text(encoding="utf-8")
@@ -436,20 +540,31 @@ class TestAttentionUpdater:
         assert store.attention_file.read_text(encoding="utf-8") == first
 
     def test_preserves_external_section(
-        self, store, feedback, pending_store, routine_store, clock,
+        self,
+        store,
+        feedback,
+        pending_store,
+        routine_store,
+        clock,
     ) -> None:
         store.attention_file.parent.mkdir(parents=True, exist_ok=True)
         store.attention_file.write_text(
-            "## Sentinel Observations (auto)\n\n"
-            "<!-- last_updated=2026-05-29T13:00 -->\n\nbody\n",
+            "## Sentinel Observations (auto)\n\n<!-- last_updated=2026-05-29T13:00 -->\n\nbody\n",
             encoding="utf-8",
         )
         feedback.record_dispatched(
-            "n1", action="nudge", session_key="cli:default",
-            priority="medium", proactivity_score=0.5,
+            "n1",
+            action="nudge",
+            session_key="cli:default",
+            priority="medium",
+            proactivity_score=0.5,
         )
         updater = _build_updater(
-            store, feedback, pending_store, routine_store, clock,
+            store,
+            feedback,
+            pending_store,
+            routine_store,
+            clock,
         )
         _run(updater.update())
         body = store.attention_file.read_text(encoding="utf-8")

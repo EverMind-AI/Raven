@@ -16,14 +16,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.config.raven import NudgePolicyConfig
+from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
 from raven.proactive_engine.sentinel.predictor.task_discoverer import TaskDiscoverer
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
-
 
 _NOW = datetime(2026, 5, 8, 8, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
@@ -33,23 +32,31 @@ _NOW_MS = int(_NOW.timestamp() * 1000)
 
 
 def _make_decision(
-    *, decision_id: str = "dec_x",
+    *,
+    decision_id: str = "dec_x",
     awaiting_confirm: bool = False,
     consumed: bool = False,
-    channel: str = "feishu", to: str = "ou_xxx",
+    channel: str = "feishu",
+    to: str = "ou_xxx",
     created_at_ms: int = _NOW_MS,
     ttl_min: int = 60,
 ) -> PendingDecision:
     return PendingDecision(
         decision_id=decision_id,
-        channel=channel, to=to,
+        channel=channel,
+        to=to,
         created_at_ms=created_at_ms,
         ttl_min=ttl_min,
         options=[
-            TaskOption(id="opt_1", title="task one", why="why",
-                       type="ad_hoc", exec_kind="reply",
-                       exec_payload={"prompt": "do one"},
-                       created_at_ms=created_at_ms),
+            TaskOption(
+                id="opt_1",
+                title="task one",
+                why="why",
+                type="ad_hoc",
+                exec_kind="reply",
+                exec_payload={"prompt": "do one"},
+                created_at_ms=created_at_ms,
+            ),
         ],
         consumed=consumed,
         awaiting_confirm=awaiting_confirm,
@@ -61,21 +68,28 @@ class _DiscoveryStubProvider:
     """Returns 3 canned options on the discovery LLM call."""
 
     async def chat_with_retry(self, *, messages, tools, model, tool_choice):
-        args = json.dumps({
-            "options": [
-                {
-                    "title": f"task {i}", "why": "why",
-                    "type": "ad_hoc", "exec_kind": "reply",
-                    "exec_payload": {"prompt": f"do task {i}"},
-                }
-                for i in range(3)
-            ],
-        })
+        args = json.dumps(
+            {
+                "options": [
+                    {
+                        "title": f"task {i}",
+                        "why": "why",
+                        "type": "ad_hoc",
+                        "exec_kind": "reply",
+                        "exec_payload": {"prompt": f"do task {i}"},
+                    }
+                    for i in range(3)
+                ],
+            }
+        )
+
         class _Call:
             arguments = args
+
         class _Resp:
             has_tool_calls = True
             tool_calls = [_Call()]
+
         return _Resp()
 
 
@@ -101,8 +115,7 @@ def memory_store(workspace: Path) -> MemoryStore:
 def test_put_returns_superseded_awaiting_ids(tmp_path: Path):
     store = PendingDecisionStore(tmp_path / "pending.json")
     # Plant an awaiting_confirm decision
-    awaiting = _make_decision(decision_id="dec_old", awaiting_confirm=True,
-                              created_at_ms=_NOW_MS - 1000)
+    awaiting = _make_decision(decision_id="dec_old", awaiting_confirm=True, created_at_ms=_NOW_MS - 1000)
     store.put(awaiting)
 
     # New decision on same address — should supersede the awaiting one
@@ -114,9 +127,7 @@ def test_put_returns_superseded_awaiting_ids(tmp_path: Path):
 def test_put_returns_empty_when_no_awaiting_superseded(tmp_path: Path):
     store = PendingDecisionStore(tmp_path / "pending.json")
     # Plant a fresh (not awaiting) decision
-    not_awaiting = _make_decision(decision_id="dec_old",
-                                   awaiting_confirm=False,
-                                   created_at_ms=_NOW_MS - 1000)
+    not_awaiting = _make_decision(decision_id="dec_old", awaiting_confirm=False, created_at_ms=_NOW_MS - 1000)
     store.put(not_awaiting)
 
     fresh = _make_decision(decision_id="dec_new", created_at_ms=_NOW_MS)
@@ -141,13 +152,10 @@ def test_put_returns_empty_when_consumed_decision_present(tmp_path: Path):
     superseding it isn't a concern (user already picked or cancelled).
     Only un-consumed awaiting_confirm decisions matter."""
     store = PendingDecisionStore(tmp_path / "pending.json")
-    consumed = _make_decision(decision_id="dec_consumed",
-                              consumed=True,
-                              created_at_ms=_NOW_MS - 1000)
+    consumed = _make_decision(decision_id="dec_consumed", consumed=True, created_at_ms=_NOW_MS - 1000)
     # Bypass the lifecycle methods — direct hand-poke for setup
     store.put(_make_decision(decision_id="dec_temp"))
-    store.mark_consumed("dec_temp", picked_option_id="opt_1",
-                        consumed_at_ms=_NOW_MS - 500)
+    store.mark_consumed("dec_temp", picked_option_id="opt_1", consumed_at_ms=_NOW_MS - 500)
 
     fresh = _make_decision(decision_id="dec_new")
     superseded = store.put(fresh)
@@ -160,9 +168,7 @@ def test_put_returns_empty_when_consumed_decision_present(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_discoverer_calls_policy_check_and_record_fired(
-    memory_store, tmp_path
-):
+async def test_discoverer_calls_policy_check_and_record_fired(memory_store, tmp_path):
     pending_store = PendingDecisionStore(tmp_path / "pending.json")
     dispatcher = NudgeDispatcher(now_fn=lambda: _NOW)
     dispatcher.set_post(AsyncMock())
@@ -186,9 +192,11 @@ async def test_discoverer_calls_policy_check_and_record_fired(
     # NudgePolicy should now know about the fire (next check on same
     # session for a "nudge" with same content would be denied via dedup)
     second_check = policy.check(
-        "nudge", session_key="feishu:ou_xxx",
+        "nudge",
+        session_key="feishu:ou_xxx",
         # Use the same menu preview that TaskDiscoverer used internally
-        content="(any)", priority="medium",
+        content="(any)",
+        priority="medium",
     )
     # We can't easily verify the exact dedup hit without re-rendering
     # the menu; instead verify fired_at was incremented
@@ -208,7 +216,7 @@ async def test_discoverer_skips_when_policy_denies(memory_store, tmp_path):
     provider = _DiscoveryStubProvider()
 
     # Build a policy with quiet_hours that include 8 AM (the test time)
-    policy_cfg = NudgePolicyConfig(quiet_hours=(7, 9))   # 7-9 AM = quiet
+    policy_cfg = NudgePolicyConfig(quiet_hours=(7, 9))  # 7-9 AM = quiet
     policy = NudgePolicy(policy_cfg, now_fn=lambda: _NOW)
 
     discoverer = TaskDiscoverer(
@@ -259,9 +267,7 @@ async def test_discoverer_works_without_policy(memory_store, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(
-    memory_store, tmp_path
-):
+async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(memory_store, tmp_path):
     pending_store = PendingDecisionStore(tmp_path / "pending.json")
     posted: list = []
 
@@ -274,7 +280,8 @@ async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(
 
     # Plant an awaiting_confirm decision on the same address
     awaiting = _make_decision(
-        decision_id="dec_old", awaiting_confirm=True,
+        decision_id="dec_old",
+        awaiting_confirm=True,
         created_at_ms=_NOW_MS - 30 * 60_000,  # 30 min ago, well within TTL
     )
     pending_store.put(awaiting)
@@ -302,16 +309,12 @@ async def test_discoverer_notifies_user_when_superseding_awaiting_confirm(
     assert "替换" in submitted[0].text
 
     # The new menu still goes through the dispatcher to the hub.
-    menu_msgs = [m for m in posted
-                 if m.source.extras.get("_sentinel_action")
-                     == "discovery_menu"]
+    menu_msgs = [m for m in posted if m.source.extras.get("_sentinel_action") == "discovery_menu"]
     assert len(menu_msgs) == 1
 
 
 @pytest.mark.asyncio
-async def test_discoverer_suppresses_notice_when_dispatch_fails(
-    memory_store, tmp_path
-):
+async def test_discoverer_suppresses_notice_when_dispatch_fails(memory_store, tmp_path):
     """If dispatch_options raises, the supersede notice MUST NOT be
     sent — otherwise the user sees 'your pick was replaced' without
     ever receiving the replacement menu, which is worse UX than the
@@ -321,10 +324,13 @@ async def test_discoverer_suppresses_notice_when_dispatch_fails(
 
     # Plant an awaiting_confirm decision so a successful run would
     # trigger the notice
-    pending_store.put(_make_decision(
-        decision_id="dec_old", awaiting_confirm=True,
-        created_at_ms=_NOW_MS - 10 * 60_000,
-    ))
+    pending_store.put(
+        _make_decision(
+            decision_id="dec_old",
+            awaiting_confirm=True,
+            created_at_ms=_NOW_MS - 10 * 60_000,
+        )
+    )
 
     # Build a dispatcher that always raises on dispatch_options
     class _FailingDispatcher:
@@ -357,9 +363,7 @@ async def test_discoverer_suppresses_notice_when_dispatch_fails(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_no_notice_when_superseding_unpicked_decision(
-    memory_store, tmp_path
-):
+async def test_discoverer_no_notice_when_superseding_unpicked_decision(memory_store, tmp_path):
     """If the prior decision wasn't picked (still showing fresh
     options), there's nothing user-facing to recover — no notice
     sent."""
@@ -368,10 +372,13 @@ async def test_discoverer_no_notice_when_superseding_unpicked_decision(
     dispatcher.set_post(AsyncMock())
     provider = _DiscoveryStubProvider()
 
-    pending_store.put(_make_decision(
-        decision_id="dec_old", awaiting_confirm=False,
-        created_at_ms=_NOW_MS - 30 * 60_000,
-    ))
+    pending_store.put(
+        _make_decision(
+            decision_id="dec_old",
+            awaiting_confirm=False,
+            created_at_ms=_NOW_MS - 30 * 60_000,
+        )
+    )
 
     discoverer = TaskDiscoverer(
         memory_store=memory_store,
@@ -394,8 +401,7 @@ async def test_discoverer_no_notice_when_superseding_unpicked_decision(
 # ── #4: startup warning when require_confirm=True without LLM ─────────
 
 
-def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path,
-                                                             caplog):
+def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path, caplog):
     """Health check: require_confirm=True without an LLM provider
     works for clear yes/no but ambiguous replies fall through. Operator
     should be warned at startup."""
@@ -405,6 +411,7 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path,
     # Build a minimal runner stub with phase4 stash but provider=None
     class _StubRunner:
         feedback = MagicMock()
+
     runner = _StubRunner()
     pending_store = PendingDecisionStore(tmp_path / "pending.json")
     runner._phase4_pending_store = pending_store
@@ -415,12 +422,14 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path,
 
     # Build a minimal agent stub
     from raven.agent.hook.composite import CompositeHook
+
     class _StubAgent:
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
         decision_consumer = None
         hooks = CompositeHook()
+
     agent = _StubAgent()
 
     sentinel_cfg = SentinelConfig(
@@ -430,12 +439,13 @@ def test_attach_decision_consumer_warns_on_no_llm_provider(tmp_path,
     )
 
     import io
+
     from loguru import logger as _logger
+
     captured = io.StringIO()
     sink_id = _logger.add(captured, level="WARNING")
     try:
-        attach_sentinel_decision_consumer(runner, agent,
-                                          sentinel_cfg=sentinel_cfg)
+        attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     finally:
         _logger.remove(sink_id)
 
@@ -457,22 +467,23 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
 
     class _StubRunner:
         feedback = MagicMock()
+
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(
-        tmp_path / "pending.json"
-    )
+    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
     runner._phase4_routine_store = None
     runner._phase4_planner_provider = _StubProvider()
     runner._phase4_planner_model = "qwen3.5-27B"
     runner._phase4_now_fn = None
 
     from raven.agent.hook.composite import CompositeHook
+
     class _StubAgent:
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
         decision_consumer = None
         hooks = CompositeHook()
+
     agent = _StubAgent()
 
     sentinel_cfg = SentinelConfig(
@@ -482,12 +493,13 @@ def test_attach_decision_consumer_no_warn_when_provider_set(tmp_path):
     )
 
     import io
+
     from loguru import logger as _logger
+
     captured = io.StringIO()
     sink_id = _logger.add(captured, level="WARNING")
     try:
-        attach_sentinel_decision_consumer(runner, agent,
-                                          sentinel_cfg=sentinel_cfg)
+        attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     finally:
         _logger.remove(sink_id)
     assert "no LLM provider" not in captured.getvalue()
@@ -505,10 +517,9 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
 
     class _StubRunner:
         feedback = MagicMock()
+
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(
-        tmp_path / "pending.json"
-    )
+    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
     runner._phase4_routine_store = None
     runner._phase4_planner_provider = None
     runner._phase4_planner_model = None
@@ -520,6 +531,7 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
         subagents = MagicMock()
         decision_consumer = None
         hooks = CompositeHook()
+
     agent = _StubAgent()
 
     sentinel_cfg = SentinelConfig(
@@ -527,13 +539,9 @@ def test_attach_decision_consumer_registers_hook(tmp_path):
         task_discovery_enabled=True,
         task_discovery_require_confirm=False,
     )
-    assert not any(
-        isinstance(h, DecisionConsumerAdapter) for h in agent.hooks
-    )
+    assert not any(isinstance(h, DecisionConsumerAdapter) for h in agent.hooks)
     attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
-    assert any(
-        isinstance(h, DecisionConsumerAdapter) for h in agent.hooks
-    )
+    assert any(isinstance(h, DecisionConsumerAdapter) for h in agent.hooks)
 
 
 def test_attach_decision_consumer_is_idempotent(tmp_path):
@@ -549,10 +557,9 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
 
     class _StubRunner:
         feedback = MagicMock()
+
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(
-        tmp_path / "pending.json"
-    )
+    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
     runner._phase4_routine_store = None
     runner._phase4_planner_provider = None
     runner._phase4_planner_model = None
@@ -564,6 +571,7 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
         subagents = MagicMock()
         decision_consumer = None
         hooks = CompositeHook()
+
     agent = _StubAgent()
 
     sentinel_cfg = SentinelConfig(
@@ -573,9 +581,7 @@ def test_attach_decision_consumer_is_idempotent(tmp_path):
     )
     attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
-    adapter_count = sum(
-        1 for h in agent.hooks if isinstance(h, DecisionConsumerAdapter)
-    )
+    adapter_count = sum(1 for h in agent.hooks if isinstance(h, DecisionConsumerAdapter))
     assert adapter_count == 1
 
 
@@ -588,22 +594,23 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
 
     class _StubRunner:
         feedback = MagicMock()
+
     runner = _StubRunner()
-    runner._phase4_pending_store = PendingDecisionStore(
-        tmp_path / "pending.json"
-    )
+    runner._phase4_pending_store = PendingDecisionStore(tmp_path / "pending.json")
     runner._phase4_routine_store = None
     runner._phase4_planner_provider = None
     runner._phase4_planner_model = None
     runner._phase4_now_fn = None
 
     from raven.agent.hook.composite import CompositeHook
+
     class _StubAgent:
         cron_service = None
         tools = MagicMock()
         subagents = MagicMock()
         decision_consumer = None
         hooks = CompositeHook()
+
     agent = _StubAgent()
 
     sentinel_cfg = SentinelConfig(
@@ -613,12 +620,13 @@ def test_attach_decision_consumer_no_warn_when_require_confirm_false(
     )
 
     import io
+
     from loguru import logger as _logger
+
     captured = io.StringIO()
     sink_id = _logger.add(captured, level="WARNING")
     try:
-        attach_sentinel_decision_consumer(runner, agent,
-                                          sentinel_cfg=sentinel_cfg)
+        attach_sentinel_decision_consumer(runner, agent, sentinel_cfg=sentinel_cfg)
     finally:
         _logger.remove(sink_id)
     assert "no LLM provider" not in captured.getvalue()

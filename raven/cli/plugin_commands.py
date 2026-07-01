@@ -39,11 +39,15 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def plugins(
         config_path: Optional[str] = typer.Option(
-            None, "--config", "-c",
+            None,
+            "--config",
+            "-c",
             help="Path to config file (default: ~/.raven/config.json)",
         ),
         verbose: bool = typer.Option(
-            False, "--verbose", "-v",
+            False,
+            "--verbose",
+            "-v",
             help="Show manifest paths + factory references.",
         ),
     ) -> None:
@@ -51,11 +55,9 @@ def register(app: typer.Typer) -> None:
         # Import lazily so ``raven --help`` doesn't pay for plugin
         # discovery on every invocation.
         from raven.cli._plugin_stack import plugin_discovery_sources
-        from raven.config.raven import load_raven_config
         from raven.plugin import (
             PluginDiscovery,
             PluginRegistry,
-            Source,
         )
 
         ec_config = _load_ec_config(config_path)
@@ -98,7 +100,6 @@ def _render_plugin_table(
     verbose: bool,
 ) -> None:
     """Print one row per discovered plugin with its status."""
-    from raven.plugin import Source
 
     if not discovered:
         console.print(
@@ -133,9 +134,7 @@ def _render_plugin_table(
             status = "[dim]inactive (opt-in)[/dim]"
         else:
             status = "[yellow]not activated[/yellow]"
-        backends = ", ".join(
-            c.name for c in mf.contributes.memory_backends
-        ) or "(none)"
+        backends = ", ".join(c.name for c in mf.contributes.memory_backends) or "(none)"
 
         row = [
             pid,
@@ -145,9 +144,7 @@ def _render_plugin_table(
             backends,
         ]
         if verbose:
-            factories = "; ".join(
-                c.factory for c in mf.contributes.memory_backends
-            )
+            factories = "; ".join(c.factory for c in mf.contributes.memory_backends)
             row.append(factories or "(none)")
         table.add_row(*row)
     console.print(table)
@@ -179,8 +176,7 @@ def _render_backend_selection(ec_config, registry) -> None:
     available = registry.memory_backend_names()
     if selected not in available:
         console.print(
-            f"\n[bold]Active memory backend:[/bold] [red]{selected}[/red] "
-            f"[red](not available)[/red]",
+            f"\n[bold]Active memory backend:[/bold] [red]{selected}[/red] [red](not available)[/red]",
         )
         console.print(
             f"  [dim]Registered: {', '.join(available) or '(none)'}[/dim]",
@@ -204,8 +200,7 @@ def _render_backend_selection(ec_config, registry) -> None:
             break
 
     console.print(
-        f"\n[bold]Active memory backend:[/bold] [green]{selected}[/green] "
-        f"[dim](from plugin: {owner_id})[/dim]",
+        f"\n[bold]Active memory backend:[/bold] [green]{selected}[/green] [dim](from plugin: {owner_id})[/dim]",
     )
     console.print(
         f"  [dim]User id:  {ec_config.memory.user_id}[/dim]",

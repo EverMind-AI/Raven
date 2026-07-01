@@ -1,10 +1,10 @@
 import { atom, computed } from 'nanostores'
 
+import type { GatewaySkin } from '../gatewayTypes.js'
+
 import { MOUSE_TRACKING } from '../config/env.js'
 import { ZERO } from '../domain/usage.js'
-import type { GatewaySkin } from '../gatewayTypes.js'
 import { applyDetectedBackground, DEFAULT_THEME, fromSkin, resolveCurrentDefaultTheme } from '../theme.js'
-
 import { DEFAULT_INDICATOR_STYLE, type UiState } from './interfaces.js'
 
 const buildUiState = (): UiState => ({

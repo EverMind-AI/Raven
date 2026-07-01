@@ -33,9 +33,7 @@ class ToolAuditHook(AgentHook):
     def name(self) -> str:
         return "EvalToolAuditHook"
 
-    async def before_execute_tools(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         if not (self._config.enabled and self._config.on_tool_audit):
             return HookDecision()
         denylist = set(self._config.tool_denylist)
@@ -81,10 +79,7 @@ def _extract_offending_tool_names(response: Any, denylist: set[str]) -> set[str]
         name = (
             getattr(tc, "name", None)
             or (tc.get("name") if isinstance(tc, dict) else None)
-            or (
-                tc.get("function", {}).get("name")
-                if isinstance(tc, dict) else None
-            )
+            or (tc.get("function", {}).get("name") if isinstance(tc, dict) else None)
         )
         if isinstance(name, str) and name in denylist:
             offenders.add(name)

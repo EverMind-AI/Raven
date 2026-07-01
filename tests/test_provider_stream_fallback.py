@@ -36,9 +36,7 @@ class _ChatOnlyProvider(LLMProvider):
 
 
 async def test_fallback_yields_single_terminal_delta() -> None:
-    provider = _ChatOnlyProvider(
-        LLMResponse(content="hello", usage={"total_tokens": 5}, reasoning_content="why")
-    )
+    provider = _ChatOnlyProvider(LLMResponse(content="hello", usage={"total_tokens": 5}, reasoning_content="why"))
     deltas = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
 
     assert len(deltas) == 1

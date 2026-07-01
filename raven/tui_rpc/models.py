@@ -78,9 +78,7 @@ class McpToolInfo(_Strict):
 
     name: str = Field(..., description="Raw tool name (without mcp_<server>_ prefix).")
     description: str
-    parameters: dict[str, JsonValue] = Field(
-        ..., description="JSON Schema for the tool's input arguments."
-    )
+    parameters: dict[str, JsonValue] = Field(..., description="JSON Schema for the tool's input arguments.")
 
 
 class SkillInfo(_Strict):
@@ -113,19 +111,14 @@ class CliResult(_Strict):
     exit_code: int = Field(..., description="CLI command exit code; 0 = success.")
     error_code: int | None = Field(
         default=None,
-        description=(
-            "Only present for timeout / not-dispatch-compatible cases "
-            "(mirrors a JSON-RPC error code)."
-        ),
+        description=("Only present for timeout / not-dispatch-compatible cases (mirrors a JSON-RPC error code)."),
     )
 
 
 class StubResult(_Strict):
     """Shared shape for all hermes-only stub method results (-32012)."""
 
-    error: str = Field(
-        ..., description="Human-readable explanation of why this method is not supported in v0.1."
-    )
+    error: str = Field(..., description="Human-readable explanation of why this method is not supported in v0.1.")
     hint: str | None = Field(
         default=None,
         description="Optional hint to the user (e.g., 'Press Ctrl+C').",
@@ -304,8 +297,7 @@ class SessionDeleteResult(_Strict):
     deleted: str | None = Field(
         default=None,
         description=(
-            "The session_id that was deleted (matches the request param); "
-            "null when no such session file existed."
+            "The session_id that was deleted (matches the request param); null when no such session file existed."
         ),
     )
 
@@ -378,9 +370,7 @@ class SessionExportParams(_Strict):
 
 class SessionExportResult(_Strict):
     exported: bool = Field(..., description="True when a Markdown file was written.")
-    path: str | None = Field(
-        ..., description="Absolute path of the written file, or null on failure."
-    )
+    path: str | None = Field(..., description="Absolute path of the written file, or null on failure.")
     reason: str | None = Field(
         default=None,
         description="Failure reason when not exported: not_found | ambiguous | write_failed.",
@@ -591,9 +581,7 @@ class ModelRemoveModelResult(_Strict):
 class ConfigGetParams(_Strict):
     keys: list[str] | None = Field(
         default=None,
-        description=(
-            "If omitted, return all whitelisted fields. Unknown keys are silently dropped."
-        ),
+        description=("If omitted, return all whitelisted fields. Unknown keys are silently dropped."),
     )
 
 
@@ -661,9 +649,7 @@ class SystemVersionResult(_Strict):
 
 
 class CliDispatchParams(_Strict):
-    argv: list[str] = Field(
-        ..., description="Pre-tokenized argv (TUI side has already shlex-split)."
-    )
+    argv: list[str] = Field(..., description="Pre-tokenized argv (TUI side has already shlex-split).")
     width: int = Field(
         ...,
         ge=20,
@@ -723,20 +709,14 @@ class CommandsCatalogResponse(_Strict):
     canon: dict[str, str] = Field(
         ...,
         description=(
-            "alias (with leading /) -> canonical mapping. Group + subcommand "
-            "space-separated (e.g. '/channels status')."
+            "alias (with leading /) -> canonical mapping. Group + subcommand space-separated (e.g. '/channels status')."
         ),
     )
     pairs: list[tuple[str, str]] = Field(
         ...,
-        description=(
-            "Ordered (alias, canonical) tuples. Empty pairs -> TS degrades "
-            "catalog setup; gating field."
-        ),
+        description=("Ordered (alias, canonical) tuples. Empty pairs -> TS degrades catalog setup; gating field."),
     )
-    sub: dict[str, list[str]] = Field(
-        ..., description="group -> [subcommand]; blacklisted entries filtered out."
-    )
+    sub: dict[str, list[str]] = Field(..., description="group -> [subcommand]; blacklisted entries filtered out.")
     categories: list[str] = Field(
         ...,
         description="'(top-level)' first then alphabetical group names.",

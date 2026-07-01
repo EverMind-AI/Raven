@@ -11,7 +11,6 @@ import sys
 
 import pytest
 
-
 CLI_BASE = [sys.executable, "-m", "tests.tui.autotest"]
 
 
@@ -62,9 +61,7 @@ class TestSmokeSubcommand:
         # "spawn succeeds + ... subprocess clean exit code = 0"). Allow both
         # 0 (perfect) and 1 (readiness timeout); not 2 (harness error).
         assert result.returncode in (0, 1), (
-            f"unexpected rc={result.returncode}\n"
-            f"stdout:\n{result.stdout}\n"
-            f"stderr:\n{result.stderr}"
+            f"unexpected rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
     def test_smoke_fails_on_nonexistent_binary(self):
@@ -76,6 +73,4 @@ class TestSmokeSubcommand:
             f"expected exit 1 (subprocess exit != 0); got {result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
-        assert "[fail]" in result.stdout, (
-            f"expected [fail] trace marker; stdout:\n{result.stdout}"
-        )
+        assert "[fail]" in result.stdout, f"expected [fail] trace marker; stdout:\n{result.stdout}"

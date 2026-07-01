@@ -29,7 +29,6 @@ from raven.agent.hook import (
     AgentHookContext,
     CompositeHook,
     DecisionConsumerAdapter,
-    HookDecision,
     OnUserInboundAdapter,
     ResponseModifierAdapter,
 )
@@ -190,21 +189,15 @@ class TestDecisionConsumerAdapter:
 
 class TestResponseModifierAdapter:
     async def test_modified_content_propagated(self):
-        ctx = AgentHookContext(
-            session_key="cli:test", outbound_content="hi"
-        )
-        adapter = ResponseModifierAdapter(
-            lambda key, content: f"{content} | session={key}"
-        )
+        ctx = AgentHookContext(session_key="cli:test", outbound_content="hi")
+        adapter = ResponseModifierAdapter(lambda key, content: f"{content} | session={key}")
         decision = await adapter.after_send(ctx)
         assert decision.modified_content == "hi | session=cli:test"
 
     async def test_unchanged_content_returns_passthrough(self):
         # If the modifier returns the same string, we must not signal a
         # change (so downstream content-chaining ignores the call).
-        ctx = AgentHookContext(
-            session_key="cli:test", outbound_content="hi"
-        )
+        ctx = AgentHookContext(session_key="cli:test", outbound_content="hi")
         adapter = ResponseModifierAdapter(lambda k, c: c)
         decision = await adapter.after_send(ctx)
         assert decision.modified_content is None
@@ -229,9 +222,7 @@ class TestResponseModifierAdapter:
         def boom(k, c):
             raise RuntimeError("boom")
 
-        ctx = AgentHookContext(
-            session_key="cli:test", outbound_content="hi"
-        )
+        ctx = AgentHookContext(session_key="cli:test", outbound_content="hi")
         adapter = ResponseModifierAdapter(boom)
         decision = await adapter.after_send(ctx)
         # No-op on exception — content unchanged.
@@ -242,9 +233,7 @@ class TestResponseModifierAdapter:
         # a future Sentinel might return an envelope), we should not
         # corrupt outbound_content.
         adapter = ResponseModifierAdapter(lambda k, c: None)  # type: ignore[arg-type]
-        ctx = AgentHookContext(
-            session_key="cli:test", outbound_content="hi"
-        )
+        ctx = AgentHookContext(session_key="cli:test", outbound_content="hi")
         decision = await adapter.after_send(ctx)
         assert decision.modified_content is None
 
@@ -325,9 +314,7 @@ class TestAgentLoopHookWireUp:
         assert isinstance(hooks[0], DecisionConsumerAdapter)
 
     def test_response_modifier_only(self, workspace):
-        agent = _make_agent(
-            workspace, response_modifier=lambda k, c: c
-        )
+        agent = _make_agent(workspace, response_modifier=lambda k, c: c)
         hooks = list(agent.hooks)
         assert len(hooks) == 1
         assert isinstance(hooks[0], ResponseModifierAdapter)
@@ -355,9 +342,7 @@ class TestAgentLoopHookWireUp:
         assert isinstance(hooks[2], Explicit)
         assert isinstance(hooks[3], ResponseModifierAdapter)
 
-    async def test_user_inbound_observer_fires_when_no_short_circuit(
-        self, workspace
-    ):
+    async def test_user_inbound_observer_fires_when_no_short_circuit(self, workspace):
         received = []
         agent = _make_agent(
             workspace,
@@ -374,9 +359,7 @@ class TestAgentLoopHookWireUp:
         await agent.hooks.before_user_inbound(ctx)
         assert received == ["hello"]
 
-    async def test_decision_consumer_short_circuit_halts_observer(
-        self, workspace
-    ):
+    async def test_decision_consumer_short_circuit_halts_observer(self, workspace):
         """With both adapters wired, the canonical order has observer
         BEFORE short-circuiter, so engagement observation is preserved
         even when /pick replies short-circuit."""
@@ -404,8 +387,6 @@ class TestAgentLoopHookWireUp:
             workspace,
             response_modifier=lambda k, c: c + " [appended]",
         )
-        ctx = AgentHookContext(
-            session_key="cli:c1", outbound_content="hi"
-        )
+        ctx = AgentHookContext(session_key="cli:c1", outbound_content="hi")
         decision = await agent.hooks.after_send(ctx)
         assert decision.modified_content == "hi [appended]"

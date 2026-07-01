@@ -47,8 +47,7 @@ class MemoryBackendContractTests:
         does *not* need to call them itself.
         """
         raise NotImplementedError(
-            "MemoryBackendContractTests subclass must override "
-            "make_backend()",
+            "MemoryBackendContractTests subclass must override make_backend()",
         )
 
     # ── Fixture ─────────────────────────────────────────────────────
@@ -71,7 +70,9 @@ class MemoryBackendContractTests:
     async def test_recall_returns_memory_list(self, backend) -> None:
         """``recall`` returns ``list[Memory]``. Empty is OK."""
         hits = await backend.recall(
-            "anything", user_id="contract-test", top_k=5,
+            "anything",
+            user_id="contract-test",
+            top_k=5,
         )
         assert isinstance(hits, list)
         for h in hits:
@@ -96,7 +97,9 @@ class MemoryBackendContractTests:
             ],
         )
         hits = await backend.recall(
-            "programming", user_id="contract-test", top_k=5,
+            "programming",
+            user_id="contract-test",
+            top_k=5,
         )
         assert isinstance(hits, list)
 
@@ -109,16 +112,21 @@ class MemoryBackendContractTests:
     async def test_top_k_respected_or_bounded(self, backend) -> None:
         """``top_k`` upper-bounds the result; backends can return less."""
         hits = await backend.recall(
-            "q", user_id="contract-test", top_k=3,
+            "q",
+            user_id="contract-test",
+            top_k=3,
         )
         assert len(hits) <= 3
 
     async def test_recall_with_empty_owner_does_not_crash(
-        self, backend,
+        self,
+        backend,
     ) -> None:
         """Some hosts pass an unknown / never-stored-for owner."""
         hits = await backend.recall(
-            "q", user_id="never-existed", top_k=5,
+            "q",
+            user_id="never-existed",
+            top_k=5,
         )
         assert isinstance(hits, list)
 

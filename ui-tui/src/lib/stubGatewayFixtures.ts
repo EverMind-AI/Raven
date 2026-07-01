@@ -17,7 +17,7 @@ import type {
   SessionListItem,
   SessionListResponse,
   SessionResumeResponse,
-  SetupStatusResponse,
+  SetupStatusResponse
 } from '../gatewayTypes.js'
 import type { SessionInfo } from '../types.js'
 
@@ -29,7 +29,7 @@ export const STUB_SESSION_INFO: SessionInfo = {
   skills: {},
   tools: {},
   // Raven Agent fork: independent version line, "X commits behind" semantic n/a.
-  update_behind: null,
+  update_behind: null
 }
 
 export const STUB_SESSION_LIST_ITEM: SessionListItem = {
@@ -37,30 +37,30 @@ export const STUB_SESSION_LIST_ITEM: SessionListItem = {
   message_count: 3,
   preview: 'hello / I am a stub.',
   started_at: MOCK_STARTED_AT,
-  title: 'Mock Session',
+  title: 'Mock Session'
 }
 
 export const STUB_SESSION_LIST: SessionListResponse = {
-  sessions: [STUB_SESSION_LIST_ITEM],
+  sessions: [STUB_SESSION_LIST_ITEM]
 }
 
 export const STUB_MESSAGES: GatewayTranscriptMessage[] = [
   { role: 'system', text: 'Raven Agent TUI stub mode — no real backend attached.' },
   { role: 'user', text: 'hello' },
-  { role: 'assistant', text: 'I am a stub.' },
+  { role: 'assistant', text: 'I am a stub.' }
 ]
 
 export const STUB_SESSION_RESUME: SessionResumeResponse = {
   info: STUB_SESSION_INFO,
   message_count: STUB_MESSAGES.length,
   messages: STUB_MESSAGES,
-  session_id: MOCK_SESSION_ID,
+  session_id: MOCK_SESSION_ID
 }
 
 const STUB_SLASH_PAIRS: [string, string][] = [
   ['/help', 'show stub help'],
   ['/exit', 'exit TUI'],
-  ['/clear', 'clear screen'],
+  ['/clear', 'clear screen']
 ]
 
 export const STUB_COMMANDS_CATALOG: CommandsCatalogResponse = {
@@ -68,7 +68,7 @@ export const STUB_COMMANDS_CATALOG: CommandsCatalogResponse = {
   categories: [{ name: 'Core', pairs: STUB_SLASH_PAIRS }],
   pairs: STUB_SLASH_PAIRS,
   skill_count: 0,
-  sub: {},
+  sub: {}
 }
 
 export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
@@ -84,7 +84,7 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
       name: 'Anthropic',
       needs_api_base: false,
       slug: 'anthropic',
-      total_models: 1,
+      total_models: 1
     },
     {
       auth_type: 'api_key',
@@ -96,7 +96,7 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
       needs_api_base: false,
       slug: 'openai',
       total_models: 0,
-      warning: 'paste OPENAI_API_KEY to activate',
+      warning: 'paste OPENAI_API_KEY to activate'
     },
     {
       auth_type: 'api_key',
@@ -108,9 +108,9 @@ export const STUB_MODEL_OPTIONS: ModelOptionsResponse = {
       needs_api_base: true,
       slug: 'custom',
       total_models: 0,
-      warning: 'set an API key and base URL to activate',
-    },
-  ],
+      warning: 'set an API key and base URL to activate'
+    }
+  ]
 }
 
 export const STUB_SKIN: GatewaySkin = {}
@@ -124,13 +124,13 @@ export const STUB_SKIN: GatewaySkin = {}
 export const STUB_CONFIG_FULL: ConfigFullResponse = {
   config: {
     display: { tui_auto_resume_recent: true },
-    voice: {},
-  },
+    voice: {}
+  }
 }
 
 export const STUB_SESSION_CREATE = {
   info: STUB_SESSION_INFO,
-  session_id: MOCK_SESSION_ID,
+  session_id: MOCK_SESSION_ID
 }
 
 export const STUB_CONFIG_MTIME: ConfigMtimeResponse = { mtime: 0 }

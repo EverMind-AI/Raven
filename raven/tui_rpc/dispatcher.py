@@ -61,9 +61,7 @@ class Dispatcher:
         """
         # ----- Frame validation -----------------------------------------------------
         if not isinstance(frame, dict):
-            return _err_frame(
-                None, PARSE_ERROR, "parse_error", data={"reason": "frame is not an object"}
-            )
+            return _err_frame(None, PARSE_ERROR, "parse_error", data={"reason": "frame is not an object"})
 
         frame_id = frame.get("id")  # may be None for notification frames
 
@@ -98,9 +96,7 @@ class Dispatcher:
         # ----- Method routing -------------------------------------------------------
         handler = self._handlers.get(method)
         if handler is None:
-            return _err_frame(
-                frame_id, METHOD_NOT_FOUND, "method_not_found", data={"method": method}
-            )
+            return _err_frame(frame_id, METHOD_NOT_FOUND, "method_not_found", data={"method": method})
 
         # ----- Dispatch -------------------------------------------------------------
         try:

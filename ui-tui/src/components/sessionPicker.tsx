@@ -8,9 +8,9 @@ import { useEffect, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { SessionDeleteResponse, SessionListItem, SessionListResponse } from '../gatewayTypes.js'
-import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
+import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowOffset } from './overlayControls.js'
 
 const VISIBLE = 15
@@ -202,7 +202,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
         Resume Session
       </Text>
 
-      {offset > 0 && <Text color={t.color.muted}>  ↑ {offset} more</Text>}
+      {offset > 0 && <Text color={t.color.muted}> ↑ {offset} more</Text>}
 
       {items.slice(offset, offset + VISIBLE).map((s, vi) => {
         const i = offset + vi
@@ -239,7 +239,7 @@ export function SessionPicker({ activeSid, gw, onCancel, onDeleteActive, onSelec
         )
       })}
 
-      {offset + VISIBLE < items.length && <Text color={t.color.muted}>  ↓ {items.length - offset - VISIBLE} more</Text>}
+      {offset + VISIBLE < items.length && <Text color={t.color.muted}> ↓ {items.length - offset - VISIBLE} more</Text>}
       {err && <Text color={t.color.label}>error: {err}</Text>}
       {deleting ? (
         <OverlayHint t={t}>deleting…</OverlayHint>

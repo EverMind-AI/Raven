@@ -34,7 +34,7 @@ def _parse_env_file(path: Path) -> list[tuple[str, str]]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         if line.startswith("export "):
-            line = line[len("export "):].lstrip()
+            line = line[len("export ") :].lstrip()
         k, v = line.split("=", 1)
         k = k.strip()
         v = v.strip().strip('"').strip("'")

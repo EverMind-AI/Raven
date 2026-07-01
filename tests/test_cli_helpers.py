@@ -27,9 +27,7 @@ def stub_load_config(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_send_probe_success(
-    monkeypatch: pytest.MonkeyPatch, stub_load_config: None
-) -> None:
+def test_send_probe_success(monkeypatch: pytest.MonkeyPatch, stub_load_config: None) -> None:
     """Happy path: provider returns a normal response → tuple shape correct."""
 
     class _FakeProvider:
@@ -49,9 +47,7 @@ def test_send_probe_success(
     assert elapsed >= 0
 
 
-def test_send_probe_provider_error_raises(
-    monkeypatch: pytest.MonkeyPatch, stub_load_config: None
-) -> None:
+def test_send_probe_provider_error_raises(monkeypatch: pytest.MonkeyPatch, stub_load_config: None) -> None:
     """``finish_reason='error'`` → ``send_probe`` raises ``RuntimeError``."""
 
     class _ErrProvider:
@@ -68,9 +64,7 @@ def test_send_probe_provider_error_raises(
         send_probe()
 
 
-def test_send_probe_timeout_raises(
-    monkeypatch: pytest.MonkeyPatch, stub_load_config: None
-) -> None:
+def test_send_probe_timeout_raises(monkeypatch: pytest.MonkeyPatch, stub_load_config: None) -> None:
     """Slow provider trips ``asyncio.TimeoutError`` when ``timeout_s`` elapses."""
 
     class _SlowProvider:
@@ -98,9 +92,7 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
         json.dumps(
             {
                 "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
-                "providers": {
-                    "custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}
-                },
+                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
             }
         ),
         encoding="utf-8",

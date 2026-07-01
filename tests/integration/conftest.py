@@ -103,7 +103,8 @@ def _missing_runtime_config(settings: Any) -> list[str]:
 
 @pytest_asyncio.fixture
 async def everos_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Any:
     """Isolated everos store + full lifespan, in the test's event loop.
 
@@ -141,10 +142,12 @@ async def everos_env(
     from raven.plugin import PluginContext, ServiceLocator
     from raven.plugin.memory.everos.backend import EverosBackend
 
-    be = EverosBackend(PluginContext(
-        config={"mode": "embedded"},
-        services=ServiceLocator(workspace=tmp_path),
-    ))
+    be = EverosBackend(
+        PluginContext(
+            config={"mode": "embedded"},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+    )
     await be.start()
     try:
         yield SimpleNamespace(root=tmp_path, backend=be)

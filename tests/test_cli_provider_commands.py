@@ -61,9 +61,7 @@ def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch) ->
         get_token=lambda: fake_token,
         login_oauth_interactive=lambda **_: fake_token,
     )
-    monkeypatch.setitem(
-        __import__("sys").modules, "oauth_cli_kit", fake_module
-    )
+    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
     assert r.exit_code == 0
@@ -80,9 +78,7 @@ def test_provider_login_openai_codex_failure_exits_1(monkeypatch: pytest.MonkeyP
         get_token=lambda: empty_token,
         login_oauth_interactive=lambda **_: empty_token,
     )
-    monkeypatch.setitem(
-        __import__("sys").modules, "oauth_cli_kit", fake_module
-    )
+    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
     assert r.exit_code == 1
@@ -135,9 +131,7 @@ def test_list_shows_every_provider(tmp_config: Path) -> None:
 
 
 def test_set_and_get_round_trip(tmp_config: Path) -> None:
-    r = runner.invoke(
-        app, ["provider", "set", "openrouter", "--api-key", "test-key"]
-    )
+    r = runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "test-key"])
     assert r.exit_code == 0, r.stdout
     assert "updated" in r.stdout
 
@@ -149,17 +143,13 @@ def test_set_and_get_round_trip(tmp_config: Path) -> None:
 
 def test_get_with_show_secrets_returns_plaintext(tmp_config: Path) -> None:
     runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "test-key"])
-    r = runner.invoke(
-        app, ["provider", "get", "openrouter", "--show-secrets"]
-    )
+    r = runner.invoke(app, ["provider", "get", "openrouter", "--show-secrets"])
     assert r.exit_code == 0
     assert "test-key" in r.stdout
 
 
 def test_set_oauth_provider_via_api_key_rejected(tmp_config: Path) -> None:
-    r = runner.invoke(
-        app, ["provider", "set", "github_copilot", "--api-key", "X"]
-    )
+    r = runner.invoke(app, ["provider", "set", "github_copilot", "--api-key", "X"])
     assert r.exit_code != 0
     assert "login" in r.output.lower()
 
@@ -185,9 +175,7 @@ def test_set_complex_provider_azure(tmp_config: Path) -> None:
 
 
 def test_unknown_field_points_to_show(tmp_config: Path) -> None:
-    r = runner.invoke(
-        app, ["provider", "set", "openrouter", "--not-a-field", "X"]
-    )
+    r = runner.invoke(app, ["provider", "set", "openrouter", "--not-a-field", "X"])
     assert r.exit_code != 0
     assert "provider show" in r.output
 
@@ -233,9 +221,7 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json")
-    )
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
 
@@ -260,9 +246,7 @@ def test_set_empty_flags_prints_schema_table(tmp_config: Path) -> None:
 
 
 def test_set_with_equals_form(tmp_config: Path) -> None:
-    r = runner.invoke(
-        app, ["provider", "set", "openrouter", "--api-key=sk-equals"]
-    )
+    r = runner.invoke(app, ["provider", "set", "openrouter", "--api-key=sk-equals"])
     assert r.exit_code == 0, r.output
     data = json.loads(tmp_config.read_text(encoding="utf-8"))
     assert data["providers"]["openrouter"]["apiKey"] == "sk-equals"

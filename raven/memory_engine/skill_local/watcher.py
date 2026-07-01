@@ -109,7 +109,8 @@ class SkillFileWatcher:
         self._thread.start()
         log.debug(
             "SkillFileWatcher started on %d root(s): %s",
-            len(self._roots), [str(r) for r in self._roots],
+            len(self._roots),
+            [str(r) for r in self._roots],
         )
         return True
 
@@ -156,14 +157,11 @@ class SkillFileWatcher:
                         # One bad callback must not kill the watcher —
                         # the next batch may target a different source.
                         log.exception(
-                            "SkillFileWatcher on_change failed "
-                            "for source=%s",
+                            "SkillFileWatcher on_change failed for source=%s",
                             source,
                         )
         except Exception:
             # Any other failure (watchfiles internal error, FS gone,
             # etc.) leaves the thread dead but the registry usable in
             # manual-invalidation mode.
-            log.exception(
-                "SkillFileWatcher crashed; auto-refresh disabled until restart"
-            )
+            log.exception("SkillFileWatcher crashed; auto-refresh disabled until restart")

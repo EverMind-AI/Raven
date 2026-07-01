@@ -69,12 +69,10 @@ def resolve_refs(body: str, skill_dir: Path | str | None) -> tuple[str, bool]:
         return mo.group(0)
 
     segments = _CODE_FENCE_RE.split(body)
-    body = "".join(
-        seg if seg.startswith("```") else _MD_LINK_RE.sub(_md_sub, seg)
-        for seg in segments
-    )
+    body = "".join(seg if seg.startswith("```") else _MD_LINK_RE.sub(_md_sub, seg) for seg in segments)
 
     if "{baseDir}" in body:
+
         def _bd_sub(mo: re.Match[str]) -> str:
             nonlocal any_resolved
             ref = mo.group(1).rstrip(".,;:")

@@ -15,6 +15,7 @@
 import { EventEmitter } from 'node:events'
 
 import type { GatewayEvent, ModelOptionProvider } from './gatewayTypes.js'
+
 import {
   STUB_COMMANDS_CATALOG,
   STUB_CONFIG_FULL,
@@ -25,7 +26,7 @@ import {
   STUB_SESSION_LIST,
   STUB_SESSION_RESUME,
   STUB_SETUP_STATUS,
-  STUB_SKIN,
+  STUB_SKIN
 } from './lib/stubGatewayFixtures.js'
 
 const DELAY_MS = 50
@@ -162,7 +163,6 @@ export class GatewayClientStub extends EventEmitter {
     this.bufferedEvents = []
     this.subscribed = false
   }
-
 
   getLogTail(_limit = 20): string {
     return '(stub gateway has no log)'

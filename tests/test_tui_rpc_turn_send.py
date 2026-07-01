@@ -123,9 +123,7 @@ async def test_turn_send_rejects_active_turn_with_minus_32003() -> None:
     await turn_send({"session_key": "tui:default", "content": "first"}, scheduler=scheduler, turn_ids=turn_ids)
 
     with pytest.raises(TurnInProgressError) as excinfo:
-        await turn_send(
-            {"session_key": "tui:default", "content": "second"}, scheduler=scheduler, turn_ids=turn_ids
-        )
+        await turn_send({"session_key": "tui:default", "content": "second"}, scheduler=scheduler, turn_ids=turn_ids)
 
     assert excinfo.value.CODE == -32003
     assert excinfo.value.MESSAGE == "turn_in_progress"
@@ -145,9 +143,7 @@ async def test_turn_send_rejects_unknown_model_with_minus_32008() -> None:
 async def test_turn_send_without_scheduler_emits_model_not_available() -> None:
     # No agent loop wired (scheduler None, no build error) → per-turn -32008 event.
     emitter = FakeEmitter()
-    result = await turn_send(
-        {"session_key": "tui:default", "content": "x"}, emitter=emitter, scheduler=None
-    )
+    result = await turn_send({"session_key": "tui:default", "content": "x"}, emitter=emitter, scheduler=None)
     assert result["accepted"] is True
     assert emitter.types() == ["message.start", "error"]
     assert emitter.emitted[-1][1]["payload"]["code"] == -32008
@@ -226,12 +222,14 @@ async def test_turn_send_accepts_optional_channel_chat_id_sender_id() -> None:
 
 
 async def test_turn_send_dispatches_via_dispatcher(dispatcher: Dispatcher) -> None:
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.send",
-        "params": {"session_key": "tui:default", "content": "hello"},
-    })
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.send",
+            "params": {"session_key": "tui:default", "content": "hello"},
+        }
+    )
 
     assert "error" not in resp, f"turn.send unexpectedly raised: {resp}"
     assert set(resp["result"]) == {"turn_id", "accepted"}
@@ -241,18 +239,22 @@ async def test_turn_send_dispatches_via_dispatcher(dispatcher: Dispatcher) -> No
 async def test_turn_send_dispatcher_returns_minus_32003_on_concurrent_send(
     dispatcher: Dispatcher,
 ) -> None:
-    await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.send",
-        "params": {"session_key": "tui:default", "content": "first"},
-    })
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "turn.send",
-        "params": {"session_key": "tui:default", "content": "second"},
-    })
+    await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.send",
+            "params": {"session_key": "tui:default", "content": "first"},
+        }
+    )
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "turn.send",
+            "params": {"session_key": "tui:default", "content": "second"},
+        }
+    )
 
     assert "error" in resp
     assert resp["error"]["code"] == -32003

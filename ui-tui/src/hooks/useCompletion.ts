@@ -6,11 +6,12 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type { CompletionItem } from '../app/interfaces.js'
-import { SLASH_COMMANDS } from '../app/slash/registry.js'
 import type { SlashCommand } from '../app/slash/types.js'
-import { looksLikeSlashCommand } from '../domain/slash.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { CompletionResponse } from '../gatewayTypes.js'
+
+import { SLASH_COMMANDS } from '../app/slash/registry.js'
+import { looksLikeSlashCommand } from '../domain/slash.js'
 import { asRpcResult } from '../lib/rpc.js'
 
 const TAB_PATH_RE = /((?:["']?(?:[A-Za-z]:[\\/]|\.{1,2}\/|~\/|\/|@|[^"'`\s]+\/))[^\s]*)$/

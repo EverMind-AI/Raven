@@ -39,7 +39,7 @@ def grade(transcript: list, workspace_path: str) -> dict:
         Dict mapping criterion names to scores (0.0 to 1.0)
     """
     scores = {}
-    
+
     # Check if there's any assistant response in the transcript
     has_response = False
     for entry in transcript:
@@ -51,8 +51,8 @@ def grade(transcript: list, workspace_path: str) -> dict:
                 if content and len(content) > 0:
                     has_response = True
                     break
-    
+
     scores["agent_responded"] = 1.0 if has_response else 0.0
-    
+
     return scores
 ```

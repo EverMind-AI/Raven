@@ -30,13 +30,16 @@ def test_legacy_everos_block_silently_dropped(tmp_path: Path) -> None:
     """Old configs may still carry ``agents.defaults.everos``. The
     migration strips it so model_validate doesn't reject the file."""
     p = tmp_path / "config.json"
-    _write(p, {
-        "agents": {
-            "defaults": {
-                "everos": {"enabled": True, "enableSkill": True},
+    _write(
+        p,
+        {
+            "agents": {
+                "defaults": {
+                    "everos": {"enabled": True, "enableSkill": True},
+                },
             },
         },
-    })
+    )
     cfg = load_config(p)
     assert not hasattr(cfg.agents.defaults, "everos")
 
@@ -49,13 +52,16 @@ def test_legacy_everos_skill_light_relocated_under_agents_defaults(
     ``skillForge.everos``; see test_config_raven_loader for the
     receiving side)."""
     p = tmp_path / "config.json"
-    _write(p, {
-        "agents": {
-            "defaults": {
-                "everosSkillLight": {"enabled": True},
+    _write(
+        p,
+        {
+            "agents": {
+                "defaults": {
+                    "everosSkillLight": {"enabled": True},
+                },
             },
         },
-    })
+    )
     cfg = load_config(p)
     assert not hasattr(cfg.agents.defaults, "everosSkillLight")
     assert not hasattr(cfg.agents.defaults, "everos_skill_light")
@@ -127,8 +133,11 @@ def test_schema_validation_error_raises(tmp_path: Path) -> None:
     # ``max_tool_iterations`` is an int — pass a string to force a
     # pydantic ValidationError, which is a ValueError subclass we
     # explicitly re-raise rather than swallow.
-    _write(p, {
-        "agents": {"defaults": {"max_tool_iterations": "not-an-int"}},
-    })
+    _write(
+        p,
+        {
+            "agents": {"defaults": {"max_tool_iterations": "not-an-int"}},
+        },
+    )
     with pytest.raises(ValueError, match="schema validation"):
         load_config(p)

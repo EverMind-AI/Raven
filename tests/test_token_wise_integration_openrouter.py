@@ -29,18 +29,13 @@ from pathlib import Path
 
 import pytest
 
+from raven.cli._token_wise_stack import install_from_config
 from raven.config.raven import TokenWiseConfig
 from raven.providers.litellm_provider import LiteLLMProvider
-from raven.cli._token_wise_stack import install_from_config
 from raven.token_wise.registry import StrategyRegistry
 
 KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "raven"
-    / "token_wise"
-    / "EXPERIMENT_REPORT.md"
-)
+REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 TURNS = 6
 COST_GUARD_USD = 0.50  # hard cap; abort if we go over
@@ -173,6 +168,7 @@ class VariantResult:
 def _build_snapshot(response, model: str, session_key: str):
     """Wrapper around AgentLoop._build_usage_snapshot for the experiment."""
     from raven.agent.loop import AgentLoop
+
     return AgentLoop._build_usage_snapshot(response, model, session_key)
 
 
@@ -205,10 +201,7 @@ async def _run_variant(
 
         # Cost guard: never exceed the hard cap.
         if sum(cost_so_far.values()) > COST_GUARD_USD:
-            pytest.fail(
-                f"Cost guard tripped at ${sum(cost_so_far.values()):.4f} "
-                f"(cap=${COST_GUARD_USD}). Aborting."
-            )
+            pytest.fail(f"Cost guard tripped at ${sum(cost_so_far.values()):.4f} (cap=${COST_GUARD_USD}). Aborting.")
 
         msgs, tools, model_chosen = await registry.before_llm_call(messages, None, MODEL)
         resp = await provider.chat_with_retry(messages=msgs, tools=tools, model=model_chosen)
@@ -219,16 +212,18 @@ async def _run_variant(
         # so the test catches any extraction/pricing bugs end-to-end.
         snap = _build_snapshot(resp, MODEL, name)
 
-        result.turns.append(TurnResult(
-            turn=turn_idx,
-            prompt_tokens=snap.input_tokens,  # fresh-only after normalization
-            completion_tokens=snap.output_tokens,
-            cache_read_tokens=snap.cache_read_tokens,
-            cache_write_tokens=snap.cache_write_tokens,
-            cost_usd=snap.estimated_cost_usd,
-            response_chars=len(resp.content or ""),
-            finish_reason=resp.finish_reason,
-        ))
+        result.turns.append(
+            TurnResult(
+                turn=turn_idx,
+                prompt_tokens=snap.input_tokens,  # fresh-only after normalization
+                completion_tokens=snap.output_tokens,
+                cache_read_tokens=snap.cache_read_tokens,
+                cache_write_tokens=snap.cache_write_tokens,
+                cost_usd=snap.estimated_cost_usd,
+                response_chars=len(resp.content or ""),
+                finish_reason=resp.finish_reason,
+            )
+        )
         cost_so_far[name] = result.total_cost
 
         # Notify strategies (so UsageTracker captures stats for V3).
@@ -305,9 +300,7 @@ def _write_report(variants: list[VariantResult], baseline_name: str) -> str:
     for v in variants:
         if v.total_cache_read > 0:
             ratio = v.total_cache_read / max(1, v.total_cache_read + v.total_prompt)
-            lines.append(
-                f"- `{v.name}`: {ratio*100:.1f}% of input tokens served from cache"
-            )
+            lines.append(f"- `{v.name}`: {ratio * 100:.1f}% of input tokens served from cache")
     lines.append("")
     lines.append("## Raw data (JSON)\n")
     lines.append("```json")
@@ -374,8 +367,12 @@ async def test_ablation_experiment(api_key: str, tmp_path: Path):
     v1 = await _run_variant(
         name="V1_baseline",
         description="No cache_control. Provider auto-cache disabled. No TokenWise.",
-        api_key=api_key, sys_prompt=sys_prompt, user_questions=questions,
-        disable_auto_cache=True, registry=v1_registry, cost_so_far=cost_so_far,
+        api_key=api_key,
+        sys_prompt=sys_prompt,
+        user_questions=questions,
+        disable_auto_cache=True,
+        registry=v1_registry,
+        cost_so_far=cost_so_far,
     )
 
     # Brief pause so the cache write from V2 (if any) doesn't bleed into V3.
@@ -386,8 +383,12 @@ async def test_ablation_experiment(api_key: str, tmp_path: Path):
     v2 = await _run_variant(
         name="V2_provider_auto",
         description="LiteLLMProvider built-in cache_control (system + last tool). No TokenWise.",
-        api_key=api_key, sys_prompt=sys_prompt, user_questions=questions,
-        disable_auto_cache=False, registry=v2_registry, cost_so_far=cost_so_far,
+        api_key=api_key,
+        sys_prompt=sys_prompt,
+        user_questions=questions,
+        disable_auto_cache=False,
+        registry=v2_registry,
+        cost_so_far=cost_so_far,
     )
 
     await asyncio.sleep(2)
@@ -398,8 +399,12 @@ async def test_ablation_experiment(api_key: str, tmp_path: Path):
     v3 = await _run_variant(
         name="V3_tokenwise",
         description="TokenWise CacheOptimizer (4 breakpoints) + UsageTracker. Provider auto-cache disabled.",
-        api_key=api_key, sys_prompt=sys_prompt, user_questions=questions,
-        disable_auto_cache=True, registry=v3_registry, cost_so_far=cost_so_far,
+        api_key=api_key,
+        sys_prompt=sys_prompt,
+        user_questions=questions,
+        disable_auto_cache=True,
+        registry=v3_registry,
+        cost_so_far=cost_so_far,
     )
 
     # Sanity: UsageTracker recorded V3's calls and persisted them.
@@ -430,9 +435,7 @@ async def test_ablation_experiment(api_key: str, tmp_path: Path):
         f"V2 (provider auto-cache) had no cache hits; system_prompt cache "
         f"may not have been created. v2.turns={v2.turns}"
     )
-    assert v3.total_cache_read > 0, (
-        f"V3 had no cache hits across {TURNS} turns. v3.turns={v3.turns}"
-    )
+    assert v3.total_cache_read > 0, f"V3 had no cache hits across {TURNS} turns. v3.turns={v3.turns}"
     # Note: cache_write may legitimately be 0 if a previous test run already
     # populated Anthropic's ephemeral cache for this exact prefix (5-min TTL).
     # The presence of cache_read > 0 is the real proof the system works end-to-end.
@@ -451,8 +454,7 @@ async def test_ablation_experiment(api_key: str, tmp_path: Path):
     # V2 should also save vs baseline (provider auto-cache works, just not as well).
     v2_savings_pct = (1 - v2.total_cost / v1.total_cost) * 100
     assert v2_savings_pct > 0, (
-        f"V2 (provider auto-cache) showed no savings vs V1 (${v2.total_cost:.6f} "
-        f"vs ${v1.total_cost:.6f})"
+        f"V2 (provider auto-cache) showed no savings vs V1 (${v2.total_cost:.6f} vs ${v1.total_cost:.6f})"
     )
     # V3 should be at least as good as V2 (more breakpoints can only help).
     assert v3.total_cost <= v2.total_cost * 1.05, (  # 5% tolerance for noise

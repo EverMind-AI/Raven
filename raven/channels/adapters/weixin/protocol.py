@@ -94,10 +94,7 @@ def build_headers(token: str = "", route_tag: Any = None) -> dict[str, str]:
 def has_downloadable_media_locator(media: dict[str, Any] | None) -> bool:
     if not isinstance(media, dict):
         return False
-    return bool(
-        str(media.get("encrypt_query_param", "") or "")
-        or str(media.get("full_url", "") or "").strip()
-    )
+    return bool(str(media.get("encrypt_query_param", "") or "") or str(media.get("full_url", "") or "").strip())
 
 
 def ext_for_type(media_type: str) -> str:

@@ -59,9 +59,7 @@ def test_skill_list_renders_table(tmp_config: Path, monkeypatch: pytest.MonkeyPa
     fake_svc = SimpleNamespace(
         gather_all_skills=lambda: [_make_meta("alpha"), _make_meta("beta", source="workspace")],
     )
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "list"])
     assert r.exit_code == 0
@@ -73,9 +71,7 @@ def test_skill_list_renders_table(tmp_config: Path, monkeypatch: pytest.MonkeyPa
 def test_skill_list_empty_message(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Empty registry prints the ``No skills found`` notice."""
     fake_svc = SimpleNamespace(gather_all_skills=lambda: [])
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "list"])
     assert r.exit_code == 0
@@ -90,9 +86,7 @@ def test_skill_list_filters_by_source(tmp_config: Path, monkeypatch: pytest.Monk
             _make_meta("beta", source="workspace"),
         ],
     )
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "list", "--source", "workspace"])
     assert r.exit_code == 0
@@ -106,9 +100,7 @@ def test_skill_get_known_skill(tmp_config: Path, monkeypatch: pytest.MonkeyPatch
         get_skill_metadata=lambda _: {"name": "alpha", "source": "builtin"},
         load_skill=lambda _: "# SKILL.md body",
     )
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "get", "alpha"])
     assert r.exit_code == 0
@@ -121,26 +113,20 @@ def test_skill_get_unknown_skill_exits_1(tmp_config: Path, monkeypatch: pytest.M
         get_skill_metadata=lambda _: None,
         load_skill=lambda _: None,
     )
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "get", "ghost-skill"])
     assert r.exit_code == 1
     assert "Skill not found" in r.stdout
 
 
-def test_skill_get_with_body_renders_markdown(
-    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skill_get_with_body_renders_markdown(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--with-body`` prints the SKILL.md body section."""
     fake_svc = SimpleNamespace(
         get_skill_metadata=lambda _: {"source": "builtin"},
         load_skill=lambda _: "# Title\nbody text",
     )
-    monkeypatch.setattr(
-        "raven.cli.skill_commands._build_skill_service", lambda: fake_svc
-    )
+    monkeypatch.setattr("raven.cli.skill_commands._build_skill_service", lambda: fake_svc)
 
     r = runner.invoke(app, ["skill", "get", "alpha", "--with-body"])
     assert r.exit_code == 0

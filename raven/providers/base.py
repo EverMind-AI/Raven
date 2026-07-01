@@ -31,6 +31,7 @@ class ErrorClassification:
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
+
     id: str
     name: str
     arguments: dict[str, Any]
@@ -57,6 +58,7 @@ class ToolCallRequest:
 @dataclass
 class LLMResponse:
     """Response from an LLM provider."""
+
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
@@ -140,7 +142,8 @@ class LLMProvider(ABC):
 
             if isinstance(content, list):
                 filtered = [
-                    item for item in content
+                    item
+                    for item in content
                     if not (
                         isinstance(item, dict)
                         and item.get("type") in ("text", "input_text", "output_text")
@@ -291,7 +294,9 @@ class LLMProvider(ABC):
 
     @classmethod
     def classify_error(
-        cls, exc: BaseException | None = None, content: str | None = None,
+        cls,
+        exc: BaseException | None = None,
+        content: str | None = None,
     ) -> ErrorClassification:
         """Classify a failed call by exception type + HTTP status + message.
 
@@ -311,14 +316,23 @@ class LLMProvider(ABC):
         # window won't help; the same model after compaction will). Detected by
         # class name first — a bare 400 otherwise looks like invalid_request.
         if "contextwindowexceedederror" in names or has(
-            "context length", "context window", "maximum context",
-            "too many tokens", "reduce the length",
+            "context length",
+            "context window",
+            "maximum context",
+            "too many tokens",
+            "reduce the length",
         ):
             return ErrorClassification("context_overflow", should_compress=True)
 
         # Rate limit → wait and retry; a different provider may not be throttled.
-        if status == 429 or "ratelimiterror" in names or has(
-            "rate limit", "429", "too many requests",
+        if (
+            status == 429
+            or "ratelimiterror" in names
+            or has(
+                "rate limit",
+                "429",
+                "too many requests",
+            )
         ):
             return ErrorClassification("rate_limit", retryable=True, should_fallback=True)
 
@@ -326,32 +340,61 @@ class LLMProvider(ABC):
         if (
             status in (500, 502, 503, 504)
             or {"internalservererror", "serviceunavailableerror", "badgatewayerror"} & names
-            or has("overloaded", "server error", "service unavailable",
-                   "temporarily unavailable", "500", "502", "503", "504")
+            or has(
+                "overloaded",
+                "server error",
+                "service unavailable",
+                "temporarily unavailable",
+                "500",
+                "502",
+                "503",
+                "504",
+            )
         ):
             return ErrorClassification("server", retryable=True, should_fallback=True)
 
         # Timeout / connection → retry + fallback.
         if {"timeout", "apitimeouterror", "apiconnectionerror"} & names or has(
-            "timeout", "timed out", "connection",
+            "timeout",
+            "timed out",
+            "connection",
         ):
             return ErrorClassification("network", retryable=True, should_fallback=True)
 
         # Auth / permission → fatal config; retry & fallback won't fix it.
-        if status in (401, 403) or {"authenticationerror", "permissiondeniederror"} & names or has(
-            "unauthorized", "invalid api key", "permission denied",
+        if (
+            status in (401, 403)
+            or {"authenticationerror", "permissiondeniederror"} & names
+            or has(
+                "unauthorized",
+                "invalid api key",
+                "permission denied",
+            )
         ):
             return ErrorClassification("auth")
 
         # Billing / quota → same model can't recover, a different provider might.
         if status == 402 or has(
-            "billing", "quota", "insufficient", "credit", "payment", "exceeded your current",
+            "billing",
+            "quota",
+            "insufficient",
+            "credit",
+            "payment",
+            "exceeded your current",
         ):
             return ErrorClassification("billing", should_fallback=True)
 
         # Model unavailable / not found → no point retrying it; try another model.
-        if status == 404 or "notfounderror" in names or has(
-            "model not found", "does not exist", "no endpoints", "not available", "unavailable",
+        if (
+            status == 404
+            or "notfounderror" in names
+            or has(
+                "model not found",
+                "does not exist",
+                "no endpoints",
+                "not available",
+                "unavailable",
+            )
         ):
             return ErrorClassification("model_unavailable", should_fallback=True)
 
@@ -432,7 +475,11 @@ class LLMProvider(ABC):
             delay = self._jittered(self._CHAT_RETRY_DELAYS[attempt - 1])
             logger.warning(
                 "LLM error [{}] (attempt {}/{}) model={}, retrying in {:.1f}s: {}",
-                classification.category, attempt, total_attempts, model, delay,
+                classification.category,
+                attempt,
+                total_attempts,
+                model,
+                delay,
                 (response.content or "")[:120],
             )
             await asyncio.sleep(delay)

@@ -1,4 +1,5 @@
 """DirectExecutor: runs commands directly on the host process (no isolation)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,16 +16,33 @@ _MAX_TIMEOUT = 600
 # plus whatever the caller explicitly supplies.
 _ENV_ALLOWLIST = (
     # Locale / shell basics
-    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "USER", "LOGNAME",
-    "SHELL", "PWD", "TZ", "TMPDIR",
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PWD",
+    "TZ",
+    "TMPDIR",
     # Language runtimes (so python / node / venv-based tools resolve correctly)
-    "PYTHONPATH", "VIRTUAL_ENV",
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
     # TLS trust + proxy (so git / curl / https tools work behind corp setups).
     # These are config, not crown-jewel secrets (API keys / cloud creds / SSH
     # are deliberately NOT here).
-    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
 )
 
 
@@ -58,9 +76,7 @@ class DirectExecutor(SandboxExecutor):
             env={**_baseline_env(), **(env or {})},
         )
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                process.communicate(), timeout=effective_timeout
-            )
+            stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             process.kill()
             try:

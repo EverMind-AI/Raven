@@ -30,7 +30,6 @@ from raven import __version__
 from raven.memory_engine.base import AssembledContext, TokenBudget
 from raven.token_wise.base import TokenStrategy, UsageSnapshot
 
-
 # ---------------------------------------------------------------------------
 # Package metadata
 # ---------------------------------------------------------------------------

@@ -722,9 +722,7 @@ describe('createSlashHandler', () => {
     await vi.waitFor(() => {
       // transcript is NOT cleared (history preserved)
       expect(ctx.transcript.setHistoryItems).not.toHaveBeenCalled()
-      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls
-        .map(c => String(c[0]))
-        .join('\n')
+      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.map(c => String(c[0])).join('\n')
       expect(lines).toContain('Forked')
       expect(lines).toContain('Greeting (fork)')
       expect(lines).toContain('3 messages carried')
@@ -737,17 +735,13 @@ describe('createSlashHandler', () => {
 
   it('/fork singularizes the carried-message count', async () => {
     patchUiState({ sid: 'tui:20260616_074815_3d2dca' })
-    const rpc = vi.fn(() =>
-      Promise.resolve({ session_id: 'tui:child', title: 't (fork)', message_count: 1 })
-    )
+    const rpc = vi.fn(() => Promise.resolve({ session_id: 'tui:child', title: 't (fork)', message_count: 1 }))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     createSlashHandler(ctx)('/fork')
 
     await vi.waitFor(() => {
-      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls
-        .map(c => String(c[0]))
-        .join('\n')
+      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.map(c => String(c[0])).join('\n')
       expect(lines).toContain('1 message carried')
       expect(lines).not.toContain('1 messages carried')
     })
@@ -757,17 +751,13 @@ describe('createSlashHandler', () => {
     // Guards the defensive prevSid-empty branch: the backend never returns a
     // truthy session_id for an empty source, so this co-occurrence is
     // unreachable in production, but the renderer must not print a blank parent.
-    const rpc = vi.fn(() =>
-      Promise.resolve({ session_id: 'tui:child', title: 't (fork)', message_count: 0 })
-    )
+    const rpc = vi.fn(() => Promise.resolve({ session_id: 'tui:child', title: 't (fork)', message_count: 0 }))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     createSlashHandler(ctx)('/fork')
 
     await vi.waitFor(() => {
-      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls
-        .map(c => String(c[0]))
-        .join('\n')
+      const lines = (ctx.transcript.sys as ReturnType<typeof vi.fn>).mock.calls.map(c => String(c[0])).join('\n')
       expect(lines).toContain('parent  (none)')
     })
   })

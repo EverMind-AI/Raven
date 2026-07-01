@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest'
 
+import type { SubagentProgress } from '../types.js'
+
 import {
   buildSubagentTree,
   descendantIds,
@@ -20,7 +22,6 @@ import {
   treeTotals,
   widthByDepth
 } from '../lib/subagentTree.js'
-import type { SubagentProgress } from '../types.js'
 
 const makeItem = (overrides: Partial<SubagentProgress> & Pick<SubagentProgress, 'id' | 'index'>): SubagentProgress => ({
   depth: 0,

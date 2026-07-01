@@ -41,16 +41,12 @@ def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
     pending = [
         j
         for j in jobs
-        if (j.payload.channel or "") == "cli"
-        and j.state.next_run_at_ms
-        and j.state.next_run_at_ms > now_ms
+        if (j.payload.channel or "") == "cli" and j.state.next_run_at_ms and j.state.next_run_at_ms > now_ms
     ]
     if not pending:
         return
 
-    console.print(
-        f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]"
-    )
+    console.print(f"\n[yellow]⚠  You have {len(pending)} pending CLI reminder(s):[/yellow]")
     for j in pending:
         fire = datetime.fromtimestamp(j.state.next_run_at_ms / 1000).strftime("%H:%M")
         mins = max(0, (j.state.next_run_at_ms - now_ms) // 60_000)
@@ -82,9 +78,7 @@ def make_provider(config: Config):
     elif provider_name == "azure_openai":
         if not p or not p.api_key or not p.api_base:
             console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print(
-                "Set them in ~/.raven/config.json under providers.azure_openai section"
-            )
+            console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
             console.print("Use the model field to specify the deployment name.")
             raise typer.Exit(1)
         provider = AzureOpenAIProvider(
@@ -183,12 +177,10 @@ def print_probe_troubleshooting(provider: str | None) -> None:
     console.print("\n  [dim]Troubleshooting:[/dim]")
     if provider:
         console.print(
-            f"  [dim]·[/dim] [cyan]raven provider test {provider}[/cyan] — "
-            "re-check credentials without spending tokens"
+            f"  [dim]·[/dim] [cyan]raven provider test {provider}[/cyan] — re-check credentials without spending tokens"
         )
         console.print(
-            f"  [dim]·[/dim] [cyan]raven provider get {provider}[/cyan] — "
-            "inspect what's actually stored on disk"
+            f"  [dim]·[/dim] [cyan]raven provider get {provider}[/cyan] — inspect what's actually stored on disk"
         )
     console.print(
         "  [dim]·[/dim] Check the model id in [cyan]~/.raven/config.json[/cyan] "
@@ -235,8 +227,7 @@ def parse_fake_now(fake_now: str | None):
         frozen = _dt.fromisoformat(fake_now)
     except ValueError as exc:
         raise typer.BadParameter(
-            f"--fake-now must be an ISO-8601 timestamp (e.g. 2026-05-13T09:00:00); "
-            f"got {fake_now!r}: {exc}"
+            f"--fake-now must be an ISO-8601 timestamp (e.g. 2026-05-13T09:00:00); got {fake_now!r}: {exc}"
         ) from exc
     return lambda: frozen
 

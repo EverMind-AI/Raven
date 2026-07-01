@@ -70,9 +70,7 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
 
 
 async def test_options_unauthed_provider_marked(fake_home: Path) -> None:
-    _write_config(
-        fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}
-    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
     entry = _entry(result, "openai")
     assert entry["authenticated"] is False
@@ -110,9 +108,7 @@ async def test_options_current_provider_derived_from_model(fake_home: Path) -> N
 
 
 async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> None:
-    _write_config(
-        fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}
-    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
     entry = _entry(result, "openai_codex")
     assert entry["auth_type"] == "oauth"
@@ -122,9 +118,7 @@ async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> 
 
 
 async def test_options_needs_api_base_flag(fake_home: Path) -> None:
-    _write_config(
-        fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}
-    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
     assert _entry(result, "custom")["needs_api_base"] is True
     assert _entry(result, "azure_openai")["needs_api_base"] is True
@@ -200,9 +194,7 @@ async def test_add_model_reflected_in_options(fake_home: Path) -> None:
 async def test_remove_model_reflected_in_options(fake_home: Path) -> None:
     await model_save_key({"slug": "anthropic", "api_key": "sk-ant-xxx"})
     await model_add_model({"slug": "anthropic", "model": "claude-opus-4-8"})
-    result = await model_remove_model(
-        {"slug": "anthropic", "model": "claude-opus-4-8"}
-    )
+    result = await model_remove_model({"slug": "anthropic", "model": "claude-opus-4-8"})
     assert "claude-opus-4-8" not in result["provider"]["models"]
 
     options = await model_options({})
@@ -223,14 +215,10 @@ async def test_model_methods_registered_via_helper(fake_home: Path) -> None:
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.methods.model import register_model_methods
 
-    _write_config(
-        fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}
-    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     d = Dispatcher()
     register_model_methods(d)
-    resp = await d.dispatch(
-        {"jsonrpc": "2.0", "id": 1, "method": "model.options", "params": {}}
-    )
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "model.options", "params": {}})
     assert "error" not in resp
     assert resp["result"]["model"] == "anthropic/claude-sonnet-4-5"
 
@@ -253,9 +241,7 @@ async def test_model_methods_registered_via_helper(fake_home: Path) -> None:
 async def test_options_accepts_session_id(fake_home: Path) -> None:
     # The picker calls model.options with {session_id: "tui:default"}; the param
     # model must accept it (strict models reject unknown keys otherwise).
-    _write_config(
-        fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}
-    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({"session_id": "tui:default"})
     assert "providers" in result
 

@@ -132,9 +132,7 @@ async def turn_send(
                     emitter, parsed.session_key, turn_id, build_error.code, build_error.message
                 )
             else:
-                await _emit_start_then_error(
-                    emitter, parsed.session_key, turn_id, -32008, "model_not_available"
-                )
+                await _emit_start_then_error(emitter, parsed.session_key, turn_id, -32008, "model_not_available")
         return {"turn_id": turn_id, "accepted": True}
 
     if is_turn_active(parsed.session_key):
@@ -161,9 +159,7 @@ async def turn_send(
         # Server shutting down: surface a turn_failed so the front-end clears its
         # slot; nothing is bound (no leak).
         if emitter is not None:
-            await _emit_start_then_error(
-                emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed"
-            )
+            await _emit_start_then_error(emitter, parsed.session_key, turn_id, _TURN_FAILED_CODE, "turn_failed")
         return {"turn_id": turn_id, "accepted": True}
 
     # Bind immediately after submit with no await between (the runner reads
@@ -175,9 +171,7 @@ async def turn_send(
     _active_turns[parsed.session_key] = handle
 
     if emitter is not None:
-        await emitter.emit(
-            parsed.session_key, {"type": "message.start", "payload": {"turn_id": turn_id}}
-        )
+        await emitter.emit(parsed.session_key, {"type": "message.start", "payload": {"turn_id": turn_id}})
 
     return {"turn_id": turn_id, "accepted": True}
 
@@ -191,8 +185,7 @@ async def turn_subscribe(
     parsed = TurnSubscribeParams.model_validate(params)
     if emitter is None:
         raise RuntimeError(
-            "turn.subscribe requires a SubscriptionEmitter; "
-            "register_turn_methods must be called with emitter=...",
+            "turn.subscribe requires a SubscriptionEmitter; register_turn_methods must be called with emitter=...",
         )
     sub_id = await emitter.register(parsed.session_key)
     return {"subscription_id": sub_id}
@@ -207,8 +200,7 @@ async def turn_unsubscribe(
     parsed = TurnUnsubscribeParams.model_validate(params)
     if emitter is None:
         raise RuntimeError(
-            "turn.unsubscribe requires a SubscriptionEmitter; "
-            "register_turn_methods must be called with emitter=...",
+            "turn.unsubscribe requires a SubscriptionEmitter; register_turn_methods must be called with emitter=...",
         )
     unsubscribed = await emitter.unregister(parsed.subscription_id)
     return {"unsubscribed": unsubscribed}
@@ -247,14 +239,17 @@ async def turn_cancel(
     handle.cancel()
 
     if emitter is not None:
-        await emitter.emit(parsed.session_key, {
-            "type": "error",
-            "payload": {
-                "code": _TURN_FAILED_CODE,
-                "message": "turn_cancelled",
-                "reason": "cancelled_by_client",
+        await emitter.emit(
+            parsed.session_key,
+            {
+                "type": "error",
+                "payload": {
+                    "code": _TURN_FAILED_CODE,
+                    "message": "turn_cancelled",
+                    "reason": "cancelled_by_client",
+                },
             },
-        })
+        )
 
     # Drain so the sink has dropped the active-turn slot before returning.
     # handle.result() returns None on cancellation (does not raise).

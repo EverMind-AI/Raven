@@ -10,9 +10,7 @@ from typing import Any
 
 
 def build_obs_block(obs: list[dict[str, Any]]) -> str:
-    return "\n".join(
-        f"[t={e.get('time', '?')}] {e.get('event', '')}" for e in obs
-    )
+    return "\n".join(f"[t={e.get('time', '?')}] {e.get('event', '')}" for e in obs)
 
 
 def build_synth_block(synth: Any) -> str:

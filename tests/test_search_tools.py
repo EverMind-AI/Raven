@@ -3,6 +3,7 @@
 Tests exercise both the ripgrep-backed path (when rg is on PATH) and the
 pure-Python fallback (forced by patching shutil.which to return None).
 """
+
 from __future__ import annotations
 
 import shutil
@@ -25,6 +26,7 @@ def tree(tmp_path: Path) -> Path:
 
 
 # ── grep ────────────────────────────────────────────────────────────────
+
 
 async def test_grep_content_finds_match(tree: Path):
     tool = GrepTool(workspace=tree, allowed_dir=tree)
@@ -105,6 +107,7 @@ async def test_grep_outside_allowed_dir(tmp_path: Path):
 
 # ── find ────────────────────────────────────────────────────────────────
 
+
 async def test_find_basename_recursive(tree: Path):
     tool = FindTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="*.py")
@@ -136,6 +139,7 @@ async def test_find_sorted_by_recency(tree: Path):
     # util.py touched last → should sort first
     import os
     import time
+
     os.utime(tree / "src" / "util.py", (time.time() + 100, time.time() + 100))
     tool = FindTool(workspace=tree, allowed_dir=tree)
     out = await tool.execute(pattern="*.py")

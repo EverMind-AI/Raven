@@ -41,17 +41,12 @@ from raven.agent.loop import AgentLoop
 from raven.agent.tools.base import Tool
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.cache_optimizer import CacheOptimizer
-from raven.token_wise.system_and_tail_cache import SystemAndTailCacheStrategy
 from raven.token_wise.registry import StrategyRegistry
+from raven.token_wise.system_and_tail_cache import SystemAndTailCacheStrategy
 from raven.token_wise.usage_tracker import UsageTracker
 
 KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "raven"
-    / "token_wise"
-    / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
-)
+REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT_HERMES_VS_RAVEN.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 COST_GUARD_USD = 2.00
 _OPENROUTER_PIN = {"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
@@ -130,10 +125,7 @@ def _seed_workspace(workspace: Path, soul: str) -> None:
 # Custom tools
 # ---------------------------------------------------------------------------
 
-_BLOB = "\n".join(
-    f"  field_{i:02d}: value_{i:02d}_aaaa_bbbb_cccc_dddd_eeee_ffff_gggg"
-    for i in range(35)
-)
+_BLOB = "\n".join(f"  field_{i:02d}: value_{i:02d}_aaaa_bbbb_cccc_dddd_eeee_ffff_gggg" for i in range(35))
 
 
 class _ToolAlpha(Tool):
@@ -338,7 +330,8 @@ async def _run_variant(
 
     sys_prompt = loop.context.build_system_prompt()
     result = VariantResult(
-        name=variant_name, strategy=strategy_label,
+        name=variant_name,
+        strategy=strategy_label,
         sys_prompt_chars=len(sys_prompt),
         tools_count=len(register_tools or []),
     )
@@ -352,13 +345,15 @@ async def _run_variant(
             await _run_user_turn(loop, q, session_key=session_key, chat_id=variant_name)
             # Collect ALL LLM calls this turn produced (may be >1 for tool chains)
             for snap in tracker.history[before_count:]:
-                result.calls.append(CallResult(
-                    fresh_prompt=snap.input_tokens,
-                    cache_read=snap.cache_read_tokens,
-                    cache_write=snap.cache_write_tokens,
-                    completion=snap.output_tokens,
-                    cost_usd=snap.estimated_cost_usd,
-                ))
+                result.calls.append(
+                    CallResult(
+                        fresh_prompt=snap.input_tokens,
+                        cache_read=snap.cache_read_tokens,
+                        cache_write=snap.cache_write_tokens,
+                        completion=snap.output_tokens,
+                        cost_usd=snap.estimated_cost_usd,
+                    )
+                )
             cost_so_far[f"{scenario_tag}:{variant_name}"] = result.total_cost
     except Exception as e:
         result.error = repr(e)
@@ -375,8 +370,7 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
     lines: list[str] = []
     lines.append("# Hermes ``system_and_3`` vs Raven ``CacheOptimizer`` — Head-to-Head\n")
     lines.append(
-        "_Both strategies faithfully reproduced and benchmarked through the "
-        "real ``AgentLoop.run_turn`` code path._\n"
+        "_Both strategies faithfully reproduced and benchmarked through the real ``AgentLoop.run_turn`` code path._\n"
     )
     lines.append(f"_Generated: {datetime.now(timezone.utc).isoformat()} UTC_\n")
     lines.append(f"Model: `{MODEL}` (via OpenRouter, pinned to Anthropic)\n")
@@ -406,7 +400,8 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
         for v in sc.variants:
             delta = (
                 f"{(v.total_cost - baseline.total_cost) / baseline.total_cost * 100:+.1f}%"
-                if baseline.total_cost > 0 else "n/a"
+                if baseline.total_cost > 0
+                else "n/a"
             )
             total_input = v.total_fresh + v.total_cache_read + v.total_cache_write
             hit_pct = f"{v.total_cache_read / total_input * 100:.1f}%" if total_input > 0 else "0%"
@@ -418,10 +413,7 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
 
         lines.append("\n### Per-call detail\n")
         for v in sc.variants:
-            lines.append(
-                f"#### {v.name} ({v.strategy}, sys={v.sys_prompt_chars:,}ch, "
-                f"tools={v.tools_count})\n"
-            )
+            lines.append(f"#### {v.name} ({v.strategy}, sys={v.sys_prompt_chars:,}ch, tools={v.tools_count})\n")
             if v.error:
                 lines.append(f"**ERROR**: `{v.error}`\n")
             lines.append("| # | Fresh | Cache R | Cache W | Compl | Cost |")
@@ -444,10 +436,7 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
             if v2.total_cost > 0:
                 vs = (1 - v3.total_cost / v2.total_cost) * 100
                 winner = v3.name if vs > 0 else v2.name
-                lines.append(
-                    f"- **Winner: {winner}** "
-                    f"(Raven vs Hermes: {vs:+.1f}%)\n"
-                )
+                lines.append(f"- **Winner: {winner}** (Raven vs Hermes: {vs:+.1f}%)\n")
 
     # Final verdict
     lines.append("\n---\n\n## Overall verdict\n")
@@ -473,13 +462,20 @@ def _write_report(scenarios: list[ScenarioResult]) -> str:
                     "tools_count": v.tools_count,
                     "n_calls": v.n,
                     "totals": {
-                        "fresh": v.total_fresh, "cache_w": v.total_cache_write,
-                        "cache_r": v.total_cache_read, "completion": v.total_completion,
+                        "fresh": v.total_fresh,
+                        "cache_w": v.total_cache_write,
+                        "cache_r": v.total_cache_read,
+                        "completion": v.total_completion,
                         "cost": v.total_cost,
                     },
                     "calls": [
-                        {"fresh": c.fresh_prompt, "cr": c.cache_read, "cw": c.cache_write,
-                         "comp": c.completion, "cost": c.cost_usd}
+                        {
+                            "fresh": c.fresh_prompt,
+                            "cr": c.cache_read,
+                            "cw": c.cache_write,
+                            "comp": c.completion,
+                            "cost": c.cost_usd,
+                        }
                         for c in v.calls
                     ],
                     "error": v.error,
@@ -511,8 +507,9 @@ async def test_hermes_vs_raven(api_key: str, tmp_path: Path):
     # ================================================================
     # S1 — Pure conversation (no tools), 8 turns
     # ================================================================
-    s1_questions = [f"Reply with only the word '{w}'." for w in
-                    ["OK", "YES", "DONE", "AFFIRM", "ACK", "READY", "CHECK", "END"]]
+    s1_questions = [
+        f"Reply with only the word '{w}'." for w in ["OK", "YES", "DONE", "AFFIRM", "ACK", "READY", "CHECK", "END"]
+    ]
     s1_variants = []
     for vname, strategy_label, cache_strat, disable_auto in [
         ("V1_baseline", "none", None, True),
@@ -520,23 +517,31 @@ async def test_hermes_vs_raven(api_key: str, tmp_path: Path):
         ("V3_hermes", "sys+last_3", SystemAndTailCacheStrategy(), True),
     ]:
         v = await _run_variant(
-            variant_name=vname, strategy_label=strategy_label,
-            api_key=api_key, workspace_root=tmp_path, scenario_tag="S1",
-            soul=_medium_soul(), questions=s1_questions, register_tools=None,
-            cache_strategy=cache_strat, disable_provider_auto_cache=disable_auto,
+            variant_name=vname,
+            strategy_label=strategy_label,
+            api_key=api_key,
+            workspace_root=tmp_path,
+            scenario_tag="S1",
+            soul=_medium_soul(),
+            questions=s1_questions,
+            register_tools=None,
+            cache_strategy=cache_strat,
+            disable_provider_auto_cache=disable_auto,
             cost_so_far=cost,
         )
         s1_variants.append(v)
         await asyncio.sleep(2)
 
-    scenarios.append(ScenarioResult(
-        name="S1: Pure conversation (8 turns, no tools)",
-        description=(
-            "Medium SOUL.md (~600 tok). 8 single-token Q&A turns. No tools registered. "
-            "Tests cross-turn history caching."
-        ),
-        variants=s1_variants,
-    ))
+    scenarios.append(
+        ScenarioResult(
+            name="S1: Pure conversation (8 turns, no tools)",
+            description=(
+                "Medium SOUL.md (~600 tok). 8 single-token Q&A turns. No tools registered. "
+                "Tests cross-turn history caching."
+            ),
+            variants=s1_variants,
+        )
+    )
 
     # ================================================================
     # S2 — Intra-turn tool chain (3 tools sequentially per turn, 3 turns)
@@ -554,33 +559,38 @@ async def test_hermes_vs_raven(api_key: str, tmp_path: Path):
         ("V3_hermes", "sys+last_3", SystemAndTailCacheStrategy(), True),
     ]:
         v = await _run_variant(
-            variant_name=vname, strategy_label=strategy_label,
-            api_key=api_key, workspace_root=tmp_path, scenario_tag="S2",
-            soul=_tool_chain_soul(), questions=s2_questions,
+            variant_name=vname,
+            strategy_label=strategy_label,
+            api_key=api_key,
+            workspace_root=tmp_path,
+            scenario_tag="S2",
+            soul=_tool_chain_soul(),
+            questions=s2_questions,
             register_tools=chain_tools,
-            cache_strategy=cache_strat, disable_provider_auto_cache=disable_auto,
-            cost_so_far=cost, max_iterations=8,
+            cache_strategy=cache_strat,
+            disable_provider_auto_cache=disable_auto,
+            cost_so_far=cost,
+            max_iterations=8,
         )
         s2_variants.append(v)
         await asyncio.sleep(2)
 
-    scenarios.append(ScenarioResult(
-        name="S2: Intra-turn tool chain (3 tools × 3 turns)",
-        description=(
-            "Small SOUL.md (~300 tok). 3 registered tools (alpha/beta/gamma). "
-            "System prompt instructs: call exactly one tool per LLM response, "
-            "in order. Each turn = up to 4 LLM calls. Tests intra-turn prefix caching."
-        ),
-        variants=s2_variants,
-    ))
+    scenarios.append(
+        ScenarioResult(
+            name="S2: Intra-turn tool chain (3 tools × 3 turns)",
+            description=(
+                "Small SOUL.md (~300 tok). 3 registered tools (alpha/beta/gamma). "
+                "System prompt instructs: call exactly one tool per LLM response, "
+                "in order. Each turn = up to 4 LLM calls. Tests intra-turn prefix caching."
+            ),
+            variants=s2_variants,
+        )
+    )
 
     # ================================================================
     # S3 — Mixed: multi-turn, one tool per turn, 6 turns
     # ================================================================
-    s3_questions = [
-        f"Look up id 'item_{i:02d}' and confirm in one word."
-        for i in range(1, 7)
-    ]
+    s3_questions = [f"Look up id 'item_{i:02d}' and confirm in one word." for i in range(1, 7)]
     s3_variants = []
     for vname, strategy_label, cache_strat, disable_auto in [
         ("V1_baseline", "none", None, True),
@@ -588,24 +598,32 @@ async def test_hermes_vs_raven(api_key: str, tmp_path: Path):
         ("V3_hermes", "sys+last_3", SystemAndTailCacheStrategy(), True),
     ]:
         v = await _run_variant(
-            variant_name=vname, strategy_label=strategy_label,
-            api_key=api_key, workspace_root=tmp_path, scenario_tag="S3",
-            soul=_single_tool_soul(), questions=s3_questions,
+            variant_name=vname,
+            strategy_label=strategy_label,
+            api_key=api_key,
+            workspace_root=tmp_path,
+            scenario_tag="S3",
+            soul=_single_tool_soul(),
+            questions=s3_questions,
             register_tools=[_DataLookup()],
-            cache_strategy=cache_strat, disable_provider_auto_cache=disable_auto,
-            cost_so_far=cost, max_iterations=4,
+            cache_strategy=cache_strat,
+            disable_provider_auto_cache=disable_auto,
+            cost_so_far=cost,
+            max_iterations=4,
         )
         s3_variants.append(v)
         await asyncio.sleep(2)
 
-    scenarios.append(ScenarioResult(
-        name="S3: Mixed — one tool per turn (6 turns)",
-        description=(
-            "Small SOUL.md (~300 tok). 1 tool (data_lookup). Each turn = 2 LLM calls "
-            "(decide + respond). Tests the common real-world agent workload."
-        ),
-        variants=s3_variants,
-    ))
+    scenarios.append(
+        ScenarioResult(
+            name="S3: Mixed — one tool per turn (6 turns)",
+            description=(
+                "Small SOUL.md (~300 tok). 1 tool (data_lookup). Each turn = 2 LLM calls "
+                "(decide + respond). Tests the common real-world agent workload."
+            ),
+            variants=s3_variants,
+        )
+    )
 
     # Write report
     body = _write_report(scenarios)

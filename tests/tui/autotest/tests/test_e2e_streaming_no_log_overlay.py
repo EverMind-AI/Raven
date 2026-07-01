@@ -40,9 +40,7 @@ _LEAK_RE = re.compile(
 @pytest.mark.e2e
 def test_tui_chat_streaming_no_log_overlay(harness):
     harness.spawn("uv run raven tui")
-    assert harness.wait(r"Raven", timeout=25.0), (
-        f"TUI did not reach banner; screen=\n{harness.screen()}"
-    )
+    assert harness.wait(r"Raven", timeout=25.0), f"TUI did not reach banner; screen=\n{harness.screen()}"
     harness.type("Reply in exactly 30 words about anything.")
     harness.press("enter")
 

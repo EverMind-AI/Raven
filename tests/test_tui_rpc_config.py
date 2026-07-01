@@ -64,9 +64,7 @@ async def test_config_get_unknown_keys_silently_omitted(fake_home: Path) -> None
 
 async def test_config_get_reads_persisted_values(fake_home: Path) -> None:
     (fake_home / ".raven").mkdir()
-    (fake_home / ".raven" / "config.json").write_text(
-        json.dumps({"tui": {"theme": "solarized-dark"}})
-    )
+    (fake_home / ".raven" / "config.json").write_text(json.dumps({"tui": {"theme": "solarized-dark"}}))
     result = await config_get({"keys": ["tui.theme"]})
     assert result["config"]["tui.theme"] == "solarized-dark"
 
@@ -139,9 +137,7 @@ async def test_config_set_missing_key_param_raises_validation(fake_home: Path) -
 # ----------------------------------------------------------------------------
 
 
-async def test_config_set_model_reassigns_loop_and_persists(
-    fake_home: Path, monkeypatch
-) -> None:
+async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
     loop = SimpleNamespace(provider="old-prov", model="old-model")
@@ -152,9 +148,7 @@ async def test_config_set_model_reassigns_loop_and_persists(
     monkeypatch.setattr(
         config_mod,
         "load_runtime_config",
-        lambda *a, **k: SimpleNamespace(
-            agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))
-        ),
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
     )
 
     result = await config_set(
@@ -190,9 +184,7 @@ async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
 
 
-async def test_config_set_model_rejected_during_active_turn(
-    fake_home: Path, monkeypatch
-) -> None:
+async def test_config_set_model_rejected_during_active_turn(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
     monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: True)
@@ -208,9 +200,7 @@ async def test_config_set_model_rejected_during_active_turn(
         )
 
 
-async def test_config_set_model_unconstructable_preserves_previous(
-    fake_home: Path, monkeypatch
-) -> None:
+async def test_config_set_model_unconstructable_preserves_previous(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
     (fake_home / ".raven").mkdir()
@@ -226,9 +216,7 @@ async def test_config_set_model_unconstructable_preserves_previous(
     monkeypatch.setattr(
         config_mod,
         "load_runtime_config",
-        lambda *a, **k: SimpleNamespace(
-            agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))
-        ),
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
     )
 
     loop = SimpleNamespace(provider="keep-prov", model="anthropic/claude-sonnet-4-5")
@@ -271,9 +259,7 @@ async def test_config_methods_registered_via_helper(fake_home: Path) -> None:
     assert "error" not in resp
     assert resp["result"]["applied"] is True
 
-    resp = await d.dispatch(
-        {"jsonrpc": "2.0", "id": 2, "method": "config.get", "params": {"keys": ["tui.theme"]}}
-    )
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 2, "method": "config.get", "params": {"keys": ["tui.theme"]}})
     assert resp["result"]["config"]["tui.theme"] == "ok"
 
     # readonly → JSON-RPC error -32010

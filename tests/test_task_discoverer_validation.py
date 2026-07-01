@@ -23,7 +23,6 @@ from raven.proactive_engine.sentinel.predictor.task_discoverer import (
 )
 from raven.proactive_engine.sentinel.types import LLMValidation, Routine, TaskOption
 
-
 _NOW = datetime(2026, 5, 14, 8, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
 
@@ -77,32 +76,56 @@ def test_gate_unvalidated_passes_through():
 
 def test_gate_not_routine_verdict_filtered():
     """Validator said 'this is keyword coincidence' → drop."""
-    r = _routine("a", validation=LLMValidation(
-        is_routine=False, confidence=0.9, reason="3 different topics", validated_at_ms=1,
-    ))
+    r = _routine(
+        "a",
+        validation=LLMValidation(
+            is_routine=False,
+            confidence=0.9,
+            reason="3 different topics",
+            validated_at_ms=1,
+        ),
+    )
     assert _passes_llm_gate(r, confidence_floor=0.6) is False
 
 
 def test_gate_low_confidence_filtered_even_when_is_routine_true():
     """Validator unsure (confidence < floor) → drop."""
-    r = _routine("a", validation=LLMValidation(
-        is_routine=True, confidence=0.4, reason="weak", validated_at_ms=1,
-    ))
+    r = _routine(
+        "a",
+        validation=LLMValidation(
+            is_routine=True,
+            confidence=0.4,
+            reason="weak",
+            validated_at_ms=1,
+        ),
+    )
     assert _passes_llm_gate(r, confidence_floor=0.6) is False
 
 
 def test_gate_high_confidence_passes():
-    r = _routine("a", validation=LLMValidation(
-        is_routine=True, confidence=0.85, reason="3 Tuesdays", validated_at_ms=1,
-    ))
+    r = _routine(
+        "a",
+        validation=LLMValidation(
+            is_routine=True,
+            confidence=0.85,
+            reason="3 Tuesdays",
+            validated_at_ms=1,
+        ),
+    )
     assert _passes_llm_gate(r, confidence_floor=0.6) is True
 
 
 def test_gate_at_floor_passes():
     """Boundary: confidence == floor must pass (>=, not >)."""
-    r = _routine("a", validation=LLMValidation(
-        is_routine=True, confidence=0.6, reason="boundary", validated_at_ms=1,
-    ))
+    r = _routine(
+        "a",
+        validation=LLMValidation(
+            is_routine=True,
+            confidence=0.6,
+            reason="boundary",
+            validated_at_ms=1,
+        ),
+    )
     assert _passes_llm_gate(r, confidence_floor=0.6) is True
 
 
@@ -112,12 +135,26 @@ def test_gate_at_floor_passes():
 def test_format_drops_not_routine_verdicts():
     """A routine the validator rejected must NOT appear in the formatted summary."""
     candidates = [
-        _routine("real", count=5, validation=LLMValidation(
-            is_routine=True, confidence=0.9, reason="clear", validated_at_ms=1,
-        )),
-        _routine("noise", count=5, validation=LLMValidation(
-            is_routine=False, confidence=0.95, reason="3 different topics", validated_at_ms=1,
-        )),
+        _routine(
+            "real",
+            count=5,
+            validation=LLMValidation(
+                is_routine=True,
+                confidence=0.9,
+                reason="clear",
+                validated_at_ms=1,
+            ),
+        ),
+        _routine(
+            "noise",
+            count=5,
+            validation=LLMValidation(
+                is_routine=False,
+                confidence=0.95,
+                reason="3 different topics",
+                validated_at_ms=1,
+            ),
+        ),
     ]
     disco, _ = _disco_with_validator(candidates=candidates, validator=None)
     out = disco._format_candidate_routines(now_ms=_NOW_MS)
@@ -129,9 +166,16 @@ def test_format_keeps_unvalidated_candidates():
     """Mix of unvalidated + low-confidence-rejected — unvalidated still surfaces."""
     candidates = [
         _routine("untouched", count=5),  # no validation
-        _routine("rejected", count=5, validation=LLMValidation(
-            is_routine=True, confidence=0.3, reason="weak", validated_at_ms=1,
-        )),
+        _routine(
+            "rejected",
+            count=5,
+            validation=LLMValidation(
+                is_routine=True,
+                confidence=0.3,
+                reason="weak",
+                validated_at_ms=1,
+            ),
+        ),
     ]
     disco, _ = _disco_with_validator(candidates=candidates, validator=None)
     out = disco._format_candidate_routines(now_ms=_NOW_MS)
@@ -144,13 +188,22 @@ def test_format_keeps_unvalidated_candidates():
 
 @pytest.mark.asyncio
 async def test_validator_called_only_for_uncached_candidates():
-    cached = _routine("cached", validation=LLMValidation(
-        is_routine=True, confidence=0.8, reason="prior", validated_at_ms=42,
-    ))
+    cached = _routine(
+        "cached",
+        validation=LLMValidation(
+            is_routine=True,
+            confidence=0.8,
+            reason="prior",
+            validated_at_ms=42,
+        ),
+    )
     fresh = _routine("fresh", validation=None)
     validator = AsyncMock()
     validator.validate.return_value = LLMValidation(
-        is_routine=True, confidence=0.7, reason="new", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.7,
+        reason="new",
+        validated_at_ms=_NOW_MS,
     )
     disco, store = _disco_with_validator(
         candidates=[cached, fresh],
@@ -193,8 +246,12 @@ async def test_validator_exception_is_caught_other_candidates_still_processed():
         if routine.id == "boom":
             raise RuntimeError("simulated LLM crash")
         return LLMValidation(
-            is_routine=True, confidence=0.8, reason="ok", validated_at_ms=now_ms,
+            is_routine=True,
+            confidence=0.8,
+            reason="ok",
+            validated_at_ms=now_ms,
         )
+
     validator.validate.side_effect = _flaky
 
     disco, store = _disco_with_validator(
@@ -224,13 +281,16 @@ async def test_validator_skips_sub_threshold_candidates():
     filter out by min_occurrences_to_surface (default 3) anyway."""
     validator = AsyncMock()
     validator.validate.return_value = LLMValidation(
-        is_routine=True, confidence=0.7, reason="ok", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.7,
+        reason="ok",
+        validated_at_ms=_NOW_MS,
     )
     candidates = [
-        _routine("one", count=1),    # below default floor of 3
-        _routine("two", count=2),    # below floor
+        _routine("one", count=1),  # below default floor of 3
+        _routine("two", count=2),  # below floor
         _routine("three", count=3),  # at floor
-        _routine("five", count=5),   # above floor
+        _routine("five", count=5),  # above floor
     ]
     disco, store = _disco_with_validator(
         candidates=candidates,
@@ -240,9 +300,7 @@ async def test_validator_skips_sub_threshold_candidates():
     await disco._validate_uncached_routines(now_ms=_NOW_MS)
 
     # Only "three" and "five" should be validated.
-    validated_ids = [
-        call.args[0].id for call in validator.validate.await_args_list
-    ]
+    validated_ids = [call.args[0].id for call in validator.validate.await_args_list]
     assert sorted(validated_ids) == ["five", "three"]
     assert validator.validate.await_count == 2
     assert store.set_llm_validation.call_count == 2
@@ -254,7 +312,10 @@ async def test_validate_uses_bounded_history_since():
     the full HISTORY.md file (could be MBs on long-lived users)."""
     validator = AsyncMock()
     validator.validate.return_value = LLMValidation(
-        is_routine=True, confidence=0.8, reason="ok", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.8,
+        reason="ok",
+        validated_at_ms=_NOW_MS,
     )
     disco, _ = _disco_with_validator(
         candidates=[_routine("a", count=5)],
@@ -276,6 +337,7 @@ async def test_validate_summary_log_records_outcome_counts(caplog):
     """After a validation pass, an INFO summary log line is emitted with
     accepted / rejected / error counts."""
     import logging
+
     from loguru import logger
 
     # Bridge loguru → stdlib caplog (loguru doesn't write to logging by default)
@@ -290,8 +352,10 @@ async def test_validate_summary_log_records_outcome_counts(caplog):
             LLMValidation(is_routine=False, confidence=0.8, reason="r", validated_at_ms=_NOW_MS),
             None,  # soft fail → errors
         ]
+
         async def _seq(routine, history, *, now_ms):
             return outcomes.pop(0)
+
         validator.validate.side_effect = _seq
 
         candidates = [_routine("a", count=4), _routine("b", count=4), _routine("c", count=4)]
@@ -320,7 +384,10 @@ async def test_validator_respects_custom_min_occurrences():
     memory_store.read_history_since.return_value = ""
     validator = AsyncMock()
     validator.validate.return_value = LLMValidation(
-        is_routine=True, confidence=0.8, reason="ok", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.8,
+        reason="ok",
+        validated_at_ms=_NOW_MS,
     )
     disco = TaskDiscoverer(
         memory_store=memory_store,
@@ -334,9 +401,7 @@ async def test_validator_respects_custom_min_occurrences():
         now_fn=lambda: _NOW,
     )
     await disco._validate_uncached_routines(now_ms=_NOW_MS)
-    validated_ids = sorted(
-        call.args[0].id for call in validator.validate.await_args_list
-    )
+    validated_ids = sorted(call.args[0].id for call in validator.validate.await_args_list)
     assert validated_ids == ["r5", "r6", "r7"]
 
 
@@ -345,11 +410,15 @@ async def test_validator_respects_custom_min_occurrences():
 
 def test_routine_store_set_llm_validation_persists(tmp_path):
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
+
     store = RoutineStore(tmp_path / "routines.json")
     r = _routine("x")
     store.merge([r], now_ms=_NOW_MS)
     verdict = LLMValidation(
-        is_routine=True, confidence=0.78, reason="3 hits", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.78,
+        reason="3 hits",
+        validated_at_ms=_NOW_MS,
     )
     assert store.set_llm_validation("x", verdict) is True
     # Reload from disk
@@ -360,9 +429,13 @@ def test_routine_store_set_llm_validation_persists(tmp_path):
 
 def test_routine_store_set_llm_validation_returns_false_for_missing(tmp_path):
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
+
     store = RoutineStore(tmp_path / "routines.json")
     verdict = LLMValidation(
-        is_routine=True, confidence=0.5, reason="r", validated_at_ms=_NOW_MS,
+        is_routine=True,
+        confidence=0.5,
+        reason="r",
+        validated_at_ms=_NOW_MS,
     )
     assert store.set_llm_validation("never-existed", verdict) is False
 
@@ -372,8 +445,11 @@ def test_routine_store_set_llm_validation_returns_false_for_missing(tmp_path):
 
 def _raw_option(**overrides) -> dict:
     base = {
-        "title": "T", "why": "w", "type": "ad_hoc",
-        "exec_kind": "reply", "exec_payload": {"prompt": "p"},
+        "title": "T",
+        "why": "w",
+        "type": "ad_hoc",
+        "exec_kind": "reply",
+        "exec_payload": {"prompt": "p"},
     }
     base.update(overrides)
     return base
@@ -381,50 +457,48 @@ def _raw_option(**overrides) -> dict:
 
 def _opt(title: str, deadline: str = "") -> TaskOption:
     return TaskOption(
-        id="opt_x", title=title, why="w", type="ad_hoc",
-        exec_kind="reply", deadline=deadline,
+        id="opt_x",
+        title=title,
+        why="w",
+        type="ad_hoc",
+        exec_kind="reply",
+        deadline=deadline,
     )
 
 
 def test_raw_to_option_keeps_valid_iso_deadline():
-    opt = TaskDiscoverer._raw_to_option(
-        _raw_option(deadline="2026-06-03"), now_ms=_NOW_MS, seen_ids=set())
+    opt = TaskDiscoverer._raw_to_option(_raw_option(deadline="2026-06-03"), now_ms=_NOW_MS, seen_ids=set())
     assert opt is not None
     assert opt.deadline == "2026-06-03"
 
 
 @pytest.mark.parametrize("bad", ["下周", "6/3", "2026-13-40", "soon", "2026/06/03"])
 def test_raw_to_option_drops_invalid_deadline(bad):
-    opt = TaskDiscoverer._raw_to_option(
-        _raw_option(deadline=bad), now_ms=_NOW_MS, seen_ids=set())
+    opt = TaskDiscoverer._raw_to_option(_raw_option(deadline=bad), now_ms=_NOW_MS, seen_ids=set())
     assert opt is not None
     assert opt.deadline == ""
 
 
 def test_raw_to_option_missing_deadline_defaults_empty():
-    opt = TaskDiscoverer._raw_to_option(
-        _raw_option(), now_ms=_NOW_MS, seen_ids=set())
+    opt = TaskDiscoverer._raw_to_option(_raw_option(), now_ms=_NOW_MS, seen_ids=set())
     assert opt is not None
     assert opt.deadline == ""
 
 
 def test_annotate_overdue_prefixes_and_floats_front():
     # _NOW = 2026-05-14
-    out = TaskDiscoverer._annotate_overdue(
-        [_opt("on time", ""), _opt("late", "2026-05-01")], _NOW)
+    out = TaskDiscoverer._annotate_overdue([_opt("on time", ""), _opt("late", "2026-05-01")], _NOW)
     assert out[0].title == "⚠️ 逾期 5/1 late"
     assert out[1].title == "on time"
 
 
 def test_annotate_overdue_sorts_overdue_earliest_first():
-    out = TaskDiscoverer._annotate_overdue(
-        [_opt("a", "2026-05-10"), _opt("b", "2026-05-02")], _NOW)
+    out = TaskDiscoverer._annotate_overdue([_opt("a", "2026-05-10"), _opt("b", "2026-05-02")], _NOW)
     assert [o.title for o in out] == ["⚠️ 逾期 5/2 b", "⚠️ 逾期 5/10 a"]
 
 
 def test_annotate_overdue_leaves_future_and_undated_untouched():
-    out = TaskDiscoverer._annotate_overdue(
-        [_opt("future", "2026-06-01"), _opt("none", "")], _NOW)
+    out = TaskDiscoverer._annotate_overdue([_opt("future", "2026-06-01"), _opt("none", "")], _NOW)
     assert [o.title for o in out] == ["future", "none"]
     assert all(not o.title.startswith("⚠️") for o in out)
 

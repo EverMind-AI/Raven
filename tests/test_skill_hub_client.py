@@ -22,6 +22,7 @@ def _zip(files: dict[str, str]) -> bytes:
 
 # ── _bundle_root ─────────────────────────────────────────────────────
 
+
 def test_bundle_root_collapses_single_wrapper_dir(tmp_path: Path) -> None:
     # Hub zips wrap everything under one <skill>/ directory.
     inner = tmp_path / "tmux"
@@ -45,9 +46,11 @@ def test_bundle_root_ignores_hidden_entries(tmp_path: Path) -> None:
 
 # ── _safe_extract ────────────────────────────────────────────────────
 
+
 def test_safe_extract_writes_allowed_files(tmp_path: Path) -> None:
     SkillHubClient._safe_extract(
-        _zip({"SKILL.md": "body", "scripts/run.sh": "echo hi"}), tmp_path,
+        _zip({"SKILL.md": "body", "scripts/run.sh": "echo hi"}),
+        tmp_path,
     )
     assert (tmp_path / "SKILL.md").read_text() == "body"
     assert (tmp_path / "scripts" / "run.sh").read_text() == "echo hi"
@@ -56,7 +59,8 @@ def test_safe_extract_writes_allowed_files(tmp_path: Path) -> None:
 def test_safe_extract_skips_disallowed_not_fails(tmp_path: Path) -> None:
     # One stray file must not make the whole skill uninstallable.
     SkillHubClient._safe_extract(
-        _zip({"SKILL.md": "body", "templates/weird.xyz": "junk"}), tmp_path,
+        _zip({"SKILL.md": "body", "templates/weird.xyz": "junk"}),
+        tmp_path,
     )
     assert (tmp_path / "SKILL.md").exists()
     assert not (tmp_path / "templates" / "weird.xyz").exists()

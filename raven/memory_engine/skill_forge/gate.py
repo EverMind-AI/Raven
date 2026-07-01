@@ -92,7 +92,8 @@ class LLMGateFilter:
             plan, selected_ids = self._parse_response(content)
         except ValueError as exc:
             log.warning(
-                "LLM gate response unparseable (%s); falling back to top-N", exc,
+                "LLM gate response unparseable (%s); falling back to top-N",
+                exc,
             )
             return candidates[: self._legacy_top_k]
 
@@ -105,7 +106,9 @@ class LLMGateFilter:
                 out.append(hit)
         log.info(
             "LLM gate: candidates=%d → selected=%d %s",
-            len(candidates), len(out), [h.name for h in out],
+            len(candidates),
+            len(out),
+            [h.name for h in out],
         )
         self._optional_trace(task, candidates, plan, out, content)
         return out
@@ -129,9 +132,7 @@ class LLMGateFilter:
             body_excerpt = " ".join(body.split())[:_BODY_EXCERPT_CHARS]
             if not body_excerpt:
                 body_excerpt = "(no body)"
-            lines.append(
-                f"- {sid}: {desc}\n  Body excerpt: {body_excerpt}"
-            )
+            lines.append(f"- {sid}: {desc}\n  Body excerpt: {body_excerpt}")
             by_id[sid] = h
         return "\n".join(lines), by_id
 
@@ -188,7 +189,7 @@ class LLMGateFilter:
             "and which sequence of available-tool calls would achieve it.\n"
             "2. **Filter**: for EACH candidate skill, ask "
             "\"can the agent execute this skill's workflow using only the "
-            "available tools above?\" If no, drop it — no matter how "
+            'available tools above?" If no, drop it — no matter how '
             "topically relevant.\n"
             "3. **Match**: among the survivors, a skill is relevant ONLY "
             "if it provides a procedure or strategy directly useful for "
@@ -250,10 +251,7 @@ class LLMGateFilter:
                 "candidates": [h.qualified_id for h in candidates],
                 "plan": plan,
                 "selected": [h.qualified_id for h in selected],
-                "rejected": [
-                    h.qualified_id for h in candidates
-                    if h.qualified_id not in selected_ids
-                ],
+                "rejected": [h.qualified_id for h in candidates if h.qualified_id not in selected_ids],
                 "raw_response": raw[:4000],
             }
             with open(path, "a", encoding="utf-8") as f:

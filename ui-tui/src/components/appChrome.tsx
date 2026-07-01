@@ -8,8 +8,11 @@ import { useStore } from '@nanostores/react'
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react'
 import unicodeSpinners from 'unicode-animations'
 
-import { $delegationState } from '../app/delegationStore.js'
 import type { IndicatorStyle } from '../app/interfaces.js'
+import type { Theme } from '../theme.js'
+import type { Msg, Usage } from '../types.js'
+
+import { $delegationState } from '../app/delegationStore.js'
 import { useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { FACES } from '../content/faces.js'
@@ -19,8 +22,6 @@ import { stickyPromptFromViewport } from '../domain/viewport.js'
 import { buildSubagentTree, treeTotals, widthByDepth } from '../lib/subagentTree.js'
 import { fmtK } from '../lib/text.js'
 import { useScrollbarSnapshot, useViewportSnapshot } from '../lib/viewportStore.js'
-import type { Theme } from '../theme.js'
-import type { Msg, Usage } from '../types.js'
 
 const FACE_TICK_MS = 2500
 const HEART_COLORS = ['#ff5fa2', '#ff4d6d']
@@ -318,8 +319,8 @@ export function StatusRule({
           ) : (
             <Text color={statusColor}>{`● ${status} `}</Text>
           )}
-          <Text color={t.color.muted}> {" "} {modelLabel(model, modelReasoningEffort, modelFast)}</Text>
-          {ctxLabel ? <Text color={t.color.muted}> {" "} {ctxLabel}</Text> : null}
+          <Text color={t.color.muted}> {modelLabel(model, modelReasoningEffort, modelFast)}</Text>
+          {ctxLabel ? <Text color={t.color.muted}> {ctxLabel}</Text> : null}
           {bar ? (
             <Text color={t.color.muted}>
               {'   '}
@@ -335,15 +336,19 @@ export function StatusRule({
           {typeof usage.compressions === 'number' && usage.compressions > 0 ? (
             <Text color={t.color.muted}>
               {'   '}
-              <Text color={usage.compressions >= 10 ? t.color.error : usage.compressions >= 5 ? t.color.warn : t.color.muted}>
+              <Text
+                color={
+                  usage.compressions >= 10 ? t.color.error : usage.compressions >= 5 ? t.color.warn : t.color.muted
+                }
+              >
                 cmp {usage.compressions}
               </Text>
             </Text>
           ) : null}
           <SpawnHud t={t} />
-          {bgCount > 0 ? <Text color={t.color.muted}> {" "} {bgCount} bg</Text> : null}
+          {bgCount > 0 ? <Text color={t.color.muted}> {bgCount} bg</Text> : null}
           {showCost && typeof usage.cost_usd === 'number' ? (
-            <Text color={t.color.muted}> {" "} ${usage.cost_usd.toFixed(4)}</Text>
+            <Text color={t.color.muted}> ${usage.cost_usd.toFixed(4)}</Text>
           ) : null}
         </Text>
       </Box>

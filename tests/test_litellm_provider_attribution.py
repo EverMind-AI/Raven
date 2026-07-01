@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
-
-from raven.providers.litellm_provider import _OPENROUTER_ATTRIBUTION, LiteLLMProvider
+from raven.providers.litellm_provider import LiteLLMProvider
 
 
 def _make_provider(provider_name: str, extra_headers: dict | None = None) -> LiteLLMProvider:
-    with patch("raven.providers.litellm_provider.litellm"), patch(
-        "raven.providers.litellm_provider.LiteLLMProvider._setup_env"
+    with (
+        patch("raven.providers.litellm_provider.litellm"),
+        patch("raven.providers.litellm_provider.LiteLLMProvider._setup_env"),
     ):
         return LiteLLMProvider(
             api_key="sk-test",

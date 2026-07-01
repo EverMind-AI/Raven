@@ -20,9 +20,9 @@ class WebSearchTool(Tool):
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10}
+            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10},
         },
-        "required": ["query"]
+        "required": ["query"],
     }
 
     def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
@@ -55,7 +55,7 @@ class WebSearchTool(Tool):
                         "Content-Type": "application/json",
                         "X-API-KEY": self.api_key,
                     },
-                    timeout=10.0
+                    timeout=10.0,
                 )
                 r.raise_for_status()
 
@@ -99,9 +99,9 @@ class WebFetchTool(Tool):
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
             "extractMode": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
-            "maxChars": {"type": "integer", "minimum": 100}
+            "maxChars": {"type": "integer", "minimum": 100},
         },
-        "required": ["url"]
+        "required": ["url"],
     }
 
     def __init__(self, api_key: str | None = None, max_chars: int = 50000, proxy: str | None = None):
@@ -135,16 +135,19 @@ class WebFetchTool(Tool):
             if truncated:
                 text = text[:max_chars]
 
-            return json.dumps({
-                "url": url,
-                "finalUrl": url,
-                "status": r.status_code,
-                "extractor": "jina-reader",
-                "extractMode": extractMode,
-                "truncated": truncated,
-                "length": len(text),
-                "text": text,
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "url": url,
+                    "finalUrl": url,
+                    "status": r.status_code,
+                    "extractor": "jina-reader",
+                    "extractMode": extractMode,
+                    "truncated": truncated,
+                    "length": len(text),
+                    "text": text,
+                },
+                ensure_ascii=False,
+            )
         except httpx.ProxyError as e:
             logger.error("WebFetch proxy error for {}: {}", url, e)
             return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)

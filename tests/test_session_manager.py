@@ -94,9 +94,7 @@ def test_save_reserves_metadata_keys(tmp_path: Path):
     session.add_message("user", "x")
     mgr.save(session)
 
-    first_line = (tmp_path / "sessions" / "tui" / "meta01.jsonl").read_text(
-        encoding="utf-8"
-    ).splitlines()[0]
+    first_line = (tmp_path / "sessions" / "tui" / "meta01.jsonl").read_text(encoding="utf-8").splitlines()[0]
     meta = json.loads(first_line)["metadata"]
     assert meta["channel"] == "tui"
     assert meta["chat_id"] == "meta01"
@@ -114,9 +112,7 @@ def test_load_preserves_on_disk_message_order(tmp_path: Path):
         {"role": "user", "content": "late", "received_at": "2026-06-10T10:00:05"},
         {"role": "user", "content": "early", "received_at": "2026-06-10T10:00:01"},
     ]
-    (session_dir / "order01.jsonl").write_text(
-        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
-    )
+    (session_dir / "order01.jsonl").write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
 
     loaded = SessionManager(tmp_path).get_or_create("tui:order01")
     assert [m["content"] for m in loaded.messages] == ["late", "early"]
@@ -178,11 +174,14 @@ def test_find_most_recent_ignores_old_flat_files(tmp_path: Path):
     _seed_nested(tmp_path, "tui", "nested01", "2026-06-10T10:00:00")
     flat = tmp_path / "sessions" / "tui_flat01.jsonl"
     flat.write_text(
-        json.dumps({
-            "_type": "metadata",
-            "key": "tui:flat01",
-            "updated_at": "2026-06-10T23:59:59",
-        }) + "\n",
+        json.dumps(
+            {
+                "_type": "metadata",
+                "key": "tui:flat01",
+                "updated_at": "2026-06-10T23:59:59",
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -246,10 +245,7 @@ def test_concurrent_writers_lose_no_turns(tmp_path: Path):
     """Two processes saving the same session: both turn blocks land,
     each block's messages contiguous (tool_call/result adjacency)."""
     key = "tui:race01"
-    procs = [
-        multiprocessing.Process(target=_turn_worker, args=(str(tmp_path), key, w))
-        for w in range(2)
-    ]
+    procs = [multiprocessing.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
     for p in procs:
         p.start()
     for p in procs:
@@ -286,7 +282,10 @@ def test_loader_skips_partial_trailing_line(tmp_path: Path):
     full = json.dumps({"role": "user", "content": "full"})
     (session_dir / "crash01.jsonl").write_text(
         json.dumps({"_type": "metadata", "key": "tui:crash01", "metadata": {}})
-        + "\n" + full + "\n" + '{"role": "assistant", "content": "tru',
+        + "\n"
+        + full
+        + "\n"
+        + '{"role": "assistant", "content": "tru',
         encoding="utf-8",
     )
 
@@ -300,8 +299,10 @@ def test_legacy_global_sessions_shim_removed(tmp_path: Path, monkeypatch):
     legacy.mkdir()
     legacy_file = legacy / "tui_x.jsonl"
     legacy_file.write_text(
-        json.dumps({"_type": "metadata", "key": "tui:x"}) + "\n"
-        + json.dumps({"role": "user", "content": "old"}) + "\n",
+        json.dumps({"_type": "metadata", "key": "tui:x"})
+        + "\n"
+        + json.dumps({"role": "user", "content": "old"})
+        + "\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -539,8 +540,11 @@ def _msg(role, content):
 def test_undo_last_turn_drops_last_user_block():
     s = Session(key="tui:t1")
     s.messages = [
-        _msg("user", "q1"), _msg("assistant", "a1"),
-        _msg("user", "q2"), _msg("assistant", "a2"), _msg("tool", "t2"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
+        _msg("tool", "t2"),
     ]
     removed = s.undo_last_turn()
     assert removed == 3
@@ -562,8 +566,10 @@ def test_undo_last_turn_empty_session_returns_zero():
 def test_undo_last_turn_never_crosses_last_consolidated():
     s = Session(key="tui:t1")
     s.messages = [
-        _msg("user", "q1"), _msg("assistant", "a1"),
-        _msg("user", "q2"), _msg("assistant", "a2"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
     ]
     s.last_consolidated = 2
     removed = s.undo_last_turn()
@@ -576,8 +582,10 @@ def test_undo_last_turn_never_crosses_last_consolidated():
 def test_undo_last_turn_n_clamps_to_tail_first_user():
     s = Session(key="tui:t1")
     s.messages = [
-        _msg("user", "q1"), _msg("assistant", "a1"),
-        _msg("user", "q2"), _msg("assistant", "a2"),
+        _msg("user", "q1"),
+        _msg("assistant", "a1"),
+        _msg("user", "q2"),
+        _msg("assistant", "a2"),
     ]
     removed = s.undo_last_turn(n=5)
     assert removed == 4
@@ -620,6 +628,7 @@ def test_undo_then_save_truncates_file_on_disk(tmp_path):
     reloaded = fresh.get_or_create("tui:undome")
     assert [m["content"] for m in reloaded.messages] == ["q1", "a1"]
     assert reloaded.key == "tui:undome"
+
 
 # ── fork (session fork/branch) ──────────────────────────────────────────────
 

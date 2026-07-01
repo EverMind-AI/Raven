@@ -33,8 +33,16 @@ class _ScriptedProvider(LLMProvider):
         super().__init__(api_key="test")
         self._responses = responses
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return self._responses.pop(0)
 
     def get_default_model(self) -> str:

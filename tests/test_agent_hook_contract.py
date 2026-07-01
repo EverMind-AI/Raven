@@ -31,7 +31,6 @@ from raven.agent.hook import (
     HookDecision,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -225,9 +224,7 @@ class TestCompositeHookRegistrationOrder:
                 order.append(self.tag)
                 return HookDecision()
 
-        composite = CompositeHook(
-            [Recorder("first"), Recorder("second"), Recorder("third")]
-        )
+        composite = CompositeHook([Recorder("first"), Recorder("second"), Recorder("third")])
         await composite.before_iteration(ctx)
         assert order == ["first", "second", "third"]
 
@@ -499,18 +496,14 @@ class TestCompositeHookEndToEndScenario:
         def _req(text: str) -> TurnRequest:
             return TurnRequest(
                 origin=Origin.USER,
-                source=Source(
-                    channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM
-                ),
+                source=Source(channel="cli", chat_id="c", sender_id="u", chat_type=ChatType.DM),
                 text=text,
             )
 
         class FakeDecisionConsumer(AgentHook):
             async def before_user_inbound(self, ctx):
                 log.append("decision_consumer.check")
-                if ctx.turn_request and ctx.turn_request.text.startswith(
-                    "/pick"
-                ):
+                if ctx.turn_request and ctx.turn_request.text.startswith("/pick"):
                     log.append("decision_consumer.short_circuit")
                     return HookDecision(short_circuit_result="picked option")
                 return HookDecision()
@@ -527,9 +520,7 @@ class TestCompositeHookEndToEndScenario:
                 base = ctx.outbound_content or ""
                 return HookDecision(modified_content=base + " [nudge]")
 
-        composite = CompositeHook(
-            [FakeDecisionConsumer(), FakeFeedbackTracker(), FakeNudgeInjector()]
-        )
+        composite = CompositeHook([FakeDecisionConsumer(), FakeFeedbackTracker(), FakeNudgeInjector()])
 
         # Path 1: /pick reply → short-circuit, observer skipped.
         ctx.turn_request = _req("/pick 2")

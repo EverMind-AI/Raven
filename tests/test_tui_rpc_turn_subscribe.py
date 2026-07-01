@@ -90,9 +90,7 @@ async def test_turn_unsubscribe_unknown_returns_false_idempotent(
     """Unsubscribe with unknown subscription_id → ``{unsubscribed: False}`` —
     NOT an error (unsubscribe is idempotent).
     """
-    result = await turn_unsubscribe(
-        {"subscription_id": "nonexistent-sub-id-12345"}, emitter=emitter
-    )
+    result = await turn_unsubscribe({"subscription_id": "nonexistent-sub-id-12345"}, emitter=emitter)
     assert result == {"unsubscribed": False}
 
 
@@ -118,12 +116,14 @@ async def test_turn_unsubscribe_twice_second_call_returns_false(
 async def test_turn_subscribe_dispatches_via_dispatcher(
     dispatcher: Dispatcher,
 ) -> None:
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.subscribe",
-        "params": {"session_key": "tui:default"},
-    })
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.subscribe",
+            "params": {"session_key": "tui:default"},
+        }
+    )
     assert "error" not in resp
     assert set(resp["result"]) == {"subscription_id"}
 
@@ -131,19 +131,23 @@ async def test_turn_subscribe_dispatches_via_dispatcher(
 async def test_turn_unsubscribe_dispatches_via_dispatcher(
     dispatcher: Dispatcher,
 ) -> None:
-    sub_resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.subscribe",
-        "params": {"session_key": "tui:default"},
-    })
+    sub_resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.subscribe",
+            "params": {"session_key": "tui:default"},
+        }
+    )
     sub_id = sub_resp["result"]["subscription_id"]
 
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "turn.unsubscribe",
-        "params": {"subscription_id": sub_id},
-    })
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "turn.unsubscribe",
+            "params": {"subscription_id": sub_id},
+        }
+    )
     assert "error" not in resp
     assert resp["result"] == {"unsubscribed": True}

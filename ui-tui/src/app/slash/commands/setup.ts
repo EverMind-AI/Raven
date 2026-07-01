@@ -1,8 +1,9 @@
 import { withInkSuspended } from '@hermes/ink'
 
+import type { SlashCommand } from '../types.js'
+
 import { launchRavenCommand } from '../../../lib/externalCli.js'
 import { runExternalSetup } from '../../setupHandoff.js'
-import type { SlashCommand } from '../types.js'
 
 export const setupCommands: SlashCommand[] = [
   {

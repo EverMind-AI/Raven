@@ -79,6 +79,7 @@ def _cfg(**overrides) -> NudgePolicyConfig:
 @dataclass
 class SentinelStack:
     """All Sentinel executors wired together for testing."""
+
     policy: NudgePolicy
     dispatcher: NudgeDispatcher
     injector: NudgeInjector
@@ -106,7 +107,8 @@ class SentinelStack:
 
         if action == "nudge":
             result = await self.dispatcher.dispatch(
-                decision, [split_session_key(session_key)],
+                decision,
+                [split_session_key(session_key)],
             )
             if result.delivered:
                 self.policy.record_fired(action, session_key, content)
@@ -151,7 +153,8 @@ def stack():
     dispatcher.set_post(_post)
     injector = NudgeInjector(ttl_seconds=1800, now_fn=clock)
     defer = DeferManager(
-        dispatcher, sessions,
+        dispatcher,
+        sessions,
         idle_threshold_seconds=300,
         max_wait_seconds=86400,
         now_fn=clock,
@@ -160,8 +163,13 @@ def stack():
     # real sessions, so a direct split is the equivalent resolution.
     defer.set_target_resolver(lambda ts: [split_session_key(ts)])
     return SentinelStack(
-        policy=policy, dispatcher=dispatcher, injector=injector, defer=defer,
-        clock=clock, sessions=sessions, posted=posted,
+        policy=policy,
+        dispatcher=dispatcher,
+        injector=injector,
+        defer=defer,
+        clock=clock,
+        sessions=sessions,
+        posted=posted,
     )
 
 
@@ -185,6 +193,7 @@ def _decision(action: str, **overrides) -> PlannerDecision:
 # ---------------------------------------------------------------------------
 # Skip
 
+
 @pytest.mark.asyncio
 async def test_skip_action_no_side_effects(stack):
     result = await stack.execute(_decision("skip"))
@@ -197,6 +206,7 @@ async def test_skip_action_no_side_effects(stack):
 
 # ---------------------------------------------------------------------------
 # Plain nudge
+
 
 @pytest.mark.asyncio
 async def test_plain_nudge_publishes_outbound(stack):
@@ -225,6 +235,7 @@ async def test_plain_nudge_respects_policy(stack):
 # ---------------------------------------------------------------------------
 # nudge_inject
 
+
 @pytest.mark.asyncio
 async def test_inject_queues_to_session(stack):
     result = await stack.execute(_decision("nudge_inject"))
@@ -247,6 +258,7 @@ async def test_inject_bypassed_when_not_target_session(stack):
 
 # ---------------------------------------------------------------------------
 # nudge_defer
+
 
 @pytest.mark.asyncio
 async def test_defer_register_then_fire_on_idle(stack):
@@ -281,6 +293,7 @@ async def test_defer_does_not_fire_while_session_active(stack):
 
 # ---------------------------------------------------------------------------
 # Action coverage — all 4 non-skip actions exercised
+
 
 @pytest.mark.asyncio
 async def test_coverage_all_action_paths(stack):

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 _THIS_DIR = Path(__file__).resolve().parent
-_RUNNERS_DIR = _THIS_DIR.parent.parent   # runners/
+_RUNNERS_DIR = _THIS_DIR.parent.parent  # runners/
 
 
 def _parse_obs_time(raw: Any) -> datetime:
@@ -60,11 +60,13 @@ class PbenchDriver(BenchmarkDriver):
         "openclaw": "openclaw_agent.yaml",
     }
 
-    def __init__(self,
-                 agent_name: str | None = None,
-                 context_mode: str = "cold",
-                 synthesizer_name: str = "keyword",
-                 prompts_dir: Path | None = None):
+    def __init__(
+        self,
+        agent_name: str | None = None,
+        context_mode: str = "cold",
+        synthesizer_name: str = "keyword",
+        prompts_dir: Path | None = None,
+    ):
         self._cfg = get_benchmark_config("pbench")
         self._dataset = Path(self._cfg["dataset_file"])
         self._agent_name = (agent_name or "raven").lower()
@@ -76,19 +78,20 @@ class PbenchDriver(BenchmarkDriver):
         if context_mode == "warm":
             # Import lazily — synthesizers module imports raven types.
             import synthesizers as _syn
+
             self._synthesizer = _syn.get_synthesizer(synthesizer_name)
 
     def _load_prompt(self) -> dict[str, str]:
         if self._prompt_template is None:
             import prompts_loader
+
             fname = self._PROMPT_BY_AGENT.get(self._agent_name, "raven_agent.yaml")
             self._prompt_template = prompts_loader.load_prompt(self._prompts_dir / fname)
         return self._prompt_template
 
     # ---- samples ----
 
-    def load_samples(self, *, n: int | None = None,
-                     filter_id: str | None = None) -> list[Sample]:
+    def load_samples(self, *, n: int | None = None, filter_id: str | None = None) -> list[Sample]:
         if not self._dataset.exists():
             raise FileNotFoundError(
                 f"pbench dataset not found at {self._dataset}. "
@@ -103,17 +106,18 @@ class PbenchDriver(BenchmarkDriver):
         for i, rec in enumerate(picks):
             obs = rec.get("obs") or []
             synth = self._synthesizer.synthesize(obs) if self._synthesizer else None
-            samples.append(Sample(
-                raw=rec,
-                session_hint=f"pbench-{i:04d}-{(rec.get('id') or '')[:12]}",
-                meta={"synth": synth},
-            ))
+            samples.append(
+                Sample(
+                    raw=rec,
+                    session_hint=f"pbench-{i:04d}-{(rec.get('id') or '')[:12]}",
+                    meta={"synth": synth},
+                )
+            )
         return samples
 
     # ---- prompt-based ----
 
-    def build_prompt(self, sample: Sample,
-                     ctx: dict[str, Any] | None = None) -> str:
+    def build_prompt(self, sample: Sample, ctx: dict[str, Any] | None = None) -> str:
         tmpl = self._load_prompt()
         obs = sample.raw.get("obs") or []
         synth = (sample.meta or {}).get("synth")
@@ -135,8 +139,11 @@ class PbenchDriver(BenchmarkDriver):
     def to_planner_context(self, sample: Sample) -> Any:
         """Build a PlannerContext directly from obs + synthesizer output."""
         from raven.proactive_engine.sentinel.types import (
-            ActiveSession, NudgePolicyState, PlannerContext,
+            ActiveSession,
+            NudgePolicyState,
+            PlannerContext,
         )
+
         obs = sample.raw.get("obs") or []
         last_ev = obs[-1] if obs else {"time": "", "event": ""}
         now = _parse_obs_time(last_ev.get("time"))
@@ -146,27 +153,28 @@ class PbenchDriver(BenchmarkDriver):
         routines = list(synth.routines) if synth else []
         user_profile = (synth.user_profile if synth else "") or ""
 
-        history = "\n".join(
-            f"[{e.get('time', '?')}] {e.get('event', '')}" for e in obs
-        )
+        history = "\n".join(f"[{e.get('time', '?')}] {e.get('event', '')}" for e in obs)
         target = f"pbench:{sample.session_hint}"
         return PlannerContext(
             now=now,
             memory_md=memory_md,
             history_md_recent=history,
-            active_sessions=[ActiveSession(
-                key=target, last_active_at=now,
-                last_user_message=last_ev.get("event", ""),
-            )],
+            active_sessions=[
+                ActiveSession(
+                    key=target,
+                    last_active_at=now,
+                    last_user_message=last_ev.get("event", ""),
+                )
+            ],
             routines=routines,
             nudge_policy_state=NudgePolicyState(
-                in_quiet_hours=False, remaining_today=100,
+                in_quiet_hours=False,
+                remaining_today=100,
             ),
             user_profile=user_profile,
         )
 
-    def to_hermes_cron(self, sample: Sample,
-                       ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    def to_hermes_cron(self, sample: Sample, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
         """Synthetic cron wrapping the obs stream as the prompt.
 
         There's no real cron trigger in reward_data — we use cron.run_job as
@@ -226,8 +234,7 @@ class PbenchDriver(BenchmarkDriver):
 
     # ---- rows + summary ----
 
-    def make_row(self, sample: Sample, outcome: "AgentOutcome",
-                 runtime_meta: dict[str, Any]) -> dict[str, Any]:
+    def make_row(self, sample: Sample, outcome: "AgentOutcome", runtime_meta: dict[str, Any]) -> dict[str, Any]:
         rec = sample.raw
         system_label = runtime_meta.get("system_label", "unknown")
 
@@ -258,11 +265,12 @@ class PbenchDriver(BenchmarkDriver):
                 "proposed_task": dec.get("proposed_task"),
                 "reason": dec.get("reason"),
                 "raw_final": (outcome.text or "")[:4000],
-                **({"fake_now": outcome.meta.get("fake_now")}
-                   if outcome.meta and "fake_now" in outcome.meta else {}),
-                **({"sentinel_action": dec.get("sentinel_action"),
-                    "sentinel_route": dec.get("sentinel_route")}
-                   if "sentinel_action" in dec else {}),
+                **({"fake_now": outcome.meta.get("fake_now")} if outcome.meta and "fake_now" in outcome.meta else {}),
+                **(
+                    {"sentinel_action": dec.get("sentinel_action"), "sentinel_route": dec.get("sentinel_route")}
+                    if "sentinel_action" in dec
+                    else {}
+                ),
             },
             "predicted_help": predicted_help,
             "help_match": predicted_help == rec.get("help_needed"),
@@ -273,8 +281,7 @@ class PbenchDriver(BenchmarkDriver):
             row["synth"] = {
                 "user_profile": synth.user_profile,
                 "routines": [
-                    {"id": r.id, "pattern": r.pattern, "status": r.status,
-                     "occurrence_count": r.occurrence_count}
+                    {"id": r.id, "pattern": r.pattern, "status": r.status, "occurrence_count": r.occurrence_count}
                     for r in synth.routines
                 ],
                 "memory_md": synth.memory_md,
@@ -302,20 +309,21 @@ class PbenchDriver(BenchmarkDriver):
         lines.append(f"  status: {dict(status_counter)}")
         lines.append(f"  parse_ok: {parse_ok}/{len(rows)}")
         if rows:
-            lines.append(
-                f"  elapsed: total {elapsed_total:.1f}s  "
-                f"mean {elapsed_total/len(rows):.1f}s/record"
-            )
+            lines.append(f"  elapsed: total {elapsed_total:.1f}s  mean {elapsed_total / len(rows):.1f}s/record")
 
         # TP/FP/TN/FN quick read
         TP = FP = TN = FN = 0
         for r in rows:
             pred = r.get("predicted_help")
             truth = r.get("truth_help_needed")
-            if pred and truth: TP += 1
-            elif pred and not truth: FP += 1
-            elif not pred and not truth: TN += 1
-            elif not pred and truth: FN += 1
+            if pred and truth:
+                TP += 1
+            elif pred and not truth:
+                FP += 1
+            elif not pred and not truth:
+                TN += 1
+            elif not pred and truth:
+                FN += 1
         p = TP / (TP + FP) if (TP + FP) else 0.0
         rc = TP / (TP + FN) if (TP + FN) else 0.0
         f1 = 2 * p * rc / (p + rc) if (p + rc) else 0.0
@@ -323,8 +331,7 @@ class PbenchDriver(BenchmarkDriver):
         return "\n".join(lines)
 
     def dataset_description(self) -> str:
-        return (f"ProactiveBench reward_data (stratified, {self._context_mode}): "
-                f"{self._dataset}")
+        return f"ProactiveBench reward_data (stratified, {self._context_mode}): {self._dataset}"
 
 
 __all__ = ["PbenchDriver"]

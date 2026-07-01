@@ -37,9 +37,7 @@ async def test_question_request_notification_emitted() -> None:
     frames, send_frame = _frame_collector()
     broker = QuestionBroker(send_frame)
 
-    task = asyncio.create_task(
-        broker.await_question(CID, prompt="Which?", choices=["a", "b"], default="x")
-    )
+    task = asyncio.create_task(broker.await_question(CID, prompt="Which?", choices=["a", "b"], default="x"))
     frame = await _wait_for_frame(frames)
 
     assert "id" not in frame

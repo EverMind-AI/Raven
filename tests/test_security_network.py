@@ -9,8 +9,10 @@ from raven.security import network as net
 
 def _mock_resolve(monkeypatch: pytest.MonkeyPatch, ip: str) -> None:
     """Force socket.getaddrinfo to resolve hostnames to a fixed IP."""
+
     def fake_getaddrinfo(host, *_args, **_kwargs):
         return [(0, 0, 0, "", (ip, 0))]
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
 
@@ -32,12 +34,15 @@ def test_blocks_link_local() -> None:
     assert "private/internal" in err
 
 
-@pytest.mark.parametrize("url", [
-    "http://10.0.0.1/x",
-    "http://192.168.1.1/x",
-    "http://172.16.0.1/x",
-    "http://100.64.0.1/x",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://10.0.0.1/x",
+        "http://192.168.1.1/x",
+        "http://172.16.0.1/x",
+        "http://100.64.0.1/x",
+    ],
+)
 def test_blocks_private_ipv4(url: str) -> None:
     ok, err = net.validate_url_target(url)
     assert not ok, f"should block {url}"
@@ -50,12 +55,15 @@ def test_blocks_unique_local_v6() -> None:
     assert "private/internal" in err
 
 
-@pytest.mark.parametrize("url", [
-    "file:///etc/passwd",
-    "ftp://example.com/x",
-    "gopher://example.com/x",
-    "javascript:alert(1)",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/x",
+        "gopher://example.com/x",
+        "javascript:alert(1)",
+    ],
+)
 def test_blocks_non_http_scheme(url: str) -> None:
     ok, err = net.validate_url_target(url)
     assert not ok
@@ -69,8 +77,10 @@ def test_blocks_missing_hostname() -> None:
 
 def test_blocks_unresolvable_host(monkeypatch: pytest.MonkeyPatch) -> None:
     import socket
+
     def fake_getaddrinfo(*_args, **_kwargs):
         raise socket.gaierror("no such host")
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
     ok, err = net.validate_url_target("https://nx.example.invalid/")
@@ -122,8 +132,10 @@ def test_resolved_allows_public_ip_literal() -> None:
 def test_resolved_tolerates_dns_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """validate_resolved_url is more lenient on DNS failure than validate_url_target."""
     import socket
+
     def fake_getaddrinfo(*_args, **_kwargs):
         raise socket.gaierror("no such host")
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
     ok, _ = net.validate_resolved_url("https://nx.example.invalid/")

@@ -122,8 +122,10 @@ async def probe_segment(
             chat_id=None,
             session_messages=[],
             budget=TokenBudget(
-                context_length=200_000, reserved_output=8000,
-                reserved_tools=4000, reserved_system=4000,
+                context_length=200_000,
+                reserved_output=8000,
+                reserved_tools=4000,
+                reserved_system=4000,
                 available_history=184_000,
             ),
         )
@@ -146,7 +148,9 @@ async def main() -> None:
     p.add_argument("--limit", type=int, default=5)
     p.add_argument("--k", type=int, default=3, help="top-K for hub source / segment")
     p.add_argument(
-        "--stage", choices=["1", "2", "3", "all"], default="all",
+        "--stage",
+        choices=["1", "2", "3", "all"],
+        default="all",
         help="Which stage to run (1=client, 2=hub_source, 3=segment).",
     )
     args = p.parse_args()

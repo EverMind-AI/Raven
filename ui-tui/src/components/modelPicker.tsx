@@ -6,12 +6,12 @@
 import { Box, Text, useInput, useStdout } from '@hermes/ink'
 import { useEffect, useMemo, useState } from 'react'
 
-import { providerDisplayNames } from '../domain/providers.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
-import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
+import { providerDisplayNames } from '../domain/providers.js'
+import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
 
 const VISIBLE = 12
@@ -152,7 +152,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           slug: provider?.slug,
           api_key: apiKey,
           ...(apiBase ? { api_base: apiBase } : {}),
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(sessionId ? { session_id: sessionId } : {})
         })
           .then(raw => {
             const r = asRpcResult<{ provider?: ModelOptionProvider }>(raw)
@@ -165,9 +165,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
             }
 
             // Update the provider in our list with fresh data
-            setProviders(prev =>
-              prev.map(p => p.slug === r.provider!.slug ? r.provider! : p)
-            )
+            setProviders(prev => prev.map(p => (p.slug === r.provider!.slug ? r.provider! : p)))
             setKeyInput('')
             setBaseInput('')
             setKeyField('api_key')
@@ -233,7 +231,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         gw.request<{ provider?: ModelOptionProvider }>('model.add_model', {
           slug: provider.slug,
           model,
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(sessionId ? { session_id: sessionId } : {})
         })
           .then(raw => {
             const r = asRpcResult<{ provider?: ModelOptionProvider }>(raw)
@@ -245,7 +243,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
               return
             }
 
-            setProviders(prev => prev.map(p => p.slug === r.provider!.slug ? r.provider! : p))
+            setProviders(prev => prev.map(p => (p.slug === r.provider!.slug ? r.provider! : p)))
             const idx = (r.provider.models ?? []).indexOf(model)
             setModelNameInput('')
             setKeySaving(false)
@@ -285,7 +283,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         setKeySaving(true)
         gw.request<{ disconnected?: boolean }>('model.disconnect', {
           slug: provider.slug,
-          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(sessionId ? { session_id: sessionId } : {})
         })
           .then(raw => {
             const r = asRpcResult<{ disconnected?: boolean }>(raw)
@@ -293,9 +291,16 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
             if (r?.disconnected) {
               // Mark provider as unauthenticated in local state
               setProviders(prev =>
-                prev.map(p => p.slug === provider.slug
-                  ? { ...p, authenticated: false, models: [], total_models: 0, warning: p.key_env ? `paste ${p.key_env} to activate` : 'run `raven model` to configure' }
-                  : p
+                prev.map(p =>
+                  p.slug === provider.slug
+                    ? {
+                        ...p,
+                        authenticated: false,
+                        models: [],
+                        total_models: 0,
+                        warning: p.key_env ? `paste ${p.key_env} to activate` : 'run `raven model` to configure'
+                      }
+                    : p
                 )
               )
             }
@@ -400,13 +405,13 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       gw.request<{ provider?: ModelOptionProvider }>('model.remove_model', {
         slug: provider.slug,
         model,
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(sessionId ? { session_id: sessionId } : {})
       })
         .then(raw => {
           const r = asRpcResult<{ provider?: ModelOptionProvider }>(raw)
 
           if (r?.provider) {
-            setProviders(prev => prev.map(p => p.slug === r.provider!.slug ? r.provider! : p))
+            setProviders(prev => prev.map(p => (p.slug === r.provider!.slug ? r.provider! : p)))
             setModelIdx(idx => Math.max(0, Math.min(idx, (r.provider!.models?.length ?? 1) - 1)))
           }
 
@@ -469,29 +474,39 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           Saved to ~/.raven/.env{showBase ? ' · Tab switches field' : ''}
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
 
         <Text color={focusBase ? t.color.muted : t.color.accent} wrap="truncate-end">
-          {focusBase ? '  ' : '▸ '}{keyLabel}:
+          {focusBase ? '  ' : '▸ '}
+          {keyLabel}:
         </Text>
 
         <Text color={t.color.accent} wrap="truncate-end">
-          {'  '}{masked || '(empty)'}{focusBase ? '' : caret}
+          {'  '}
+          {masked || '(empty)'}
+          {focusBase ? '' : caret}
         </Text>
 
         {showBase ? (
           <>
             <Text color={focusBase ? t.color.accent : t.color.muted} wrap="truncate-end">
-              {focusBase ? '▸ ' : '  '}{baseLabel}:
+              {focusBase ? '▸ ' : '  '}
+              {baseLabel}:
             </Text>
 
             <Text color={t.color.accent} wrap="truncate-end">
-              {'  '}{baseInput || '(empty)'}{focusBase ? caret : ''}
+              {'  '}
+              {baseInput || '(empty)'}
+              {focusBase ? caret : ''}
             </Text>
           </>
         ) : null}
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
@@ -502,10 +517,14 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
             saving…
           </Text>
         ) : (
-          <Text color={t.color.muted} wrap="truncate-end"> </Text>
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' '}
+          </Text>
         )}
 
-        <OverlayHint t={t}>{showBase ? 'Enter next/save · Tab field · Ctrl+U clear · Esc back' : 'Enter save · Ctrl+U clear · Esc back'}</OverlayHint>
+        <OverlayHint t={t}>
+          {showBase ? 'Enter next/save · Tab field · Ctrl+U clear · Esc back' : 'Enter save · Ctrl+U clear · Esc back'}
+        </OverlayHint>
       </Box>
     )
   }
@@ -522,13 +541,19 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           Type the full model id
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
-
-        <Text color={t.color.accent} wrap="truncate-end">
-          {'  '}{modelNameInput || '(empty)'}{keySaving ? '' : '▎'}
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        <Text color={t.color.accent} wrap="truncate-end">
+          {'  '}
+          {modelNameInput || '(empty)'}
+          {keySaving ? '' : '▎'}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
 
         {keyError ? (
           <Text color={t.color.label} wrap="truncate-end">
@@ -539,7 +564,9 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
             saving…
           </Text>
         ) : (
-          <Text color={t.color.muted} wrap="truncate-end"> </Text>
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' '}
+          </Text>
         )}
 
         <OverlayHint t={t}>Enter add · Ctrl+U clear · Esc back</OverlayHint>
@@ -555,7 +582,9 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           Disconnect {provider.name}?
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
           This removes saved credentials for {provider.name}.
@@ -565,10 +594,14 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           You can re-authenticate later by selecting it again.
         </Text>
 
-        <Text color={t.color.muted} wrap="truncate-end"> </Text>
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
 
         {keySaving ? (
-          <Text color={t.color.muted} wrap="truncate-end">disconnecting…</Text>
+          <Text color={t.color.muted} wrap="truncate-end">
+            disconnecting…
+          </Text>
         ) : (
           <OverlayHint t={t}>y/Enter confirm · n/Esc cancel</OverlayHint>
         )}
@@ -578,18 +611,15 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
   // ── Provider selection stage ─────────────────────────────────────────
   if (stage === 'provider') {
-    const rows = providers.map(
-      (p, i) => {
-        const authMark = p.authenticated === false ? '○' : p.is_current ? '*' : '●'
-        const modelCount = p.total_models ?? p.models?.length ?? 0
+    const rows = providers.map((p, i) => {
+      const authMark = p.authenticated === false ? '○' : p.is_current ? '*' : '●'
+      const modelCount = p.total_models ?? p.models?.length ?? 0
 
-        const suffix = p.authenticated === false
-          ? (p.auth_type === 'api_key' ? '(no key)' : '(needs setup)')
-          : `${modelCount} models`
+      const suffix =
+        p.authenticated === false ? (p.auth_type === 'api_key' ? '(no key)' : '(needs setup)') : `${modelCount} models`
 
-        return `${authMark} ${names[i]} · ${suffix}`
-      }
-    )
+      return `${authMark} ${names[i]} · ${suffix}`
+    })
 
     const { items, offset } = windowItems(rows, providerIdx, VISIBLE)
 

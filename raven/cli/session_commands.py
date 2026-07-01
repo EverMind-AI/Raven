@@ -48,7 +48,7 @@ def _open_manager() -> SessionManager:
 
 def _bare_id(key: str) -> str:
     if key.startswith(f"{_CLI_CHANNEL}:"):
-        return key[len(f"{_CLI_CHANNEL}:"):]
+        return key[len(f"{_CLI_CHANNEL}:") :]
     return key
 
 
@@ -77,9 +77,7 @@ def resolve_session(manager: SessionManager, id_or_prefix: str) -> str:
         raise typer.Exit(code=1)
     if len(prefix_matches) > 1:
         cands = ", ".join(_bare_id(s["key"]) for s in prefix_matches[:8])
-        console.print(
-            f"[red]Ambiguous prefix {id_or_prefix!r} — candidates: {cands}[/red]"
-        )
+        console.print(f"[red]Ambiguous prefix {id_or_prefix!r} — candidates: {cands}[/red]")
         raise typer.Exit(code=1)
     return prefix_matches[0]["key"]
 
@@ -103,10 +101,7 @@ def resolve_session_cross_channel(manager: SessionManager, value: str) -> str:
     res = manager.resolve_key(value)
     if res.status == "ambiguous":
         cands = ", ".join(res.candidates[:8])
-        raise typer.BadParameter(
-            f"{value!r} matches multiple sessions: {cands}. "
-            "Pass the full channel:chat_id key."
-        )
+        raise typer.BadParameter(f"{value!r} matches multiple sessions: {cands}. Pass the full channel:chat_id key.")
     if res.status == "resolved":
         return res.key
     return f"{_CLI_CHANNEL}:{value}"
@@ -140,10 +135,7 @@ def session_create(
         console.print(f"  Use with: raven agent --session {key}")
     else:
         console.print(chat_id)
-        console.print(
-            f"[dim]  (lazy — materialises on first use: "
-            f"raven agent --session {key})[/dim]"
-        )
+        console.print(f"[dim]  (lazy — materialises on first use: raven agent --session {key})[/dim]")
 
 
 # ── list ──────────────────────────────────────────────────────────────
@@ -259,9 +251,7 @@ def session_fork(
 
     child_bare = _bare_id(child.key)
     console.print(child_bare)
-    console.print(
-        f"[dim]  (forked from {_bare_id(key)}; use: raven agent --session {child.key})[/dim]"
-    )
+    console.print(f"[dim]  (forked from {_bare_id(key)}; use: raven agent --session {child.key})[/dim]")
 
 
 # ── export ────────────────────────────────────────────────────────────

@@ -34,14 +34,18 @@ def _minimal_base_config(skill_forge_block: dict) -> dict:
     """Build a JSON dict valid enough for both ``_load_runtime_config``
     (base Config) and ``load_raven_config`` (extension blocks)."""
     return {
-        "agents": {"defaults": {
-            "model": "test-model",
-            "provider": "custom",
-        }},
-        "providers": {"custom": {
-            "apiKey": "test",
-            "apiBase": "http://localhost",
-        }},
+        "agents": {
+            "defaults": {
+                "model": "test-model",
+                "provider": "custom",
+            }
+        },
+        "providers": {
+            "custom": {
+                "apiKey": "test",
+                "apiBase": "http://localhost",
+            }
+        },
         "skill_forge": skill_forge_block,
     }
 
@@ -59,6 +63,7 @@ def isolated_config_state(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
     import raven.config.loader as loader
+
     monkeypatch.setattr(loader, "_current_config_path", None)
 
     return fake_home
@@ -68,7 +73,9 @@ def isolated_config_state(tmp_path: Path, monkeypatch):
 
 
 def test_load_raven_config_reads_from_set_config_path(
-    isolated_config_state: Path, tmp_path: Path, monkeypatch,
+    isolated_config_state: Path,
+    tmp_path: Path,
+    monkeypatch,
 ):
     """Contract: after ``set_config_path(X)``, ``load_raven_config()``
     must read from X — not from ``~/.raven/config.json``.
@@ -80,18 +87,28 @@ def test_load_raven_config_reads_from_set_config_path(
     """
     # Default global → summary
     global_cfg = isolated_config_state / ".raven" / "config.json"
-    _write_json(global_cfg, _minimal_base_config({
-        "enabled": True,
-        "injection_mode": "summary",
-    }))
+    _write_json(
+        global_cfg,
+        _minimal_base_config(
+            {
+                "enabled": True,
+                "injection_mode": "summary",
+            }
+        ),
+    )
 
     # Custom override → full_body
     custom_cfg = tmp_path / "custom-config.json"
-    _write_json(custom_cfg, _minimal_base_config({
-        "enabled": True,
-        "injection_mode": "full_body",
-        "inject_max": 2,
-    }))
+    _write_json(
+        custom_cfg,
+        _minimal_base_config(
+            {
+                "enabled": True,
+                "injection_mode": "full_body",
+                "inject_max": 2,
+            }
+        ),
+    )
 
     from raven.config import loader
     from raven.config.raven import load_raven_config
@@ -150,22 +167,33 @@ def test_cli_subcommand_loads_extension_blocks_from_custom_config(
     """
     # 1. Global config → summary (should be IGNORED when --config is passed)
     global_cfg = isolated_config_state / ".raven" / "config.json"
-    _write_json(global_cfg, _minimal_base_config({
-        "enabled": True,
-        "injection_mode": "summary",
-    }))
+    _write_json(
+        global_cfg,
+        _minimal_base_config(
+            {
+                "enabled": True,
+                "injection_mode": "summary",
+            }
+        ),
+    )
 
     # 2. Custom --config → full_body (should WIN)
     custom_cfg = tmp_path / "custom-config.json"
-    _write_json(custom_cfg, _minimal_base_config({
-        "enabled": True,
-        "injection_mode": "full_body",
-        "inject_max": 2,
-    }))
+    _write_json(
+        custom_cfg,
+        _minimal_base_config(
+            {
+                "enabled": True,
+                "injection_mode": "full_body",
+                "inject_max": 2,
+            }
+        ),
+    )
 
     # 3. Patch load_raven_config to capture + short-circuit
     captured: dict = {}
     import raven.config.raven as ec_module
+
     real_load = ec_module.load_raven_config
 
     def capture_and_stop():
@@ -176,15 +204,21 @@ def test_cli_subcommand_loads_extension_blocks_from_custom_config(
 
     # 4. Invoke
     from raven.cli.commands import app
+
     runner = CliRunner()
     if subcommand == "agent":
-        cmd = ["agent", "--config", str(custom_cfg),
-               "--workspace", str(tmp_path / "ws"),
-               "--message", "test", "--no-logs"]
+        cmd = [
+            "agent",
+            "--config",
+            str(custom_cfg),
+            "--workspace",
+            str(tmp_path / "ws"),
+            "--message",
+            "test",
+            "--no-logs",
+        ]
     else:
-        cmd = ["gateway", "--config", str(custom_cfg),
-               "--workspace", str(tmp_path / "ws"),
-               "--port", "0"]
+        cmd = ["gateway", "--config", str(custom_cfg), "--workspace", str(tmp_path / "ws"), "--port", "0"]
     result = runner.invoke(app, cmd, catch_exceptions=True)
 
     # 5. Verify

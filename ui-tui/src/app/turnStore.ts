@@ -6,8 +6,9 @@
 import { atom } from 'nanostores'
 import { useSyncExternalStore } from 'react'
 
-import { isTodoDone } from '../lib/liveProgress.js'
 import type { ActiveTool, ActivityItem, Msg, SubagentProgress, TodoItem } from '../types.js'
+
+import { isTodoDone } from '../lib/liveProgress.js'
 
 const buildTurnState = (): TurnState => ({
   activity: [],

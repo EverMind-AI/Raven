@@ -25,6 +25,7 @@ the previous `_sys.path` shadowing-defense hack at the top of this
 file is no longer needed because the script no longer shares its name
 with the ``boxlite`` package.)
 """
+
 import argparse
 import asyncio
 import json
@@ -72,6 +73,7 @@ def _runtime():
     invariant from being a footgun for future commands.
     """
     import boxlite
+
     home = str(_home())
     rt = _runtime_cache.get(home)
     if rt is None:
@@ -81,6 +83,7 @@ def _runtime():
 
 
 # ── Image name helpers ─────────────────────────────────────────────────────────
+
 
 def _canonical(image: str) -> str:
     """Normalize a short image name to its canonical registry form.
@@ -105,9 +108,9 @@ def _canonical(image: str) -> str:
 def _short(reference: str) -> str:
     """Strip the docker.io/library/ prefix for display."""
     if reference.startswith("docker.io/library/"):
-        return reference[len("docker.io/library/"):]
+        return reference[len("docker.io/library/") :]
     if reference.startswith("docker.io/"):
-        return reference[len("docker.io/"):]
+        return reference[len("docker.io/") :]
     return reference
 
 
@@ -117,6 +120,7 @@ def _match_reference(reference: str, user_input: str) -> bool:
 
 
 # ── Registry credentials ───────────────────────────────────────────────────────
+
 
 def _registry_auth_key(image: str) -> str:
     """Return the key used in ~/.docker/config.json auths for the image's registry.
@@ -128,9 +132,7 @@ def _registry_auth_key(image: str) -> str:
     """
     name_part = image.split(":")[0]
     first = name_part.split("/")[0]
-    if first in ("docker.io", "index.docker.io") or (
-        "." not in first and ":" not in first and first != "localhost"
-    ):
+    if first in ("docker.io", "index.docker.io") or ("." not in first and ":" not in first and first != "localhost"):
         return "https://index.docker.io/v1/"
     return first  # e.g. "ghcr.io", "registry.example.com:5000"
 
@@ -143,6 +145,7 @@ def _store_registry_credentials(registry_key: str, username: str, password: str)
     Existing entries for other registries are preserved.
     """
     import base64
+
     config_path = Path.home() / ".docker" / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -155,6 +158,7 @@ def _store_registry_credentials(registry_key: str, username: str, password: str)
 
 
 # ── SQLite helpers ─────────────────────────────────────────────────────────────
+
 
 def _open_db() -> sqlite3.Connection:
     db = _db_path()
@@ -180,8 +184,7 @@ def _boxes_using_image(canonical_ref: str) -> list[dict]:
     with _open_db() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT bc.id, bc.name, bs.status, bc.json "
-            "FROM box_config bc JOIN box_state bs ON bc.id = bs.id"
+            "SELECT bc.id, bc.name, bs.status, bc.json FROM box_config bc JOIN box_state bs ON bc.id = bs.id"
         ).fetchall()
     short = _short(canonical_ref)
     result = []
@@ -205,6 +208,7 @@ def _delete_image_from_db(canonical_ref: str) -> int:
 
 
 # ── Orphaned file GC ───────────────────────────────────────────────────────────
+
 
 def _gc_image_files(removed_row: dict) -> None:
     """Remove files for the deleted image that are no longer referenced by any remaining image."""
@@ -241,6 +245,7 @@ def _gc_image_files(removed_row: dict) -> None:
 
 # ── Image size ─────────────────────────────────────────────────────────────────
 
+
 def _layer_sizes_bytes(row: dict) -> int:
     """Sum compressed layer sizes on disk; fall back to 0 if files are missing."""
     total = 0
@@ -256,6 +261,7 @@ def _layer_sizes_bytes(row: dict) -> int:
 
 
 # ── Image subcommands ──────────────────────────────────────────────────────────
+
 
 async def image_pull(
     image: str,
@@ -274,12 +280,16 @@ async def image_pull(
         print(f"Credentials stored for {key}")
 
     import boxlite
+
     print(f"Pulling {image} ...")
     # SimpleBox without runtime= falls back to Boxlite.default() (~/.boxlite),
     # which would silently ignore --home-dir. Bind it to the active runtime
     # so the pull lands in the home dir the user asked for.
     async with boxlite.SimpleBox(
-        image=image, cpus=1, memory_mib=256, runtime=_runtime(),
+        image=image,
+        cpus=1,
+        memory_mib=256,
+        runtime=_runtime(),
     ) as box:
         result = await box.exec("sh", "-c", "echo ok")
         if result.exit_code != 0:
@@ -294,7 +304,9 @@ def image_ls() -> None:
         print("No images cached.")
         return
 
-    display = [(_short(r["reference"]), r["manifest_digest"][:19], r["cached_at"][:19], _layer_sizes_bytes(r)) for r in rows]
+    display = [
+        (_short(r["reference"]), r["manifest_digest"][:19], r["cached_at"][:19], _layer_sizes_bytes(r)) for r in rows
+    ]
     ref_w = max(len(d[0]) for d in display)
     ref_w = max(ref_w, 5)
 
@@ -334,6 +346,7 @@ def image_rm(image: str, force: bool) -> None:
 
 
 # ── VM subcommands ─────────────────────────────────────────────────────────────
+
 
 def _state_str(state: object) -> str:
     # BoxStateInfo has a .status str field ("running", "stopped", "created", ...)
@@ -456,9 +469,11 @@ async def vm_shell(id_or_name: str, shell: str) -> None:
         await execution.resize_tty(rows, cols)
 
         if hasattr(_signal, "SIGWINCH"):
+
             def _on_resize(*_):
                 r, c = _term_size()
                 asyncio.run_coroutine_threadsafe(execution.resize_tty(r, c), loop)
+
             _signal.signal(_signal.SIGWINCH, _on_resize)
 
         stdin_writer = execution.stdin()
@@ -524,6 +539,7 @@ async def vm_shell(id_or_name: str, shell: str) -> None:
 
 # ── CLI wiring ─────────────────────────────────────────────────────────────────
 
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="boxlite",
@@ -534,9 +550,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help="Boxlite runtime home dir (DB, images, layers). "
-             "Overrides BOXLITE_HOME and the default ~/.boxlite. "
-             "Use raven's data dir to inspect raven-managed VMs, e.g. "
-             "$(uv run python -c 'from raven.config.paths import get_sandbox_dir; print(get_sandbox_dir(\"boxlite\"))').",
+        "Overrides BOXLITE_HOME and the default ~/.boxlite. "
+        "Use raven's data dir to inspect raven-managed VMs, e.g. "
+        "$(uv run python -c 'from raven.config.paths import get_sandbox_dir; print(get_sandbox_dir(\"boxlite\"))').",
     )
     sub = p.add_subparsers(dest="resource", required=True)
 
@@ -546,12 +562,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pull_p = img_sub.add_parser("pull", help="Pull an OCI image into the local cache")
     pull_p.add_argument("image", help="Image reference, e.g. ubuntu:22.04")
-    pull_p.add_argument("-u", "--username", default=None,
-                        help="Registry username (or set BOXLITE_REGISTRY_USERNAME). "
-                             "Credentials are saved to ~/.docker/config.json.")
-    pull_p.add_argument("-p", "--password", default=None,
-                        help="Registry password / token (or set BOXLITE_REGISTRY_PASSWORD). "
-                             "Credentials are saved to ~/.docker/config.json.")
+    pull_p.add_argument(
+        "-u",
+        "--username",
+        default=None,
+        help="Registry username (or set BOXLITE_REGISTRY_USERNAME). Credentials are saved to ~/.docker/config.json.",
+    )
+    pull_p.add_argument(
+        "-p",
+        "--password",
+        default=None,
+        help="Registry password / token (or set BOXLITE_REGISTRY_PASSWORD). "
+        "Credentials are saved to ~/.docker/config.json.",
+    )
 
     img_sub.add_parser("ls", help="List cached OCI images")
 
@@ -570,7 +593,9 @@ def _build_parser() -> argparse.ArgumentParser:
     create_p.add_argument("--name", default=None, help="Optional name for the VM")
     create_p.add_argument("--cpus", type=int, default=2, help="vCPU count (default: 2)")
     create_p.add_argument("--memory", type=int, default=2048, metavar="MiB", help="RAM in MiB (default: 2048)")
-    create_p.add_argument("--disk", type=int, default=None, metavar="GB", help="Persistent disk in GB (default: ephemeral)")
+    create_p.add_argument(
+        "--disk", type=int, default=None, metavar="GB", help="Persistent disk in GB (default: ephemeral)"
+    )
     create_p.add_argument("--start", action="store_true", help="Boot the VM immediately after creation")
 
     start_p = vm_sub.add_parser("start", help="Start a stopped VM")
@@ -585,8 +610,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     shell_p = vm_sub.add_parser("shell", help="Open an interactive PTY shell in a running VM")
     shell_p.add_argument("id_or_name", help="VM ID or name")
-    shell_p.add_argument("--shell", default="/bin/sh", dest="shell_cmd",
-                         help="Shell binary to run (default: /bin/sh)")
+    shell_p.add_argument("--shell", default="/bin/sh", dest="shell_cmd", help="Shell binary to run (default: /bin/sh)")
 
     return p
 

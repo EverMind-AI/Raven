@@ -36,9 +36,9 @@ Information about the user to help personalize interactions.
 
 ## Topics of Interest
 
-- 
-- 
-- 
+-
+-
+-
 
 ## Special Instructions
 

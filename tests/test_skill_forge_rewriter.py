@@ -6,8 +6,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import pytest
-
 from raven.memory_engine.skill_forge.rewriter import (
     QueryRewriter,
     RewriteResult,
@@ -52,22 +50,22 @@ async def test_analyze_no_retrieval_short_circuits() -> None:
 
 
 async def test_analyze_returns_rewritten_query() -> None:
-    provider = _StubProvider(json.dumps({
-        "need_retrieval": True,
-        "rewritten_query": "generate pdf reports",
-    }))
-    rewriter = QueryRewriter(provider)
-    result = await rewriter.analyze(
-        "could you please generate a pdf report from /home/user/data.csv"
+    provider = _StubProvider(
+        json.dumps(
+            {
+                "need_retrieval": True,
+                "rewritten_query": "generate pdf reports",
+            }
+        )
     )
+    rewriter = QueryRewriter(provider)
+    result = await rewriter.analyze("could you please generate a pdf report from /home/user/data.csv")
     assert result.need_retrieval is True
     assert result.rewritten_query == "generate pdf reports"
 
 
 async def test_analyze_handles_code_fence_wrapping() -> None:
-    provider = _StubProvider(
-        '```json\n{"need_retrieval": true, "rewritten_query": "trim"}\n```'
-    )
+    provider = _StubProvider('```json\n{"need_retrieval": true, "rewritten_query": "trim"}\n```')
     result = await QueryRewriter(provider).analyze("verbose query")
     assert result.rewritten_query == "trim"
 

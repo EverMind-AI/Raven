@@ -33,21 +33,17 @@ class BenchmarkDriver(ABC):
     # ---- required ------------------------------------------------------------
 
     @abstractmethod
-    def load_samples(self, *, n: int | None = None,
-                     filter_id: str | None = None) -> list["Sample"]: ...
+    def load_samples(self, *, n: int | None = None, filter_id: str | None = None) -> list["Sample"]: ...
 
     @abstractmethod
-    def build_prompt(self, sample: "Sample",
-                     ctx: dict[str, Any] | None = None) -> str: ...
+    def build_prompt(self, sample: "Sample", ctx: dict[str, Any] | None = None) -> str: ...
 
     @abstractmethod
-    def parse_output(self, text: str | None,
-                     sample: "Sample") -> dict[str, Any]:
+    def parse_output(self, text: str | None, sample: "Sample") -> dict[str, Any]:
         """Parse a backend's free-text reply into the row-level decision dict."""
 
     @abstractmethod
-    def make_row(self, sample: "Sample", outcome: "AgentOutcome",
-                 runtime_meta: dict[str, Any]) -> dict[str, Any]:
+    def make_row(self, sample: "Sample", outcome: "AgentOutcome", runtime_meta: dict[str, Any]) -> dict[str, Any]:
         """Shape the final result row written to the output JSON."""
 
     # ---- optional ------------------------------------------------------------

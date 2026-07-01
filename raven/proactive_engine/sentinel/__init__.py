@@ -6,24 +6,24 @@ NudgeFeedbackTracker, ContextAssembler, ProactiveSpawn, and SentinelRunner
 — the orchestrator that binds all components into a periodic tick loop.
 """
 
-from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
 from raven.proactive_engine.sentinel.executor.defer_manager import DeferManager
+from raven.proactive_engine.sentinel.executor.dispatcher import ExecutionResult, NudgeDispatcher
+from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
+from raven.proactive_engine.sentinel.executor.runner import SentinelRunner, TickOutcome
+from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
 from raven.proactive_engine.sentinel.feedback.tracker import (
     FeedbackSignal,
     NudgeFeedbackTracker,
     new_nudge_id,
 )
-from raven.proactive_engine.sentinel.executor.dispatcher import ExecutionResult, NudgeDispatcher
-from raven.proactive_engine.sentinel.executor.injector import NudgeInjector
-from raven.proactive_engine.sentinel.trigger_policy.policy import CheckResult, NudgePolicy
 from raven.proactive_engine.sentinel.planner import ProactivePlanner
-from raven.proactive_engine.sentinel.executor.spawn import ProactiveSpawn
+from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
+from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
+from raven.proactive_engine.sentinel.trigger_policy.policy import CheckResult, NudgePolicy
 from raven.proactive_engine.sentinel.trigger_policy.prefs import (
     PersonalizedOverrides,
     ProactivityPreferencesReader,
 )
-from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
-from raven.proactive_engine.sentinel.executor.runner import SentinelRunner, TickOutcome
 from raven.proactive_engine.sentinel.types import (
     ActiveSession,
     NudgePolicyState,

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.proactive_engine.sentinel import (
     ActiveSession,
     NudgePolicyState,
@@ -12,6 +11,7 @@ from raven.proactive_engine.sentinel import (
     ProactivePlanner,
     Routine,
 )
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 class StubProvider(LLMProvider):
@@ -70,21 +70,25 @@ def _make_context() -> PlannerContext:
 
 
 async def test_planner_parses_tool_call_nudge():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c1",
-            name="planner_decision",
-            arguments={
-                "action": "nudge",
-                "reason": "routine time window ended without checkin",
-                "proactivity_score": 0.8,
-                "priority": "low",
-                "target_session": "telegram:home",
-                "nudge_message": "你 Duolingo 连续 47 天了，今天还没打…",
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c1",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge",
+                        "reason": "routine time window ended without checkin",
+                        "proactivity_score": 0.8,
+                        "priority": "low",
+                        "target_session": "telegram:home",
+                        "nudge_message": "你 Duolingo 连续 47 天了，今天还没打…",
+                    },
+                )
+            ],
+        )
+    )
 
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
 
@@ -103,47 +107,59 @@ async def test_planner_defaults_to_skip_when_no_tool_call():
 
 
 async def test_planner_forces_valid_action():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={"action": "bogus", "reason": "x", "proactivity_score": 0.9},
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={"action": "bogus", "reason": "x", "proactivity_score": 0.9},
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "skip"
 
 
 async def test_planner_clamps_score_and_priority():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "nudge",
-                "reason": "x",
-                "proactivity_score": 3.5,          # out of range
-                "priority": "extremely_urgent",    # invalid
-                "nudge_message": "m",
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge",
+                        "reason": "x",
+                        "proactivity_score": 3.5,  # out of range
+                        "priority": "extremely_urgent",  # invalid
+                        "nudge_message": "m",
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.proactivity_score == 1.0
     assert decision.priority == "low"
 
 
 async def test_planner_passes_rich_context_to_prompt():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={"action": "skip", "reason": "nothing", "proactivity_score": 0.1},
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={"action": "skip", "reason": "nothing", "proactivity_score": 0.1},
+                )
+            ],
+        )
+    )
     await ProactivePlanner(provider, "stub").decide(_make_context())
 
     user_msg = next(m for m in provider.last_messages if m["role"] == "user")
@@ -161,22 +177,26 @@ async def test_planner_passes_rich_context_to_prompt():
 
 async def test_planner_parses_nudge_defer():
     """Ensure the new nudge_defer action round-trips with its defer_condition."""
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "nudge_defer",
-                "reason": "user is consulting about health issue; wait to add refill reminder",
-                "proactivity_score": 0.75,
-                "priority": "medium",
-                "target_session": "telegram:home",
-                "nudge_message": "顺便两件和妈妈健康相关的事...",
-                "defer_condition": "当前腰疼咨询告一段落",
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge_defer",
+                        "reason": "user is consulting about health issue; wait to add refill reminder",
+                        "proactivity_score": 0.75,
+                        "priority": "medium",
+                        "target_session": "telegram:home",
+                        "nudge_message": "顺便两件和妈妈健康相关的事...",
+                        "defer_condition": "当前腰疼咨询告一段落",
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "nudge_defer"
     assert decision.defer_condition == "当前腰疼咨询告一段落"
@@ -184,21 +204,25 @@ async def test_planner_parses_nudge_defer():
 
 
 async def test_planner_parses_nudge_inject():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "nudge_inject",
-                "reason": "user is planning travel; passport expiry is naturally additive",
-                "proactivity_score": 0.85,
-                "priority": "low",
-                "target_session": "cli:direct",
-                "nudge_message": "顺便提一下：你护照 2027-03 到期...",
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge_inject",
+                        "reason": "user is planning travel; passport expiry is naturally additive",
+                        "proactivity_score": 0.85,
+                        "priority": "low",
+                        "target_session": "cli:direct",
+                        "nudge_message": "顺便提一下：你护照 2027-03 到期...",
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "nudge_inject"
     assert "护照" in (decision.nudge_message or "")
@@ -208,20 +232,24 @@ async def test_planner_parses_nudge_inject():
 async def test_planner_downgrades_nudge_without_message():
     """nudge / nudge_inject / nudge_defer without nudge_message should become skip
     so the runner never has to fall back to reason-as-message."""
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "nudge",
-                "reason": "pretend nudge without a message",
-                "proactivity_score": 0.8,
-                "priority": "low",
-                # nudge_message intentionally missing
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge",
+                        "reason": "pretend nudge without a message",
+                        "proactivity_score": 0.8,
+                        "priority": "low",
+                        # nudge_message intentionally missing
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "skip"
     assert "missing nudge_message" in decision.reason
@@ -230,39 +258,47 @@ async def test_planner_downgrades_nudge_without_message():
 
 
 async def test_planner_downgrades_defer_without_condition():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "nudge_defer",
-                "reason": "forgot the defer_condition",
-                "proactivity_score": 0.7,
-                "nudge_message": "有个事儿等你聊完再说",
-                # defer_condition intentionally missing
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "nudge_defer",
+                        "reason": "forgot the defer_condition",
+                        "proactivity_score": 0.7,
+                        "nudge_message": "有个事儿等你聊完再说",
+                        # defer_condition intentionally missing
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "skip"
     assert "missing defer_condition" in decision.reason
 
 
 async def test_planner_downgrades_spawn_without_task():
-    provider = StubProvider(LLMResponse(
-        content=None,
-        tool_calls=[ToolCallRequest(
-            id="c",
-            name="planner_decision",
-            arguments={
-                "action": "spawn_agent",
-                "reason": "forgot the spawn_task",
-                "proactivity_score": 0.9,
-                # spawn_task intentionally missing
-            },
-        )],
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallRequest(
+                    id="c",
+                    name="planner_decision",
+                    arguments={
+                        "action": "spawn_agent",
+                        "reason": "forgot the spawn_task",
+                        "proactivity_score": 0.9,
+                        # spawn_task intentionally missing
+                    },
+                )
+            ],
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "skip"
     assert "missing spawn_task" in decision.reason
@@ -276,14 +312,26 @@ async def test_planner_temperature_override():
         def __init__(self):
             super().__init__(api_key="test")
 
-        async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                       temperature=0.7, reasoning_effort=None, tool_choice=None):
+        async def chat(
+            self,
+            messages,
+            tools=None,
+            model=None,
+            max_tokens=4096,
+            temperature=0.7,
+            reasoning_effort=None,
+            tool_choice=None,
+        ):
             captured["temperature"] = temperature
             return LLMResponse(
                 content=None,
-                tool_calls=[ToolCallRequest(id="c", name="planner_decision",
-                                             arguments={"action": "skip", "reason": "x",
-                                                        "proactivity_score": 0.1})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c",
+                        name="planner_decision",
+                        arguments={"action": "skip", "reason": "x", "proactivity_score": 0.1},
+                    )
+                ],
             )
 
         def get_default_model(self) -> str:
@@ -301,10 +349,12 @@ async def test_planner_temperature_override():
 
 
 async def test_planner_survives_llm_error():
-    provider = StubProvider(LLMResponse(
-        content="Error calling LLM: connection reset",
-        finish_reason="error",
-    ))
+    provider = StubProvider(
+        LLMResponse(
+            content="Error calling LLM: connection reset",
+            finish_reason="error",
+        )
+    )
     decision = await ProactivePlanner(provider, "stub").decide(_make_context())
     assert decision.action == "skip"
     assert "llm_error" in decision.reason

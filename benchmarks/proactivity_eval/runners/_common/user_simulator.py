@@ -18,19 +18,18 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider
 
-
 ActionKind = Literal["send", "idle", "dismiss", "end_day"]
 
 
 @dataclass
 class SimAction:
     kind: ActionKind
-    content: str | None = None             # for "send"
-    idle_minutes: int | None = None        # for "idle"
-    dismiss_nudge_id: str | None = None    # for "dismiss"
-    reasoning: str = ""                    # simulator's own justification
+    content: str | None = None  # for "send"
+    idle_minutes: int | None = None  # for "idle"
+    dismiss_nudge_id: str | None = None  # for "dismiss"
+    reasoning: str = ""  # simulator's own justification
     turn_hint: Literal["single", "continue"] = "single"
-    raw: dict[str, Any] | None = None      # debugging
+    raw: dict[str, Any] | None = None  # debugging
 
 
 @dataclass
@@ -41,7 +40,7 @@ class SimContext:
     memory_tail: str = ""
     pending_nudges: list[dict[str, Any]] = field(default_factory=list)
     last_action_kind: str | None = None
-    day_index: int = 0                     # 0-indexed, 0..29
+    day_index: int = 0  # 0-indexed, 0..29
 
 
 SIMULATOR_TOOL = {
@@ -131,10 +130,10 @@ _SYSTEM_PROMPT = """你是用户行为模拟器 — 扮演一个真实用户与 
 
 def _render_persona(persona: dict) -> str:
     lines = [
-        f"# Persona: {persona.get('id')} ({persona.get('role','?')})",
-        f"- 时区: {persona.get('timezone','Asia/Shanghai')}  语言: {persona.get('language','zh-CN')}",
+        f"# Persona: {persona.get('id')} ({persona.get('role', '?')})",
+        f"- 时区: {persona.get('timezone', 'Asia/Shanghai')}  语言: {persona.get('language', 'zh-CN')}",
         f"- 作息: {persona.get('wake_hours', [7, 23])}",
-        f"- 沟通风格: {persona.get('communication_style','')}",
+        f"- 沟通风格: {persona.get('communication_style', '')}",
     ]
     rhythm = persona.get("weekly_rhythm") or {}
     if rhythm:
@@ -156,7 +155,7 @@ def _render_context(ctx: SimContext) -> str:
     fake_now = ctx.fake_now
     weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][fake_now.weekday()]
     parts = [
-        f"## 当前状态",
+        "## 当前状态",
         f"- fake_now: {fake_now.isoformat()} ({weekday})",
         f"- day_index: {ctx.day_index}/30",
         f"- 上次 action: {ctx.last_action_kind or '(无)'}",
@@ -170,10 +169,7 @@ def _render_context(ctx: SimContext) -> str:
     if ctx.pending_nudges:
         parts.append("\n## 待处理的 agent 推送")
         for n in ctx.pending_nudges:
-            parts.append(
-                f"- id={n.get('id','?')} at={n.get('fake_now','?')} "
-                f"content={n.get('content','')[:150]!r}"
-            )
+            parts.append(f"- id={n.get('id', '?')} at={n.get('fake_now', '?')} content={n.get('content', '')[:150]!r}")
     if ctx.memory_tail:
         parts.append("\n## MEMORY.md 尾部")
         parts.append("```\n" + ctx.memory_tail[-1500:] + "\n```")
@@ -314,14 +310,14 @@ class UserSimulator:
             )
         except Exception as exc:
             logger.warning("simulator LLM failed: {}: {}", type(exc).__name__, exc)
-            return SimAction(kind="idle", idle_minutes=60,
-                             reasoning=f"simulator_llm_error: {exc}")
+            return SimAction(kind="idle", idle_minutes=60, reasoning=f"simulator_llm_error: {exc}")
 
         if not getattr(resp, "has_tool_calls", False):
             # Fallback — LLM didn't use the tool. Parse freetext leniently.
             content = (getattr(resp, "content", "") or "").strip()
             return SimAction(
-                kind="idle", idle_minutes=60,
+                kind="idle",
+                idle_minutes=60,
                 reasoning=f"simulator_no_tool_call; freetext={content[:120]!r}",
             )
 
@@ -331,35 +327,44 @@ class UserSimulator:
                 args = json.loads(args)
         except Exception as exc:
             return SimAction(
-                kind="idle", idle_minutes=60,
+                kind="idle",
+                idle_minutes=60,
                 reasoning=f"simulator_arg_parse_error: {exc}",
             )
 
         return _parse_action(args)
 
     async def materialize_intent(
-        self, intent: dict[str, Any], ctx: SimContext,
+        self,
+        intent: dict[str, Any],
+        ctx: SimContext,
     ) -> str:
         """Turn a scheduled intent into the first user message for this turn."""
         messages = [
             {"role": "system", "content": _MATERIALIZE_INTENT_SYSTEM},
-            {"role": "user", "content": (
-                _render_persona(self.persona) + "\n\n"
-                + _render_context(ctx) + "\n\n"
-                + "## 当前要发起的 intent\n"
-                + f"- topic: {intent.get('topic','')}\n"
-                + f"- kind: {intent.get('kind','')}\n"
-                + f"- depth: {intent.get('depth','single_turn')}\n"
-                + f"- expected_followups: {intent.get('expected_followups', 0)}\n"
-                + (f"- reveals_new_fact: {intent['reveals_new_fact']}\n"
-                   if intent.get('reveals_new_fact') else "")
-                + "\n请生成 user 的首条消息（只输出一句话/一段话，不带引号）。"
-            )},
+            {
+                "role": "user",
+                "content": (
+                    _render_persona(self.persona)
+                    + "\n\n"
+                    + _render_context(ctx)
+                    + "\n\n"
+                    + "## 当前要发起的 intent\n"
+                    + f"- topic: {intent.get('topic', '')}\n"
+                    + f"- kind: {intent.get('kind', '')}\n"
+                    + f"- depth: {intent.get('depth', 'single_turn')}\n"
+                    + f"- expected_followups: {intent.get('expected_followups', 0)}\n"
+                    + (f"- reveals_new_fact: {intent['reveals_new_fact']}\n" if intent.get("reveals_new_fact") else "")
+                    + "\n请生成 user 的首条消息（只输出一句话/一段话，不带引号）。"
+                ),
+            },
         ]
         try:
             resp = await self.provider.chat_with_retry(
-                messages=messages, model=self.model,
-                temperature=self.temperature, max_tokens=self.max_tokens,
+                messages=messages,
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
             )
             content = (resp.content or "").strip()
             # Strip common wrappers if LLM added ``` or quotes
@@ -367,13 +372,15 @@ class UserSimulator:
                 content = content[1:-1]
             if content.startswith("```") and content.endswith("```"):
                 content = content.strip("`").strip()
-            return content or f"[materialize failed for intent: {intent.get('topic','?')}]"
+            return content or f"[materialize failed for intent: {intent.get('topic', '?')}]"
         except Exception as exc:
             logger.warning("materialize_intent failed: {}: {}", type(exc).__name__, exc)
-            return f"[materialize error: {intent.get('topic','?')}]"
+            return f"[materialize error: {intent.get('topic', '?')}]"
 
     async def decide_followup(
-        self, intent: dict[str, Any], ctx: SimContext,
+        self,
+        intent: dict[str, Any],
+        ctx: SimContext,
         followups_taken: int,
     ) -> tuple[str, str | None, str]:
         """Inside an intent, decide: another user turn, or end intent.
@@ -383,21 +390,33 @@ class UserSimulator:
         expected = intent.get("expected_followups", 0)
         messages = [
             {"role": "system", "content": _FOLLOWUP_SYSTEM},
-            {"role": "user", "content": (
-                _render_persona(self.persona) + "\n\n"
-                + _render_context(ctx) + "\n\n"
-                + f"## 当前 intent 状态\n"
-                + f"- topic: {intent.get('topic','')}\n"
-                + f"- 计划 followups: {expected}\n"
-                + f"- 已完成 followups: {followups_taken}\n"
-                + "根据 agent 刚才的回复，决定 send 还是 end_intent。"
-                + (f" 已经完成计划的 followup 数量，除非对话很自然可以延续，否则结束。" if followups_taken >= expected else "")
-            )},
+            {
+                "role": "user",
+                "content": (
+                    _render_persona(self.persona)
+                    + "\n\n"
+                    + _render_context(ctx)
+                    + "\n\n"
+                    + "## 当前 intent 状态\n"
+                    + f"- topic: {intent.get('topic', '')}\n"
+                    + f"- 计划 followups: {expected}\n"
+                    + f"- 已完成 followups: {followups_taken}\n"
+                    + "根据 agent 刚才的回复，决定 send 还是 end_intent。"
+                    + (
+                        " 已经完成计划的 followup 数量，除非对话很自然可以延续，否则结束。"
+                        if followups_taken >= expected
+                        else ""
+                    )
+                ),
+            },
         ]
         try:
             resp = await self.provider.chat_with_retry(
-                messages=messages, tools=[_FOLLOWUP_TOOL],
-                model=self.model, temperature=self.temperature, max_tokens=300,
+                messages=messages,
+                tools=[_FOLLOWUP_TOOL],
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=300,
             )
         except Exception as exc:
             logger.warning("decide_followup failed: {}: {}", type(exc).__name__, exc)
@@ -417,7 +436,8 @@ class UserSimulator:
         return (decision, content, str(args.get("reasoning") or ""))
 
     async def react_to_nudges(
-        self, ctx: SimContext,
+        self,
+        ctx: SimContext,
     ) -> tuple[str, str | None, str]:
         """Pre-intent hook — react to nudges that arrived during idle.
 
@@ -428,17 +448,25 @@ class UserSimulator:
             return ("ignore", None, "no_nudges")
         messages = [
             {"role": "system", "content": _REACT_NUDGE_SYSTEM},
-            {"role": "user", "content": (
-                _render_persona(self.persona) + "\n\n"
-                + _render_context(ctx) + "\n\n"
-                + "## 上述 pending_nudges 是 agent idle 期间主动 push 的。\n"
-                + "请按 persona 视角决定：engage / dismiss / ignore。"
-            )},
+            {
+                "role": "user",
+                "content": (
+                    _render_persona(self.persona)
+                    + "\n\n"
+                    + _render_context(ctx)
+                    + "\n\n"
+                    + "## 上述 pending_nudges 是 agent idle 期间主动 push 的。\n"
+                    + "请按 persona 视角决定：engage / dismiss / ignore。"
+                ),
+            },
         ]
         try:
             resp = await self.provider.chat_with_retry(
-                messages=messages, tools=[_REACT_NUDGE_TOOL],
-                model=self.model, temperature=self.temperature, max_tokens=300,
+                messages=messages,
+                tools=[_REACT_NUDGE_TOOL],
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=300,
             )
         except Exception as exc:
             logger.warning("react_to_nudges failed: {}", exc)
@@ -470,9 +498,7 @@ class UserSimulator:
         }
 
     @classmethod
-    def restore(
-        cls, state: dict[str, Any], provider: LLMProvider
-    ) -> "UserSimulator":
+    def restore(cls, state: dict[str, Any], provider: LLMProvider) -> "UserSimulator":
         return cls(
             persona=state["persona"],
             provider=provider,
@@ -485,8 +511,7 @@ class UserSimulator:
 def _parse_action(args: dict[str, Any]) -> SimAction:
     kind = args.get("kind")
     if kind not in ("send", "idle", "dismiss", "end_day"):
-        return SimAction(kind="idle", idle_minutes=60,
-                         reasoning=f"unknown_kind:{kind}", raw=args)
+        return SimAction(kind="idle", idle_minutes=60, reasoning=f"unknown_kind:{kind}", raw=args)
 
     reasoning = str(args.get("reasoning") or "")
     turn_hint = args.get("turn_hint", "single")
@@ -496,10 +521,8 @@ def _parse_action(args: dict[str, Any]) -> SimAction:
     if kind == "send":
         content = str(args.get("content") or "").strip()
         if not content:
-            return SimAction(kind="idle", idle_minutes=30,
-                             reasoning="send_without_content", raw=args)
-        return SimAction(kind="send", content=content, reasoning=reasoning,
-                         turn_hint=turn_hint, raw=args)
+            return SimAction(kind="idle", idle_minutes=30, reasoning="send_without_content", raw=args)
+        return SimAction(kind="send", content=content, reasoning=reasoning, turn_hint=turn_hint, raw=args)
 
     if kind == "idle":
         mins = args.get("idle_minutes")
@@ -507,13 +530,12 @@ def _parse_action(args: dict[str, Any]) -> SimAction:
             mins = max(1, min(540, int(mins)))
         except (TypeError, ValueError):
             mins = 60
-        return SimAction(kind="idle", idle_minutes=mins,
-                         reasoning=reasoning, raw=args)
+        return SimAction(kind="idle", idle_minutes=mins, reasoning=reasoning, raw=args)
 
     if kind == "dismiss":
-        return SimAction(kind="dismiss",
-                         dismiss_nudge_id=str(args.get("dismiss_nudge_id") or ""),
-                         reasoning=reasoning, raw=args)
+        return SimAction(
+            kind="dismiss", dismiss_nudge_id=str(args.get("dismiss_nudge_id") or ""), reasoning=reasoning, raw=args
+        )
 
     # end_day
     return SimAction(kind="end_day", reasoning=reasoning, raw=args)

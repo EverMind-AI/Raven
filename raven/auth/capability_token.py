@@ -31,7 +31,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-
 _SIG_ALGO = hashlib.sha256
 
 
@@ -60,11 +59,7 @@ class CapabilityToken:
             agent_id=str(payload["agent_id"]),
             capabilities=list(payload.get("capabilities") or []),
             issued_at=int(payload.get("issued_at", 0)),
-            expires_at=(
-                int(payload["expires_at"])
-                if payload.get("expires_at") is not None
-                else None
-            ),
+            expires_at=(int(payload["expires_at"]) if payload.get("expires_at") is not None else None),
             metadata=dict(payload.get("metadata") or {}),
         )
 

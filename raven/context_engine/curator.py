@@ -17,12 +17,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.agent.tools.base import Tool
 from raven.config.raven import ContextConfig
 from raven.context_engine.base import AssembledPrefix
 from raven.context_engine.history_trimmer import HistoryTrimmer
 from raven.memory_engine.base import AssembledContext, TokenBudget
+from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
 from raven.utils.helpers import (
     ensure_dir,
@@ -189,21 +189,23 @@ class CuratorArchiveStore:
             if idx < self.config.protect_first_n * 2:
                 relevance = max(relevance, 0.8)
 
-            manifest.append(ManifestItem(
-                id=idx,
-                role=str(message.get("role", "")),
-                ts=message.get("timestamp") if isinstance(message.get("timestamp"), str) else None,
-                tokens=estimate_message_tokens(message),
-                turn_id=turn_id,
-                group_id=group_id,
-                snippet=_snippet(content_text, 240),
-                summary=_snippet(content_text, 420),
-                keywords=_keywords(content_text),
-                relevance=min(1.0, max(0.0, relevance)),
-                protected=idx < self.config.protect_first_n * 2,
-                archived=archived,
-                archive_ref=archive_ref,
-            ))
+            manifest.append(
+                ManifestItem(
+                    id=idx,
+                    role=str(message.get("role", "")),
+                    ts=message.get("timestamp") if isinstance(message.get("timestamp"), str) else None,
+                    tokens=estimate_message_tokens(message),
+                    turn_id=turn_id,
+                    group_id=group_id,
+                    snippet=_snippet(content_text, 240),
+                    summary=_snippet(content_text, 420),
+                    keywords=_keywords(content_text),
+                    relevance=min(1.0, max(0.0, relevance)),
+                    protected=idx < self.config.protect_first_n * 2,
+                    archived=archived,
+                    archive_ref=archive_ref,
+                )
+            )
         self.save_manifest(session_key, manifest)
         return manifest
 
@@ -283,15 +285,19 @@ class CuratorArchiveStore:
             except (OSError, json.JSONDecodeError) as exc:
                 results.append({"archive_ref": ref, "error": str(exc), "messages": []})
                 continue
-            results.append({
-                "archive_ref": ref,
-                "messages": messages,
-                "returned_tokens": returned_tokens,
-                "truncated": returned_tokens >= budget,
-            })
+            results.append(
+                {
+                    "archive_ref": ref,
+                    "messages": messages,
+                    "returned_tokens": returned_tokens,
+                    "truncated": returned_tokens >= budget,
+                }
+            )
         return {"results": results}
 
-    def set_relevance(self, session_key: str, manifest: list[ManifestItem], updates: list[dict[str, Any]]) -> dict[str, Any]:
+    def set_relevance(
+        self, session_key: str, manifest: list[ManifestItem], updates: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         by_id = {item.id: item for item in manifest}
         accepted: list[int] = []
         rejected: list[dict[str, Any]] = []
@@ -337,7 +343,10 @@ class CuratorAssembler:
         self.get_tool_definitions = get_tool_definitions
         self.context_window_tokens = context_window_tokens
         self.trimmer = HistoryTrimmer(
-            provider, model, get_tool_definitions, context_window_tokens,
+            provider,
+            model,
+            get_tool_definitions,
+            context_window_tokens,
         )
         # Per-turn system prefix (seg1–5) + user message; set by
         # CuratorSegmentBuilder before any build/validate call.
@@ -350,7 +359,9 @@ class CuratorAssembler:
         return f"# Curator Working State\n\n{ws}" if ws else ""
 
     def _full_messages(
-        self, history: list[dict[str, Any]], working_state: str | None,
+        self,
+        history: list[dict[str, Any]],
+        working_state: str | None,
     ) -> list[dict[str, Any]]:
         prefix = self.prefix
         system = prefix.system_prefix
@@ -474,15 +485,17 @@ class CuratorArchiveMessagesTool(_CuratorTool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        return self._json(self.archive.archive_messages(
-            self.state.session_key,
-            self.state.manifest,
-            self.state.session_messages,
-            kwargs.get("message_ids", []),
-            kwargs.get("reason", ""),
-            kwargs.get("tags", []),
-            kwargs.get("summary", ""),
-        ))
+        return self._json(
+            self.archive.archive_messages(
+                self.state.session_key,
+                self.state.manifest,
+                self.state.session_messages,
+                kwargs.get("message_ids", []),
+                kwargs.get("reason", ""),
+                kwargs.get("tags", []),
+                kwargs.get("summary", ""),
+            )
+        )
 
 
 class CuratorRetrieveArchivedTool(_CuratorTool):
@@ -510,11 +523,13 @@ class CuratorRetrieveArchivedTool(_CuratorTool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        return self._json(self.archive.retrieve(
-            kwargs.get("archive_refs", []),
-            max_tokens=kwargs.get("max_tokens", 2000),
-            mode=kwargs.get("mode", "snippet"),
-        ))
+        return self._json(
+            self.archive.retrieve(
+                kwargs.get("archive_refs", []),
+                max_tokens=kwargs.get("max_tokens", 2000),
+                mode=kwargs.get("mode", "snippet"),
+            )
+        )
 
 
 class CuratorSearchHistoryTool(_CuratorTool):
@@ -558,14 +573,16 @@ class CuratorSearchHistoryTool(_CuratorTool):
             if not overlap and terms:
                 continue
             score = overlap + item.relevance + (0.25 if item.id >= len(self.state.manifest) - 12 else 0)
-            hits.append({
-                "message_id": item.id,
-                "archive_ref": item.archive_ref,
-                "score": round(score, 4),
-                "tokens": item.tokens,
-                "snippet": item.snippet,
-                "reason": "keyword/relevance match",
-            })
+            hits.append(
+                {
+                    "message_id": item.id,
+                    "archive_ref": item.archive_ref,
+                    "score": round(score, 4),
+                    "tokens": item.tokens,
+                    "snippet": item.snippet,
+                    "reason": "keyword/relevance match",
+                }
+            )
         hits.sort(key=lambda h: (h["score"], h["message_id"]), reverse=True)
         return self._json({"hits": hits[:top_k]})
 
@@ -599,20 +616,22 @@ class CuratorReadMemoryTool(_CuratorTool):
         max_chars = int(kwargs.get("max_tokens", 2500)) * 4
         memory = self.memory.read_long_term()
         working_state = self.archive.read_working_state(self.state.session_key)
-        return self._json({
-            "sections": [
-                {
-                    "name": "Long-term Memory",
-                    "content": memory[:max_chars],
-                    "truncated": len(memory) > max_chars,
-                },
-                {
-                    "name": "Working State",
-                    "content": json.dumps(working_state, ensure_ascii=False),
-                    "truncated": False,
-                },
-            ]
-        })
+        return self._json(
+            {
+                "sections": [
+                    {
+                        "name": "Long-term Memory",
+                        "content": memory[:max_chars],
+                        "truncated": len(memory) > max_chars,
+                    },
+                    {
+                        "name": "Working State",
+                        "content": json.dumps(working_state, ensure_ascii=False),
+                        "truncated": False,
+                    },
+                ]
+            }
+        )
 
 
 class CuratorSetRelevanceTool(_CuratorTool):
@@ -651,9 +670,13 @@ class CuratorSetRelevanceTool(_CuratorTool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        return self._json(self.archive.set_relevance(
-            self.state.session_key, self.state.manifest, kwargs.get("updates", []),
-        ))
+        return self._json(
+            self.archive.set_relevance(
+                self.state.session_key,
+                self.state.manifest,
+                kwargs.get("updates", []),
+            )
+        )
 
 
 class CuratorUpdateWorkingStateTool(_CuratorTool):
@@ -682,9 +705,11 @@ class CuratorUpdateWorkingStateTool(_CuratorTool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        return self._json({
-            "working_state": self.archive.write_working_state(self.state.session_key, kwargs),
-        })
+        return self._json(
+            {
+                "working_state": self.archive.write_working_state(self.state.session_key, kwargs),
+            }
+        )
 
 
 class CuratorBuildContextTool(_CuratorTool):
@@ -710,18 +735,23 @@ class CuratorBuildContextTool(_CuratorTool):
         if validation.get("ok"):
             self.state.final_plan = plan
             self.state.final_validation = validation
-            return self._json({
-                "accepted": True,
-                "final_total_tokens": validation.get("total_tokens"),
-                "included_message_ids": validation.get("included_message_ids"),
-                "assembler_warnings": validation.get("assembler_warnings", []),
-            })
-        return self._json({
-            "accepted": False,
-            "errors": validation.get("errors", []) + ([f"budget exceeded by {validation.get('over_by')} tokens"] if validation.get("over_by") else []),
-            "validation": validation,
-            "retry_allowed": True,
-        })
+            return self._json(
+                {
+                    "accepted": True,
+                    "final_total_tokens": validation.get("total_tokens"),
+                    "included_message_ids": validation.get("included_message_ids"),
+                    "assembler_warnings": validation.get("assembler_warnings", []),
+                }
+            )
+        return self._json(
+            {
+                "accepted": False,
+                "errors": validation.get("errors", [])
+                + ([f"budget exceeded by {validation.get('over_by')} tokens"] if validation.get("over_by") else []),
+                "validation": validation,
+                "retry_allowed": True,
+            }
+        )
 
 
 def _plan_schema(required: bool) -> dict[str, Any]:
@@ -741,11 +771,19 @@ def _plan_schema(required: bool) -> dict[str, Any]:
 
 def _plan_from_kwargs(kwargs: dict[str, Any]) -> ContextPlan:
     return ContextPlan(
-        include_message_ids=[int(x) for x in kwargs.get("include_message_ids", []) if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()],
+        include_message_ids=[
+            int(x)
+            for x in kwargs.get("include_message_ids", [])
+            if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()
+        ],
         include_archive_refs=[str(x) for x in kwargs.get("include_archive_refs", [])],
         memory_sections=[str(x) for x in kwargs.get("memory_sections", [])],
         working_state_injection=str(kwargs.get("working_state_injection", "") or ""),
-        drop_message_ids=[int(x) for x in kwargs.get("drop_message_ids", []) if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()],
+        drop_message_ids=[
+            int(x)
+            for x in kwargs.get("drop_message_ids", [])
+            if isinstance(x, (int, str)) and str(x).lstrip("-").isdigit()
+        ],
         notes=str(kwargs.get("notes", "") or ""),
     )
 

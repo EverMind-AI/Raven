@@ -44,9 +44,7 @@ def _candidate_paths(name: str, explicit: str | Path | None) -> list[Path]:
 _CACHE: dict[tuple[str, str | None], dict[str, Any]] = {}
 
 
-def get_agent_config(
-    name: str, explicit_path: str | Path | None = None
-) -> dict[str, Any]:
+def get_agent_config(name: str, explicit_path: str | Path | None = None) -> dict[str, Any]:
     """Return the resolved agent config dict. Merges local overrides + env."""
     cache_key = (name, str(explicit_path) if explicit_path else None)
     if cache_key in _CACHE:
@@ -60,8 +58,7 @@ def get_agent_config(
             break
     if primary is None:
         raise FileNotFoundError(
-            f"No agent config for '{name}'. Expected one of: "
-            + ", ".join(str(p) for p in candidates)
+            f"No agent config for '{name}'. Expected one of: " + ", ".join(str(p) for p in candidates)
         )
 
     def _load(p: Path) -> dict[str, Any]:

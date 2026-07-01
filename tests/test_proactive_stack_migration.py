@@ -33,12 +33,14 @@ def test_merge_when_both_exist(tmp_path: Path) -> None:
     legacy = tmp_path / "ws" / "sentinel_feedback.jsonl"
     legacy.parent.mkdir(parents=True)
     legacy.write_text(
-        '{"signal": "dispatched", "ts": "2026-01-01"}\n', encoding="utf-8",
+        '{"signal": "dispatched", "ts": "2026-01-01"}\n',
+        encoding="utf-8",
     )
     new = tmp_path / "sentinel" / "feedback.jsonl"
     new.parent.mkdir(parents=True)
     new.write_text(
-        '{"signal": "accepted", "ts": "2026-02-01"}\n', encoding="utf-8",
+        '{"signal": "accepted", "ts": "2026-02-01"}\n',
+        encoding="utf-8",
     )
 
     _migrate_legacy_feedback_log(legacy, new)
@@ -47,8 +49,9 @@ def test_merge_when_both_exist(tmp_path: Path) -> None:
     merged = new.read_text(encoding="utf-8")
     assert '"ts": "2026-02-01"' in merged
     assert '"ts": "2026-01-01"' in merged
-    assert merged.index('"2026-02-01"') < merged.index('"2026-01-01"'), \
+    assert merged.index('"2026-02-01"') < merged.index('"2026-01-01"'), (
         "appended legacy events come after existing ones"
+    )
 
 
 def test_creates_new_parent_dir(tmp_path: Path) -> None:

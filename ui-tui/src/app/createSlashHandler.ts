@@ -3,13 +3,13 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { parseSlashCommand } from '../domain/slash.js'
 import type { SlashExecResponse } from '../gatewayTypes.js'
-import { asCommandDispatch, rpcErrorMessage } from '../lib/rpc.js'
-
 import type { SlashHandlerContext } from './interfaces.js'
-import { findSlashCommand } from './slash/registry.js'
 import type { SlashRunCtx } from './slash/types.js'
+
+import { parseSlashCommand } from '../domain/slash.js'
+import { asCommandDispatch, rpcErrorMessage } from '../lib/rpc.js'
+import { findSlashCommand } from './slash/registry.js'
 import { getUiState } from './uiStore.js'
 
 export function createSlashHandler(ctx: SlashHandlerContext): (cmd: string) => boolean {

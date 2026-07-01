@@ -7,20 +7,21 @@ from typing import Literal
 
 # ── Benchmark data ─────────────────────────────────────────────────────────────
 
+
 @dataclass
 class ModelTaskScore:
     task_id: str
-    score: float       # 0-100 percentage
+    score: float  # 0-100 percentage
     max_score: float
 
 
 @dataclass
 class ModelBenchmark:
-    model: str         # PinchBench model ID  e.g. "anthropic/claude-sonnet-4"
+    model: str  # PinchBench model ID  e.g. "anthropic/claude-sonnet-4"
     provider: str
     overall_score: float
-    speed: float | None     # avg execution time in seconds (PinchBench records this)
-    cost: float             # total USD cost for running the full 23-task benchmark
+    speed: float | None  # avg execution time in seconds (PinchBench records this)
+    cost: float  # total USD cost for running the full 23-task benchmark
     task_scores: list[ModelTaskScore]
     submission_id: str
 
@@ -39,11 +40,29 @@ class RoutingProfile:
 # ── Classification ─────────────────────────────────────────────────────────────
 
 TaskCategory = Literal[
-    "sanity", "calendar", "stock", "blog", "tool_use", "summary",
-    "events", "email", "memory", "files", "workflow", "clawdhub",
-    "skill_search", "image_gen", "humanizer", "daily_summary",
-    "email_triage", "email_search", "market_research", "spreadsheet",
-    "eli5_pdf", "comprehension", "second_brain",
+    "sanity",
+    "calendar",
+    "stock",
+    "blog",
+    "tool_use",
+    "summary",
+    "events",
+    "email",
+    "memory",
+    "files",
+    "workflow",
+    "clawdhub",
+    "skill_search",
+    "image_gen",
+    "humanizer",
+    "daily_summary",
+    "email_triage",
+    "email_search",
+    "market_research",
+    "spreadsheet",
+    "eli5_pdf",
+    "comprehension",
+    "second_brain",
 ]
 
 
@@ -54,6 +73,7 @@ class ClassificationResult:
 
 
 # ── Selection ──────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ModelScore:

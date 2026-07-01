@@ -22,8 +22,7 @@ def _channel():
 
 
 def _group_msg(mid="m1", content="hello"):
-    return SimpleNamespace(id=mid, content=content, group_openid="g1",
-                           author=SimpleNamespace(member_openid="u1"))
+    return SimpleNamespace(id=mid, content=content, group_openid="g1", author=SimpleNamespace(member_openid="u1"))
 
 
 # ── parsing ────────────────────────────────────────────────────────────
@@ -171,6 +170,7 @@ def test_send_reraises_transient_for_manager_retry():
     other errors stay swallowed (see test_send_swallows_api_error)."""
     import pytest
     from botpy.errors import ServerError
+
     ch = _channel()
     ch._client = _client()
     ch._client.api.post_c2c_message = AsyncMock(side_effect=ServerError("502"))
@@ -191,9 +191,10 @@ def test_send_swallows_api_error():
 def test_qq_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = QQChannel(SimpleNamespace(app_id="a", secret="s"))
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_qq_spec_import_is_cheap():
@@ -201,6 +202,7 @@ def test_qq_spec_import_is_cheap():
     deferred into SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.qq.spec as s;"
         "assert 'botpy' not in sys.modules, 'spec import pulled in the botpy SDK';"

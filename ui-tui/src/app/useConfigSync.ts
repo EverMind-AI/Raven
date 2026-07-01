@@ -5,20 +5,12 @@
 
 import { useEffect, useRef } from 'react'
 
-import { resolveDetailsMode, resolveSections } from '../domain/details.js'
 import type { GatewayClient } from '../gatewayClientStub.js'
-import type {
-  ConfigFullResponse,
-  ConfigMtimeResponse,
-  ReloadMcpResponse
-} from '../gatewayTypes.js'
-import {
-  DEFAULT_VOICE_RECORD_KEY,
-  type ParsedVoiceRecordKey,
-  parseVoiceRecordKey
-} from '../lib/platform.js'
-import { asRpcResult } from '../lib/rpc.js'
+import type { ConfigFullResponse, ConfigMtimeResponse, ReloadMcpResponse } from '../gatewayTypes.js'
 
+import { resolveDetailsMode, resolveSections } from '../domain/details.js'
+import { DEFAULT_VOICE_RECORD_KEY, type ParsedVoiceRecordKey, parseVoiceRecordKey } from '../lib/platform.js'
+import { asRpcResult } from '../lib/rpc.js'
 import {
   type BusyInputMode,
   DEFAULT_INDICATOR_STYLE,

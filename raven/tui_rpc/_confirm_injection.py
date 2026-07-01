@@ -45,9 +45,7 @@ def confirm_injection(broker: "ConfirmBroker", loop: asyncio.AbstractEventLoop) 
         *_args: Any,
         **_kwargs: Any,
     ) -> bool:
-        future = asyncio.run_coroutine_threadsafe(
-            broker.await_confirm(str(text), default=bool(default)), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(broker.await_confirm(str(text), default=bool(default)), loop)
         answer = future.result()
         if abort and not answer:
             # Preserve click's abort=True contract (no current call site uses

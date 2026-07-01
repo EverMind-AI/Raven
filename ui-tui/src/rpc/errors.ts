@@ -5,18 +5,18 @@
 // when a JSON-RPC error response arrives — it selects the matching subclass
 // by `code`, falling back to the generic `RpcError` for unknown codes.
 
-import type { JsonRpcErrorObject } from './generated.js';
+import type { JsonRpcErrorObject } from './generated.js'
 
 /** Base class for all JSON-RPC error responses surfaced to callers. */
 export class RpcError extends Error {
-  readonly code: number;
-  readonly data: unknown;
+  readonly code: number
+  readonly data: unknown
 
   constructor(frame: JsonRpcErrorObject) {
-    super(`[rpc ${frame.code}] ${frame.message}`);
-    this.name = 'RpcError';
-    this.code = frame.code;
-    this.data = frame.data;
+    super(`[rpc ${frame.code}] ${frame.message}`)
+    this.name = 'RpcError'
+    this.code = frame.code
+    this.data = frame.data
   }
 }
 
@@ -24,92 +24,92 @@ export class RpcError extends Error {
 
 export class SessionNotFoundError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'SessionNotFoundError';
+    super(f)
+    this.name = 'SessionNotFoundError'
   }
 }
 export class SessionLockedError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'SessionLockedError';
+    super(f)
+    this.name = 'SessionLockedError'
   }
 }
 export class TurnInProgressError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'TurnInProgressError';
+    super(f)
+    this.name = 'TurnInProgressError'
   }
 }
 export class McpServerNotConnectedError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'McpServerNotConnectedError';
+    super(f)
+    this.name = 'McpServerNotConnectedError'
   }
 }
 export class McpToolCallFailedError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'McpToolCallFailedError';
+    super(f)
+    this.name = 'McpToolCallFailedError'
   }
 }
 export class SkillNotFoundError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'SkillNotFoundError';
+    super(f)
+    this.name = 'SkillNotFoundError'
   }
 }
 export class SkillPinConflictError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'SkillPinConflictError';
+    super(f)
+    this.name = 'SkillPinConflictError'
   }
 }
 export class ModelNotAvailableError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'ModelNotAvailableError';
+    super(f)
+    this.name = 'ModelNotAvailableError'
   }
 }
 export class ModelSwitchInTurnError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'ModelSwitchInTurnError';
+    super(f)
+    this.name = 'ModelSwitchInTurnError'
   }
 }
 export class ConfigFieldReadonlyError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'ConfigFieldReadonlyError';
+    super(f)
+    this.name = 'ConfigFieldReadonlyError'
   }
 }
 export class ConfigValidationError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'ConfigValidationError';
+    super(f)
+    this.name = 'ConfigValidationError'
   }
 }
 export class NotSupportedInV01Error extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'NotSupportedInV01Error';
+    super(f)
+    this.name = 'NotSupportedInV01Error'
   }
 }
 export class CliCommandFailedError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'CliCommandFailedError';
+    super(f)
+    this.name = 'CliCommandFailedError'
   }
 }
 export class CliCommandTimeoutError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'CliCommandTimeoutError';
+    super(f)
+    this.name = 'CliCommandTimeoutError'
   }
 }
 export class NotDispatchCompatibleError extends RpcError {
   constructor(f: JsonRpcErrorObject) {
-    super(f);
-    this.name = 'NotDispatchCompatibleError';
+    super(f)
+    this.name = 'NotDispatchCompatibleError'
   }
 }
 
@@ -130,11 +130,11 @@ const CODE_TO_CTOR: Record<number, new (f: JsonRpcErrorObject) => RpcError> = {
   [-32012]: NotSupportedInV01Error,
   [-32013]: CliCommandFailedError,
   [-32014]: CliCommandTimeoutError,
-  [-32015]: NotDispatchCompatibleError,
-};
+  [-32015]: NotDispatchCompatibleError
+}
 
 /** Pick the right subclass for an incoming JSON-RPC error frame. */
 export function rpcErrorFromFrame(frame: JsonRpcErrorObject): RpcError {
-  const Ctor = CODE_TO_CTOR[frame.code];
-  return Ctor ? new Ctor(frame) : new RpcError(frame);
+  const Ctor = CODE_TO_CTOR[frame.code]
+  return Ctor ? new Ctor(frame) : new RpcError(frame)
 }

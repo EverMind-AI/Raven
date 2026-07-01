@@ -14,7 +14,6 @@ from raven.proactive_engine.sentinel.trigger_policy.derive_dnd import (
     parse_daily_plan,
 )
 
-
 _SAMPLE = """## 今日 fire 计划
 <!-- generated 2026-05-04T06:00:00 | model=qwen3.5-27b | entries=4 -->
 - 07:30 routine_morning_med | priority=high | 晨起药物
@@ -117,9 +116,7 @@ async def test_producer_renders_llm_entries(tmp_path: Path):
     attention_file = tmp_path / "attention.md"
     mem_store = MagicMock()
     mem_store.attention_file = attention_file
-    mem_store.read_long_term = MagicMock(return_value=(
-        "# Long-term Memory\n## Important Notes\n- 每天 7:00 服药\n"
-    ))
+    mem_store.read_long_term = MagicMock(return_value=("# Long-term Memory\n## Important Notes\n- 每天 7:00 服药\n"))
     provider = MagicMock()
     fake_response = MagicMock()
     fake_response.has_tool_calls = True

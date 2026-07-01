@@ -97,8 +97,7 @@ def _format_silent(j: CronJob) -> str:
     return str(n)
 
 
-def _resolve_id(service: CronService, prefix: str,
-                *, include_disabled: bool = True) -> CronJob:
+def _resolve_id(service: CronService, prefix: str, *, include_disabled: bool = True) -> CronJob:
     """Find a job by full id or unique prefix. Exits with friendly
     error on no-match or ambiguous-prefix."""
     jobs = service.list_jobs(include_disabled=include_disabled)
@@ -108,9 +107,7 @@ def _resolve_id(service: CronService, prefix: str,
         raise typer.Exit(code=1)
     if len(matches) > 1:
         cands = ", ".join(j.id for j in matches[:8])
-        console.print(
-            f"[red]Ambiguous prefix {prefix!r} — candidates: {cands}[/red]"
-        )
+        console.print(f"[red]Ambiguous prefix {prefix!r} — candidates: {cands}[/red]")
         raise typer.Exit(code=1)
     return matches[0]
 
@@ -150,17 +147,11 @@ def _parse_duration(value: str) -> int:
     if not s:
         raise typer.BadParameter("duration cannot be empty")
     if s.endswith(("ms", "us", "ns")):
-        raise typer.BadParameter(
-            f"smallest unit is seconds (s); did you mean '1s' instead of {value!r}?"
-        )
+        raise typer.BadParameter(f"smallest unit is seconds (s); did you mean '1s' instead of {value!r}?")
     if "." in s:
-        raise typer.BadParameter(
-            f"only integer values supported; e.g. '90m' instead of {value!r}"
-        )
+        raise typer.BadParameter(f"only integer values supported; e.g. '90m' instead of {value!r}")
     if s.isdigit():
-        raise typer.BadParameter(
-            f"missing unit suffix; did you mean '{s}s'?"
-        )
+        raise typer.BadParameter(f"missing unit suffix; did you mean '{s}s'?")
 
     total = 0
     i = 0
@@ -183,7 +174,8 @@ def _parse_duration(value: str) -> int:
 @cron_app.command("list")
 def cron_list(
     all_: bool = typer.Option(
-        False, "--all/--enabled-only",
+        False,
+        "--all/--enabled-only",
         help="Include disabled jobs (default hides them)",
     ),
 ):
@@ -201,8 +193,7 @@ def cron_list(
     jobs = service.list_jobs(include_disabled=all_)
 
     # Service-level banner (folds the standalone `cron status` cmd)
-    enabled_count = sum(1 for j in service.list_jobs(include_disabled=True)
-                        if j.enabled)
+    enabled_count = sum(1 for j in service.list_jobs(include_disabled=True) if j.enabled)
     total_count = status["jobs"]
     next_wake_ms = status.get("next_wake_at_ms")
     if next_wake_ms is None:
@@ -218,9 +209,7 @@ def cron_list(
         else:
             hours = secs // 3600
             mins = (secs % 3600) // 60
-            next_wake_str = (
-                f"in {hours}h {mins}m ({next_dt.strftime('%Y-%m-%d %H:%M')})"
-            )
+            next_wake_str = f"in {hours}h {mins}m ({next_dt.strftime('%Y-%m-%d %H:%M')})"
 
     console.print(
         f"[dim]Cron service: {total_count} jobs "
@@ -229,8 +218,7 @@ def cron_list(
     )
 
     if not jobs:
-        console.print("[dim]  (no jobs to list — pass --all to include "
-                      "disabled)[/dim]")
+        console.print("[dim]  (no jobs to list — pass --all to include disabled)[/dim]")
         return
 
     table = Table()
@@ -244,8 +232,10 @@ def cron_list(
     for j in jobs:
         last_status = j.state.last_status or "-"
         last_styled = (
-            f"[red]{last_status}[/red]" if last_status == "error"
-            else f"[green]{last_status}[/green]" if last_status == "ok"
+            f"[red]{last_status}[/red]"
+            if last_status == "error"
+            else f"[green]{last_status}[/green]"
+            if last_status == "ok"
             else last_status
         )
         id_display = j.id if j.enabled else f"[dim]{j.id} (off)[/dim]"
@@ -266,8 +256,7 @@ def cron_list(
 
 @cron_app.command("get")
 def cron_get(
-    id_prefix: str = typer.Argument(..., metavar="ID",
-                                     help="Job id or unique prefix"),
+    id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
 ):
     """Show full detail of one cron job (schedule, payload, state,
     silent-fire counter, claim status).
@@ -280,19 +269,16 @@ def cron_get(
     service = _open_service()
     job = _resolve_id(service, id_prefix)
 
-    table = Table(title=f"Cron job '{job.name or '(unnamed)'}'",
-                  show_header=False)
+    table = Table(title=f"Cron job '{job.name or '(unnamed)'}'", show_header=False)
     table.add_column("Field", style="cyan")
     table.add_column("Value")
 
     table.add_row("ID", job.id)
     table.add_row("Name", job.name or "-")
-    table.add_row("Enabled", "[green]True[/green]" if job.enabled
-                              else "[red]False[/red]")
+    table.add_row("Enabled", "[green]True[/green]" if job.enabled else "[red]False[/red]")
     table.add_row("Schedule", _format_schedule(job.schedule))
     table.add_row("delete_after_run", str(job.delete_after_run))
-    table.add_row("silent_fire_limit",
-                  str(job.silent_fire_limit) if job.silent_fire_limit else "-")
+    table.add_row("silent_fire_limit", str(job.silent_fire_limit) if job.silent_fire_limit else "-")
 
     # Payload
     table.add_row("─ Payload ─", "")
@@ -301,22 +287,23 @@ def cron_get(
     table.add_row("to", job.payload.to or "-")
     table.add_row("deliver", str(job.payload.deliver))
     table.add_row("topic_tag", job.payload.topic_tag or "-")
-    table.add_row("message",
-                  (job.payload.message[:200]
-                   + ("…" if len(job.payload.message) > 200 else ""))
-                  if job.payload.message else "-")
+    table.add_row(
+        "message",
+        (job.payload.message[:200] + ("…" if len(job.payload.message) > 200 else "")) if job.payload.message else "-",
+    )
 
     # State
     table.add_row("─ State ─", "")
     table.add_row("next_run_at", _format_next_run(job))
-    table.add_row("last_run_at",
-                  datetime.fromtimestamp(job.state.last_run_at_ms / 1000)
-                  .strftime("%Y-%m-%d %H:%M:%S")
-                  if job.state.last_run_at_ms else "-")
+    table.add_row(
+        "last_run_at",
+        datetime.fromtimestamp(job.state.last_run_at_ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
+        if job.state.last_run_at_ms
+        else "-",
+    )
     table.add_row("last_status", job.state.last_status or "-")
     if job.state.last_error:
-        table.add_row("last_error",
-                      f"[red]{job.state.last_error[:200]}[/red]")
+        table.add_row("last_error", f"[red]{job.state.last_error[:200]}[/red]")
     table.add_row("silent_fire_count", _format_silent(job))
     if job.state.claimed_by_pid:
         table.add_row("claimed_by_pid", str(job.state.claimed_by_pid))
@@ -328,14 +315,12 @@ def cron_get(
     if job.created_at_ms:
         table.add_row(
             "created_at",
-            datetime.fromtimestamp(job.created_at_ms / 1000)
-            .strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.fromtimestamp(job.created_at_ms / 1000).strftime("%Y-%m-%d %H:%M:%S"),
         )
     if job.updated_at_ms:
         table.add_row(
             "updated_at",
-            datetime.fromtimestamp(job.updated_at_ms / 1000)
-            .strftime("%Y-%m-%d %H:%M:%S"),
+            datetime.fromtimestamp(job.updated_at_ms / 1000).strftime("%Y-%m-%d %H:%M:%S"),
         )
 
     console.print(table)
@@ -346,10 +331,8 @@ def cron_get(
 
 @cron_app.command("delete")
 def cron_delete(
-    id_prefix: str = typer.Argument(..., metavar="ID",
-                                     help="Job id or unique prefix"),
-    yes: bool = typer.Option(False, "--yes", "-y",
-                              help="Skip confirmation prompt"),
+    id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Remove a cron job (destructive — primary escape hatch when the
     agent's CronTool is misbehaving).
@@ -363,7 +346,8 @@ def cron_delete(
 
     sched = _format_schedule(job.schedule)
     if not _confirm_destructive(
-        f"Remove cron job '{job.name or job.id}' ({sched})?", yes=yes,
+        f"Remove cron job '{job.name or job.id}' ({sched})?",
+        yes=yes,
     ):
         console.print("[dim]aborted[/dim]")
         raise typer.Exit(code=1)
@@ -371,8 +355,7 @@ def cron_delete(
     if service.remove_job(job.id):
         console.print(f"[green]✓[/green] Removed job {job.id}")
     else:
-        console.print(f"[red]Failed to remove {job.id} "
-                      f"(may have been removed by another process)[/red]")
+        console.print(f"[red]Failed to remove {job.id} (may have been removed by another process)[/red]")
         raise typer.Exit(code=1)
 
 
@@ -381,8 +364,7 @@ def cron_delete(
 
 @cron_app.command("enable")
 def cron_enable(
-    id_prefix: str = typer.Argument(..., metavar="ID",
-                                     help="Job id or unique prefix"),
+    id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
 ):
     """Enable a previously-disabled cron job.
 
@@ -395,8 +377,7 @@ def cron_enable(
         console.print(f"[dim]Job {job.id} is already enabled.[/dim]")
         return
     if service.enable_job(job.id, enabled=True):
-        console.print(f"[green]✓[/green] Enabled job {job.id} "
-                      f"({_format_schedule(job.schedule)})")
+        console.print(f"[green]✓[/green] Enabled job {job.id} ({_format_schedule(job.schedule)})")
     else:
         console.print(f"[red]Failed to enable {job.id}[/red]")
         raise typer.Exit(code=1)
@@ -404,10 +385,8 @@ def cron_enable(
 
 @cron_app.command("disable")
 def cron_disable(
-    id_prefix: str = typer.Argument(..., metavar="ID",
-                                     help="Job id or unique prefix"),
-    yes: bool = typer.Option(False, "--yes", "-y",
-                              help="Skip confirmation prompt"),
+    id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ):
     """Disable a cron job without deleting it (paused — preserves intent
     for later re-enable).
@@ -421,8 +400,8 @@ def cron_disable(
         console.print(f"[dim]Job {job.id} is already disabled.[/dim]")
         return
     if not _confirm_destructive(
-        f"Disable cron job '{job.name or job.id}' "
-        f"({_format_schedule(job.schedule)})?", yes=yes,
+        f"Disable cron job '{job.name or job.id}' ({_format_schedule(job.schedule)})?",
+        yes=yes,
     ):
         console.print("[dim]aborted[/dim]")
         raise typer.Exit(code=1)
@@ -438,14 +417,13 @@ def cron_disable(
 
 @cron_app.command("run")
 def cron_run(
-    id_prefix: str = typer.Argument(..., metavar="ID",
-                                     help="Job id or unique prefix"),
+    id_prefix: str = typer.Argument(..., metavar="ID", help="Job id or unique prefix"),
     force: bool = typer.Option(
-        False, "--force",
+        False,
+        "--force",
         help="Run even if disabled (default skips disabled jobs)",
     ),
-    yes: bool = typer.Option(False, "--yes", "-y",
-                              help="Skip the state-mutation confirm prompt"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the state-mutation confirm prompt"),
 ):
     """Test-fire a cron job: claim + execute the schedule path with
     delivery stubbed out, **and advance persistent job state as if the
@@ -474,9 +452,7 @@ def cron_run(
     service = _open_service()
     job = _resolve_id(service, id_prefix)
     if not job.enabled and not force:
-        console.print(
-            f"[red]Job {job.id} is disabled — pass --force to run anyway.[/red]"
-        )
+        console.print(f"[red]Job {job.id} is disabled — pass --force to run anyway.[/red]")
         raise typer.Exit(code=1)
 
     # Gateway-running detection (best-effort heuristic). Surface BEFORE
@@ -486,7 +462,7 @@ def cron_run(
     #
     # Two signals, OR'd, because each on its own has gaps:
     #
-    #   1. Active claim within the ``GATEWAY_HEARTBEAT_S`` window —
+    #   1. Active claim within the ``gateway_heartbeat_s`` window —
     #      precise: "gateway is currently mid-run on some job". Misses
     #      idle gateway between ticks. Distinct from CronService's own
     #      ``_CLAIM_TTL_MS = 30 * 60 * 1000`` (30min, the time before
@@ -505,26 +481,21 @@ def cron_run(
     # widely-spaced jobs — there's no heartbeat protocol to fix that
     # without out-of-scope service changes.
     from time import time as _time
-    GATEWAY_HEARTBEAT_S = 60
-    GATEWAY_HEARTBEAT_MS = GATEWAY_HEARTBEAT_S * 1000
+
+    gateway_heartbeat_s = 60
+    gateway_heartbeat_ms = gateway_heartbeat_s * 1000
     now_s = _time()
     now_ms = int(now_s * 1000)
     has_live_claim = any(
         j.state.claimed_by_pid is not None
         and j.state.claimed_at_ms is not None
-        and (now_ms - j.state.claimed_at_ms) < GATEWAY_HEARTBEAT_MS
+        and (now_ms - j.state.claimed_at_ms) < gateway_heartbeat_ms
         for j in service.list_jobs(include_disabled=True)
     )
     jobs_path = service.store_path
-    mtime_recent = (
-        jobs_path.exists()
-        and (now_s - jobs_path.stat().st_mtime) < GATEWAY_HEARTBEAT_S
-    )
+    mtime_recent = jobs_path.exists() and (now_s - jobs_path.stat().st_mtime) < gateway_heartbeat_s
     if has_live_claim or mtime_recent:
-        why = (
-            "active claim in the last 60s" if has_live_claim
-            else "jobs.json modified in the last 60s"
-        )
+        why = "active claim in the last 60s" if has_live_claim else "jobs.json modified in the last 60s"
         console.print(
             f"[yellow]⚠ Possible gateway activity ({why}). CLI run "
             f"competes for the claim via fcntl; if gateway wins, the "
@@ -539,14 +510,10 @@ def cron_run(
     will_disable = is_one_shot and not job.delete_after_run
     if will_delete:
         mutation_warn = (
-            f"[red]⚠ This will REMOVE the job from the store "
-            f"(one-shot 'at' with delete_after_run=True).[/red]"
+            "[red]⚠ This will REMOVE the job from the store (one-shot 'at' with delete_after_run=True).[/red]"
         )
     elif will_disable:
-        mutation_warn = (
-            f"[yellow]⚠ This will DISABLE the job after firing "
-            f"(one-shot 'at' reminder).[/yellow]"
-        )
+        mutation_warn = "[yellow]⚠ This will DISABLE the job after firing (one-shot 'at' reminder).[/yellow]"
     else:
         mutation_warn = (
             f"[yellow]⚠ This will advance next_run_at and write "
@@ -555,27 +522,22 @@ def cron_run(
         )
     console.print(mutation_warn)
     if not _confirm_destructive(
-        f"Test-fire job '{job.name or job.id}' "
-        f"(message delivery stubbed, but job state advances)?", yes=yes,
+        f"Test-fire job '{job.name or job.id}' (message delivery stubbed, but job state advances)?",
+        yes=yes,
     ):
         console.print("[dim]aborted[/dim]")
         raise typer.Exit(code=1)
 
-    console.print(
-        f"[cyan][TEST-FIRE][/cyan] {job.id} ({_format_schedule(job.schedule)})"
-    )
+    console.print(f"[cyan][TEST-FIRE][/cyan] {job.id} ({_format_schedule(job.schedule)})")
 
     delivered: dict[str, Any] = {"called": False}
 
     async def _stub_on_job(j) -> None:
         delivered["called"] = True
-        console.print(f"[cyan][TEST-FIRE][/cyan] would-deliver (stubbed):")
+        console.print("[cyan][TEST-FIRE][/cyan] would-deliver (stubbed):")
         console.print(f"    channel = {j.payload.channel}")
         console.print(f"    to      = {j.payload.to}")
-        console.print(
-            f"    message = {j.payload.message[:120]}"
-            f"{'…' if len(j.payload.message) > 120 else ''}"
-        )
+        console.print(f"    message = {j.payload.message[:120]}{'…' if len(j.payload.message) > 120 else ''}")
 
     service.on_job = _stub_on_job
     ok = asyncio.run(service.run_job(job.id, force=force))
@@ -597,17 +559,14 @@ def cron_run(
             tail = "Job has been DISABLED; re-enable with `cron enable`."
         else:
             updated = next(
-                (j for j in service.list_jobs(include_disabled=True)
-                 if j.id == job.id), None,
+                (j for j in service.list_jobs(include_disabled=True) if j.id == job.id),
+                None,
             )
             if updated is not None:
                 tail = f"next_run advanced to {_format_next_run(updated)}."
             else:
                 tail = "Job state advanced (check `cron get`)."
-        console.print(
-            f"[dim](message delivery was stubbed — user did not see "
-            f"the reminder. {tail})[/dim]"
-        )
+        console.print(f"[dim](message delivery was stubbed — user did not see the reminder. {tail})[/dim]")
 
 
 # ── add ───────────────────────────────────────────────────────────────
@@ -615,38 +574,39 @@ def cron_run(
 
 @cron_app.command("add")
 def cron_add(
-    name: str = typer.Option(..., "--name",
-                              help="Short reminder name (≤ 30 chars)"),
-    message: str = typer.Option(..., "--message",
-                                 help="Reminder text the user will see"),
+    name: str = typer.Option(..., "--name", help="Short reminder name (≤ 30 chars)"),
+    message: str = typer.Option(..., "--message", help="Reminder text the user will see"),
     cron: str = typer.Option(
-        None, "--cron",
+        None,
+        "--cron",
         help="Cron expression for clock-based recurring jobs (e.g. '0 9 * * *')",
     ),
     at_iso: str = typer.Option(
-        None, "--at",
+        None,
+        "--at",
         help="ISO datetime for one-shot jobs (e.g. '2026-05-15T08:00:00')",
     ),
     every: str = typer.Option(
-        None, "--every",
-        help="Interval duration for fixed-interval recurring jobs "
-             "(e.g. '7s', '5m', '1h30m', '7d'; units s/m/h/d)",
+        None,
+        "--every",
+        help="Interval duration for fixed-interval recurring jobs (e.g. '7s', '5m', '1h30m', '7d'; units s/m/h/d)",
     ),
     tz: str = typer.Option(
-        None, "--tz",
+        None,
+        "--tz",
         help="IANA timezone for cron expressions (e.g. 'Asia/Shanghai')",
     ),
     channel: str = typer.Option(
-        None, "--channel",
-        help="Delivery channel; defaults to 'cli' (ephemeral, routed at "
-             "trigger time via cron.forward_channels)",
+        None,
+        "--channel",
+        help="Delivery channel; defaults to 'cli' (ephemeral, routed at trigger time via cron.forward_channels)",
     ),
     to: str = typer.Option(
-        None, "--to",
+        None,
+        "--to",
         help="Recipient chat_id; defaults to 'direct' for ephemeral cli channel",
     ),
-    yes: bool = typer.Option(False, "--yes", "-y",
-                              help="Skip confirmation prompts"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
 ):
     """Create a cron job from explicit flags (advanced / scripting path).
 
@@ -677,19 +637,12 @@ def cron_add(
         ("--at", at_iso),
         ("--every", every),
     ]
-    set_flags = [name for name, val in schedule_flags
-                 if val is not None and val != ""]
+    set_flags = [name for name, val in schedule_flags if val is not None and val != ""]
     if len(set_flags) != 1:
         if not set_flags:
-            console.print(
-                "[red]Need exactly one schedule flag: "
-                "--cron OR --at OR --every[/red]"
-            )
+            console.print("[red]Need exactly one schedule flag: --cron OR --at OR --every[/red]")
         else:
-            console.print(
-                f"[red]Pass exactly one of "
-                f"--cron / --at / --every (got {set_flags})[/red]"
-            )
+            console.print(f"[red]Pass exactly one of --cron / --at / --every (got {set_flags})[/red]")
         raise typer.Exit(code=2)
 
     # Build CronSchedule
@@ -701,16 +654,16 @@ def cron_add(
         # boundary instead.
         try:
             from croniter import croniter
+
             croniter(cron)
         except Exception as exc:
-            console.print(
-                f"[red]Invalid cron expression {cron!r}: {exc}[/red]"
-            )
+            console.print(f"[red]Invalid cron expression {cron!r}: {exc}[/red]")
             raise typer.Exit(code=2)
         # Validate timezone if provided
         if tz:
             try:
                 from zoneinfo import ZoneInfo
+
                 ZoneInfo(tz)
             except Exception:
                 console.print(f"[red]Unknown timezone: {tz!r}[/red]")
@@ -721,10 +674,7 @@ def cron_add(
         try:
             dt = datetime.fromisoformat(at_iso)
         except ValueError:
-            console.print(
-                f"[red]Invalid ISO datetime: {at_iso!r} "
-                f"(expected YYYY-MM-DDTHH:MM:SS)[/red]"
-            )
+            console.print(f"[red]Invalid ISO datetime: {at_iso!r} (expected YYYY-MM-DDTHH:MM:SS)[/red]")
             raise typer.Exit(code=2)
         # A naive `at` + tz means "that wall-clock time in tz"; anchor it so
         # .timestamp() does not fall back to the host's local zone. An
@@ -732,6 +682,7 @@ def cron_add(
         if dt.tzinfo is None and tz:
             try:
                 from zoneinfo import ZoneInfo
+
                 dt = dt.replace(tzinfo=ZoneInfo(tz))
             except Exception:
                 console.print(f"[red]Unknown timezone: {tz!r}[/red]")
@@ -765,9 +716,7 @@ def cron_add(
         # silently never fires.
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2)
-    console.print(
-        f"[green]✓[/green] Created job '{job.name}' (id: {job.id})"
-    )
+    console.print(f"[green]✓[/green] Created job '{job.name}' (id: {job.id})")
 
 
 # ── config (cron section read/write) ──────────────────────────────────
@@ -827,11 +776,13 @@ _KEY_HANDLERS: dict[str, dict[str, Any]] = {
 @cron_config_app.command("get")
 def cron_config_get(
     forward_channels: bool = typer.Option(
-        False, "--forward-channels",
+        False,
+        "--forward-channels",
         help="Show only forward_channels value",
     ),
     default_timezone: bool = typer.Option(
-        False, "--default-timezone",
+        False,
+        "--default-timezone",
         help="Show only default_timezone value",
     ),
 ) -> None:
@@ -842,10 +793,12 @@ def cron_config_get(
 
     config = load_config()
     selected = [
-        k for k, picked in (
+        k
+        for k, picked in (
             ("forward_channels", forward_channels),
             ("default_timezone", default_timezone),
-        ) if picked
+        )
+        if picked
     ]
     if not selected:
         table = Table(title="cron config (effective values)", show_lines=False)
@@ -864,11 +817,13 @@ def cron_config_get(
 @cron_config_app.command("set")
 def cron_config_set(
     forward_channels: str | None = typer.Option(
-        None, "--forward-channels",
+        None,
+        "--forward-channels",
         help="New forward_channels (CSV / '*' / 'all' / 'none' / '')",
     ),
     default_timezone: str | None = typer.Option(
-        None, "--default-timezone",
+        None,
+        "--default-timezone",
         help="New default_timezone (any zoneinfo name, e.g. Asia/Shanghai)",
     ),
 ) -> None:
@@ -884,10 +839,7 @@ def cron_config_set(
         raw_updates.append(("default_timezone", default_timezone))
 
     if not raw_updates:
-        console.print(
-            "[red]Must specify at least one flag, e.g. "
-            "--forward-channels / --default-timezone.[/red]"
-        )
+        console.print("[red]Must specify at least one flag, e.g. --forward-channels / --default-timezone.[/red]")
         raise typer.Exit(1)
 
     # Parse all first so a bad value never half-writes.
@@ -903,30 +855,25 @@ def cron_config_set(
 
     for key, parsed, handler in parsed_updates:
         prev = update_cron_config(key, parsed)
-        console.print(
-            f"[green]✓[/green] cron.{key} → "
-            f"{handler['display'](parsed)} (was {prev!r})"
-        )
+        console.print(f"[green]✓[/green] cron.{key} → {handler['display'](parsed)} (was {prev!r})")
 
 
 @cron_config_app.command("reset")
 def cron_config_reset(
-    yes: bool = typer.Option(False, "--yes", "-y",
-                             help="Skip confirm prompt"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirm prompt"),
 ) -> None:
     """Reset the whole cron section to schema defaults
     (``forward_channels=['*']``, ``default_timezone='Asia/Shanghai'``)."""
     from raven.config.update import reset_cron_config
 
     if not _confirm_destructive(
-        "Reset all cron config to defaults?", yes=yes,
+        "Reset all cron config to defaults?",
+        yes=yes,
     ):
         console.print("[yellow]Aborted.[/yellow]")
         return
     reset_cron_config()
-    console.print(
-        "[green]✓[/green] cron config reset; defaults take effect on next load."
-    )
+    console.print("[green]✓[/green] cron config reset; defaults take effect on next load.")
 
 
 __all__ = ["cron_app"]

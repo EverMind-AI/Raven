@@ -77,9 +77,7 @@ async def test_runner_stream_flag_is_forwarded():
     loop = FakeAgentLoop()
     runner = AgentTurnRunner(loop, stream=True)
     events, emit = _collect()
-    await runner.run(
-        TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: []
-    )
+    await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
     assert loop.calls[0]["stream"] is True  # build_tui would pass True; build_repl False
 
 
@@ -193,9 +191,7 @@ async def test_build_repl_defaults_to_single_slot_pools():
 
 
 async def test_build_repl_honors_configured_pool_sizes():
-    scheduler, _hub, teardown = build_repl(
-        _EchoLoop(), "cli", lambda t: None, user_pool=5, system_pool=3
-    )
+    scheduler, _hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None, user_pool=5, system_pool=3)
     try:
         assert scheduler._pools._user._value == 5
         assert scheduler._pools._system._value == 3
@@ -219,9 +215,12 @@ async def test_repl_loop_renders_each_reply_before_the_next_prompt():
     await teardown()
     # both inputs processed (no drop) and each reply rendered before the next prompt
     assert events == [
-        "prompt", "render:reply<a>",
-        "prompt", "render:reply<b>",
-        "prompt", "exit",
+        "prompt",
+        "render:reply<a>",
+        "prompt",
+        "render:reply<b>",
+        "prompt",
+        "exit",
     ]
 
 
@@ -293,9 +292,7 @@ async def test_build_repl_teardown_leaves_no_pending_tasks():
     # spawned (lane worker, reaper, outlet worker) — no "Task destroyed pending".
     baseline = asyncio.all_tasks()
     scheduler, hub, teardown = build_repl(_EchoLoop(), "cli", lambda t: None)
-    handle = scheduler.submit(
-        TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1")
-    )
+    handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
     await handle.result()
     await hub.wait_idle("cli")
     spawned = asyncio.all_tasks() - baseline - {asyncio.current_task()}

@@ -5,8 +5,9 @@
 
 import { Box, Text } from '@hermes/ink'
 
-import { HOTKEYS } from '../content/hotkeys.js'
 import type { Theme } from '../theme.js'
+
+import { HOTKEYS } from '../content/hotkeys.js'
 
 const COMMON_COMMANDS: [string, string][] = [
   ['/help', 'full list of commands + hotkeys'],
@@ -20,10 +21,7 @@ const COMMON_COMMANDS: [string, string][] = [
 const HOTKEY_PREVIEW = HOTKEYS.slice(0, 8)
 
 export function HelpHint({ t }: { t: Theme }) {
-  const labelW = Math.max(
-    ...COMMON_COMMANDS.map(([k]) => k.length),
-    ...HOTKEY_PREVIEW.map(([k]) => k.length)
-  )
+  const labelW = Math.max(...COMMON_COMMANDS.map(([k]) => k.length), ...HOTKEY_PREVIEW.map(([k]) => k.length))
 
   const pad = (s: string) => s + ' '.repeat(Math.max(0, labelW - s.length + 2))
 
@@ -42,9 +40,7 @@ export function HelpHint({ t }: { t: Theme }) {
           <Text bold color={t.color.primary}>
             ? quick help
           </Text>
-          <Text color={t.color.muted}>
-            {'  ·  type /help for the full panel  ·  backspace to dismiss'}
-          </Text>
+          <Text color={t.color.muted}>{'  ·  type /help for the full panel  ·  backspace to dismiss'}</Text>
         </Text>
 
         <Box marginTop={1}>

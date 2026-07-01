@@ -67,9 +67,7 @@ class _BM25Okapi:
         self.b = b
         self.corpus_size = len(tokenized_corpus)
         self.doc_lens = [len(d) for d in tokenized_corpus]
-        self.avgdl = (
-            sum(self.doc_lens) / self.corpus_size if self.corpus_size else 0.0
-        )
+        self.avgdl = sum(self.doc_lens) / self.corpus_size if self.corpus_size else 0.0
 
         self.doc_freqs: list[dict[str, int]] = []
         df: dict[str, int] = {}
@@ -84,10 +82,7 @@ class _BM25Okapi:
         n = self.corpus_size
         # ``log(1 + (N - n + 0.5) / (n + 0.5))`` — Robertson-Spärck-Jones
         # weighting; the ``1 +`` guard keeps it non-negative when n ≈ N.
-        self.idf = {
-            term: math.log(1 + (n - count + 0.5) / (count + 0.5))
-            for term, count in df.items()
-        }
+        self.idf = {term: math.log(1 + (n - count + 0.5) / (count + 0.5)) for term, count in df.items()}
 
     def get_scores(self, query_tokens: list[str]) -> list[float]:
         scores = [0.0] * self.corpus_size
@@ -193,7 +188,4 @@ class LocalPool:
             key=lambda x: x[0],
             reverse=True,
         )[:top_k]
-        return [
-            ScoredSkill(name=m.name, score=float(s), source=m.source)
-            for s, m in ranked
-        ]
+        return [ScoredSkill(name=m.name, score=float(s), source=m.source) for s, m in ranked]

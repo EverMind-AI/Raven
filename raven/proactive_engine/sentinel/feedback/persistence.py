@@ -67,9 +67,7 @@ class JsonStateStore:
             finally:
                 fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
-    def update(
-        self, fn: Callable[[dict[str, Any]], dict[str, Any]]
-    ) -> dict[str, Any]:
+    def update(self, fn: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
         """Atomic read-modify-write. Callback receives current state, returns
         new state. Returns the newly-written state."""
         with self.locked():

@@ -352,10 +352,13 @@ describe('fromSkin', () => {
   it('maps completion meta background colors from skins', async () => {
     const { fromSkin } = await importThemeWithCleanEnv()
 
-    const theme = fromSkin({
-      completion_menu_meta_bg: '#111111',
-      completion_menu_meta_current_bg: '#222222'
-    }, {})
+    const theme = fromSkin(
+      {
+        completion_menu_meta_bg: '#111111',
+        completion_menu_meta_current_bg: '#222222'
+      },
+      {}
+    )
 
     expect(theme.color.completionMetaBg).toBe('#111111')
     expect(theme.color.completionMetaCurrentBg).toBe('#222222')

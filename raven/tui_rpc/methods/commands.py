@@ -39,6 +39,10 @@ from typing import TYPE_CHECKING, Any
 import typer
 from loguru import logger
 
+from raven.tui_rpc.methods._typer_reflect import (
+    resolve_name as _resolve_name,
+)
+
 # Single source of truth for blacklist + agent-REPL filter — see
 # ``cli_dispatch.py`` header for rationale (design.md §D4.4 — one set
 # read by both ``cli.dispatch`` rejection and ``commands.catalog`` exclusion
@@ -46,10 +50,6 @@ from loguru import logger
 from raven.tui_rpc.methods.cli_dispatch import (
     _DISPATCH_BLACKLIST,
     _is_agent_repl,
-)
-from raven.tui_rpc.methods._typer_reflect import (
-    collect_command_names as _collect_command_names,
-    resolve_name as _resolve_name,
 )
 
 if TYPE_CHECKING:
@@ -109,9 +109,7 @@ def _reflect_app(app: typer.Typer) -> list[_CatalogEntry]:
         name = _resolve_name(ci)
         if not name:
             continue
-        entries.append(
-            _CatalogEntry(argv=(name,), help_text=_extract_help(ci), kind="top")
-        )
+        entries.append(_CatalogEntry(argv=(name,), help_text=_extract_help(ci), kind="top"))
 
     # Subgroups (app.add_typer(subapp, name=...))
     for ti in app.registered_groups:

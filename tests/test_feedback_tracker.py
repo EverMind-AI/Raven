@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 import pytest
 
 from raven.proactive_engine.sentinel.feedback.tracker import (
-    FeedbackSignal,
     NudgeFeedbackTracker,
     new_nudge_id,
 )
@@ -36,8 +35,7 @@ def _tracker(path, clock=None) -> NudgeFeedbackTracker:
 def test_record_dispatched_writes_jsonl(tmp_path):
     log = tmp_path / "fb.jsonl"
     tr = _tracker(log)
-    tr.record_dispatched("n1", action="nudge", session_key="cli:direct",
-                          priority="low", proactivity_score=0.7)
+    tr.record_dispatched("n1", action="nudge", session_key="cli:direct", priority="low", proactivity_score=0.7)
     lines = log.read_text().splitlines()
     assert len(lines) == 1
     rec = json.loads(lines[0])
@@ -137,9 +135,9 @@ def test_load_rehydrates_from_disk(tmp_path):
 
 def test_load_skips_malformed_lines(tmp_path):
     log = tmp_path / "fb.jsonl"
-    log.write_text("not json\n" +
-                    json.dumps({"ts": "2026-04-21T10:00:00", "id": "x", "signal": "dispatched"}) + "\n" +
-                    "{bogus}\n")
+    log.write_text(
+        "not json\n" + json.dumps({"ts": "2026-04-21T10:00:00", "id": "x", "signal": "dispatched"}) + "\n" + "{bogus}\n"
+    )
     tr = _tracker(log)
     tr.load()  # should not raise
     assert len(tr.recent()) == 1
@@ -182,13 +180,13 @@ def test_new_nudge_id_unique():
 # ---------------------------------------------------------------------------
 # L5: recent_topic_rejects — counts DISMISSED + IGNORED for a given topic_tag
 
+
 def test_recent_topic_rejects_counts_dismissed(tmp_path):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(3):
         nid = f"n{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "medication"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "medication"})
         tr.record_dismissed(nid, reason="too noisy")
     assert tr.recent_topic_rejects("medication") == 3
 
@@ -199,8 +197,7 @@ def test_recent_topic_rejects_ignored_weighted_half(tmp_path):
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(2):
         nid = f"n{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         tr.record_ignored(nid, window_seconds=600)
     assert tr.recent_topic_rejects("exercise") == 1.0
 
@@ -211,13 +208,11 @@ def test_recent_topic_rejects_mixes_dismissed_and_ignored(tmp_path):
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(3):
         nid = f"d{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         tr.record_dismissed(nid)
     for i in range(2):
         nid = f"g{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         tr.record_ignored(nid, window_seconds=600)
     assert tr.recent_topic_rejects("exercise") == 4.0
 
@@ -226,8 +221,7 @@ def test_recent_topic_rejects_later_accept_wins(tmp_path):
     # A nudge IGNORED by the sweep but later engaged is not a reject.
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
-    tr.record_dispatched("n1", action="nudge", session_key="s",
-                          details={"topic_tag": "exercise"})
+    tr.record_dispatched("n1", action="nudge", session_key="s", details={"topic_tag": "exercise"})
     tr.record_ignored("n1", window_seconds=600)
     tr.record_accepted("n1")
     assert tr.recent_topic_rejects("exercise") == 0.0
@@ -235,11 +229,11 @@ def test_recent_topic_rejects_later_accept_wins(tmp_path):
 
 # sweep_ignored — the producer of IGNORED for long-silent nudges
 
+
 def test_sweep_ignored_marks_silent_after_window(tmp_path):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
-    tr.record_dispatched("n1", action="nudge", session_key="s",
-                          details={"topic_tag": "t"})
+    tr.record_dispatched("n1", action="nudge", session_key="s", details={"topic_tag": "t"})
     clock.advance(21601)  # > 6h
     assert tr.sweep_ignored(window_seconds=21600) == 1
     assert tr.counts()["ignored"] == 1
@@ -285,11 +279,9 @@ def test_sweep_ignored_idempotent(tmp_path):
 def test_recent_topic_rejects_separates_topics(tmp_path):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
-    tr.record_dispatched("n1", action="nudge", session_key="s",
-                          details={"topic_tag": "medication"})
+    tr.record_dispatched("n1", action="nudge", session_key="s", details={"topic_tag": "medication"})
     tr.record_dismissed("n1")
-    tr.record_dispatched("n2", action="nudge", session_key="s",
-                          details={"topic_tag": "exercise"})
+    tr.record_dispatched("n2", action="nudge", session_key="s", details={"topic_tag": "exercise"})
     tr.record_dismissed("n2")
     assert tr.recent_topic_rejects("medication") == 1
     assert tr.recent_topic_rejects("exercise") == 1
@@ -300,12 +292,10 @@ def test_recent_topic_rejects_window_excludes_old(tmp_path):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     # Two old rejects (>24h ago) — should not count.
-    tr.record_dispatched("old1", action="nudge", session_key="s",
-                          details={"topic_tag": "medication"})
+    tr.record_dispatched("old1", action="nudge", session_key="s", details={"topic_tag": "medication"})
     tr.record_dismissed("old1")
     clock.advance(86401)  # 24h + 1s later
-    tr.record_dispatched("new1", action="nudge", session_key="s",
-                          details={"topic_tag": "medication"})
+    tr.record_dispatched("new1", action="nudge", session_key="s", details={"topic_tag": "medication"})
     tr.record_dismissed("new1")
     assert tr.recent_topic_rejects("medication") == 1
 
@@ -313,8 +303,7 @@ def test_recent_topic_rejects_window_excludes_old(tmp_path):
 def test_recent_topic_rejects_accepted_not_counted(tmp_path):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     tr = _tracker(tmp_path / "fb.jsonl", clock)
-    tr.record_dispatched("n1", action="nudge", session_key="s",
-                          details={"topic_tag": "med"})
+    tr.record_dispatched("n1", action="nudge", session_key="s", details={"topic_tag": "med"})
     tr.record_accepted("n1")
     assert tr.recent_topic_rejects("med") == 0
 
@@ -336,6 +325,7 @@ def test_recent_topic_rejects_no_topic_in_dispatch_ignored(tmp_path):
 # ---------------------------------------------------------------------------
 # L3: acceptance_rate filtered by topic + topic_acceptance_rate helper
 
+
 def test_acceptance_rate_filtered_by_topic(tmp_path):
     """Filter restricts numerator + denominator to one topic."""
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
@@ -343,8 +333,7 @@ def test_acceptance_rate_filtered_by_topic(tmp_path):
     # 5 medication dispatches: 4 accepted, 1 dismissed → 80%
     for i in range(5):
         nid = f"med{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "medication"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "medication"})
         if i < 4:
             tr.record_accepted(nid)
         else:
@@ -352,8 +341,7 @@ def test_acceptance_rate_filtered_by_topic(tmp_path):
     # 5 exercise dispatches: 1 accepted, 4 dismissed → 20%
     for i in range(5):
         nid = f"ex{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         if i < 1:
             tr.record_accepted(nid)
         else:
@@ -368,8 +356,7 @@ def test_topic_acceptance_rate_below_min_volume_returns_none(tmp_path):
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(2):
         nid = f"n{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         tr.record_dismissed(nid)
     assert tr.topic_acceptance_rate("exercise") is None
 
@@ -379,8 +366,7 @@ def test_topic_acceptance_rate_at_min_volume_returns_value(tmp_path):
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(3):
         nid = f"n{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "exercise"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "exercise"})
         tr.record_dismissed(nid)
     assert tr.topic_acceptance_rate("exercise") == pytest.approx(0.0)
 
@@ -391,14 +377,12 @@ def test_topic_acceptance_rate_neutral_excluded(tmp_path):
     tr = _tracker(tmp_path / "fb.jsonl", clock)
     for i in range(3):
         nid = f"acc{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "med"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "med"})
         tr.record_accepted(nid)
     # 2 NEUTRAL — should be excluded
     for i in range(2):
         nid = f"neu{i}"
-        tr.record_dispatched(nid, action="nudge", session_key="s",
-                              details={"topic_tag": "med"})
+        tr.record_dispatched(nid, action="nudge", session_key="s", details={"topic_tag": "med"})
         tr.record_neutral(nid, reason="ambiguous")
     # Rate = 3 accepted / 3 scored = 1.0 (not 3/5)
     assert tr.topic_acceptance_rate("med") == pytest.approx(1.0)
@@ -411,6 +395,7 @@ def test_topic_acceptance_rate_empty_topic_returns_none(tmp_path):
 
 # ---------------------------------------------------------------------------
 # L2: by_hour_reject_rate — per-hour-of-day rolling rate
+
 
 def test_by_hour_reject_rate_groups_correctly(tmp_path):
     """Each DISPATCHED's timestamp hour is the bucket; rejects on that

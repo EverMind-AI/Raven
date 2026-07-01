@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.providers.base import LLMProvider, LLMResponse
 
 
 class StubProvider(LLMProvider):
@@ -30,8 +30,16 @@ class StubProvider(LLMProvider):
         super().__init__(api_key="test")
         self._content = content
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return LLMResponse(content=self._content, finish_reason="stop")
 
     def get_default_model(self) -> str:
@@ -58,7 +66,10 @@ def _make_msg(content: str = "hello") -> TurnRequest:
     return TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel="tui", chat_id="chat1", sender_id="user", chat_type=ChatType.DM,
+            channel="tui",
+            chat_id="chat1",
+            sender_id="user",
+            chat_type=ChatType.DM,
         ),
         text=content,
     )
@@ -67,11 +78,7 @@ def _make_msg(content: str = "hello") -> TurnRequest:
 def _persisted_messages(workspace: Path) -> list[dict[str, Any]]:
     path = workspace / "sessions" / "tui" / "chat1.jsonl"
     assert path.exists(), "session file was not persisted"
-    records = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [r for r in records if r.get("_type") != "metadata"]
 
 

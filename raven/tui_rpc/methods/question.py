@@ -25,9 +25,7 @@ if TYPE_CHECKING:
     from raven.tui_rpc.question_broker import QuestionBroker
 
 
-async def question_respond(
-    params: dict[str, Any], *, question_broker: "QuestionBroker"
-) -> dict:
+async def question_respond(params: dict[str, Any], *, question_broker: "QuestionBroker") -> dict:
     """Resolve a pending question. Unknown/expired key → ``{ok: False}``.
 
     Accepts either ``conversation_id`` or ``request_id`` as the handle.
@@ -38,9 +36,7 @@ async def question_respond(
     return {"ok": ok}
 
 
-def register_question_methods(
-    dispatcher: "Dispatcher", *, question_broker: "QuestionBroker"
-) -> None:
+def register_question_methods(dispatcher: "Dispatcher", *, question_broker: "QuestionBroker") -> None:
     """Register ``clarify.respond`` with the broker pre-bound."""
 
     async def _respond(params: dict[str, Any]) -> dict:

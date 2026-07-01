@@ -3,9 +3,10 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { Msg, SessionInfo } from '../types.js'
+
 import { LONG_MSG } from '../config/limits.js'
 import { buildToolTrailLine, fmtK } from '../lib/text.js'
-import type { Msg, SessionInfo } from '../types.js'
 
 export const introMsg = (info: SessionInfo): Msg => ({ info, kind: 'intro', role: 'system', text: '' })
 

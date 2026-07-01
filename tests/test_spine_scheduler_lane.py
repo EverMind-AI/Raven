@@ -152,13 +152,17 @@ async def test_emit_stamps_source_when_absent_and_preserves_explicit():
     other = Source(channel="x", chat_id="y", sender_id="z", chat_type=ChatType.GROUP)
 
     events1, sink1 = _collector()
-    lane1 = Lane(runner=StampProbeRunner(source=None), pools=OriginPools(user=1, system=1), sink=sink1, conversation_id="c")
+    lane1 = Lane(
+        runner=StampProbeRunner(source=None), pools=OriginPools(user=1, system=1), sink=sink1, conversation_id="c"
+    )
     await lane1.submit(TurnRequest(origin=Origin.USER, source=src, text="x"))
     text1 = next(e for e in events1 if isinstance(e, Text))
     assert text1.source == src  # stamped with the request's source
 
     events2, sink2 = _collector()
-    lane2 = Lane(runner=StampProbeRunner(source=other), pools=OriginPools(user=1, system=1), sink=sink2, conversation_id="c")
+    lane2 = Lane(
+        runner=StampProbeRunner(source=other), pools=OriginPools(user=1, system=1), sink=sink2, conversation_id="c"
+    )
     await lane2.submit(TurnRequest(origin=Origin.USER, source=src, text="x"))
     text2 = next(e for e in events2 if isinstance(e, Text))
     assert text2.source == other  # explicit source is not overwritten

@@ -168,9 +168,7 @@ def _manager_for(agent_loop: "AgentLoop | None", config: "Config") -> SessionMan
     return _get_or_build_manager(config)
 
 
-def _map_to_wire(
-    messages: list[dict[str, Any]], session_key: str
-) -> list[dict[str, Any]]:
+def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
     """Map stored session messages to the GatewayTranscriptMessage wire shape.
 
     The TS side (``gatewayTypes.ts:23``) expects ``{role, text?, context?, name?}``.
@@ -187,17 +185,13 @@ def _map_to_wire(
     out = []
     for m in messages:
         if not isinstance(m, dict) or "role" not in m:
-            logger.warning(
-                "session.resume: skipping malformed stored message in {}", session_key
-            )
+            logger.warning("session.resume: skipping malformed stored message in {}", session_key)
             continue
         entry: dict[str, Any] = {"role": m["role"]}
         content = m.get("content", "")
         if isinstance(content, list):
             entry["text"] = " ".join(
-                blk.get("text", "")
-                for blk in content
-                if isinstance(blk, dict) and blk.get("type") == "text"
+                blk.get("text", "") for blk in content if isinstance(blk, dict) and blk.get("type") == "text"
             )
         elif isinstance(content, str):
             entry["text"] = content

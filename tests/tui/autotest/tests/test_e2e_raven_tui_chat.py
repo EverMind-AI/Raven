@@ -32,13 +32,13 @@ def test_tui_chat_qwen_round_trip(harness):
     )
     harness.type("What's your model's name?")
     harness.press("enter")
-    assert harness.wait(r"Qwen", timeout=60.0), (
-        f"Qwen model did not respond within 60s; screen=\n{harness.screen()}"
-    )
+    assert harness.wait(r"Qwen", timeout=60.0), f"Qwen model did not respond within 60s; screen=\n{harness.screen()}"
     # Cancel UX volatile post-streaming (same class as dogfood overlay tests).
     # Use Esc + Ctrl+C robust pattern.
     import time as _t
+
     from tests.tui.autotest.runner import BackendError
+
     for key in ("escape", "ctrl+c"):
         try:
             harness.press(key)

@@ -27,7 +27,7 @@ def load_prompt(path: Path | str) -> dict[str, str]:
     Templates retain their {placeholder} markers — no substitution yet.
     """
     path = Path(path)
-    data: Any = yaml.safe_load(path.read_text(encoding='utf-8'))
+    data: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path} must be a YAML mapping; got {type(data).__name__}")
     for key in ("system", "user"):

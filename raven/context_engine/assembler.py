@@ -30,7 +30,6 @@ from raven.context_engine.base import (
     AssembledPrefix,
     AssemblyContext,
     ContextEngine,
-    Segment,
     SegmentBuilder,
 )
 from raven.context_engine.segments import render

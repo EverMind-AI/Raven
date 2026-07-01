@@ -130,9 +130,7 @@ class RpcServer:
             # Legacy / test path: bare pipes via ``os.pipe()``.
             # `os.fdopen` so the transport owns a Python file object; loop
             # will close the underlying fd when the transport closes.
-            await loop.connect_read_pipe(
-                lambda: reader_protocol, os.fdopen(self._request_fd, "rb", buffering=0)
-            )
+            await loop.connect_read_pipe(lambda: reader_protocol, os.fdopen(self._request_fd, "rb", buffering=0))
             write_transport, write_protocol = await loop.connect_write_pipe(
                 asyncio.BaseProtocol,
                 os.fdopen(self._notify_fd, "wb", buffering=0),
@@ -171,9 +169,7 @@ class RpcServer:
                     break
 
                 if len(line) > MAX_FRAME_BYTES:
-                    logger.error(
-                        "tui_rpc: frame {} bytes > {} cap; closing", len(line), MAX_FRAME_BYTES
-                    )
+                    logger.error("tui_rpc: frame {} bytes > {} cap; closing", len(line), MAX_FRAME_BYTES)
                     break
 
                 # Spawn the dispatch as an independent task so streaming /

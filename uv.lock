@@ -3338,12 +3338,12 @@ dev = [
     { name = "oauth-cli-kit", specifier = ">=0.1.3" },
     { name = "pexpect", specifier = ">=4.9" },
     { name = "pip-audit", specifier = ">=2.10.0" },
-    { name = "pre-commit", specifier = ">=4.5.0" },
+    { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pyte", specifier = ">=0.8" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.15.0" },
+    { name = "ruff", specifier = ">=0.15.11,<0.16" },
 ]
 
 [[package]]

@@ -110,7 +110,7 @@ def test_send_media_reaches_sdk(tmp_path):
     assert "photo" in kwargs
     assert "reply_parameters" not in kwargs
     assert "message_thread_id" not in kwargs
-    ch._app.bot.send_message.assert_not_awaited()   # empty content -> no text send
+    ch._app.bot.send_message.assert_not_awaited()  # empty content -> no text send
 
 
 def test_send_invalid_chat_id_is_dropped():
@@ -122,7 +122,7 @@ def test_send_invalid_chat_id_is_dropped():
 def test_send_when_not_running_is_noop():
     ch = _channel()
     ch._app = None
-    asyncio.run(ch.send("42", "hi"))   # must not raise
+    asyncio.run(ch.send("42", "hi"))  # must not raise
 
 
 # ── media extension resolution ────────────────────────────────────────
@@ -130,8 +130,14 @@ def test_send_when_not_running_is_noop():
 
 @pytest.mark.parametrize(
     "path, kind",
-    [("a.jpg", "photo"), ("a.png", "photo"), ("a.ogg", "voice"),
-     ("a.mp3", "audio"), ("a.pdf", "document"), ("noext", "document")],
+    [
+        ("a.jpg", "photo"),
+        ("a.png", "photo"),
+        ("a.ogg", "voice"),
+        ("a.mp3", "audio"),
+        ("a.pdf", "document"),
+        ("noext", "document"),
+    ],
 )
 def test_outbound_kind(path, kind):
     assert _outbound_kind(path) == kind
@@ -180,9 +186,9 @@ def test_is_allowed_rejects_malformed_sender():
     id, or an empty username — short-circuiting before the match attempt (note
     'abc|alice' is denied despite 'alice' being allowed)."""
     ch = _channel(allow_from=["alice"])
-    assert ch.is_allowed("bob") is False          # no "|" separator
-    assert ch.is_allowed("abc|alice") is False    # id part is not numeric
-    assert ch.is_allowed("123|") is False         # empty username
+    assert ch.is_allowed("bob") is False  # no "|" separator
+    assert ch.is_allowed("abc|alice") is False  # id part is not numeric
+    assert ch.is_allowed("123|") is False  # empty username
 
 
 # ── group addressing ──────────────────────────────────────────────────
@@ -260,7 +266,7 @@ def test_on_message_disallowed_sender_skips_download_and_typing():
     user = SimpleNamespace(id=5, username="bob")
     update = SimpleNamespace(message=SimpleNamespace(), effective_user=user)
     asyncio.run(ch._on_message(update, None))
-    ch._download.assert_not_awaited()        # no media download for a denied sender
+    ch._download.assert_not_awaited()  # no media download for a denied sender
     ch._start_typing.assert_not_called()
     ch.intake.publish.assert_not_awaited()
 
@@ -274,6 +280,7 @@ def test_flush_group_straggler_schedules_new_flush(monkeypatch):
     key, so the straggler rebuilt the buffer, saw the stale task key, and the
     rebuilt buffer was never flushed: silent message loss.)"""
     import raven.channels.adapters.telegram.channel as tg
+
     monkeypatch.setattr(tg, "_ALBUM_WINDOW_S", 0)
     ch = _channel()
     ch._start_typing = MagicMock()
@@ -282,16 +289,16 @@ def test_flush_group_straggler_schedules_new_flush(monkeypatch):
 
     async def fake_publish(**kw):
         published.append(kw)
-        if len(published) == 1:                      # straggler lands mid-publish
+        if len(published) == 1:  # straggler lands mid-publish
             ch._buffer_group("g1", "c1", user, "late", ["/m/late.jpg"], {}, None)
 
     ch.intake.publish = fake_publish
 
     async def scenario():
         ch._buffer_group("g1", "c1", user, "first", ["/m/a.jpg"], {}, None)
-        await ch._group_tasks["c1:g1"]               # straggler arrives inside this flush
-        assert "c1:g1" in ch._group_tasks            # fresh flush was scheduled
-        await ch._group_tasks["c1:g1"]               # second flush drains the straggler
+        await ch._group_tasks["c1:g1"]  # straggler arrives inside this flush
+        assert "c1:g1" in ch._group_tasks  # fresh flush was scheduled
+        await ch._group_tasks["c1:g1"]  # second flush drains the straggler
 
     asyncio.run(scenario())
     assert [p["content"] for p in published] == ["first", "late"]
@@ -313,7 +320,7 @@ def test_stop_reaps_helper_tasks():
         await asyncio.wait_for(ch.stop(), timeout=2)
         assert typing.cancelled() and group.cancelled()
         assert not ch._typing and not ch._group_tasks
-        await asyncio.wait_for(ch.stop(), timeout=2)   # idempotent
+        await asyncio.wait_for(ch.stop(), timeout=2)  # idempotent
 
     asyncio.run(scenario())
 
@@ -324,9 +331,10 @@ def test_stop_reaps_helper_tasks():
 def test_telegram_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _channel()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_telegram_spec_import_is_cheap():
@@ -334,6 +342,7 @@ def test_telegram_spec_import_is_cheap():
     (the heavy import is deferred into SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.telegram.spec as s;"
         "assert 'telegram' not in sys.modules, 'spec import pulled in the telegram SDK';"

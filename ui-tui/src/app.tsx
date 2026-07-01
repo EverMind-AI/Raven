@@ -3,11 +3,12 @@ import { useStore } from '@nanostores/react'
 import { useEffect } from 'react'
 
 import type { ChatStreamRpcClient } from './app/chatStream.js'
+import type { GatewayClient } from './gatewayClientStub.js'
+
 import { GatewayProvider } from './app/gatewayContext.js'
 import { $uiState, $uiTheme, applyTerminalBackground } from './app/uiStore.js'
 import { useMainApp } from './app/useMainApp.js'
 import { AppLayout } from './components/appLayout.js'
-import type { GatewayClient } from './gatewayClientStub.js'
 import { cursorColorHex } from './theme.js'
 
 // Ask the terminal for its real background color (OSC 11) so light/dark

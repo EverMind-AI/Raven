@@ -7,6 +7,17 @@ import { Box, NoSelect, Text } from '@hermes/ink'
 import { memo, type ReactNode, useEffect, useMemo, useState } from 'react'
 import spinners, { type BrailleSpinnerName } from 'unicode-animations'
 
+import type { Theme } from '../theme.js'
+import type {
+  ActiveTool,
+  ActivityItem,
+  DetailsMode,
+  SectionVisibility,
+  SubagentNode,
+  SubagentProgress,
+  ThinkingMode
+} from '../types.js'
+
 import { THINKING_COT_MAX } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
 import {
@@ -32,16 +43,6 @@ import {
   thinkingPreview,
   toolTrailLabel
 } from '../lib/text.js'
-import type { Theme } from '../theme.js'
-import type {
-  ActiveTool,
-  ActivityItem,
-  DetailsMode,
-  SectionVisibility,
-  SubagentNode,
-  SubagentProgress,
-  ThinkingMode
-} from '../types.js'
 
 const THINK: BrailleSpinnerName[] = ['helix', 'breathe', 'orbit', 'dna', 'waverows', 'snake', 'pulse']
 const TOOL: BrailleSpinnerName[] = ['cascade', 'scan', 'diagswipe', 'fillsweep', 'rain', 'columns', 'sparkle']

@@ -34,7 +34,8 @@ from typing import TYPE_CHECKING, Callable
 from loguru import logger
 
 from raven.proactive_engine.sentinel.attention_producers._base import (
-    AttentionProducer, WEEKDAY,
+    WEEKDAY,
+    AttentionProducer,
 )
 
 if TYPE_CHECKING:
@@ -48,9 +49,9 @@ if TYPE_CHECKING:
 #   "2026-05-15"      — ISO full date
 # We do NOT use a single mega-regex: keeping these split keeps misfires
 # (e.g. matching version "v1.5.10") tractable to debug.
-_DATE_RE_ZH = re.compile(r'(?P<m>\d{1,2})月(?P<d>\d{1,2})[日号]')
-_DATE_RE_MD = re.compile(r'(?<![\d.])\b(?P<m>\d{1,2})[/-](?P<d>\d{1,2})\b(?![\d.])')
-_DATE_RE_ISO = re.compile(r'\b\d{4}-(?P<m>\d{2})-(?P<d>\d{2})\b')
+_DATE_RE_ZH = re.compile(r"(?P<m>\d{1,2})月(?P<d>\d{1,2})[日号]")
+_DATE_RE_MD = re.compile(r"(?<![\d.])\b(?P<m>\d{1,2})[/-](?P<d>\d{1,2})\b(?![\d.])")
+_DATE_RE_ISO = re.compile(r"\b\d{4}-(?P<m>\d{2})-(?P<d>\d{2})\b")
 
 
 def _extract_dates_from_memory(text: str, today: date) -> list[tuple[str, int, int, int]]:
@@ -69,8 +70,8 @@ def _extract_dates_from_memory(text: str, today: date) -> list[tuple[str, int, i
         for pat in (_DATE_RE_ZH, _DATE_RE_ISO, _DATE_RE_MD):
             for m in pat.finditer(line):
                 try:
-                    mn = int(m.group('m'))
-                    dn = int(m.group('d'))
+                    mn = int(m.group("m"))
+                    dn = int(m.group("d"))
                 except (ValueError, IndexError):
                     continue
                 if not (1 <= mn <= 12 and 1 <= dn <= 31):
@@ -166,8 +167,11 @@ _PLAN_TOOL: dict = {
                             },
                         },
                         "required": [
-                            "time_hhmm", "topic_tag", "priority",
-                            "rationale", "user_message",
+                            "time_hhmm",
+                            "topic_tag",
+                            "priority",
+                            "rationale",
+                            "user_message",
                         ],
                     },
                 },
@@ -371,7 +375,8 @@ class DailyPlanProducer(AttentionProducer):
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "DailyPlanProducer LLM call failed: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
                 body = self._cached_body  # keep yesterday's plan rather than blank
             self._cached_body = body
@@ -384,9 +389,8 @@ class DailyPlanProducer(AttentionProducer):
         attention_md = self._read_attention_excerpt()
         used_tags = self._recent_topic_tags(now)
 
-        used_tags_block = (
-            "## 已使用 topic_tags（必须复用，不要起新名）\n"
-            + ("\n".join(f"- `{t}`" for t in used_tags) if used_tags else "(无历史)")
+        used_tags_block = "## 已使用 topic_tags（必须复用，不要起新名）\n" + (
+            "\n".join(f"- `{t}`" for t in used_tags) if used_tags else "(无历史)"
         )
         dates_block = _format_days_until_block(memory_md + "\n" + (attention_md or ""), now)
 
@@ -432,10 +436,7 @@ class DailyPlanProducer(AttentionProducer):
             return ""
 
         entries.sort(key=lambda e: str(e.get("time_hhmm", "99:99")))
-        lines = [
-            f"<!-- generated {now.isoformat()} | "
-            f"model={self._model or 'default'} | entries={len(entries)} -->"
-        ]
+        lines = [f"<!-- generated {now.isoformat()} | model={self._model or 'default'} | entries={len(entries)} -->"]
         for e in entries:
             t = str(e.get("time_hhmm", "")).strip()
             tag = str(e.get("topic_tag", "")).strip()
@@ -470,6 +471,7 @@ class DailyPlanProducer(AttentionProducer):
             if not attention_file.exists():
                 return ""
             from raven.memory_engine.consolidate.attention import parse_attention
+
             sections = parse_attention(attention_file.read_text(encoding="utf-8"))
             wanted = [
                 "## User overrides",

@@ -90,9 +90,7 @@ def test_set_unknown_field_raises_with_helpful_message(cfg_path: Path) -> None:
 
 def test_set_invalid_value_raises_validation_error(cfg_path: Path) -> None:
     with pytest.raises(ValidationError):
-        set_channel_fields(
-            "telegram", {"group_policy": "definitely_not_a_valid_literal"}, config_path=cfg_path
-        )
+        set_channel_fields("telegram", {"group_policy": "definitely_not_a_valid_literal"}, config_path=cfg_path)
 
 
 def test_set_returns_previous_values(cfg_path: Path) -> None:
@@ -184,9 +182,7 @@ def test_atomic_write_no_corruption_on_validation_error(cfg_path: Path) -> None:
     before = _read(cfg_path)
 
     with pytest.raises(ValidationError):
-        set_channel_fields(
-            "telegram", {"group_policy": "garbage_literal"}, config_path=cfg_path
-        )
+        set_channel_fields("telegram", {"group_policy": "garbage_literal"}, config_path=cfg_path)
 
     assert _read(cfg_path) == before  # nothing got partially written
 
@@ -261,9 +257,7 @@ def test_every_channel_has_specs_with_enabled(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ALL_CHANNELS)
-def test_every_channel_enable_disable_reset_round_trip(
-    name: str, cfg_path: Path
-) -> None:
+def test_every_channel_enable_disable_reset_round_trip(name: str, cfg_path: Path) -> None:
     """Closed-loop enable -> disable -> reset works for every channel."""
     enable_channel(name, config_path=cfg_path)
     assert _read(cfg_path)["channels"][name]["enabled"] is True
@@ -334,9 +328,7 @@ def test_mochat_nested_mention_dotted_path(cfg_path: Path) -> None:
     assert section["mention"]["requireInGroups"] is True
     assert section["clawToken"] == "tk"
 
-    set_channel_fields(
-        "mochat", {"mention.require_in_groups": "false"}, config_path=cfg_path
-    )
+    set_channel_fields("mochat", {"mention.require_in_groups": "false"}, config_path=cfg_path)
     section = _read(cfg_path)["channels"]["mochat"]
     assert section["mention"]["requireInGroups"] is False
 

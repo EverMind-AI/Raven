@@ -133,15 +133,29 @@ class TuiOutlet:
                 await self._emitter.emit(cid, {"type": "thinking.delta", "payload": {"text": out.content}})
         elif isinstance(out, ToolEvent):
             if out.phase is ToolPhase.START:
-                await self._emitter.emit(cid, {
-                    "type": "tool.start",
-                    "payload": {"tool_call_id": out.tool_call_id, "name": out.name, "arguments": out.arguments or {}},
-                })
+                await self._emitter.emit(
+                    cid,
+                    {
+                        "type": "tool.start",
+                        "payload": {
+                            "tool_call_id": out.tool_call_id,
+                            "name": out.name,
+                            "arguments": out.arguments or {},
+                        },
+                    },
+                )
             else:
-                await self._emitter.emit(cid, {
-                    "type": "tool.complete",
-                    "payload": {"tool_call_id": out.tool_call_id, "result_preview": out.result_preview, "truncated": out.truncated},
-                })
+                await self._emitter.emit(
+                    cid,
+                    {
+                        "type": "tool.complete",
+                        "payload": {
+                            "tool_call_id": out.tool_call_id,
+                            "result_preview": out.result_preview,
+                            "truncated": out.truncated,
+                        },
+                    },
+                )
         elif isinstance(out, Text):
             # A non-streamed reply (clarification / hook short-circuit / empty
             # fallback) rides one token.delta into the same buffer the streamed

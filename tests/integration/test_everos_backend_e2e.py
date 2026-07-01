@@ -30,15 +30,15 @@ pytestmark = pytest.mark.real_llm
 
 
 def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
-    be = EverosBackend(PluginContext(
-        config={"mode": "embedded", "agent_id": agent_id},
-        services=ServiceLocator(workspace=tmp_path),
-    ))
+    be = EverosBackend(
+        PluginContext(
+            config={"mode": "embedded", "agent_id": agent_id},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+    )
     # Embedded mode must resolve the real adapter now that everos is
     # installed — if it degraded to no-op the e2e would be meaningless.
-    assert isinstance(be._adapter, _RealEverosAdapter), (
-        "embedded backend did not bind the real everos adapter"
-    )
+    assert isinstance(be._adapter, _RealEverosAdapter), "embedded backend did not bind the real everos adapter"
     return be
 
 
@@ -56,7 +56,10 @@ def _stamp_user(messages: list[dict[str, Any]], user_id: str) -> list[dict[str, 
 
 
 async def _store_repeated(
-    be: EverosBackend, session: str, messages: list[dict[str, Any]], times: int,
+    be: EverosBackend,
+    session: str,
+    messages: list[dict[str, Any]],
+    times: int,
 ) -> None:
     """Send messages across several store() calls to cross the boundary."""
     for i in range(times):
@@ -64,7 +67,10 @@ async def _store_repeated(
 
 
 async def test_user_track_recall_through_backend(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], tmp_path: Path,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    tmp_path: Path,
     pipeline_drain: Any,
 ) -> None:
     be = _backend(tmp_path, agent_id=ids.agent_id)
@@ -75,7 +81,9 @@ async def test_user_track_recall_through_backend(
         await pipeline_drain()
 
         hits = await be.recall(
-            "user preferences", user_id=ids.user_id, top_k=5,
+            "user preferences",
+            user_id=ids.user_id,
+            top_k=5,
         )
         assert isinstance(hits, list)
         for h in hits:
@@ -87,7 +95,10 @@ async def test_user_track_recall_through_backend(
 
 
 async def test_agent_skill_recall_through_backend(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], tmp_path: Path,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    tmp_path: Path,
     pipeline_drain: Any,
 ) -> None:
     be = _backend(tmp_path, agent_id=ids.agent_id)
@@ -123,7 +134,10 @@ async def test_agent_skill_recall_through_backend(
 
 
 async def test_dual_track_isolation(
-    everos_env: Any, ids: Any, corpus: dict[str, Any], tmp_path: Path,
+    everos_env: Any,
+    ids: Any,
+    corpus: dict[str, Any],
+    tmp_path: Path,
     pipeline_drain: Any,
 ) -> None:
     """A user-track query must never surface agent skills/cases."""
@@ -131,12 +145,16 @@ async def test_dual_track_isolation(
     await be.start()
     try:
         await _store_repeated(
-            be, ids.session,
-            _stamp_user(corpus["user_facts"]["messages"], ids.user_id), times=2,
+            be,
+            ids.session,
+            _stamp_user(corpus["user_facts"]["messages"], ids.user_id),
+            times=2,
         )
         await pipeline_drain()
         user_hits = await be.recall(
-            "rotate deploy key", user_id=ids.user_id, top_k=10,
+            "rotate deploy key",
+            user_id=ids.user_id,
+            top_k=10,
         )
         assert all(h.metadata.get("owner_type") == "user" for h in user_hits)
 

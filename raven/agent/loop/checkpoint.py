@@ -37,9 +37,12 @@ from loguru import logger
 # Committer identity baked into the shadow repo so commits don't depend on the
 # user's global git config (and never touch it).
 _GIT_IDENT = (
-    "-c", "user.name=Raven",
-    "-c", "user.email=checkpoint@raven.local",
-    "-c", "commit.gpgsign=false",
+    "-c",
+    "user.name=Raven",
+    "-c",
+    "user.email=checkpoint@raven.local",
+    "-c",
+    "commit.gpgsign=false",
 )
 
 
@@ -160,7 +163,8 @@ class CheckpointService:
             "git",
             f"--git-dir={self._git_dir}",
             f"--work-tree={self._workspace}",
-            "-c", "core.quotePath=false",
+            "-c",
+            "core.quotePath=false",
             *args,
         )
         proc = await asyncio.create_subprocess_exec(
@@ -171,7 +175,8 @@ class CheckpointService:
         )
         try:
             out, err = await asyncio.wait_for(
-                proc.communicate(), timeout=_GIT_TIMEOUT_SECONDS,
+                proc.communicate(),
+                timeout=_GIT_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             # NFS / index-lock / disk-full pathology: don't leak a zombie,
@@ -184,7 +189,8 @@ class CheckpointService:
                 pass
             logger.debug(
                 "checkpoint git timed out after {}s: {}",
-                _GIT_TIMEOUT_SECONDS, " ".join(args[:2]),
+                _GIT_TIMEOUT_SECONDS,
+                " ".join(args[:2]),
             )
             return -1, "", "timeout"
         return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
@@ -211,7 +217,7 @@ class CheckpointService:
                         "an out-of-band shadow git repo — your own .git is "
                         "untouched.\n\n"
                         "Safe to delete; will be recreated on next agent run. "
-                        "Disable via `runtime.checkpoint.policy = \"never\"` "
+                        'Disable via `runtime.checkpoint.policy = "never"` '
                         "in your Raven config (typically "
                         "~/.raven/config.json, or whichever file you "
                         "passed via --config).\n",

@@ -34,10 +34,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--agent", default="openclaw")
     ap.add_argument("--mode", default=None)
     ap.add_argument("--concurrency", type=int, default=4)
-    ap.add_argument("--benchmark", default="pbench",
-                    choices=["pbench"], help="cases re-run not implemented yet")
-    ap.add_argument("--with-memory", action="store_true",
-                    help="Pass through to backend overrides (must match original run).")
+    ap.add_argument("--benchmark", default="pbench", choices=["pbench"], help="cases re-run not implemented yet")
+    ap.add_argument(
+        "--with-memory", action="store_true", help="Pass through to backend overrides (must match original run)."
+    )
     return ap.parse_args()
 
 
@@ -47,11 +47,8 @@ async def main() -> None:
     if not out.exists():
         sys.exit(f"output file not found: {out}")
 
-    rows = json.loads(out.read_text(encoding='utf-8'))
-    failed_idx = [
-        i for i, r in enumerate(rows)
-        if (r.get("agent") or {}).get("parse_ok") is False
-    ]
+    rows = json.loads(out.read_text(encoding="utf-8"))
+    failed_idx = [i for i, r in enumerate(rows) if (r.get("agent") or {}).get("parse_ok") is False]
     if not failed_idx:
         print("no failed rows to retry; nothing to do.")
         return
@@ -83,17 +80,22 @@ async def main() -> None:
         sample = samples[i]
         cat = sample.raw.get("category") or sample.raw.get("id") or f"#{i}"
         async with sem:
-            print(f"[{done['n']+1}/{total}] START idx={i} {cat}", flush=True)
+            print(f"[{done['n'] + 1}/{total}] START idx={i} {cat}", flush=True)
             outcome = await backend.run_one(
-                sample, driver, session_id=sample.session_hint,
+                sample,
+                driver,
+                session_id=sample.session_hint,
             )
             runtime_meta_i = dict(runtime_meta_base)
             if outcome.meta:
-                runtime_meta_i.update({
-                    k: v for k, v in outcome.meta.items()
-                    if k in ("model", "route", "delivered", "fake_now",
-                             "full_doc", "cron_prompt", "plausibility_note")
-                })
+                runtime_meta_i.update(
+                    {
+                        k: v
+                        for k, v in outcome.meta.items()
+                        if k
+                        in ("model", "route", "delivered", "fake_now", "full_doc", "cron_prompt", "plausibility_note")
+                    }
+                )
             new_row = driver.make_row(sample, outcome, runtime_meta_i)
             done["n"] += 1
             ok = (new_row.get("agent") or {}).get("parse_ok")
@@ -129,7 +131,7 @@ async def main() -> None:
         if (new_row.get("agent") or {}).get("parse_ok") is False:
             still_failed.append(i)
 
-    out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
+    out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[retry] backup -> {backup}")
     print(f"[retry] patched {len(failed_idx)} rows; still failing: {len(still_failed)}")
     if still_failed:

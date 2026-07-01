@@ -9,13 +9,11 @@
 // StatusRule sibling then shares the box's computed top, which previously
 // tripped the renderer's height-0 skip and dropped the overlay entirely.
 
-import { PassThrough } from 'stream'
-
 import { renderSync } from '@hermes/ink'
 import React from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
-import { GatewayProvider } from '../app/gatewayContext.js'
 import type {
   AppLayoutActions,
   AppLayoutComposerProps,
@@ -25,12 +23,14 @@ import type {
   GatewayServices,
   StatusBarMode
 } from '../app/interfaces.js'
+import type { Msg } from '../types.js'
+
+import { GatewayProvider } from '../app/gatewayContext.js'
 import { patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { AppLayout } from '../components/appLayout.js'
 import { DEFAULT_VOICE_RECORD_KEY } from '../lib/platform.js'
 import { stripAnsi } from '../lib/text.js'
-import type { Msg } from '../types.js'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 

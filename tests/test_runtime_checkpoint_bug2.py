@@ -51,11 +51,11 @@ async def test_checkpoint_commits_then_noops_when_unchanged(workspace):
 async def test_checkpoint_does_not_touch_user_git(workspace):
     """When the workspace is itself a git repo, the shadow checkpoint must
     not add commits to the user's real history (plan §7 fixture)."""
-    env = {"GIT_AUTHOR_NAME": "u", "GIT_AUTHOR_EMAIL": "u@u",
-           "GIT_COMMITTER_NAME": "u", "GIT_COMMITTER_EMAIL": "u@u"}
+    env = {"GIT_AUTHOR_NAME": "u", "GIT_AUTHOR_EMAIL": "u@u", "GIT_COMMITTER_NAME": "u", "GIT_COMMITTER_EMAIL": "u@u"}
     subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
-    subprocess.run(["git", "commit", "--allow-empty", "-qm", "base"],
-                   cwd=workspace, check=True, env={**_os_environ(), **env})
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-qm", "base"], cwd=workspace, check=True, env={**_os_environ(), **env}
+    )
     head_before = _git_head(workspace)
     count_before = _git_count(workspace)
 
@@ -71,17 +71,18 @@ async def test_checkpoint_does_not_touch_user_git(workspace):
 
 def _os_environ():
     import os
+
     return dict(os.environ)
 
 
 def _git_head(cwd: Path) -> str:
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True).stdout.strip()
 
 
 def _git_count(cwd: Path) -> str:
-    return subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=cwd,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"], cwd=cwd, capture_output=True, text=True
+    ).stdout.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -96,14 +97,25 @@ class _ToolLoopProvider(LLMProvider):
         super().__init__(api_key="test")
         self._path = path
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return LLMResponse(
             content="",
-            tool_calls=[ToolCallRequest(
-                id="c1", name="write_file",
-                arguments={"path": self._path, "content": "x = 1\n"},
-            )],
+            tool_calls=[
+                ToolCallRequest(
+                    id="c1",
+                    name="write_file",
+                    arguments={"path": self._path, "content": "x = 1\n"},
+                )
+            ],
             finish_reason="tool_calls",
         )
 
@@ -181,16 +193,27 @@ class _WriteThenStopProvider(LLMProvider):
         super().__init__(api_key="test")
         self._n = 0
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self._n += 1
         if self._n == 1:
             return LLMResponse(
                 content="",
-                tool_calls=[ToolCallRequest(
-                    id="c1", name="write_file",
-                    arguments={"path": "done.py", "content": "ok\n"},
-                )],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="write_file",
+                        arguments={"path": "done.py", "content": "ok\n"},
+                    )
+                ],
                 finish_reason="tool_calls",
             )
         return LLMResponse(content="all done", finish_reason="stop")
@@ -200,10 +223,17 @@ class _WriteThenStopProvider(LLMProvider):
 
 
 class _ErrorProvider(LLMProvider):
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
-        return LLMResponse(content="fatal model error: bad request",
-                           finish_reason="error")
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        return LLMResponse(content="fatal model error: bad request", finish_reason="error")
 
     def get_default_model(self) -> str:
         return "stub"
@@ -211,8 +241,11 @@ class _ErrorProvider(LLMProvider):
 
 async def test_completed_status_and_snapshot(workspace):
     agent = AgentLoop(
-        provider=_WriteThenStopProvider(), workspace=workspace,
-        model="stub", max_iterations=5, restrict_to_workspace=True,
+        provider=_WriteThenStopProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=5,
+        restrict_to_workspace=True,
         runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
     final, _used, _msgs, outcome = await agent._run_agent_loop(
@@ -228,8 +261,11 @@ async def test_completed_status_and_snapshot(workspace):
 
 async def test_error_status(workspace):
     agent = AgentLoop(
-        provider=_ErrorProvider(), workspace=workspace,
-        model="stub", max_iterations=5, restrict_to_workspace=True,
+        provider=_ErrorProvider(),
+        workspace=workspace,
+        model="stub",
+        max_iterations=5,
+        restrict_to_workspace=True,
         runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always")),
     )
     _final, _used, _msgs, outcome = await agent._run_agent_loop(
@@ -286,10 +322,15 @@ def test_recovery_block_injects_into_list_content(workspace):
     leading text block."""
     agent = _loop_agent(workspace, checkpoint_enabled=True)
     agent._pending_recovery["s"] = {"checkpoint_id": "cid9", "files": ["a.py"]}
-    messages = [{"role": "user", "content": [
-        {"type": "text", "text": "hi"},
-        {"type": "image_url", "image_url": {"url": "data:..."}},
-    ]}]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hi"},
+                {"type": "image_url", "image_url": {"url": "data:..."}},
+            ],
+        }
+    ]
     agent._inject_recovery_block("s", messages)
     content = messages[-1]["content"]
     assert isinstance(content, list)
@@ -331,12 +372,17 @@ async def test_recovery_flows_interrupt_to_next_assembly(workspace):
     # Turn 2 — real assembly must carry the recovery notice.
     session = agent.sessions.get_or_create(key)
     messages = await agent._assemble_context_messages(
-        session=session, session_key=key, current_message="continue",
+        session=session,
+        session_key=key,
+        current_message="continue",
     )
     last_user = messages[-1]
     assert last_user["role"] == "user"
-    text = last_user["content"] if isinstance(last_user["content"], str) else \
-        next(b["text"] for b in last_user["content"] if b.get("type") == "text")
+    text = (
+        last_user["content"]
+        if isinstance(last_user["content"], str)
+        else next(b["text"] for b in last_user["content"] if b.get("type") == "text")
+    )
     assert "interrupted" in text.lower()
     assert "continue" in text
 
@@ -349,13 +395,17 @@ async def test_recovery_consumed_once(workspace):
     session = agent.sessions.get_or_create(key)
 
     m1 = await agent._assemble_context_messages(
-        session=session, session_key=key, current_message="first",
+        session=session,
+        session_key=key,
+        current_message="first",
     )
     t1 = m1[-1]["content"]
     assert "interrupted" in (t1 if isinstance(t1, str) else str(t1)).lower()
 
     m2 = await agent._assemble_context_messages(
-        session=session, session_key=key, current_message="second",
+        session=session,
+        session_key=key,
+        current_message="second",
     )
     t2 = m2[-1]["content"]
     assert "interrupted" not in (t2 if isinstance(t2, str) else str(t2)).lower()

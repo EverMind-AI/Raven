@@ -34,7 +34,7 @@ proactivity_eval/
 | Agent | Version / 包版本 | Date |
 |---|---|---|
 | **Raven** | `raven 0.1.0` | 2026-04-28 |
-| **Hermes** | `hermes-agent 0.10.0` | 2026-04-18 | 
+| **Hermes** | `hermes-agent 0.10.0` | 2026-04-18 |
 | **OpenClaw** | `openclaw 2026.2.1` | 2026-02-03 |
 
 ### 结果
@@ -129,4 +129,3 @@ uv run python benchmarks/proactivity_eval/runners/longrun_scorecard.py \
 ```
 
 详见 `runners/README.md`。
-

@@ -16,7 +16,6 @@ from raven.proactive_engine.sentinel.types import (
     TaskOption,
 )
 
-
 _NOW = datetime(2026, 5, 8, 9, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
 
@@ -119,13 +118,22 @@ async def test_reply_whitespace_only_prompt_returns_error():
 @pytest.mark.asyncio
 async def test_routine_confirm_upgrades_existing_routine(tmp_path: Path):
     routine_store = RoutineStore(tmp_path / "routines.json")
-    routine_store.merge([
-        Routine(id="dow1-h09-meeting", pattern="Tuesday 09:00 — meeting",
-                day_of_week=1, time_slot=(9, 12), occurrence_count=4),
-    ], now_ms=_NOW_MS - 1000)
+    routine_store.merge(
+        [
+            Routine(
+                id="dow1-h09-meeting",
+                pattern="Tuesday 09:00 — meeting",
+                day_of_week=1,
+                time_slot=(9, 12),
+                occurrence_count=4,
+            ),
+        ],
+        now_ms=_NOW_MS - 1000,
+    )
 
     executor = ActionExecutor(
-        routine_store=routine_store, now_fn=lambda: _NOW,
+        routine_store=routine_store,
+        now_fn=lambda: _NOW,
     )
     option = _option(
         type="routine_confirm",
@@ -160,7 +168,8 @@ async def test_routine_confirm_no_routine_store_errors(tmp_path: Path):
 async def test_routine_confirm_unknown_routine_errors(tmp_path: Path):
     routine_store = RoutineStore(tmp_path / "routines.json")
     executor = ActionExecutor(
-        routine_store=routine_store, now_fn=lambda: _NOW,
+        routine_store=routine_store,
+        now_fn=lambda: _NOW,
     )
     option = _option(
         type="routine_confirm",
@@ -175,10 +184,18 @@ async def test_routine_confirm_unknown_routine_errors(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_routine_confirm_with_make_cron_creates_job(tmp_path: Path):
     routine_store = RoutineStore(tmp_path / "routines.json")
-    routine_store.merge([
-        Routine(id="dow1-h09-meeting", pattern="Tuesday 09:00 — meeting",
-                day_of_week=1, time_slot=(9, 12), occurrence_count=4),
-    ], now_ms=_NOW_MS - 1000)
+    routine_store.merge(
+        [
+            Routine(
+                id="dow1-h09-meeting",
+                pattern="Tuesday 09:00 — meeting",
+                day_of_week=1,
+                time_slot=(9, 12),
+                occurrence_count=4,
+            ),
+        ],
+        now_ms=_NOW_MS - 1000,
+    )
 
     cron_service = CronService(tmp_path / "jobs.json")
 
@@ -212,9 +229,12 @@ async def test_routine_confirm_with_make_cron_creates_job(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_routine_confirm_with_make_cron_but_missing_expr(tmp_path: Path):
     routine_store = RoutineStore(tmp_path / "routines.json")
-    routine_store.merge([
-        Routine(id="dow1-h09-meeting", pattern="x", occurrence_count=4),
-    ], now_ms=_NOW_MS - 1000)
+    routine_store.merge(
+        [
+            Routine(id="dow1-h09-meeting", pattern="x", occurrence_count=4),
+        ],
+        now_ms=_NOW_MS - 1000,
+    )
 
     executor = ActionExecutor(
         routine_store=routine_store,
@@ -246,8 +266,7 @@ async def test_tool_exec_kind_unconfigured_errors():
     silently no-op'ing. (Full happy-path coverage lives in
     test_action_executor_tool_spawn.py.)"""
     executor = ActionExecutor(now_fn=lambda: _NOW)
-    option = _option(exec_kind="tool",
-                     exec_payload={"tool": "write_file", "args": {}})
+    option = _option(exec_kind="tool", exec_payload={"tool": "write_file", "args": {}})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "tool_registry" in result.error.lower()
@@ -259,8 +278,7 @@ async def test_spawn_exec_kind_unconfigured_errors():
     exec_kind=spawn errors clearly. Full happy-path lives in
     test_action_executor_tool_spawn.py."""
     executor = ActionExecutor(now_fn=lambda: _NOW)
-    option = _option(exec_kind="spawn",
-                     exec_payload={"task_description": "research X"})
+    option = _option(exec_kind="spawn", exec_payload={"task_description": "research X"})
     result = await executor.execute(option, decision=_decision())
     assert result.status == "error"
     assert "subagent_manager" in result.error.lower()

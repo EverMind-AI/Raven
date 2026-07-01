@@ -22,29 +22,29 @@ if TYPE_CHECKING:
 # ── 23 categories → task IDs ───────────────────────────────────────────────────
 
 TASK_CATEGORIES: dict[TaskCategory, str] = {
-    "sanity":          "task_00_sanity",
-    "calendar":        "task_01_calendar",
-    "stock":           "task_02_stock",
-    "blog":            "task_03_blog",
-    "tool_use":        "task_04_weather",
-    "summary":         "task_05_summary",
-    "events":          "task_06_events",
-    "email":           "task_07_email",
-    "memory":          "task_08_memory",
-    "files":           "task_09_files",
-    "workflow":        "task_10_workflow",
-    "clawdhub":        "task_11_clawdhub",
-    "skill_search":    "task_12_skill_search",
-    "image_gen":       "task_13_image_gen",
-    "humanizer":       "task_14_humanizer",
-    "daily_summary":   "task_15_daily_summary",
-    "email_triage":    "task_16_email_triage",
-    "email_search":    "task_17_email_search",
+    "sanity": "task_00_sanity",
+    "calendar": "task_01_calendar",
+    "stock": "task_02_stock",
+    "blog": "task_03_blog",
+    "tool_use": "task_04_weather",
+    "summary": "task_05_summary",
+    "events": "task_06_events",
+    "email": "task_07_email",
+    "memory": "task_08_memory",
+    "files": "task_09_files",
+    "workflow": "task_10_workflow",
+    "clawdhub": "task_11_clawdhub",
+    "skill_search": "task_12_skill_search",
+    "image_gen": "task_13_image_gen",
+    "humanizer": "task_14_humanizer",
+    "daily_summary": "task_15_daily_summary",
+    "email_triage": "task_16_email_triage",
+    "email_search": "task_17_email_search",
     "market_research": "task_18_market_research",
-    "spreadsheet":     "task_19_spreadsheet_summary",
-    "eli5_pdf":        "task_20_eli5_pdf_summary",
-    "comprehension":   "task_21_openclaw_comprehension",
-    "second_brain":    "task_22_second_brain",
+    "spreadsheet": "task_19_spreadsheet_summary",
+    "eli5_pdf": "task_20_eli5_pdf_summary",
+    "comprehension": "task_21_openclaw_comprehension",
+    "second_brain": "task_22_second_brain",
 }
 
 _TASK_TO_CATEGORY: dict[str, TaskCategory] = {v: k for k, v in TASK_CATEGORIES.items()}
@@ -90,6 +90,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 # ── Pre-computed embeddings ────────────────────────────────────────────────────
 
+
 def _load_embedding_data() -> list[dict] | None:
     """Load pre-computed task embeddings from embedding_data.json."""
     if not _EMBEDDING_DATA_PATH.exists():
@@ -103,6 +104,7 @@ def _load_embedding_data() -> list[dict] | None:
 
 
 # ── Classifier ─────────────────────────────────────────────────────────────────
+
 
 class PromptClassifier:
     """Classify a prompt into one of 23 PinchBench task categories."""
@@ -124,8 +126,7 @@ class PromptClassifier:
         tasks = self._get_tasks()
         if not tasks:
             logger.warning(
-                "Embedding data missing — run `python -m raven.routing.generate_embeddings`. "
-                "Falling back to 'sanity'."
+                "Embedding data missing — run `python -m raven.routing.generate_embeddings`. Falling back to 'sanity'."
             )
             return ClassificationResult(category="sanity", similarity=0.0)
 

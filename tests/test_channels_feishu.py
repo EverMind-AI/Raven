@@ -14,8 +14,12 @@ from raven.channels.adapters.feishu.channel import FeishuChannel
 
 def _channel(group_policy="open"):
     cfg = SimpleNamespace(
-        app_id="a", app_secret="s", encrypt_key="", verification_token="",
-        group_policy=group_policy, react_emoji="THUMBSUP",
+        app_id="a",
+        app_secret="s",
+        encrypt_key="",
+        verification_token="",
+        group_policy=group_policy,
+        react_emoji="THUMBSUP",
     )
     return FeishuChannel(cfg)
 
@@ -31,10 +35,16 @@ def test_extract_post_direct():
 
 
 def test_extract_post_localized_and_image():
-    payload = {"zh_cn": {"content": [[
-        {"tag": "text", "text": "hi"},
-        {"tag": "img", "image_key": "img_k1"},
-    ]]}}
+    payload = {
+        "zh_cn": {
+            "content": [
+                [
+                    {"tag": "text", "text": "hi"},
+                    {"tag": "img", "image_key": "img_k1"},
+                ]
+            ]
+        }
+    }
     text, images = content.extract_post(payload)
     assert "hi" in text
     assert images == ["img_k1"]
@@ -98,6 +108,7 @@ def test_detect_format(text, fmt):
 
 def test_post_payload_renders_link():
     import json
+
     payload = json.loads(cards.post_payload("see [docs](http://u) now"))
     tags = [el["tag"] for para in payload["zh_cn"]["content"] for el in para]
     assert "a" in tags and "text" in tags
@@ -190,7 +201,7 @@ def test_on_message_disallowed_sender_skips_react_and_download():
     """Denied sender is rejected before _react (network) and _extract (media
     download), not merely dropped at the central intake."""
     ch = _channel()
-    ch.config.allow_from = []          # deny all
+    ch.config.allow_from = []  # deny all
     ch._react = AsyncMock()
     ch._extract = AsyncMock()
     ch.intake.publish = AsyncMock()
@@ -232,6 +243,7 @@ def test_send_media_uploads_and_posts_file_key():
     ch._upload_file_sync = MagicMock(return_value="file_k1")
     ch._send_text = AsyncMock()
     import os
+
     monkey = os.path.isfile
     os.path.isfile = lambda _p: True
     try:
@@ -249,6 +261,7 @@ def test_send_reraises_transient_for_manager_retry():
     manager retry can back off; lark business errors stay swallowed."""
     import pytest
     import requests
+
     ch = _channel()
     ch._client = object()
     ch._send_text = AsyncMock(side_effect=requests.exceptions.ConnectionError("down"))
@@ -280,7 +293,7 @@ def test_stop_blocks_zombie_inbound(monkeypatch):
     assert len(calls) == 1
     ch._running = False
     ch._on_message_sync(MagicMock())
-    assert len(calls) == 1   # zombie delivery dropped
+    assert len(calls) == 1  # zombie delivery dropped
 
 
 # ── contract conformance ───────────────────────────────────────────────
@@ -289,9 +302,10 @@ def test_stop_blocks_zombie_inbound(monkeypatch):
 def test_feishu_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _channel()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_feishu_spec_import_is_cheap():
@@ -299,6 +313,7 @@ def test_feishu_spec_import_is_cheap():
     SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.feishu.spec as s;"
         "assert 'lark_oapi' not in sys.modules, 'spec import pulled in lark_oapi';"

@@ -65,14 +65,10 @@ class StrategyRegistry:
             messages, tools, model = await s.before_llm_call(messages, tools, model)
         return messages, tools, model
 
-    async def after_llm_call(
-        self, response: dict[str, Any], usage: UsageSnapshot
-    ) -> None:
+    async def after_llm_call(self, response: dict[str, Any], usage: UsageSnapshot) -> None:
         """Run each strategy's after-call hook. Errors are swallowed + logged."""
         for s in self._strategies:
             try:
                 await s.after_llm_call(response, usage)
             except Exception as e:
-                logger.warning(
-                    "TokenStrategy '{}' after_llm_call failed: {}", s.name, e
-                )
+                logger.warning("TokenStrategy '{}' after_llm_call failed: {}", s.name, e)

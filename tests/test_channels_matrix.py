@@ -69,19 +69,23 @@ def test_build_text_content_plain_vs_formatted():
 
 
 def test_build_attachment_content_kind_and_url():
-    plain = content.build_attachment_content(
-        filename="p.png", mime="image/png", size_bytes=10, mxc_url="mxc://h/a"
-    )
+    plain = content.build_attachment_content(filename="p.png", mime="image/png", size_bytes=10, mxc_url="mxc://h/a")
     assert plain["msgtype"] == "m.image"
     assert plain["url"] == "mxc://h/a" and "file" not in plain
-    assert content.build_attachment_content(
-        filename="f.bin", mime="application/octet-stream", size_bytes=1, mxc_url="mxc://h/b"
-    )["msgtype"] == "m.file"
+    assert (
+        content.build_attachment_content(
+            filename="f.bin", mime="application/octet-stream", size_bytes=1, mxc_url="mxc://h/b"
+        )["msgtype"]
+        == "m.file"
+    )
 
 
 def test_build_attachment_content_encrypted():
     enc = content.build_attachment_content(
-        filename="a.ogg", mime="audio/ogg", size_bytes=5, mxc_url="mxc://h/c",
+        filename="a.ogg",
+        mime="audio/ogg",
+        size_bytes=5,
+        mxc_url="mxc://h/c",
         encryption_info={"key": {"k": "x"}},
     )
     assert enc["msgtype"] == "m.audio"
@@ -91,8 +95,10 @@ def test_build_attachment_content_encrypted():
 def test_build_thread_relates_to():
     rel = content.build_thread_relates_to({"thread_root_event_id": "$r", "thread_reply_to_event_id": "$y"})
     assert rel == {
-        "rel_type": "m.thread", "event_id": "$r",
-        "m.in_reply_to": {"event_id": "$y"}, "is_falling_back": True,
+        "rel_type": "m.thread",
+        "event_id": "$r",
+        "m.in_reply_to": {"event_id": "$y"},
+        "is_falling_back": True,
     }
     assert content.build_thread_relates_to(None) is None
     assert content.build_thread_relates_to({"thread_root_event_id": ""}) is None
@@ -108,9 +114,7 @@ def test_event_content_and_thread():
     )
     assert content.event_content(evt)["m.relates_to"]["event_id"] == "$root"
     assert content.thread_root_id(evt) == "$root"
-    assert content.thread_metadata(evt) == {
-        "thread_root_event_id": "$root", "thread_reply_to_event_id": "$evt"
-    }
+    assert content.thread_metadata(evt) == {"thread_root_event_id": "$root", "thread_reply_to_event_id": "$evt"}
 
 
 def test_thread_root_id_non_thread():
@@ -184,8 +188,6 @@ def test_is_bot_mentioned():
 def test_collect_media_candidates_dedup_and_order():
     out = content.collect_media_candidates(["/tmp/a", "/tmp/a", "  ", "", "/tmp/b"])
     assert [p.name for p in out] == ["a", "b"]
-
-
 
 
 # ── channel decision logic ────────────────────────────────────────────
@@ -283,9 +285,10 @@ async def test_send_noop_without_client():
 def test_matrix_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = _channel()
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_matrix_spec_import_is_cheap():
@@ -293,6 +296,7 @@ def test_matrix_spec_import_is_cheap():
     SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.matrix.spec as s;"
         "assert 'nio' not in sys.modules, 'spec import pulled in matrix-nio';"

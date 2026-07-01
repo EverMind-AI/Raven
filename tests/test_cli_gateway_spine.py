@@ -114,8 +114,8 @@ async def test_proactive_reply_reaches_the_channel_via_outlet():
         await teardown()
 
     assert len(ch.sent) == 1
-    assert ch.sent[0][0] == "c9"          # chat_id (channel routing is by source.channel)
-    assert ch.sent[0][1] == "reminder!"   # content
+    assert ch.sent[0][0] == "c9"  # chat_id (channel routing is by source.channel)
+    assert ch.sent[0][1] == "reminder!"  # content
 
 
 async def test_readback_captures_cron_reply_text():
@@ -142,9 +142,7 @@ async def test_readback_skips_non_readback_origin():
     scheduler, hub, readback_texts, _sources, teardown = build_gateway(
         _ReplyAgent([Text(content="hello")]), {"telegram": ch}
     )
-    user_req = TurnRequest(
-        origin=Origin.USER, source=_src("telegram", "u1"), text="hi", conversation="telegram:u1"
-    )
+    user_req = TurnRequest(origin=Origin.USER, source=_src("telegram", "u1"), text="hi", conversation="telegram:u1")
     try:
         await scheduler.submit(user_req).result()
         await hub.wait_idle("telegram")
@@ -244,7 +242,7 @@ async def test_gateway_sink_sends_error_reply_on_failure():
     # A non-cancelled failure delivers a user-visible error reply to the channel,
     # and still fires on_turn_complete (bus _dispatch except + finally parity).
     assert len(ch.sent) == 1 and ch.sent[0][1] == "Sorry, I encountered an error."
-    assert ch.sent[0][0] == "c9"   # chat_id (channel routing is by source.channel)
+    assert ch.sent[0][0] == "c9"  # chat_id (channel routing is by source.channel)
     assert agent.notify_count >= 1
 
 

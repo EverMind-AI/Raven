@@ -31,7 +31,6 @@ from raven.config.loader import get_config_path
 from raven.config.schema import ProvidersConfig
 from raven.providers.registry import ProviderSpec, find_by_name
 
-
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -86,14 +85,10 @@ def _provider_schema_cls(name: str) -> type[BaseModel]:
     """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
     field = ProvidersConfig.model_fields.get(name)
     if field is None:
-        raise KeyError(
-            f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}"
-        )
+        raise KeyError(f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}")
     ann = _unwrap_optional(field.annotation)
     if not _is_model_class(ann):
-        raise KeyError(
-            f"'{name}' is not a provider section. Available providers: {sorted(_provider_names())}"
-        )
+        raise KeyError(f"'{name}' is not a provider section. Available providers: {sorted(_provider_names())}")
     return ann
 
 
@@ -101,10 +96,7 @@ def _provider_spec(name: str) -> ProviderSpec:
     """Look up ``ProviderSpec`` from the registry (raises if absent)."""
     spec = find_by_name(name)
     if spec is None:
-        raise KeyError(
-            f"No registry entry for provider '{name}'. Add a ProviderSpec to "
-            f"raven/providers/registry.py."
-        )
+        raise KeyError(f"No registry entry for provider '{name}'. Add a ProviderSpec to raven/providers/registry.py.")
     return spec
 
 
@@ -259,9 +251,7 @@ def _flatten_instance(instance: BaseModel, prefix: str = "") -> dict[str, Any]:
     return out
 
 
-def _walk_nested_path(
-    model_cls: type[BaseModel], dotted_key: str
-) -> tuple[type[BaseModel], str]:
+def _walk_nested_path(model_cls: type[BaseModel], dotted_key: str) -> tuple[type[BaseModel], str]:
     """Walk ``a.b.c`` through nested ``BaseModel`` classes."""
     segs = dotted_key.split(".")
     cls: type[BaseModel] = model_cls
@@ -465,8 +455,7 @@ def set_provider_fields(
     unknown = [k for k in fields if k not in field_specs]
     if unknown:
         raise KeyError(
-            f"Unknown field(s) {unknown} for provider '{name}'. "
-            f"Available fields: {sorted(field_specs.keys())}"
+            f"Unknown field(s) {unknown} for provider '{name}'. Available fields: {sorted(field_specs.keys())}"
         )
 
     if spec.is_oauth:
@@ -682,7 +671,7 @@ def test_provider(
                 "elapsed_ms": 0,
                 "http_status": None,
                 "models_count": None,
-            "model_ids": None,
+                "model_ids": None,
                 "error": "oauth_cli_kit not installed",
             }
         try:
@@ -694,7 +683,7 @@ def test_provider(
                 "elapsed_ms": 0,
                 "http_status": None,
                 "models_count": None,
-            "model_ids": None,
+                "model_ids": None,
                 "error": str(exc),
             }
         if not (token and getattr(token, "access", None)):
@@ -704,7 +693,7 @@ def test_provider(
                 "elapsed_ms": 0,
                 "http_status": None,
                 "models_count": None,
-            "model_ids": None,
+                "model_ids": None,
                 "error": "no OAuth token stored",
             }
         api_key = token.access

@@ -67,9 +67,7 @@ async def test_version_returns_three_fields():
     assert "server_version" in result
     assert "schema_version" in result
     assert "raven_version" in result
-    assert all(
-        isinstance(result[k], str) for k in ("server_version", "schema_version", "raven_version")
-    )
+    assert all(isinstance(result[k], str) for k in ("server_version", "schema_version", "raven_version"))
 
 
 # ---------------------------------------------------------------------------

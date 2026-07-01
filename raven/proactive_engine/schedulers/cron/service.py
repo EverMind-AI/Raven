@@ -20,7 +20,6 @@ from loguru import logger
 
 from raven.proactive_engine.schedulers.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
 
-
 # Stale-claim TTL — if a claim is older than this, another process may steal
 # it (the original process likely crashed mid-job).
 _CLAIM_TTL_MS = 30 * 60 * 1000
@@ -51,6 +50,7 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
             from zoneinfo import ZoneInfo
 
             from croniter import croniter
+
             # Use caller-provided reference time for deterministic scheduling
             base_time = now_ms / 1000
             tz = ZoneInfo(schedule.tz) if schedule.tz else datetime.now().astimezone().tzinfo
@@ -166,39 +166,41 @@ class CronService:
                 data = json.loads(self.store_path.read_text(encoding="utf-8"))
                 jobs = []
                 for j in data.get("jobs", []):
-                    jobs.append(CronJob(
-                        id=j["id"],
-                        name=j["name"],
-                        enabled=j.get("enabled", True),
-                        schedule=CronSchedule(
-                            kind=j["schedule"]["kind"],
-                            at_ms=j["schedule"].get("atMs"),
-                            every_ms=j["schedule"].get("everyMs"),
-                            expr=j["schedule"].get("expr"),
-                            tz=j["schedule"].get("tz"),
-                        ),
-                        payload=CronPayload(
-                            kind=j["payload"].get("kind", "agent_turn"),
-                            message=j["payload"].get("message", ""),
-                            deliver=j["payload"].get("deliver", False),
-                            channel=j["payload"].get("channel"),
-                            to=j["payload"].get("to"),
-                            topic_tag=j["payload"].get("topicTag"),
-                        ),
-                        state=CronJobState(
-                            next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
-                            last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
-                            last_status=j.get("state", {}).get("lastStatus"),
-                            last_error=j.get("state", {}).get("lastError"),
-                            claimed_by_pid=j.get("state", {}).get("claimedByPid"),
-                            claimed_at_ms=j.get("state", {}).get("claimedAtMs"),
-                            silent_fire_count=j.get("state", {}).get("silentFireCount", 0),
-                        ),
-                        created_at_ms=j.get("createdAtMs", 0),
-                        updated_at_ms=j.get("updatedAtMs", 0),
-                        delete_after_run=j.get("deleteAfterRun", False),
-                        silent_fire_limit=j.get("silentFireLimit", 12),
-                    ))
+                    jobs.append(
+                        CronJob(
+                            id=j["id"],
+                            name=j["name"],
+                            enabled=j.get("enabled", True),
+                            schedule=CronSchedule(
+                                kind=j["schedule"]["kind"],
+                                at_ms=j["schedule"].get("atMs"),
+                                every_ms=j["schedule"].get("everyMs"),
+                                expr=j["schedule"].get("expr"),
+                                tz=j["schedule"].get("tz"),
+                            ),
+                            payload=CronPayload(
+                                kind=j["payload"].get("kind", "agent_turn"),
+                                message=j["payload"].get("message", ""),
+                                deliver=j["payload"].get("deliver", False),
+                                channel=j["payload"].get("channel"),
+                                to=j["payload"].get("to"),
+                                topic_tag=j["payload"].get("topicTag"),
+                            ),
+                            state=CronJobState(
+                                next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
+                                last_run_at_ms=j.get("state", {}).get("lastRunAtMs"),
+                                last_status=j.get("state", {}).get("lastStatus"),
+                                last_error=j.get("state", {}).get("lastError"),
+                                claimed_by_pid=j.get("state", {}).get("claimedByPid"),
+                                claimed_at_ms=j.get("state", {}).get("claimedAtMs"),
+                                silent_fire_count=j.get("state", {}).get("silentFireCount", 0),
+                            ),
+                            created_at_ms=j.get("createdAtMs", 0),
+                            updated_at_ms=j.get("updatedAtMs", 0),
+                            delete_after_run=j.get("deleteAfterRun", False),
+                            silent_fire_limit=j.get("silentFireLimit", 12),
+                        )
+                    )
                 self._store = CronStore(jobs=jobs)
             except Exception as e:
                 logger.warning("Failed to load cron store: {}", e)
@@ -252,7 +254,7 @@ class CronService:
                     "silentFireLimit": j.silent_fire_limit,
                 }
                 for j in self._store.jobs
-            ]
+            ],
         }
 
         # Atomic write (temp + rename) so concurrent readers never see a
@@ -309,15 +311,15 @@ class CronService:
         if dropped:
             logger.warning(
                 "Cron: dropped {} past-due one-shot reminder(s) on startup: {}",
-                len(dropped), "; ".join(dropped),
+                len(dropped),
+                "; ".join(dropped),
             )
 
     def _get_next_wake_ms(self) -> int | None:
         """Get the earliest next run time across all jobs."""
         if not self._store:
             return None
-        times = [j.state.next_run_at_ms for j in self._store.jobs
-                 if j.enabled and j.state.next_run_at_ms]
+        times = [j.state.next_run_at_ms for j in self._store.jobs if j.enabled and j.state.next_run_at_ms]
         return min(times) if times else None
 
     def _arm_timer(self) -> None:
@@ -475,9 +477,11 @@ class CronService:
                     j.state.next_run_at_ms = None
                     disabled = True
                     logger.warning(
-                        "Cron: auto-disabled job '{}' ({}) — {} silent fires "
-                        "without user activity (limit={})",
-                        j.name, j.id, j.state.silent_fire_count, limit,
+                        "Cron: auto-disabled job '{}' ({}) — {} silent fires without user activity (limit={})",
+                        j.name,
+                        j.id,
+                        j.state.silent_fire_count,
+                        limit,
                     )
                 self._save_store()
                 return disabled
@@ -509,7 +513,7 @@ class CronService:
         """List all jobs."""
         store = self._load_store()
         jobs = store.jobs if include_disabled else [j for j in store.jobs if j.enabled]
-        return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float('inf'))
+        return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float("inf"))
 
     def add_job(
         self,
@@ -581,7 +585,11 @@ class CronService:
                         "Cron: topic_tag dedup — existing job '{}' ({}) "
                         "has topic_tag='{}'; updating message + schedule "
                         "in place (kinds={}/{})",
-                        j.name, j.id, topic_tag, j.schedule.kind, schedule.kind,
+                        j.name,
+                        j.id,
+                        topic_tag,
+                        j.schedule.kind,
+                        schedule.kind,
                     )
                     j.payload.message = message
                     j.payload.deliver = deliver
@@ -610,7 +618,10 @@ class CronService:
                     "Cron: skipped duplicate add — existing job '{}' "
                     "({}) has identical message (same channel/to, "
                     "kinds={}/{})",
-                    j.name, j.id, j.schedule.kind, schedule.kind,
+                    j.name,
+                    j.id,
+                    j.schedule.kind,
+                    schedule.kind,
                 )
                 self._arm_timer()
                 return j
@@ -637,7 +648,10 @@ class CronService:
                             "Cron: skipped duplicate add — existing job '{}' "
                             "({}) fires within 15min of new request "
                             "(same channel/to, kinds={}/{})",
-                            j.name, j.id, j.schedule.kind, schedule.kind,
+                            j.name,
+                            j.id,
+                            j.schedule.kind,
+                            schedule.kind,
                         )
                         self._arm_timer()
                         return j
@@ -657,9 +671,9 @@ class CronService:
                     existing.state.next_run_at_ms = _compute_next_run(schedule, now)
                 self._save_store()
                 logger.info(
-                    "Cron: updated existing job '{}' ({}) with new message "
-                    "(dedup on schedule+channel+to)",
-                    existing.name, existing.id,
+                    "Cron: updated existing job '{}' ({}) with new message (dedup on schedule+channel+to)",
+                    existing.name,
+                    existing.id,
                 )
                 self._arm_timer()
                 return existing

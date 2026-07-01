@@ -70,6 +70,7 @@ def policy(clock):
 # ---------------------------------------------------------------------------
 # Basic contract
 
+
 def test_skip_action_always_denied(policy):
     r = policy.check("skip", "s1", "any", "low")
     assert r.verdict == "deny"
@@ -92,6 +93,7 @@ def test_record_fired_consumes_budget(policy, clock):
 
 # ---------------------------------------------------------------------------
 # Quotas
+
 
 def test_hour_quota_blocks_fourth_nudge(policy, clock):
     # Fire 3 different sessions so we don't hit session cooldown.
@@ -137,6 +139,7 @@ def test_high_priority_bypasses_hour_quota(policy, clock):
 # ---------------------------------------------------------------------------
 # Session cooldown
 
+
 def test_session_cooldown_blocks_rapid_fire(policy, clock):
     policy.record_fired("nudge", "s1", "m1")
     clock.advance(60)
@@ -160,6 +163,7 @@ def test_high_priority_cannot_bypass_session_cooldown(policy, clock):
 
 # ---------------------------------------------------------------------------
 # Quiet hours
+
 
 def test_quiet_hours_low_priority_denied():
     clock = Clock(datetime(2026, 4, 21, 23, 30, 0))  # 23:30, quiet hours (23..7)
@@ -219,6 +223,7 @@ def test_quiet_hours_end_boundary_non_wrap_window():
 # ---------------------------------------------------------------------------
 # Dismissal cooldown
 
+
 def test_dismissal_blocks_until_cooldown_passes(policy, clock):
     policy.record_dismissed("s1")
     clock.advance(100)
@@ -237,6 +242,7 @@ def test_dismissal_only_affects_one_session(policy, clock):
 
 # ---------------------------------------------------------------------------
 # Content dedup
+
 
 def test_identical_content_deduped(policy, clock):
     policy.record_fired("nudge", "s1", "same content")
@@ -266,6 +272,7 @@ def test_dedup_expires_after_window(clock):
 # ---------------------------------------------------------------------------
 # snapshot_state
 
+
 def test_snapshot_state_reports_usage(policy, clock):
     policy.record_fired("nudge", "s1", "m1")
     clock.advance(60)
@@ -286,6 +293,7 @@ def test_snapshot_state_quiet_hours():
 # ---------------------------------------------------------------------------
 # Purity: check() must not mutate
 
+
 def test_check_is_pure(policy, clock):
     before = policy.snapshot_state()
     for _ in range(5):
@@ -301,6 +309,7 @@ def test_check_is_pure(policy, clock):
 # leaving moderate-rejection cases stuck near 1.0× and producing longrun
 # restraint = 1/21. New tiers move the action band into the realistic
 # 0.3-0.5 acceptance range.
+
 
 def test_apply_adaptive_tuning_loosens_at_high_acceptance(policy):
     policy.apply_adaptive_tuning(0.95, dispatched_count=20)
@@ -374,13 +383,18 @@ def test_warmup_relaxes_to_neutral(clock):
 # ---------------------------------------------------------------------------
 # L1: high_priority loses DND bypass when recent acceptance is low
 
+
 def test_high_priority_keeps_dnd_bypass_when_acceptance_high():
     """Default behavior unchanged when acceptance signal absent / high."""
     clock = Clock(datetime(2026, 4, 21, 23, 30, 0))  # quiet hours
     p = NudgePolicy(_cfg(), now_fn=clock)
     r = p.check(
-        "nudge", "s1", "msg", "high",
-        recent_acceptance=0.8, recent_dispatched=10,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        recent_acceptance=0.8,
+        recent_dispatched=10,
     )
     assert r.verdict == "allow"
 
@@ -398,8 +412,12 @@ def test_high_priority_loses_dnd_bypass_when_low_acceptance():
     clock = Clock(datetime(2026, 4, 21, 23, 30, 0))
     p = NudgePolicy(_cfg(), now_fn=clock)
     r = p.check(
-        "nudge", "s1", "msg", "high",
-        recent_acceptance=0.2, recent_dispatched=10,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        recent_acceptance=0.2,
+        recent_dispatched=10,
     )
     assert r.verdict == "deny"
     assert r.reason == "quiet_hours"
@@ -410,8 +428,12 @@ def test_high_priority_keeps_bypass_when_volume_too_low():
     clock = Clock(datetime(2026, 4, 21, 23, 30, 0))
     p = NudgePolicy(_cfg(), now_fn=clock)
     r = p.check(
-        "nudge", "s1", "msg", "high",
-        recent_acceptance=0.2, recent_dispatched=2,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        recent_acceptance=0.2,
+        recent_dispatched=2,
     )
     assert r.verdict == "allow"
 
@@ -423,8 +445,12 @@ def test_low_priority_unaffected_by_acceptance_signal():
     # High acceptance shouldn't suddenly let low bypass DND — that's the
     # bypass policy's job, not the feedback signal's.
     r = p.check(
-        "nudge", "s1", "msg", "low",
-        recent_acceptance=0.9, recent_dispatched=20,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        recent_acceptance=0.9,
+        recent_dispatched=20,
     )
     assert r.verdict == "deny"
 
@@ -432,11 +458,16 @@ def test_low_priority_unaffected_by_acceptance_signal():
 # ---------------------------------------------------------------------------
 # L5: topic-level reject hard cooldown (24h)
 
+
 def test_topic_reject_count_under_threshold_allows(policy):
     """1-2 rejects on a topic still allow — gate triggers at 3."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="medication", topic_reject_count=2,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="medication",
+        topic_reject_count=2,
     )
     assert r.verdict == "allow"
 
@@ -444,8 +475,12 @@ def test_topic_reject_count_under_threshold_allows(policy):
 def test_topic_reject_count_at_threshold_denies(policy):
     """3rd reject in 24h on same topic → deny regardless of priority."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="medication", topic_reject_count=3,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="medication",
+        topic_reject_count=3,
     )
     assert r.verdict == "deny"
     assert "topic_rejected_recently" in r.reason
@@ -455,8 +490,12 @@ def test_topic_reject_count_at_threshold_denies(policy):
 def test_topic_reject_high_priority_cannot_bypass(policy):
     """L5 gate is cross-priority — high can't slip through stubborn rejects."""
     r = policy.check(
-        "nudge", "s1", "msg", "high",
-        topic_tag="medication", topic_reject_count=5,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        topic_tag="medication",
+        topic_reject_count=5,
     )
     assert r.verdict == "deny"
     assert "topic_rejected_recently" in r.reason
@@ -465,8 +504,12 @@ def test_topic_reject_high_priority_cannot_bypass(policy):
 def test_topic_reject_zero_count_allows(policy):
     """No history on this topic → no gate."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="exercise", topic_reject_count=0,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="exercise",
+        topic_reject_count=0,
     )
     assert r.verdict == "allow"
 
@@ -476,8 +519,12 @@ def test_topic_reject_isolated_per_topic(policy):
     # Even though we passed reject_count=5, the other topic argument means
     # this call is asking about "exercise"; medication's history isn't here.
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="exercise", topic_reject_count=0,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="exercise",
+        topic_reject_count=0,
     )
     assert r.verdict == "allow"
 
@@ -485,8 +532,12 @@ def test_topic_reject_isolated_per_topic(policy):
 def test_topic_reject_no_topic_tag_ignored(policy):
     """topic_reject_count param without topic_tag is a no-op (defensive)."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag=None, topic_reject_count=10,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag=None,
+        topic_reject_count=10,
     )
     assert r.verdict == "allow"
 
@@ -494,11 +545,16 @@ def test_topic_reject_no_topic_tag_ignored(policy):
 # ---------------------------------------------------------------------------
 # L3: per-topic acceptance gate
 
+
 def test_topic_acceptance_high_allows(policy):
     """Topic with high acceptance flows through normally."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="medication", topic_acceptance=0.85,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="medication",
+        topic_acceptance=0.85,
     )
     assert r.verdict == "allow"
 
@@ -506,8 +562,12 @@ def test_topic_acceptance_high_allows(policy):
 def test_topic_acceptance_low_denies(policy):
     """< 30% acceptance on this topic → deny."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="exercise", topic_acceptance=0.2,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="exercise",
+        topic_acceptance=0.2,
     )
     assert r.verdict == "deny"
     assert "topic_low_acceptance" in r.reason
@@ -517,8 +577,12 @@ def test_topic_acceptance_low_denies(policy):
 def test_topic_acceptance_none_allows(policy):
     """None (insufficient volume) → benefit of the doubt, allow."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="newtopic", topic_acceptance=None,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="newtopic",
+        topic_acceptance=None,
     )
     assert r.verdict == "allow"
 
@@ -526,8 +590,12 @@ def test_topic_acceptance_none_allows(policy):
 def test_topic_acceptance_boundary_at_30pct(policy):
     """Exactly 0.3 → allow (gate fires only on strict <)."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag="t", topic_acceptance=0.3,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag="t",
+        topic_acceptance=0.3,
     )
     assert r.verdict == "allow"
 
@@ -535,8 +603,12 @@ def test_topic_acceptance_boundary_at_30pct(policy):
 def test_topic_acceptance_high_priority_cannot_bypass(policy):
     """L3 gate is content-policy: high cannot bypass low topic acceptance."""
     r = policy.check(
-        "nudge", "s1", "msg", "high",
-        topic_tag="exercise", topic_acceptance=0.1,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        topic_tag="exercise",
+        topic_acceptance=0.1,
     )
     assert r.verdict == "deny"
     assert "topic_low_acceptance" in r.reason
@@ -545,8 +617,12 @@ def test_topic_acceptance_high_priority_cannot_bypass(policy):
 def test_topic_acceptance_no_tag_ignored(policy):
     """No topic_tag → L3 gate doesn't fire (matches L5 behavior)."""
     r = policy.check(
-        "nudge", "s1", "msg", "low",
-        topic_tag=None, topic_acceptance=0.0,
+        "nudge",
+        "s1",
+        "msg",
+        "low",
+        topic_tag=None,
+        topic_acceptance=0.0,
     )
     assert r.verdict == "allow"
 
@@ -562,7 +638,10 @@ class _FakeTracker:
         self._stats = stats or {}
 
     def by_hour_reject_rate(
-        self, *, since_days: int = 14, min_volume: int = 5,
+        self,
+        *,
+        since_days: int = 14,
+        min_volume: int = 5,
     ) -> dict[int, tuple[float, int]]:
         return dict(self._stats)
 
@@ -571,7 +650,8 @@ def test_apply_adaptive_tuning_loads_dynamic_dnd(clock):
     """Tracker reporting hour-12 reject 60% → policy adds 12 to DND set."""
     p = NudgePolicy(_cfg(), now_fn=clock)
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({12: (0.6, 8), 9: (0.1, 10)}),
     )
     assert 12 in p._dynamic_dnd_hours
@@ -583,7 +663,8 @@ def test_dynamic_dnd_blocks_check_in_that_hour():
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))  # not in static quiet hours
     p = NudgePolicy(_cfg(), now_fn=clock)
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({14: (0.7, 10)}),
     )
     r = p.check("nudge", "s1", "msg", "low")
@@ -595,12 +676,14 @@ def test_dynamic_dnd_clears_when_rate_drops(clock):
     """Hour drops below 50% → removed from set on next tune."""
     p = NudgePolicy(_cfg(), now_fn=clock)
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({12: (0.6, 8)}),
     )
     assert 12 in p._dynamic_dnd_hours
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({12: (0.2, 10)}),
     )
     assert 12 not in p._dynamic_dnd_hours
@@ -616,7 +699,8 @@ def test_dynamic_dnd_no_tracker_is_noop(policy):
 def test_snapshot_state_includes_dynamic_dnd(clock):
     p = NudgePolicy(_cfg(), now_fn=clock)
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({12: (0.7, 10), 13: (0.55, 8)}),
     )
     snap = p.snapshot_state()
@@ -630,25 +714,35 @@ def test_dynamic_dnd_high_priority_can_still_bypass_with_signal(clock):
     clock = Clock(datetime(2026, 4, 21, 14, 0, 0))
     p = NudgePolicy(_cfg(), now_fn=clock)
     p.apply_adaptive_tuning(
-        0.8, dispatched_count=10,
+        0.8,
+        dispatched_count=10,
         tracker=_FakeTracker({14: (0.7, 10)}),
     )
     # High priority with strong acceptance signal can override.
     r = p.check(
-        "nudge", "s1", "msg", "high",
-        recent_acceptance=0.9, recent_dispatched=20,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        recent_acceptance=0.9,
+        recent_dispatched=20,
     )
     assert r.verdict == "allow"
     # High priority with poor acceptance signal cannot.
     r2 = p.check(
-        "nudge", "s1", "msg", "high",
-        recent_acceptance=0.2, recent_dispatched=20,
+        "nudge",
+        "s1",
+        "msg",
+        "high",
+        recent_acceptance=0.2,
+        recent_dispatched=20,
     )
     assert r2.verdict == "deny"
 
 
 # ---------------------------------------------------------------------------
 # L6: weekend-aware hour_quota multiplier
+
 
 def test_weekend_quota_default_is_05():
     """Cold-start: _weekend_quota_multiplier == 0.5 (post-tune from 0.3)."""
@@ -763,6 +857,7 @@ def test_snapshot_state_includes_weekend_flag():
 # ---------------------------------------------------------------------------
 # Scorer-window DND: not bypassable by high priority
 
+
 def test_scorer_window_dnd_denies_high_priority():
     """DND windows with ``why`` prefix ``scorer_window:`` represent
     benchmark-rubric quiet zones and must hard-deny even when the caller
@@ -770,16 +865,17 @@ def test_scorer_window_dnd_denies_high_priority():
     lets urgent fires land inside the rubric's quiet hours and tank
     Type-C restraint scores."""
     sw = DndWindow(
-        start_hour=8, start_minute=30,
-        end_hour=10, end_minute=31,
+        start_hour=8,
+        start_minute=30,
+        end_hour=10,
+        end_minute=31,
         why="scorer_window:group_meeting_quiet_hours",
     )
     clock = Clock(datetime(2026, 5, 4, 9, 30, 0))  # Mon, inside the window
     p = NudgePolicy(_cfg(do_not_disturb_windows=[sw]), now_fn=clock)
     p._hour_quota_multiplier = 1.0
 
-    r = p.check("nudge", "s1", "urgent group meeting prep", "high",
-                topic_tag="deadline_group_meeting_505")
+    r = p.check("nudge", "s1", "urgent group meeting prep", "high", topic_tag="deadline_group_meeting_505")
     assert r.verdict == "deny"
     assert "scorer_window" in r.reason
 
@@ -787,8 +883,10 @@ def test_scorer_window_dnd_denies_high_priority():
 def test_scorer_window_dnd_allows_outside_window():
     """Sanity: scorer DND only blocks while ``now`` is inside the window."""
     sw = DndWindow(
-        start_hour=8, start_minute=30,
-        end_hour=10, end_minute=31,
+        start_hour=8,
+        start_minute=30,
+        end_hour=10,
+        end_minute=31,
         why="scorer_window:group_meeting_quiet_hours",
     )
     clock = Clock(datetime(2026, 5, 4, 10, 31, 0))  # just past the end
@@ -804,8 +902,10 @@ def test_non_scorer_dnd_still_bypassable_by_high():
     pre-fix6 behavior: high priority bypasses them. Only the
     scorer_window: branch is the new hard rule."""
     regular = DndWindow(
-        start_hour=8, start_minute=30,
-        end_hour=10, end_minute=31,
+        start_hour=8,
+        start_minute=30,
+        end_hour=10,
+        end_minute=31,
         why="user lunch break",
     )
     clock = Clock(datetime(2026, 5, 4, 9, 30, 0))
@@ -823,19 +923,19 @@ def test_scorer_window_dnd_exclusive_end_boundary():
     the rubric. 15:00 sharp on an 11:00-15:00 window is allowed; 14:59 is
     inside and hard-denied."""
     sw = DndWindow(
-        start_hour=11, start_minute=0,
-        end_hour=15, end_minute=0,
+        start_hour=11,
+        start_minute=0,
+        end_hour=15,
+        end_minute=0,
         why="scorer_window:translation_hours_quiet",
     )
     # End boundary (15:00) is exclusive → outside → allowed.
-    p_end = NudgePolicy(_cfg(do_not_disturb_windows=[sw]),
-                        now_fn=Clock(datetime(2026, 5, 4, 15, 0, 0)))
+    p_end = NudgePolicy(_cfg(do_not_disturb_windows=[sw]), now_fn=Clock(datetime(2026, 5, 4, 15, 0, 0)))
     p_end._hour_quota_multiplier = 1.0
     assert p_end.check("nudge", "s1", "boundary fire", "high").verdict == "allow"
 
     # Just inside (14:59) → hard-denied even for high priority.
-    p_in = NudgePolicy(_cfg(do_not_disturb_windows=[sw]),
-                       now_fn=Clock(datetime(2026, 5, 4, 14, 59, 0)))
+    p_in = NudgePolicy(_cfg(do_not_disturb_windows=[sw]), now_fn=Clock(datetime(2026, 5, 4, 14, 59, 0)))
     p_in._hour_quota_multiplier = 1.0
     r = p_in.check("nudge", "s1", "inside fire", "high")
     assert r.verdict == "deny"
@@ -844,6 +944,7 @@ def test_scorer_window_dnd_exclusive_end_boundary():
 
 # ---------------------------------------------------------------------------
 # fix9: deadline_ canonical exemption + family cap
+
 
 def test_canonicalize_topic_strips_known_suffixes():
     """Sub-event variants (leo_sports_day_prep / _outfit / _sunscreen)

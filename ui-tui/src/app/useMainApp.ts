@@ -7,18 +7,20 @@ import { type ScrollBoxHandle, useApp, useHasSelection, useSelection, useStdout,
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { STARTUP_RESUME_ID } from '../config/env.js'
-import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
-import { SECTION_NAMES, sectionMode } from '../domain/details.js'
-import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
-import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
-import { type GatewayClient } from '../gatewayClientStub.js'
 import type {
   ClarifyRespondResponse,
   ClipboardPasteResponse,
   GatewayEvent,
   TerminalResizeResponse
 } from '../gatewayTypes.js'
+import type { Msg, PanelSection, SlashCatalog } from '../types.js'
+
+import { STARTUP_RESUME_ID } from '../config/env.js'
+import { FULL_RENDER_TAIL_ITEMS, MAX_HISTORY, WHEEL_SCROLL_STEP } from '../config/limits.js'
+import { SECTION_NAMES, sectionMode } from '../domain/details.js'
+import { attachedImageNotice, imageTokenMeta } from '../domain/messages.js'
+import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
+import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
@@ -29,8 +31,6 @@ import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import { terminalParityHints } from '../lib/terminalParity.js'
 import { buildToolTrailLine, sameToolTrailGroup, toolTrailLabel } from '../lib/text.js'
 import { estimatedMsgHeight, messageHeightKey } from '../lib/virtualHeights.js'
-import type { Msg, PanelSection, SlashCatalog } from '../types.js'
-
 import { createChatStream, type ChatStreamHandle, type ChatStreamRpcClient } from './chatStream.js'
 import { createGatewayEventHandler } from './createGatewayEventHandler.js'
 import { createSlashHandler } from './createSlashHandler.js'
@@ -390,10 +390,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   // no-op, but the wiring is in place so the flip is a one-line change.
   const chatStreamRef = useRef<ChatStreamHandle | null>(null)
 
-  const gateway = useMemo(
-    () => ({ gw, rpc, rpcClient }),
-    [gw, rpc, rpcClient]
-  )
+  const gateway = useMemo(() => ({ gw, rpc, rpcClient }), [gw, rpc, rpcClient])
 
   const die = useCallback(() => {
     gw.kill()

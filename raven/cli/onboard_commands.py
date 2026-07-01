@@ -210,10 +210,7 @@ def _pick_language() -> None:
 
 def _step_header(n: int, title: str) -> None:
     # Progress dots: filled for done/current steps, hollow for upcoming ones.
-    dots = " ".join(
-        "[#fbe23f]●[/#fbe23f]" if i <= n else "[grey37]○[/grey37]"
-        for i in range(1, _TOTAL_STEPS + 1)
-    )
+    dots = " ".join("[#fbe23f]●[/#fbe23f]" if i <= n else "[grey37]○[/grey37]" for i in range(1, _TOTAL_STEPS + 1))
     console.print()
     console.print(
         Panel(
@@ -293,9 +290,7 @@ def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) ->
 
     if non_interactive:
         if yes:
-            console.print(
-                "[dim]Existing config detected; --yes set, proceeding with overwrite.[/dim]"
-            )
+            console.print("[dim]Existing config detected; --yes set, proceeding with overwrite.[/dim]")
             return
         console.print(
             "[red]Existing config detected.[/red] Pass [#fbe23f]--reset[/#fbe23f] (or "
@@ -514,11 +509,7 @@ def _prompt_custom_model(*, allow_back: bool = False) -> Any:
     def _validate(v: str) -> Any:
         if allow_back and v.strip() == "":
             return True
-        return (
-            True
-            if v.strip()
-            else _t("Model id is required for custom endpoints.", "自定义端点必须指定模型 id。")
-        )
+        return True if v.strip() else _t("Model id is required for custom endpoints.", "自定义端点必须指定模型 id。")
 
     model = questionary.text(
         _t(
@@ -578,8 +569,7 @@ def _run_oauth_login(provider: str) -> bool:
         _t(
             "  [dim]A browser window / link will open — finish the sign-in there, "
             "then come back here. This waits until you're done.[/dim]\n",
-            "  [dim]会打开浏览器窗口 / 链接 — 在那里完成登录后回到这里;"
-            "这里会一直等到你完成。[/dim]\n",
+            "  [dim]会打开浏览器窗口 / 链接 — 在那里完成登录后回到这里;这里会一直等到你完成。[/dim]\n",
         )
     )
     try:
@@ -608,16 +598,12 @@ def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
     """
     from raven.config.update_providers import test_provider as probe
 
-    console.print(
-        _t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]")
-    )
+    console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
     result = probe(provider)
     if result["ok"]:
         models = result.get("models_count")
         suffix = _t(f" ({models} models available)", f"(共 {models} 个可用模型)") if models else ""
-        console.print(
-            _t(f"  [green]✓ Connected!{suffix}[/green]", f"  [green]✓ 连接成功!{suffix}[/green]")
-        )
+        console.print(_t(f"  [green]✓ Connected!{suffix}[/green]", f"  [green]✓ 连接成功!{suffix}[/green]"))
         return True, "valid", result.get("model_ids")
 
     status = result.get("status", "unknown")
@@ -658,10 +644,7 @@ def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
         ),
     }
     msg = hint_map.get(status, _t(f"Verification failed: {status}", f"验证失败:{status}"))
-    console.print(
-        f"  [yellow]✗ {msg}[/yellow]"
-        + (f"  [dim]{result['error']}[/dim]" if result.get("error") else "")
-    )
+    console.print(f"  [yellow]✗ {msg}[/yellow]" + (f"  [dim]{result['error']}[/dim]" if result.get("error") else ""))
     return False, status, None
 
 
@@ -716,8 +699,7 @@ def _pick_model(
     if non_interactive:
         if not spec.default_model:
             raise typer.BadParameter(
-                f"--model is required for provider '{spec.name}' "
-                "(no built-in default model in registry)."
+                f"--model is required for provider '{spec.name}' (no built-in default model in registry)."
             )
         return spec.default_model
 
@@ -766,9 +748,7 @@ def _pick_model(
         else:
             chosen = questionary.text(
                 _t(f"Default model id for {spec.name}:", f"{spec.name} 的默认模型 id:"),
-                validate=lambda v: (
-                    True if v.strip() else _t("Model id is required.", "必须指定模型 id。")
-                ),
+                validate=lambda v: True if v.strip() else _t("Model id is required.", "必须指定模型 id。"),
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
@@ -793,9 +773,7 @@ def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
         console.print(f"  [red]✗[/red] {exc}")
         raise typer.Exit(1)
     except ValidationError as exc:
-        console.print(
-            _t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}")
-        )
+        console.print(_t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}"))
         raise typer.Exit(1)
 
 
@@ -854,8 +832,7 @@ def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]
         console.print(_t(f"  [red]✗ Test failed:[/red] {exc}", f"  [red]✗ 测试失败:[/red] {exc}"))
         console.print(
             _t(
-                "  [dim]Run 'raven provider test' to re-check, or confirm the model is "
-                "served by this provider.[/dim]",
+                "  [dim]Run 'raven provider test' to re-check, or confirm the model is served by this provider.[/dim]",
                 "  [dim]可运行 'raven provider test' 复查,或确认该模型确由此服务商提供。[/dim]",
             )
         )
@@ -1009,9 +986,7 @@ def _collect_credentials(
     # Pure interactive path (no creds came from flags): prompt field-by-field
     # with empty-submit = back; backing out of the first field rewinds to the
     # provider picker.
-    pure_interactive = (
-        not non_interactive and not api_key and (not is_custom or (not base_url and not model))
-    )
+    pure_interactive = not non_interactive and not api_key and (not is_custom or (not base_url and not model))
     if pure_interactive:
         prompts: list[Callable[[], Any]] = [lambda: _prompt_api_key(provider, allow_back=True)]
         if is_custom:
@@ -1032,15 +1007,11 @@ def _collect_credentials(
         if is_custom:
             if not base_url:
                 if non_interactive:
-                    raise typer.BadParameter(
-                        "--base-url is required when --provider=custom in non-interactive mode"
-                    )
+                    raise typer.BadParameter("--base-url is required when --provider=custom in non-interactive mode")
                 base_url = _prompt_base_url()
             if not model:
                 if non_interactive:
-                    raise typer.BadParameter(
-                        "--model is required when --provider=custom in non-interactive mode"
-                    )
+                    raise typer.BadParameter("--model is required when --provider=custom in non-interactive mode")
                 model = _prompt_custom_model()
 
     fields: dict[str, Any] = {"api_key": api_key}
@@ -1246,9 +1217,7 @@ def _step1_provider(
             choices=[
                 questionary.Choice(_t("Done, continue", "完成,继续"), value="done"),
                 questionary.Choice(_t("Add another provider", "新增一个服务商"), value="add"),
-                questionary.Choice(
-                    _t("Edit / remove a provider", "编辑 / 移除服务商"), value="edit"
-                ),
+                questionary.Choice(_t("Edit / remove a provider", "编辑 / 移除服务商"), value="edit"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -1301,9 +1270,7 @@ def _probe_boxlite() -> tuple[bool, str]:
     ``reason`` ∈ ``"ok"`` / ``"missing"`` / ``"error"``. The runtime import is
     the same availability gate ``build_executor`` uses for the boxlite backend.
     """
-    console.print(
-        _t("  [dim]⏳ Checking sandbox availability…[/dim]", "  [dim]⏳ 正在检测沙箱可用性…[/dim]")
-    )
+    console.print(_t("  [dim]⏳ Checking sandbox availability…[/dim]", "  [dim]⏳ 正在检测沙箱可用性…[/dim]"))
     try:
         import boxlite  # noqa: F401
     except ImportError:
@@ -1315,9 +1282,7 @@ def _probe_boxlite() -> tuple[bool, str]:
 
 def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     """Step 2 — choose run location (host / boxlite sandbox)."""
-    _step_header(
-        2, _t("Choose where Raven runs code / commands", "选择 Raven 运行代码 / 命令的位置")
-    )
+    _step_header(2, _t("Choose where Raven runs code / commands", "选择 Raven 运行代码 / 命令的位置"))
 
     if skip or non_interactive:
         console.print(
@@ -1335,9 +1300,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     choices: list[Any] = []
     if current != "none":
         choices.append(
-            questionary.Choice(
-                _t("Keep current: sandbox (boxlite)", "沿用当前:沙箱(boxlite)"), value="keep"
-            )
+            questionary.Choice(_t("Keep current: sandbox (boxlite)", "沿用当前:沙箱(boxlite)"), value="keep")
         )
     choices.extend(
         [
@@ -1387,8 +1350,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                 _t(
                     "  [green]✓ Sandbox available. Using default resources "
                     "(2 CPU / 2 GB / network); tune in the config file if needed.[/green]",
-                    "  [green]✓ 沙箱可用。将使用默认资源"
-                    "(2 CPU / 2 GB / 联网);如需调整可改配置文件。[/green]",
+                    "  [green]✓ 沙箱可用。将使用默认资源(2 CPU / 2 GB / 联网);如需调整可改配置文件。[/green]",
                 )
             )
             return None
@@ -1536,9 +1498,7 @@ def _select_channel() -> Optional[str]:
     names = _ordered_channel_names()
     choices = [questionary.Choice(n, value=n) for n in names]
     choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
-    picked = questionary.select(
-        _t("Channel:", "渠道:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK
-    ).ask()
+    picked = questionary.select(_t("Channel:", "渠道:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK).ask()
     return picked
 
 
@@ -1628,9 +1588,7 @@ def _enable_channel(channel: str, fields: dict[str, Any]) -> None:
         console.print(f"  [red]✗[/red] {exc}")
         raise typer.Exit(1)
     except ValidationError as exc:
-        console.print(
-            _t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}")
-        )
+        console.print(_t(f"  [red]✗ Validation failed:[/red]\n{exc}", f"  [red]✗ 校验失败:[/red]\n{exc}"))
         raise typer.Exit(1)
 
 
@@ -1674,8 +1632,7 @@ def _handle_missing_node(channel: str) -> str:
         _t(
             f"  [yellow]✗ Node.js / npm not found (the {channel} bridge needs it). "
             "Install Node.js, then retry.[/yellow]",
-            f"  [yellow]✗ 未找到 Node.js / npm({channel} 的桥接需要它)。"
-            "请先安装 Node.js,再重试。[/yellow]",
+            f"  [yellow]✗ 未找到 Node.js / npm({channel} 的桥接需要它)。请先安装 Node.js,再重试。[/yellow]",
         )
     )
     choice = _failure_choice(
@@ -1712,9 +1669,7 @@ def _scancode_login(channel: str) -> None:
     spec = specs.get(channel)
     if spec is None:
         disable_channel(channel)
-        console.print(
-            _t(f"  [red]✗ Unknown channel: {channel}[/red]", f"  [red]✗ 未知渠道:{channel}[/red]")
-        )
+        console.print(_t(f"  [red]✗ Unknown channel: {channel}[/red]", f"  [red]✗ 未知渠道:{channel}[/red]"))
         return
 
     while True:
@@ -1726,10 +1681,8 @@ def _scancode_login(channel: str) -> None:
             disable_channel(channel)  # not logged in → don't leave it "connected"
             console.print(
                 _t(
-                    f"  [dim]Skipped {channel}; install Node.js then run "
-                    f"raven channels login {channel}.[/dim]",
-                    f"  [dim]已跳过 {channel};装好 Node.js 后运行 "
-                    f"raven channels login {channel}。[/dim]",
+                    f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
+                    f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
                 )
             )
             return
@@ -1813,8 +1766,7 @@ def _scancode_login(channel: str) -> None:
         disable_channel(channel)
         console.print(
             _t(
-                f"  [dim]{channel} not connected — finish later with "
-                f"raven channels login {channel}.[/dim]",
+                f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
                 f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
             )
         )
@@ -1834,9 +1786,7 @@ def _add_one_channel() -> None:
         if fields is _BACK:
             continue  # backed out of the first field — re-pick a channel
         _enable_channel(channel, fields)
-        console.print(
-            _t(f"  [green]✓ {channel} enabled.[/green]", f"  [green]✓ {channel} 已启用。[/green]")
-        )
+        console.print(_t(f"  [green]✓ {channel} enabled.[/green]", f"  [green]✓ {channel} 已启用。[/green]"))
         return
 
 
@@ -1863,12 +1813,8 @@ def _manage_existing_channels() -> None:
         action = questionary.select(
             _t(f"What would you like to do with {target}?", f"对 {target} 想做什么?"),
             choices=[
-                questionary.Choice(
-                    _t("Edit config (re-enter fields)", "编辑配置(重填字段)"), value="edit"
-                ),
-                questionary.Choice(
-                    _t("Disable (keep credentials)", "停用(保留凭证)"), value="disable"
-                ),
+                questionary.Choice(_t("Edit config (re-enter fields)", "编辑配置(重填字段)"), value="edit"),
+                questionary.Choice(_t("Disable (keep credentials)", "停用(保留凭证)"), value="disable"),
                 questionary.Choice(_t("Back", "返回"), value=_BACK),
             ],
             style=RAVEN_STYLE,
@@ -1894,8 +1840,7 @@ def _manage_existing_channels() -> None:
                 _t(
                     f"  [green]✓ Disabled {target} (credentials kept; re-enable later "
                     f"with raven channels enable {target}).[/green]",
-                    f"  [green]✓ 已停用 {target}(凭证保留;之后用 "
-                    f"raven channels enable {target} 重新启用)。[/green]",
+                    f"  [green]✓ 已停用 {target}(凭证保留;之后用 raven channels enable {target} 重新启用)。[/green]",
                 )
             )
 
@@ -2141,9 +2086,7 @@ def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
     }
 
 
-def _prompt_text(
-    label: str, *, secret: bool = False, default: str = "", allow_back: bool = False
-) -> Any:
+def _prompt_text(label: str, *, secret: bool = False, default: str = "", allow_back: bool = False) -> Any:
     """Prompt for free text. With ``allow_back``, an empty submit returns
     ``_BACK`` (and a hint is shown); otherwise returns the stripped string."""
     questionary = _require_questionary()
@@ -2151,13 +2094,9 @@ def _prompt_text(
 
     placeholder = _back_placeholder(allow_back)
     if secret:
-        value = questionary.password(
-            label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK
-        ).ask()
+        value = questionary.password(label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK).ask()
     else:
-        value = questionary.text(
-            label, default=default, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK
-        ).ask()
+        value = questionary.text(label, default=default, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK).ask()
     if value is None:
         raise typer.Exit(1)
     value = value.strip()
@@ -2209,9 +2148,7 @@ def _verify_everos_model(
     console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
     ok, detail = _probe_everos_endpoint(label, model=model, api_key=api_key, base_url=base_url)
     if ok:
-        console.print(
-            _t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]")
-        )
+        console.print(_t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]"))
         return True
     console.print(
         _t(
@@ -2356,9 +2293,7 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
     return sorted(ids) or None
 
 
-def _everos_pick_model(
-    *, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool
-) -> Any:
+def _everos_pick_model(*, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool) -> Any:
     """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
     fuzzy-searchable list, else fall back to free text. Empty submit = back."""
     questionary = _require_questionary()
@@ -2422,9 +2357,7 @@ def _everos_pick_creds_and_model(
         if reuse_main_ok:
             choices.append(
                 questionary.Choice(
-                    _t(
-                        f"↺ Reuse main chat model ({main_model})", f"↺ 复用主对话模型({main_model})"
-                    ),
+                    _t(f"↺ Reuse main chat model ({main_model})", f"↺ 复用主对话模型({main_model})"),
                     value=("reuse_main",),
                 )
             )
@@ -2439,9 +2372,7 @@ def _everos_pick_creds_and_model(
                 )
             )
         for prov in _EVEROS_PROVIDERS:
-            choices.append(
-                questionary.Choice(_t(prov["label"], prov["label_zh"]), value=("provider", prov))
-            )
+            choices.append(questionary.Choice(_t(prov["label"], prov["label_zh"]), value=("provider", prov)))
         choices.append(
             questionary.Choice(
                 _t("Other (custom OpenAI-compatible endpoint)", "其他(自定义 OpenAI 兼容端点)"),
@@ -2490,14 +2421,10 @@ def _everos_pick_creds_and_model(
             if api_key is _BACK:
                 continue
         else:  # custom
-            base_url = _prompt_text(
-                _t("Base URL (must include /v1):", "Base URL(需包含 /v1):"), allow_back=True
-            )
+            base_url = _prompt_text(_t("Base URL (must include /v1):", "Base URL(需包含 /v1):"), allow_back=True)
             if base_url is _BACK:
                 continue
-            api_key = _prompt_text(
-                _t("API key (hidden):", "API Key(隐藏输入):"), secret=True, allow_back=True
-            )
+            api_key = _prompt_text(_t("API key (hidden):", "API Key(隐藏输入):"), secret=True, allow_back=True)
             if api_key is _BACK:
                 continue
 
@@ -2531,9 +2458,7 @@ def _everos_pick_creds_and_model(
             if rerank_provider is _BACK:
                 continue
 
-        model = _everos_pick_model(
-            base_url=base_url, api_key=api_key, example=example, allow_back=True
-        )
+        model = _everos_pick_model(base_url=base_url, api_key=api_key, example=example, allow_back=True)
         if model is _BACK:
             continue
 
@@ -2543,9 +2468,7 @@ def _everos_pick_creds_and_model(
         return result
 
 
-def _config_everos_role(
-    *, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]
-) -> None:
+def _config_everos_role(*, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]) -> None:
     """Configure one EverOS memory role (llm / embedding / rerank / multimodal)
     with the unified provider→key→model flow, reuse shortcuts, and a back loop."""
     questionary = _require_questionary()
@@ -2578,9 +2501,7 @@ def _config_everos_role(
         current = _everos_section(section).get("model")
         if current:
             choices = [
-                questionary.Choice(
-                    _t(f"Keep current: {current}", f"沿用当前:{current}"), value="keep"
-                ),
+                questionary.Choice(_t(f"Keep current: {current}", f"沿用当前:{current}"), value="keep"),
                 questionary.Choice(_t("Reconfigure", "重新配置"), value="redo"),
             ]
             if optional:
@@ -2597,9 +2518,7 @@ def _config_everos_role(
                 return
             if action == "off":
                 clear_everos_section(section)
-                console.print(
-                    _t(f"  [dim]{label_en} disabled.[/dim]", f"  [dim]已停用 {label_zh}。[/dim]")
-                )
+                console.print(_t(f"  [dim]{label_en} disabled.[/dim]", f"  [dim]已停用 {label_zh}。[/dim]"))
                 return
         elif optional:
             action = questionary.select(
@@ -2612,9 +2531,7 @@ def _config_everos_role(
                 qmark=_QMARK,
             ).ask()
             if action in (None, "skip"):
-                note_en, note_zh = role.get(
-                    "skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。")
-                )
+                note_en, note_zh = role.get("skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。"))
                 console.print(_t(f"  [dim]{note_en}[/dim]", f"  [dim]{note_zh}[/dim]"))
                 return
         # A required role with nothing configured falls straight into the picker.
@@ -2653,9 +2570,7 @@ def _config_everos_role(
         return
 
 
-def _step4_memory(
-    *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str]
-) -> object:
+def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str]) -> object:
     """Step 4 — EverOS long-term memory (enable + model sub-screens).
 
     The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
@@ -2715,9 +2630,7 @@ def _step4_memory(
         action = questionary.select(
             _t("Enable EverOS long-term memory?", "启用 EverOS 长期记忆?"),
             choices=[
-                questionary.Choice(
-                    _t("Enable (configure the memory models)", "启用(继续配置记忆模型)"), value="on"
-                ),
+                questionary.Choice(_t("Enable (configure the memory models)", "启用(继续配置记忆模型)"), value="on"),
                 questionary.Choice(
                     _t(
                         "Don't enable (use Raven's native Markdown memory)",
@@ -2780,8 +2693,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
                 + _t(
                     "[dim]Fix them before relying on the related features "
                     "(run [/dim][#fbe23f]raven doctor[/#fbe23f][dim] to re-check).[/dim]",
-                    "[dim]在依赖相关功能前请先修复("
-                    "运行 [/dim][#fbe23f]raven doctor[/#fbe23f][dim] 复查)。[/dim]",
+                    "[dim]在依赖相关功能前请先修复(运行 [/dim][#fbe23f]raven doctor[/#fbe23f][dim] 复查)。[/dim]",
                 ),
                 border_style="yellow",
                 padding=(1, 2),
@@ -3018,39 +2930,21 @@ def register(app: typer.Typer) -> None:
 
     @app.command()
     def onboard(
-        provider: Optional[str] = typer.Option(
-            None, "--provider", help="LLM provider name (skips Step 1's prompt)"
-        ),
-        api_key: Optional[str] = typer.Option(
-            None, "--api-key", help="API key for the chosen provider"
-        ),
-        base_url: Optional[str] = typer.Option(
-            None, "--base-url", help="Custom OpenAI-compatible base URL"
-        ),
-        model: Optional[str] = typer.Option(
-            None, "--model", help="Default model id (e.g. 'openai/gpt-4o-mini')"
-        ),
-        channel: Optional[str] = typer.Option(
-            None, "--channel", help="Channel to enable in Step 3"
-        ),
-        skip_sandbox: bool = typer.Option(
-            False, "--skip-sandbox", help="Skip Step 2 (run location)"
-        ),
-        skip_channel: bool = typer.Option(
-            False, "--skip-channel", help="Skip Step 3 (channel setup)"
-        ),
-        skip_memory: bool = typer.Option(
-            False, "--skip-memory", help="Skip Step 4 (long-term memory)"
-        ),
+        provider: Optional[str] = typer.Option(None, "--provider", help="LLM provider name (skips Step 1's prompt)"),
+        api_key: Optional[str] = typer.Option(None, "--api-key", help="API key for the chosen provider"),
+        base_url: Optional[str] = typer.Option(None, "--base-url", help="Custom OpenAI-compatible base URL"),
+        model: Optional[str] = typer.Option(None, "--model", help="Default model id (e.g. 'openai/gpt-4o-mini')"),
+        channel: Optional[str] = typer.Option(None, "--channel", help="Channel to enable in Step 3"),
+        skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
+        skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
+        skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
         non_interactive: bool = typer.Option(
             False,
             "--non-interactive",
             help="Run without prompts (requires flags for any missing field)",
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Skip all confirm prompts"),
-        reset: bool = typer.Option(
-            False, "--reset", help="Force re-run even if a config already exists"
-        ),
+        reset: bool = typer.Option(False, "--reset", help="Force re-run even if a config already exists"),
     ) -> None:
         """Four-step setup wizard: LLM provider → sandbox → channel → memory."""
         run_wizard(

@@ -1,4 +1,5 @@
 """Unix domain socket debug server for sandbox VM inspection and interaction."""
+
 from __future__ import annotations
 
 import asyncio
@@ -129,14 +130,17 @@ class SandboxDebugServer:
         """
         if self._active_client is not None:
             try:
-                await _send(writer, {
-                    "type": "error",
-                    "message": (
-                        "Sandbox debug server already has an active client. "
-                        "Only one sandbox CLI may connect at a time — "
-                        "wait for the other session to finish, or stop it."
-                    ),
-                })
+                await _send(
+                    writer,
+                    {
+                        "type": "error",
+                        "message": (
+                            "Sandbox debug server already has an active client. "
+                            "Only one sandbox CLI may connect at a time — "
+                            "wait for the other session to finish, or stop it."
+                        ),
+                    },
+                )
             except (ConnectionResetError, BrokenPipeError):
                 pass
             finally:
@@ -212,16 +216,18 @@ class SandboxDebugServer:
 
         vms = []
         for info in boxes:
-            vms.append({
-                "id": info.id,
-                "name": getattr(info, "name", None),
-                "owned": info.id in self._owned_ids,
-                "status": info.state.status,
-                "image": info.image,
-                "cpus": info.cpus,
-                "memory_mib": info.memory_mib,
-                "created_at": getattr(info, "created_at", None),
-            })
+            vms.append(
+                {
+                    "id": info.id,
+                    "name": getattr(info, "name", None),
+                    "owned": info.id in self._owned_ids,
+                    "status": info.state.status,
+                    "image": info.image,
+                    "cpus": info.cpus,
+                    "memory_mib": info.memory_mib,
+                    "created_at": getattr(info, "created_at", None),
+                }
+            )
         await _send(writer, {"type": "vm_list", "vms": vms})
 
     # ------------------------------------------------------------------
@@ -264,7 +270,9 @@ class SandboxDebugServer:
         # Name match (owned VMs only)
         by_name = [b for b in boxes if getattr(b, "name", None) == vm_ref]
         if len(by_name) > 1:
-            await _send(writer, {"type": "error", "message": f"Ambiguous: multiple VMs named '{vm_ref}', use VM ID instead."})
+            await _send(
+                writer, {"type": "error", "message": f"Ambiguous: multiple VMs named '{vm_ref}', use VM ID instead."}
+            )
             return None
         if len(by_name) == 1:
             box = by_name[0]
@@ -381,9 +389,7 @@ class SandboxDebugServer:
         watcher = asyncio.create_task(_watch_disconnect())
 
         try:
-            done, _ = await asyncio.wait(
-                {wait_task, watcher}, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait({wait_task, watcher}, return_when=asyncio.FIRST_COMPLETED)
             if wait_task in done:
                 # Process exited first — drain remaining stdout/stderr (bounded so
                 # a misbehaving stream can't keep the connection open forever),
@@ -524,9 +530,7 @@ class SandboxDebugServer:
                         rows = client_msg.get("rows", 0)
                         cols = client_msg.get("cols", 0)
                         if rows >= 1 and cols >= 1:
-                            resize_tasks.append(
-                                asyncio.create_task(_do_resize(rows, cols))
-                            )
+                            resize_tasks.append(asyncio.create_task(_do_resize(rows, cols)))
             except (ConnectionResetError, BrokenPipeError):
                 pass
             finally:
@@ -554,6 +558,7 @@ class SandboxDebugServer:
 # ------------------------------------------------------------------
 # Shared framing helper (used by exec/shell handlers too)
 # ------------------------------------------------------------------
+
 
 async def _send(writer: asyncio.StreamWriter, obj: dict) -> None:
     writer.write((json.dumps(obj) + "\n").encode())

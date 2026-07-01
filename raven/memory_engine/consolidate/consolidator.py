@@ -75,7 +75,10 @@ _SAVE_MEMORY_TOOL = [
                         "items": {
                             "type": "object",
                             "required": [
-                                "prediction", "window", "confidence", "src_ts",
+                                "prediction",
+                                "window",
+                                "confidence",
+                                "src_ts",
                             ],
                             "properties": {
                                 "prediction": {
@@ -96,8 +99,7 @@ _SAVE_MEMORY_TOOL = [
                                 "src_ts": {
                                     "type": "string",
                                     "description": (
-                                        "Timestamp 'YYYY-MM-DD HH:MM' of the episode "
-                                        "that triggered this prediction."
+                                        "Timestamp 'YYYY-MM-DD HH:MM' of the episode that triggered this prediction."
                                     ),
                                 },
                             },
@@ -105,7 +107,9 @@ _SAVE_MEMORY_TOOL = [
                     },
                 },
                 "required": [
-                    "profile_update", "episode_summary", "foresight_hint",
+                    "profile_update",
+                    "episode_summary",
+                    "foresight_hint",
                 ],
             },
         },
@@ -237,7 +241,10 @@ def _build_annotate_tool(*, enable_foresight: bool) -> list[dict]:
             "items": {
                 "type": "object",
                 "required": [
-                    "prediction", "window", "confidence", "src_ts",
+                    "prediction",
+                    "window",
+                    "confidence",
+                    "src_ts",
                 ],
                 "properties": {
                     "prediction": {"type": "string"},
@@ -258,18 +265,20 @@ def _build_annotate_tool(*, enable_foresight: bool) -> list[dict]:
             "via refresh_profile_section when tag frequency warrants a "
             "focused rewrite."
         )
-    return [{
-        "type": "function",
-        "function": {
-            "name": "annotate_conversation",
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "annotate_conversation",
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
             },
-        },
-    }]
+        }
+    ]
 
 
 _REFRESH_SECTION_TOOL = [
@@ -316,9 +325,7 @@ _REFRESH_SECTION_TOOL = [
 ]
 
 
-_EPISODE_LINE_RE = re.compile(
-    r"^\s*\[(\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2})\]\s+(.*?)\s*$"
-)
+_EPISODE_LINE_RE = re.compile(r"^\s*\[(\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2})\]\s+(.*?)\s*$")
 _TAG_RE = re.compile(r"#([a-z][a-z0-9-]*)")
 
 
@@ -349,17 +356,36 @@ def _parse_episode_line(line: str) -> tuple[str, str, list[str]] | None:
 # when parsing episode lines.
 _PROCESS_TAGS: frozenset[str] = frozenset({"question", "habit", "answer"})
 _VALID_CONFIDENCE: frozenset[str] = frozenset({"low", "medium", "high"})
-_SRC_LINK_RE = re.compile(
-    r"\[src:\s+episodes\.md\s+@\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\]"
-)
+_SRC_LINK_RE = re.compile(r"\[src:\s+episodes\.md\s+@\s+\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\]")
 # Tokens stripped before semantic dedup of foresight predictions —
 # common subjects/auxiliaries/framing words that carry no topical content.
-_FORESIGHT_DEDUP_STOPWORDS: frozenset[str] = frozenset({
-    "user", "will", "may", "might", "likely", "again",
-    "today", "tomorrow", "next", "this", "that",
-    "the", "for", "with", "from", "and", "are", "has", "have",
-    "continue", "recurring", "pattern", "habit",
-})
+_FORESIGHT_DEDUP_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "user",
+        "will",
+        "may",
+        "might",
+        "likely",
+        "again",
+        "today",
+        "tomorrow",
+        "next",
+        "this",
+        "that",
+        "the",
+        "for",
+        "with",
+        "from",
+        "and",
+        "are",
+        "has",
+        "have",
+        "continue",
+        "recurring",
+        "pattern",
+        "habit",
+    }
+)
 _FORESIGHT_TOKEN_RE = re.compile(r"[a-zA-Z]{4,}|[一-鿿]{2,}")
 # Jaccard threshold for "same claim, reworded". 0.6 chosen empirically:
 # catches recurring-habit clusters like "Saturday run x4" or "daily
@@ -426,15 +452,12 @@ def _foresight_token_set(prediction: str) -> frozenset[str]:
     to one form (``reminders``/``reminder``, ``meetings``/``meeting``).
     """
     raw = _FORESIGHT_TOKEN_RE.findall(prediction.lower())
-    return frozenset(
-        _stem_trailing_s(t)
-        for t in raw
-        if t not in _FORESIGHT_DEDUP_STOPWORDS
-    )
+    return frozenset(_stem_trailing_s(t) for t in raw if t not in _FORESIGHT_DEDUP_STOPWORDS)
 
 
 def _is_semantic_duplicate_foresight(
-    new_pred: str, existing_preds: list[str],
+    new_pred: str,
+    existing_preds: list[str],
 ) -> bool:
     """True iff ``new_pred`` overlaps any existing prediction by Jaccard
     >= threshold over content tokens.
@@ -510,11 +533,7 @@ def _format_foresight_bullet(entry: dict[str, Any], generation_ts: str) -> str:
     # Enforce {low|medium|high}; off-enum values render as '?'.
     confidence = _normalize_confidence(entry.get("confidence") or "")
     src_ts = (entry.get("src_ts") or "").strip() or "?"
-    return (
-        f"- {pred} "
-        f"(from {generation_ts}, window: {window}, "
-        f"confidence: {confidence}, src: episodes.md @ {src_ts})"
-    )
+    return f"- {pred} (from {generation_ts}, window: {window}, confidence: {confidence}, src: episodes.md @ {src_ts})"
 
 
 _RELEVANCE_TOKEN_RE = re.compile(r"\w{2,}", re.UNICODE)
@@ -648,10 +667,7 @@ def _splice_h2_section(content: str, heading: str, new_body: str) -> str:
 
     if h_idx is None:
         sep = "\n\n" if content and not content.endswith("\n\n") else ""
-        return (
-            content.rstrip("\n") + sep + "\n" + target + "\n\n"
-            + new_body.strip("\n") + "\n"
-        )
+        return content.rstrip("\n") + sep + "\n" + target + "\n\n" + new_body.strip("\n") + "\n"
 
     # Find next H2 (lines starting with "## " but not "### " etc.).
     next_h2 = None
@@ -674,7 +690,8 @@ class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
 
     def __init__(
-        self, workspace: Path,
+        self,
+        workspace: Path,
         now_fn: Callable[[], datetime] | None = None,
     ):
         # User profile + episodic log live under the ``user_memory``
@@ -687,9 +704,7 @@ class MemoryStore:
         # that write MEMORY.md so Personalizer + MemoryConsolidator +
         # SentinelMemoryWriter serialize on the same fcntl. POSIX-only —
         # falls through to no-op on win32.
-        self.memory_lock_path = self.memory_file.with_suffix(
-            self.memory_file.suffix + ".lock"
-        )
+        self.memory_lock_path = self.memory_file.with_suffix(self.memory_file.suffix + ".lock")
 
         # attention.md + behaviors.md siblings at user_memory root.
         # Independent fcntl locks: sentinel writes attention.md frequently
@@ -697,24 +712,16 @@ class MemoryStore:
         user_memory_root = ensure_dir(workspace / "user_memory")
         self.attention_file = user_memory_root / "attention.md"
         self.behaviors_file = user_memory_root / "behaviors.md"
-        self.behaviors_offsets_path = (
-            user_memory_root / ".behaviors_offsets.json"
-        )
+        self.behaviors_offsets_path = user_memory_root / ".behaviors_offsets.json"
         # Sidecar JSON for ``## Recent stance log`` — stance_log's source
         # of truth, distinct from the attention.md section that just
         # renders it. Lets the producer mutate state without holding the
         # attention.md write lock (which it can't, since compute_body
         # runs in Phase 1 outside the lock).
         self.stance_log_path = user_memory_root / ".stance_log.json"
-        self.attention_lock_path = self.attention_file.with_suffix(
-            self.attention_file.suffix + ".lock"
-        )
-        self.behaviors_lock_path = self.behaviors_file.with_suffix(
-            self.behaviors_file.suffix + ".lock"
-        )
-        self.stance_log_lock_path = (
-            user_memory_root / ".stance_log.json.lock"
-        )
+        self.attention_lock_path = self.attention_file.with_suffix(self.attention_file.suffix + ".lock")
+        self.behaviors_lock_path = self.behaviors_file.with_suffix(self.behaviors_file.suffix + ".lock")
+        self.stance_log_lock_path = user_memory_root / ".stance_log.json.lock"
 
         # Used by ``consolidate`` to inject ``Current Time:`` into the
         # consolidator-LLM prompt — without this, the LLM's
@@ -762,6 +769,7 @@ class MemoryStore:
             return
         # `import` here so non-POSIX import doesn't fail at module load
         import fcntl
+
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
@@ -847,9 +855,7 @@ class MemoryStore:
                 m = _FORESIGHT_BULLET_RE.match(line)
                 if m:
                     pred_text = m.group("prediction").strip()
-                    existing_keys.add(
-                        (pred_text, m.group("src_ts").strip())
-                    )
+                    existing_keys.add((pred_text, m.group("src_ts").strip()))
                     existing_predictions.append(pred_text)
 
             new_bullets: list[str] = []
@@ -877,8 +883,7 @@ class MemoryStore:
                 written += 1
             if semantic_skipped:
                 logger.info(
-                    "append_foresight: skipped {} semantic-duplicate "
-                    "prediction(s)",
+                    "append_foresight: skipped {} semantic-duplicate prediction(s)",
                     semantic_skipped,
                 )
 
@@ -898,7 +903,9 @@ class MemoryStore:
             # bottom so the visual order is "stable profile sections first,
             # auto-managed Foresight last".
             new_content = _splice_h2_section_at_end(
-                base, _FORESIGHT_HEADING, body,
+                base,
+                _FORESIGHT_HEADING,
+                body,
             )
             if new_content != current:
                 self.write_long_term(new_content)
@@ -996,7 +1003,8 @@ class MemoryStore:
     _NOTES_HEADING_PREFIX = "## Notes"
 
     def get_memory_context(
-        self, current_message: str | None = None,
+        self,
+        current_message: str | None = None,
     ) -> str:
         """Return the memory block to embed in the agent's system prompt.
 
@@ -1020,14 +1028,13 @@ class MemoryStore:
         if not sections:
             return f"## Long-term Memory\n{long_term}"
         selected = self._select_relevant_sections(
-            current_message, sections, top_k=self._SECTION_READ_TOP_K,
+            current_message,
+            sections,
+            top_k=self._SECTION_READ_TOP_K,
         )
         if not selected:
             return f"## Long-term Memory\n{long_term}"
-        body = "\n\n".join(
-            f"{heading}\n\n{section_body}".rstrip()
-            for heading, section_body in selected.items()
-        )
+        body = "\n\n".join(f"{heading}\n\n{section_body}".rstrip() for heading, section_body in selected.items())
         return f"## Long-term Memory\n\n{body}\n"
 
     @classmethod
@@ -1043,14 +1050,9 @@ class MemoryStore:
         Returned dict preserves source file order for predictable
         rendering.
         """
-        scored = [
-            (heading, body, _score_section_relevance(query, heading, body))
-            for heading, body in sections.items()
-        ]
+        scored = [(heading, body, _score_section_relevance(query, heading, body)) for heading, body in sections.items()]
         scored.sort(key=lambda x: x[2], reverse=True)
-        keep_keys: set[str] = {
-            h for h, _, score in scored[:top_k] if score > 0
-        }
+        keep_keys: set[str] = {h for h, _, score in scored[:top_k] if score > 0}
         for heading in sections:
             if heading.startswith(cls._NOTES_HEADING_PREFIX):
                 keep_keys.add(heading)
@@ -1098,23 +1100,23 @@ class MemoryStore:
         if enable_foresight:
             slot_lines = (
                 "- episode_summary: ARRAY of single-line entries "
-                "\"[YYYY-MM-DD HH:MM] <summary, <=100 chars> #tag1 #tag2\".\n"
+                '"[YYYY-MM-DD HH:MM] <summary, <=100 chars> #tag1 #tag2".\n'
                 "- foresight_hint: ARRAY of predictions; [] when no deferred / "
                 "recurring signal."
             )
             example_tail = (
                 "\nforesight_hint:\n"
-                "  - {{\"prediction\": \"User will revisit WebSocket leak "
-                "fix after load test next week\", \"window\": \"5-7 days\", "
-                "\"confidence\": \"medium\", \"src_ts\": "
-                "\"2024-11-08 14:20\"}}\n"
-                "  - {{\"prediction\": \"User runs every Saturday morning "
-                "(recurring habit, 3+ observations)\", \"window\": "
-                "\"recurring weekly\", \"confidence\": \"high\", "
-                "\"src_ts\": \"2024-11-09 10:00\"}}\n"
-                "  - {{\"prediction\": \"Q4 retrospective scheduled for "
-                "next Friday\", \"window\": \"5 days\", \"confidence\": "
-                "\"high\", \"src_ts\": \"2024-11-09 14:00\"}}\n"
+                '  - {{"prediction": "User will revisit WebSocket leak '
+                'fix after load test next week", "window": "5-7 days", '
+                '"confidence": "medium", "src_ts": '
+                '"2024-11-08 14:20"}}\n'
+                '  - {{"prediction": "User runs every Saturday morning '
+                '(recurring habit, 3+ observations)", "window": '
+                '"recurring weekly", "confidence": "high", '
+                '"src_ts": "2024-11-09 10:00"}}\n'
+                '  - {{"prediction": "Q4 retrospective scheduled for '
+                'next Friday", "window": "5 days", "confidence": '
+                '"high", "src_ts": "2024-11-09 14:00"}}\n'
                 "(Again: FORMAT examples from an unrelated domain. "
                 "Produce predictions only for the conversation above.)\n"
             )
@@ -1126,22 +1128,18 @@ class MemoryStore:
         else:
             slot_lines = (
                 "- episode_summary: ARRAY of single-line entries "
-                "\"[YYYY-MM-DD HH:MM] <summary, <=100 chars> #tag1 #tag2\"."
+                '"[YYYY-MM-DD HH:MM] <summary, <=100 chars> #tag1 #tag2".'
             )
             example_tail = ""
             sys_line = (
-                "You are a conversation annotator. Call "
-                "annotate_conversation exactly once with episode_summary "
-                "filled."
+                "You are a conversation annotator. Call annotate_conversation exactly once with episode_summary filled."
             )
         # Feed the LLM its recently-used project slugs so it reuses
         # them instead of inventing new variants every call (e.g.
         # #project-clawtrack-release vs ...-cli vs ...-coverage).
         recent_tags = self.recent_project_tags(days=14, limit=12)
         if recent_tags:
-            tag_history_lines = "\n".join(
-                f"  - #{tag} ({n}x in last 14 days)" for tag, n in recent_tags
-            )
+            tag_history_lines = "\n".join(f"  - #{tag} ({n}x in last 14 days)" for tag, n in recent_tags)
             tag_history_block = (
                 "\n## Project tags you've recently used — REUSE these "
                 "slugs when describing the same project; do NOT invent "
@@ -1244,17 +1242,21 @@ episode_summary:
                     # memory lock; do it in a thread so the async event
                     # loop isn't blocked on file I/O.
                     written = await asyncio.to_thread(
-                        self.append_foresight, foresights,
+                        self.append_foresight,
+                        foresights,
                     )
                     logger.info(
                         "annotate: {} foresight hint(s) emitted → "
                         "user.md ## Foresight ({} written, {} deduped/skipped)",
-                        len(foresights), written, len(foresights) - written,
+                        len(foresights),
+                        written,
+                        len(foresights) - written,
                     )
 
             logger.info(
                 "annotate done for {} messages -> {} episode(s)",
-                len(messages), n_written,
+                len(messages),
+                n_written,
             )
             return True
         except Exception:
@@ -1311,7 +1313,10 @@ episode_summary:
         return counts
 
     def recent_project_tags(
-        self, *, days: int = 14, limit: int = 12,
+        self,
+        *,
+        days: int = 14,
+        limit: int = 12,
     ) -> list[tuple[str, int]]:
         """Return up-to-``limit`` ``(project-tag, count)`` pairs seen in
         episodes.md within the last ``days``, sorted by frequency.
@@ -1322,6 +1327,7 @@ episode_summary:
         split across multiple #project-*-cli / -docs / -release slugs.
         """
         from datetime import timedelta
+
         if not self.history_file.exists():
             return []
         cutoff = self._now_fn() - timedelta(days=days)
@@ -1360,16 +1366,16 @@ episode_summary:
         return hot
 
     def _episodes_for_tag(
-        self, tag: str, max_episodes: int = 50,
+        self,
+        tag: str,
+        max_episodes: int = 50,
     ) -> list[str]:
         """Most recent up-to-N episode lines carrying the given tag, in
         chronological order. Pulls from the tail of episodes.md."""
         if not self.history_file.exists():
             return []
         matches: list[str] = []
-        for line in reversed(
-            self.history_file.read_text(encoding="utf-8").splitlines()
-        ):
+        for line in reversed(self.history_file.read_text(encoding="utf-8").splitlines()):
             stripped = line.strip()
             if not stripped:
                 continue
@@ -1527,7 +1533,7 @@ If you'd exceed a cap, CONSOLIDATE harder.
 {now_str}
 
 ## Current user.md (UPDATE/CONSOLIDATE/REJECT — don't just append)
-{current_profile or '(empty)'}
+{current_profile or "(empty)"}
 
 ## Recent episodes tagged #{tag} ({len(relevant)} entries — fold into
 the matching section after triage)
@@ -1542,15 +1548,18 @@ section_body: full new content for that H2, every bullet ending with
         try:
             response = await provider.chat_with_retry(
                 messages=[
-                    {"role": "system", "content": (
-                        "You maintain a structured user profile in user.md, "
-                        "NOT an event log. Follow the <principles>, "
-                        "<section_schemas>, <triage_each_episode>, and "
-                        "<update_protocol> blocks in the user message. "
-                        "Prefer UPDATE over APPEND; respect per-section "
-                        "size caps; reject events / emotions / transient "
-                        "process work that already lives in episodes.md."
-                    )},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You maintain a structured user profile in user.md, "
+                            "NOT an event log. Follow the <principles>, "
+                            "<section_schemas>, <triage_each_episode>, and "
+                            "<update_protocol> blocks in the user message. "
+                            "Prefer UPDATE over APPEND; respect per-section "
+                            "size caps; reject events / emotions / transient "
+                            "process work that already lives in episodes.md."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 tools=_REFRESH_SECTION_TOOL,
@@ -1561,16 +1570,16 @@ section_body: full new content for that H2, every bullet ending with
                 logger.warning("refresh_section({}): LLM did not call tool", tag)
                 return False
             args = _normalize_save_memory_args(response.tool_calls[0].arguments)
-            if (args is None
-                    or "section_heading" not in args
-                    or "section_body" not in args):
+            if args is None or "section_heading" not in args or "section_body" not in args:
                 logger.warning("refresh_section({}): unexpected tool args", tag)
                 return False
             heading = _ensure_text(args["section_heading"]).strip()
             body = _ensure_text(args["section_body"])
             if not heading.startswith("## "):
                 logger.warning(
-                    "refresh_section({}): bad heading {!r}", tag, heading,
+                    "refresh_section({}): bad heading {!r}",
+                    tag,
+                    heading,
                 )
                 return False
 
@@ -1583,33 +1592,39 @@ section_body: full new content for that H2, every bullet ending with
                 body, n_src_dropped = _drop_bullets_without_src(body)
                 if n_src_dropped:
                     logger.warning(
-                        "refresh_section({}): dropped {} bullet(s) "
-                        "missing [src:] link in section {!r}",
-                        tag, n_src_dropped, heading,
+                        "refresh_section({}): dropped {} bullet(s) missing [src:] link in section {!r}",
+                        tag,
+                        n_src_dropped,
+                        heading,
                     )
 
             # Soft observability: warn if section grew past the
             # schema's hard caps (Projects/Habits 6, Notes 8, others 5).
             # Don't truncate — that risks dropping useful content; just
             # surface drift so the prompt can be re-tuned if it persists.
-            n_bullets = sum(
-                1 for ln in body.splitlines() if ln.lstrip().startswith("-")
-            )
+            n_bullets = sum(1 for ln in body.splitlines() if ln.lstrip().startswith("-"))
             if n_bullets > 15:
                 logger.warning(
                     "refresh_section({}): LLM produced {} bullets (>15) for "
                     "section {!r} — schema cap violated, profile may be "
                     "diary-style. Check episodes.md / prompt drift.",
-                    tag, n_bullets, heading,
+                    tag,
+                    n_bullets,
+                    heading,
                 )
 
             await asyncio.to_thread(
-                self._splice_section_and_write, heading, body, current_profile,
+                self._splice_section_and_write,
+                heading,
+                body,
+                current_profile,
             )
             logger.info(
-                "refresh_section({}): section {!r} updated using {} episode(s) "
-                "-> {} bullets",
-                tag, heading, len(relevant), n_bullets,
+                "refresh_section({}): section {!r} updated using {} episode(s) -> {} bullets",
+                tag,
+                heading,
+                len(relevant),
+                n_bullets,
             )
             return True
         except Exception:
@@ -1617,7 +1632,10 @@ section_body: full new content for that H2, every bullet ending with
             return False
 
     def _splice_section_and_write(
-        self, heading: str, new_body: str, expected_prev: str,
+        self,
+        heading: str,
+        new_body: str,
+        expected_prev: str,
     ) -> bool:
         """CAS write: splice ``new_body`` under ``heading`` in user.md only
         if file still matches ``expected_prev`` (no concurrent writer).
@@ -1625,10 +1643,7 @@ section_body: full new content for that H2, every bullet ending with
         with self.locked():
             current = self.read_long_term()
             if current != expected_prev:
-                logger.info(
-                    "refresh_section: concurrent modification detected; "
-                    "skipping write (will retry next round)"
-                )
+                logger.info("refresh_section: concurrent modification detected; skipping write (will retry next round)")
                 return False
             new_content = _splice_h2_section(current, heading, new_body)
             # Keep auto-managed ## Foresight at the bottom of user.md
@@ -1666,8 +1681,8 @@ section_body: full new content for that H2, every bullet ending with
             else:
                 # Don't advance offset on failure — next round retries.
                 logger.warning(
-                    "maybe_refresh_hot_tags: tag {!r} refresh failed; "
-                    "offset not advanced", tag,
+                    "maybe_refresh_hot_tags: tag {!r} refresh failed; offset not advanced",
+                    tag,
                 )
         return refreshed
 
@@ -1720,7 +1735,9 @@ class MemoryConsolidator:
         the LLM only sees one tag's worth of relevant context at a time.
         """
         return await self.store.annotate(
-            messages, self.provider, self.model,
+            messages,
+            self.provider,
+            self.model,
             enable_foresight=self.enable_foresight,
         )
 
@@ -1728,7 +1745,8 @@ class MemoryConsolidator:
         """Refresh any profile sections whose backing tag has heated up
         since the last refresh. Returns the number of sections rewritten."""
         return await self.store.maybe_refresh_hot_tags(
-            self.provider, self.model,
+            self.provider,
+            self.model,
             threshold=self._REFRESH_HOT_TAG_THRESHOLD,
         )
 
@@ -1757,7 +1775,7 @@ class MemoryConsolidator:
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
-        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        channel, chat_id = session.key.split(":", 1) if ":" in session.key else (None, None)
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -1779,7 +1797,7 @@ class MemoryConsolidator:
         """
         lock = self.get_lock(session.key)
         async with lock:
-            snapshot = session.messages[session.last_consolidated:]
+            snapshot = session.messages[session.last_consolidated :]
             if not snapshot:
                 return True
             ok = await self.consolidate_messages(snapshot)
@@ -1823,7 +1841,7 @@ class MemoryConsolidator:
                     break
 
                 end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated:end_idx]
+                chunk = session.messages[session.last_consolidated : end_idx]
                 if not chunk:
                     break
 

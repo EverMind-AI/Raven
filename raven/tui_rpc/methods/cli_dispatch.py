@@ -225,9 +225,7 @@ def _invoke_ec_cli(argv: list[str]) -> int:
     return int(result) if isinstance(result, int) else 0
 
 
-async def cli_dispatch(
-    params: dict, *, confirm_broker: "ConfirmBroker | None" = None
-) -> dict:
+async def cli_dispatch(params: dict, *, confirm_broker: "ConfirmBroker | None" = None) -> dict:
     """Run an EC CLI command in-process; return ``CliResult``-shaped dict.
 
     When ``confirm_broker`` is supplied (TUI production path), ``typer.confirm``
@@ -325,10 +323,7 @@ async def cli_dispatch(
                     # available). Abort is a RuntimeError subclass, NOT a
                     # ClickException, so without this it falls to the broad
                     # catch below as a useless "Internal error: Abort".
-                    err_console.print(
-                        "[yellow]This command needs confirmation; "
-                        "re-run with --yes.[/]"
-                    )
+                    err_console.print("[yellow]This command needs confirmation; re-run with --yes.[/]")
                     exit_code = 1
                 except click.exceptions.ClickException as exc:
                     err_console.print(f"[red]Error:[/] {exc.format_message()}")
@@ -357,9 +352,7 @@ async def cli_dispatch(
     }
 
 
-def register_cli_methods(
-    dispatcher: "Dispatcher", *, confirm_broker: "ConfirmBroker | None" = None
-) -> None:
+def register_cli_methods(dispatcher: "Dispatcher", *, confirm_broker: "ConfirmBroker | None" = None) -> None:
     """Register ``cli.dispatch`` on a dispatcher instance.
 
     ``confirm_broker`` is pre-bound via a closure (mirrors the turn/emitter

@@ -10,9 +10,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
-
-import pytest
 
 from raven.cli._cron_handler import _record_cron_dispatch_to_ledger
 from raven.config.raven import NudgePolicyConfig
@@ -44,7 +41,8 @@ def _make_runner(tmp_path: Path) -> object:
     clock = _Clock(datetime(2026, 5, 20, 12, 0, 0))
     policy = NudgePolicy(NudgePolicyConfig(), now_fn=clock)
     feedback = NudgeFeedbackTracker(
-        tmp_path / "sentinel_feedback.jsonl", now_fn=clock,
+        tmp_path / "sentinel_feedback.jsonl",
+        now_fn=clock,
     )
 
     class _Runner:
@@ -115,9 +113,7 @@ def test_cron_fire_records_neutral_for_acceptance_rate(tmp_path):
     # acceptance_rate should return None (no scored dispatches — neutral
     # excludes from denominator) instead of 0.0:
     rate = runner.feedback.acceptance_rate(since_days=7, min_volume=1)
-    assert rate is None, (
-        f"cron fires should not count in acceptance_rate, got {rate}"
-    )
+    assert rate is None, f"cron fires should not count in acceptance_rate, got {rate}"
 
 
 def test_cron_fire_records_dispatched_with_source_cron(tmp_path):
@@ -132,9 +128,7 @@ def test_cron_fire_records_dispatched_with_source_cron(tmp_path):
     recent = runner.feedback.recent(n=5)
     assert len(recent) >= 2  # DISPATCHED + NEUTRAL pair
     # Find the dispatched record (NEUTRAL is the trailing record post-B4).
-    dispatched = next(
-        r for r in recent if r.get("signal") == "dispatched"
-    )
+    dispatched = next(r for r in recent if r.get("signal") == "dispatched")
     assert dispatched["source"] == "cron"
     assert dispatched["details"]["topic_tag"] == "birthday_xiaotang"
     assert dispatched["details"]["cron_id"] == "testjob1"
@@ -178,8 +172,11 @@ def test_cron_fire_suppresses_next_sentinel_tick_same_topic(tmp_path):
     # after. With default topic_quota config (max 1 per 24h), this is
     # denied.
     result = runner.policy.check(
-        "nudge", "sim:dev-01:main", "girlfriend birthday in 7 days",
-        "low", topic_tag="birthday_xiaotang",
+        "nudge",
+        "sim:dev-01:main",
+        "girlfriend birthday in 7 days",
+        "low",
+        topic_tag="birthday_xiaotang",
     )
     assert result.verdict == "deny"
     assert "topic" in result.reason  # topic_quota or similar

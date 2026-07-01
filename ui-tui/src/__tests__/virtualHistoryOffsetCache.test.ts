@@ -3,10 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { PassThrough } from 'stream'
-
 import { Box, renderSync, ScrollBox, type ScrollBoxHandle, Text } from '@hermes/ink'
 import React, { useLayoutEffect, useRef } from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
@@ -46,7 +45,11 @@ const mountedSpan = (items: readonly Item[], virtualHistory: ReturnType<typeof u
   return { bottom: virtualHistory.topSpacer + height, top: virtualHistory.topSpacer }
 }
 
-const viewportIsMounted = (items: readonly Item[], virtualHistory: ReturnType<typeof useVirtualHistory>, scroll: ScrollBoxHandle) => {
+const viewportIsMounted = (
+  items: readonly Item[],
+  virtualHistory: ReturnType<typeof useVirtualHistory>,
+  scroll: ScrollBoxHandle
+) => {
   const span = mountedSpan(items, virtualHistory)
   const top = scroll.getScrollTop()
   const bottom = top + scroll.getViewportHeight()

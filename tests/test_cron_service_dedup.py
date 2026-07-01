@@ -42,12 +42,14 @@ def _add(svc, msg, schedule, *, channel="cli", to="direct", topic_tag=None):
 def test_topic_tag_dedup_same_topic_returns_existing(svc):
     """Two add_job calls with the same topic_tag share the same job id."""
     j1 = _add(
-        svc, "妈妈吃多奈哌齐 5mg (中午)",
+        svc,
+        "妈妈吃多奈哌齐 5mg (中午)",
         CronSchedule(kind="cron", expr="20 11 * * *"),
         topic_tag="medication_noon",
     )
     j2 = _add(
-        svc, "妈妈吃多奈哌齐 5mg (中午, 妈妈刚说想吃)",
+        svc,
+        "妈妈吃多奈哌齐 5mg (中午, 妈妈刚说想吃)",
         CronSchedule(kind="cron", expr="30 11 * * *"),
         topic_tag="medication_noon",
     )
@@ -57,12 +59,14 @@ def test_topic_tag_dedup_same_topic_returns_existing(svc):
 def test_topic_tag_dedup_updates_message_in_place(svc):
     """Second add_job with same topic_tag overwrites message + schedule."""
     j1 = _add(
-        svc, "old message",
+        svc,
+        "old message",
         CronSchedule(kind="cron", expr="0 11 * * *"),
         topic_tag="medication_noon",
     )
     j2 = _add(
-        svc, "new message",
+        svc,
+        "new message",
         CronSchedule(kind="cron", expr="30 13 * * *"),
         topic_tag="medication_noon",
     )
@@ -75,15 +79,19 @@ def test_topic_tag_dedup_updates_message_in_place(svc):
 def test_topic_tag_dedup_isolated_by_channel(svc):
     """Same topic_tag on different (channel, to) does NOT dedup."""
     j1 = _add(
-        svc, "msg A",
+        svc,
+        "msg A",
         CronSchedule(kind="cron", expr="0 9 * * *"),
-        channel="cli", to="alice",
+        channel="cli",
+        to="alice",
         topic_tag="exercise",
     )
     j2 = _add(
-        svc, "msg B",
+        svc,
+        "msg B",
         CronSchedule(kind="cron", expr="0 9 * * *"),
-        channel="feishu", to="bob",
+        channel="feishu",
+        to="bob",
         topic_tag="exercise",
     )
     assert j1.id != j2.id, "different channel/to must NOT dedup"
@@ -92,12 +100,14 @@ def test_topic_tag_dedup_isolated_by_channel(svc):
 def test_topic_tag_dedup_skipped_when_no_tag(svc):
     """Without topic_tag, falls through to message-equal / schedule dedup."""
     j1 = _add(
-        svc, "stretch reminder",
+        svc,
+        "stretch reminder",
         CronSchedule(kind="cron", expr="0 9 * * *"),
         topic_tag=None,
     )
     j2 = _add(
-        svc, "stretch reminder",  # identical message → message-equal dedup
+        svc,
+        "stretch reminder",  # identical message → message-equal dedup
         CronSchedule(kind="cron", expr="30 14 * * *"),  # different time
         topic_tag=None,
     )
@@ -109,12 +119,14 @@ def test_topic_tag_dedup_skipped_when_no_tag(svc):
 def test_topic_tag_dedup_distinct_tags_keep_separate(svc):
     """Different topic_tag values on same channel/to → two distinct jobs."""
     j1 = _add(
-        svc, "ms morning meds",
+        svc,
+        "ms morning meds",
         CronSchedule(kind="cron", expr="0 7 * * *"),
         topic_tag="medication_morning",
     )
     j2 = _add(
-        svc, "ms noon meds",
+        svc,
+        "ms noon meds",
         CronSchedule(kind="cron", expr="0 11 * * *"),
         topic_tag="medication_noon",
     )
@@ -128,12 +140,14 @@ def test_topic_tag_dedup_at_kind_also_dedups(svc):
     catches the case where the LLM creates an `at` for today AND a
     recurring `cron_expr` for the same topic."""
     j1 = _add(
-        svc, "OKR review reminder",
+        svc,
+        "OKR review reminder",
         CronSchedule(kind="cron", expr="0 9 * * 1"),  # weekly Monday
         topic_tag="okr_quarterly",
     )
     j2 = _add(
-        svc, "OKR review reminder (urgent)",
+        svc,
+        "OKR review reminder (urgent)",
         CronSchedule(kind="at", at_ms=int(1e15)),  # one-shot far-future
         topic_tag="okr_quarterly",
     )
@@ -149,12 +163,14 @@ def test_topic_tag_dedup_runs_before_message_equal(svc):
     takes precedence over message-equal (otherwise different messages
     with same topic_tag would slip through and create duplicates)."""
     j1 = _add(
-        svc, "wholly different text A",
+        svc,
+        "wholly different text A",
         CronSchedule(kind="cron", expr="0 8 * * *"),
         topic_tag="meds_morning",
     )
     j2 = _add(
-        svc, "completely different text B",
+        svc,
+        "completely different text B",
         CronSchedule(kind="cron", expr="0 8 * * *"),
         topic_tag="meds_morning",
     )

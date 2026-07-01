@@ -25,9 +25,9 @@ from raven.agent.loop.recovery import (
     has_thinking,
     limits_from_defaults,
 )
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.providers.base import LLMProvider, LLMResponse
 
 
 @pytest.fixture
@@ -38,16 +38,21 @@ def workspace():
 
 def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits | None = None) -> AgentLoop:
     return AgentLoop(
-        provider=provider, workspace=workspace,
-        model="stub", max_iterations=10, restrict_to_workspace=True,
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=10,
+        restrict_to_workspace=True,
         empty_recovery=limits,
     )
 
 
-def _classify(response, visible, *, prev_had_tool_calls=False, nudges_done=0,
-              prefill_retries=0, empty_retries=0, limits=None):
+def _classify(
+    response, visible, *, prev_had_tool_calls=False, nudges_done=0, prefill_retries=0, empty_retries=0, limits=None
+):
     return classify_empty_response(
-        response, visible,
+        response,
+        visible,
         prev_had_tool_calls=prev_had_tool_calls,
         nudges_done=nudges_done,
         prefill_retries=prefill_retries,
@@ -59,6 +64,7 @@ def _classify(response, visible, *, prev_had_tool_calls=False, nudges_done=0,
 # --------------------------------------------------------------------------- #
 # unit: thinking detection                                                     #
 # --------------------------------------------------------------------------- #
+
 
 def test_has_inline_thinking():
     assert has_inline_thinking("<think>...</think>") is True
@@ -79,6 +85,7 @@ def test_has_thinking():
 # --------------------------------------------------------------------------- #
 # unit: classify_empty_response                                                #
 # --------------------------------------------------------------------------- #
+
 
 def test_classify_visible_text_completes():
     assert _classify(LLMResponse(content="answer"), "answer") is RecoveryAction.COMPLETE
@@ -133,8 +140,10 @@ def test_limits_from_defaults_maps_fields():
 
     limits = limits_from_defaults(_D())
     assert limits == RecoveryLimits(
-        enabled=False, post_tool_empty_max_nudges=5,
-        thinking_prefill_max_retries=6, empty_content_max_retries=7,
+        enabled=False,
+        post_tool_empty_max_nudges=5,
+        thinking_prefill_max_retries=6,
+        empty_content_max_retries=7,
     )
 
 
@@ -146,14 +155,23 @@ def test_limits_from_defaults_uses_defaults_for_missing_attrs():
 # loop: plain empty -> retry -> recover                                        #
 # --------------------------------------------------------------------------- #
 
+
 class _EmptyThenAnswerProvider(LLMProvider):
     def __init__(self, empties: int = 2):
         super().__init__(api_key="test")
         self._empties = empties
         self.calls = 0
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.calls += 1
         if self.calls <= self._empties:
             return LLMResponse(content="", finish_reason="stop")
@@ -178,8 +196,8 @@ async def test_empty_then_recovers_and_does_not_persist_scaffolding(workspace):
     )
 
     assert out is not None
-    assert out[0] == "real answer"      # recovered, not the canned dud reply
-    assert provider.calls == 3                # 2 empty retries + the recovered call
+    assert out[0] == "real answer"  # recovered, not the canned dud reply
+    assert provider.calls == 3  # 2 empty retries + the recovered call
     # synthetic scaffolding must not be persisted into session history
     session = agent.sessions.get_or_create("s1")
     for m in session.messages:
@@ -190,14 +208,23 @@ async def test_empty_then_recovers_and_does_not_persist_scaffolding(workspace):
 # loop: thinking-only -> prefill -> recover                                    #
 # --------------------------------------------------------------------------- #
 
+
 class _ThinkingThenAnswerProvider(LLMProvider):
     def __init__(self):
         super().__init__(api_key="test")
         self.calls = 0
         self.saw_reasoning_replay = False
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.calls += 1
         if self.calls == 1:
             return LLMResponse(content="", reasoning_content="let me think", finish_reason="stop")
@@ -236,13 +263,22 @@ async def test_thinking_only_recovers_via_prefill(workspace):
 # loop: persistently empty is bounded then falls back                          #
 # --------------------------------------------------------------------------- #
 
+
 class _AlwaysEmptyProvider(LLMProvider):
     def __init__(self):
         super().__init__(api_key="test")
         self.calls = 0
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.calls += 1
         return LLMResponse(content="", finish_reason="stop")
 
@@ -286,5 +322,5 @@ async def test_recovery_disabled_falls_back_immediately(workspace):
     )
 
     assert out is not None
-    assert provider.calls == 1               # no retries when disabled
+    assert provider.calls == 1  # no retries when disabled
     assert "no response" in out[0].lower()

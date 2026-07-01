@@ -57,16 +57,12 @@ class EvalEngine:
         else:
             self._judge = _NoopJudge()  # type: ignore[assignment]
 
-        self._adapter: EvalAdapter | None = (
-            EvalAdapter(memory) if memory is not None else None
-        )
+        self._adapter: EvalAdapter | None = EvalAdapter(memory) if memory is not None else None
 
         self._before_iteration = BeforeIterationHook(self._config)
         self._tool_audit = ToolAuditHook(self._config)
         self._after_iteration = (
-            AfterIterationHook(self._config, self._judge, self._adapter)
-            if self._adapter is not None
-            else _NoopHook()  # type: ignore[assignment]
+            AfterIterationHook(self._config, self._judge, self._adapter) if self._adapter is not None else _NoopHook()  # type: ignore[assignment]
         )
 
     @property

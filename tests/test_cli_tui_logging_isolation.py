@@ -36,8 +36,7 @@ def _tty_stream_handlers(logger_name: str) -> list[logging.Handler]:
     return [
         h
         for h in lg.handlers
-        if isinstance(h, logging.StreamHandler)
-        and getattr(h, "stream", None) in (sys.stderr, sys.stdout)
+        if isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) in (sys.stderr, sys.stdout)
     ]
 
 
@@ -63,9 +62,7 @@ def _isolate_logging(tmp_path, monkeypatch):
     saved_root_filters = list(root.filters)
     saved_root_level = root.level
     saved_root_disabled = root.disabled
-    saved_named_handlers = {
-        name: list(logging.getLogger(name).handlers) for name in _KNOWN_TTY_LEAKING_LOGGERS
-    }
+    saved_named_handlers = {name: list(logging.getLogger(name).handlers) for name in _KNOWN_TTY_LEAKING_LOGGERS}
     saved_disable = logging.root.manager.disable
 
     try:

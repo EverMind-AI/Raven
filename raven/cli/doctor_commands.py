@@ -168,17 +168,11 @@ def _render_human_output(report: DoctorReport) -> None:
         console.print(f"  Workspace: {paths.workspace_path}  {mark}")
 
     if not paths.config_exists:
-        console.print(
-            "\n[yellow]⚠ Raven is not configured.[/yellow] Run "
-            "[cyan]raven onboard[/cyan] to set it up."
-        )
+        console.print("\n[yellow]⚠ Raven is not configured.[/yellow] Run [cyan]raven onboard[/cyan] to set it up.")
         return
 
     if not report.config_loaded:
-        console.print(
-            "\n[red]✗ Config schema invalid.[/red] Run "
-            "[cyan]raven onboard --reset[/cyan] to recreate it."
-        )
+        console.print("\n[red]✗ Config schema invalid.[/red] Run [cyan]raven onboard --reset[/cyan] to recreate it.")
         return
 
     routing = report.routing
@@ -197,10 +191,7 @@ def _render_human_output(report: DoctorReport) -> None:
         console.print("\n[bold]Features[/bold]")
         count = len(features.channels_enabled)
         if count:
-            console.print(
-                f"  Channels:    {count} enabled  "
-                f"({', '.join(features.channels_enabled)})"
-            )
+            console.print(f"  Channels:    {count} enabled  ({', '.join(features.channels_enabled)})")
         else:
             console.print("  Channels:    [dim]none enabled[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
@@ -211,9 +202,7 @@ def _render_human_output(report: DoctorReport) -> None:
         console.print("\n[bold]Gateway[/bold]")
         if gateway.running:
             since = (
-                datetime.fromtimestamp(gateway.started_at).strftime("%Y-%m-%d %H:%M:%S")
-                if gateway.started_at
-                else "?"
+                datetime.fromtimestamp(gateway.started_at).strftime("%Y-%m-%d %H:%M:%S") if gateway.started_at else "?"
             )
             console.print(f"  [green]✓ running[/green] (pid {gateway.pid}, since {since})")
         else:
@@ -241,34 +230,26 @@ def _render_human_output(report: DoctorReport) -> None:
     if code == 0:
         if report.probe is None:
             console.print("[green]✓ Configuration looks healthy.[/green]")
-            console.print(
-                "Run [cyan]doctor --probe[/cyan] to send a test message and "
-                "verify the LLM responds."
-            )
+            console.print("Run [cyan]doctor --probe[/cyan] to send a test message and verify the LLM responds.")
         else:
             console.print("[green]✓ All checks passed.[/green]")
     elif routing and routing.provider is None:
         console.print(
-            f"[red]✗ Model [bold]{routing.model}[/bold] could not be routed "
-            "to any configured provider.[/red]"
+            f"[red]✗ Model [bold]{routing.model}[/bold] could not be routed to any configured provider.[/red]"
         )
-        console.print(
-            "Run [cyan]raven provider list[/cyan] / "
-            "[cyan]raven provider set[/cyan] to fix routing."
-        )
+        console.print("Run [cyan]raven provider list[/cyan] / [cyan]raven provider set[/cyan] to fix routing.")
 
 
 def register(app: typer.Typer) -> None:
     @app.command()
     def doctor(
-        probe: bool = typer.Option(
-            False, "--probe", help="Send a test message to verify the LLM responds."
-        ),
-        json_output: bool = typer.Option(
-            False, "--json", help="Emit machine-readable JSON (CI-friendly)."
-        ),
+        probe: bool = typer.Option(False, "--probe", help="Send a test message to verify the LLM responds."),
+        json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON (CI-friendly)."),
         timeout: int = typer.Option(
-            15, "--timeout", help="LLM probe timeout in seconds.", min=1,
+            15,
+            "--timeout",
+            help="LLM probe timeout in seconds.",
+            min=1,
         ),
     ) -> None:
         """Health-check Raven config, routing, and (optionally) the LLM."""

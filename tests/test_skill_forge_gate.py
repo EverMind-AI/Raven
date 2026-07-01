@@ -6,8 +6,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import pytest
-
 from raven.memory_engine.skill_forge.gate import LLMGateFilter
 from raven.memory_engine.skill_forge.types import RouterHit
 
@@ -34,7 +32,10 @@ class _StubProvider:
 
 def _hit(qid: str, name: str, body: str = "", desc: str = "") -> RouterHit:
     return RouterHit(
-        qualified_id=qid, name=name, content=body, score=0.5,
+        qualified_id=qid,
+        name=name,
+        content=body,
+        score=0.5,
         meta={"description": desc, "source": qid.split("/", 1)[0]},
     )
 
@@ -48,10 +49,14 @@ async def test_empty_candidates_returns_empty() -> None:
 
 
 async def test_selects_by_qualified_id() -> None:
-    provider = _StubProvider(json.dumps({
-        "plan": "use pdf gen",
-        "skills": ["local/pdf-gen"],
-    }))
+    provider = _StubProvider(
+        json.dumps(
+            {
+                "plan": "use pdf gen",
+                "skills": ["local/pdf-gen"],
+            }
+        )
+    )
     gate = LLMGateFilter(provider, max_select=2)
     hits = [
         _hit("local/pdf-gen", "pdf-gen", body="generate pdf"),
@@ -68,9 +73,14 @@ async def test_empty_skills_list_is_valid_inject_nothing() -> None:
 
 
 async def test_respects_max_select_truncation() -> None:
-    provider = _StubProvider(json.dumps({
-        "plan": "p", "skills": ["local/a", "local/b", "local/c"],
-    }))
+    provider = _StubProvider(
+        json.dumps(
+            {
+                "plan": "p",
+                "skills": ["local/a", "local/b", "local/c"],
+            }
+        )
+    )
     gate = LLMGateFilter(provider, max_select=2)
     hits = [_hit(f"local/{n}", n) for n in ("a", "b", "c")]
     out = await gate.filter("task", hits)
@@ -78,9 +88,14 @@ async def test_respects_max_select_truncation() -> None:
 
 
 async def test_unknown_id_in_response_silently_dropped() -> None:
-    provider = _StubProvider(json.dumps({
-        "plan": "p", "skills": ["local/known", "ghost/missing"],
-    }))
+    provider = _StubProvider(
+        json.dumps(
+            {
+                "plan": "p",
+                "skills": ["local/known", "ghost/missing"],
+            }
+        )
+    )
     hits = [_hit("local/known", "known")]
     out = await LLMGateFilter(provider).filter("task", hits)
     assert [h.qualified_id for h in out] == ["local/known"]
@@ -108,10 +123,7 @@ async def test_unparseable_response_falls_back_to_top_n() -> None:
 async def test_think_block_stripped_before_parse() -> None:
     """Qwen3-style reasoning models emit <think>...</think> before JSON.
     The gate must tolerate it without falling back."""
-    provider = _StubProvider(
-        '<think>let me think...</think>\n'
-        '{"plan": "p", "skills": ["local/a"]}'
-    )
+    provider = _StubProvider('<think>let me think...</think>\n{"plan": "p", "skills": ["local/a"]}')
     out = await LLMGateFilter(provider).filter("task", [_hit("local/a", "a")])
     assert [h.qualified_id for h in out] == ["local/a"]
 

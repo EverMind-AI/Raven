@@ -707,9 +707,7 @@ class TokenWiseConfig(_Base):
     skill_lazy_loading: bool = False
     """Only inject skill summaries relevant to the current message."""
 
-    tool_result_lifecycle: ToolResultLifecycleConfig = Field(
-        default_factory=ToolResultLifecycleConfig
-    )
+    tool_result_lifecycle: ToolResultLifecycleConfig = Field(default_factory=ToolResultLifecycleConfig)
     smart_routing: SmartRoutingConfig = Field(default_factory=SmartRoutingConfig)
     budget: BudgetPolicyConfig = Field(default_factory=BudgetPolicyConfig)
 

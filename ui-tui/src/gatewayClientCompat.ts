@@ -35,6 +35,7 @@
 import { EventEmitter } from 'node:events'
 
 import type { GatewayEvent } from './gatewayTypes.js'
+
 import { STUB_SKIN } from './lib/stubGatewayFixtures.js'
 import { RpcClient } from './rpc/index.js'
 
@@ -107,7 +108,7 @@ export class GatewayClientCompat extends EventEmitter {
     this.startPromise = (async () => {
       await this.rpcClient.rpc('system.hello', {
         client_version: CLIENT_VERSION,
-        client_capabilities: CLIENT_CAPABILITIES,
+        client_capabilities: CLIENT_CAPABILITIES
       })
       // Defer event publish so `useMainApp.ts`'s useEffect (which attaches
       // `.on('event', ...)` then calls `drain()`) can mount before we

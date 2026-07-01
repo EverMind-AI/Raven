@@ -72,10 +72,19 @@ class CursorStore:
     async def save(self) -> None:
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps({
-                "schemaVersion": 1, "updatedAt": datetime.now(timezone.utc).isoformat(),
-                "cursors": self._cursors,
-            }, ensure_ascii=False, indent=2) + "\n", "utf-8")
+            self._path.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "cursors": self._cursors,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                "utf-8",
+            )
         except Exception as e:
             logger.warning("Failed to save Mochat cursor file: {}", e)
 

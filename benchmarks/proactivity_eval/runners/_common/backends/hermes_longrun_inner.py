@@ -30,13 +30,13 @@ def main() -> None:
         fake_now_iso = os.environ["HERMES_EVAL_FAKE_NOW"]
         spec = json.loads(os.environ["HERMES_EVAL_TURN_SPEC"])
     except KeyError as exc:
-        print(json.dumps({"success": False, "error": f"missing env: {exc}"}),
-              flush=True)
+        print(json.dumps({"success": False, "error": f"missing env: {exc}"}), flush=True)
         sys.exit(1)
 
     fake_now = datetime.fromisoformat(fake_now_iso)
     if fake_now.tzinfo is None:
         from datetime import timezone
+
         fake_now = fake_now.replace(tzinfo=timezone.utc)
 
     # Patch BEFORE hermes_cli.main imports cron modules that cache
@@ -44,8 +44,7 @@ def main() -> None:
     try:
         import hermes_time  # noqa: E402
     except ImportError as exc:
-        print(json.dumps({"success": False, "error": f"hermes_time import: {exc}"}),
-              flush=True)
+        print(json.dumps({"success": False, "error": f"hermes_time import: {exc}"}), flush=True)
         sys.exit(1)
     hermes_time.now = lambda: fake_now  # noqa: E731
 
@@ -53,8 +52,7 @@ def main() -> None:
     session_id = spec.get("session_id")
     resume = bool(spec.get("resume"))
     if not user_message:
-        print(json.dumps({"success": False, "error": "empty user_message"}),
-              flush=True)
+        print(json.dumps({"success": False, "error": "empty user_message"}), flush=True)
         sys.exit(1)
 
     # Build argv mimicking `hermes chat -q <msg> [--resume <sid>] -Q --pass-session-id`
@@ -73,9 +71,10 @@ def main() -> None:
     err_msg: str | None = None
     try:
         from hermes_cli.main import main as hermes_main  # noqa: E402
+
         hermes_main()
     except SystemExit as exc:
-        success = (exc.code == 0 or exc.code is None)
+        success = exc.code == 0 or exc.code is None
         if not success:
             err_msg = f"hermes exited with code {exc.code}"
     except Exception as exc:
@@ -92,8 +91,7 @@ def main() -> None:
     session_id_out = sid_match.group(1) if sid_match else (session_id or "unknown")
 
     # The response body is stdout minus the "session_id: ..." echo.
-    response = re.sub(r"^session[-_]id:.*$", "", stdout_text,
-                      flags=re.IGNORECASE | re.MULTILINE).strip()
+    response = re.sub(r"^session[-_]id:.*$", "", stdout_text, flags=re.IGNORECASE | re.MULTILINE).strip()
 
     payload = {
         "success": bool(success),

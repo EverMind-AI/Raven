@@ -11,8 +11,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from raven.agent.loop import AgentLoop
 from raven.providers.base import LLMResponse, StreamDelta
 
@@ -107,11 +105,14 @@ async def test_llm_call_stream_captures_final_usage() -> None:
     """The last non-None usage in the stream is preserved on the response."""
     chunks = [
         StreamDelta(content="x"),
-        StreamDelta(content=None, usage={
-            "prompt_tokens": 10,
-            "completion_tokens": 5,
-            "total_tokens": 15,
-        }),
+        StreamDelta(
+            content=None,
+            usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        ),
     ]
     provider = _FakeProvider(chunks)
     call = _bind_helper(provider)
@@ -120,7 +121,10 @@ async def test_llm_call_stream_captures_final_usage() -> None:
         return None
 
     response = await call(
-        messages=[], tools=None, model="m", on_token_delta=on_delta,
+        messages=[],
+        tools=None,
+        model="m",
+        on_token_delta=on_delta,
     )
 
     assert response.usage["total_tokens"] == 15
@@ -141,17 +145,25 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
     chunks = [
         StreamDelta(
             content=None,
-            tool_call_delta={"tool_calls": [{
-                "id": "call_abc",
-                "function": {"name": "fs.read", "arguments": "{\"path\":"},
-            }]},
+            tool_call_delta={
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "function": {"name": "fs.read", "arguments": '{"path":'},
+                    }
+                ]
+            },
         ),
         StreamDelta(
             content=None,
-            tool_call_delta={"tool_calls": [{
-                "id": None,
-                "function": {"name": None, "arguments": " \"/tmp/x\"}"},
-            }]},
+            tool_call_delta={
+                "tool_calls": [
+                    {
+                        "id": None,
+                        "function": {"name": None, "arguments": ' "/tmp/x"}'},
+                    }
+                ]
+            },
         ),
     ]
     provider = _FakeProvider(chunks)
@@ -161,7 +173,10 @@ async def test_llm_call_stream_collects_tool_call_fragments() -> None:
         return None
 
     response = await call(
-        messages=[], tools=None, model="m", on_token_delta=on_delta,
+        messages=[],
+        tools=None,
+        model="m",
+        on_token_delta=on_delta,
     )
 
     assert response.has_tool_calls

@@ -4,6 +4,7 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import type { InputEvent, Key } from '@hermes/ink'
+
 import * as Ink from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from 'react'
@@ -1093,9 +1094,7 @@ interface TextInputProps {
   voiceRecordKey?: ParsedVoiceRecordKey
 }
 
-export type RightClickDecision =
-  | { action: 'copy'; text: string }
-  | { action: 'paste' }
+export type RightClickDecision = { action: 'copy'; text: string } | { action: 'paste' }
 
 /**
  * Decide what right-click should do on the composer:

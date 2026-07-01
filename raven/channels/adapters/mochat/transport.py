@@ -59,7 +59,9 @@ class SocketTransport:
             reconnection_attempts=self._config.max_retry_attempts or None,
             reconnection_delay=max(0.1, self._config.socket_reconnect_delay_ms / 1000.0),
             reconnection_delay_max=max(0.1, self._config.socket_max_reconnect_delay_ms / 1000.0),
-            logger=False, engineio_logger=False, serializer=serializer,
+            logger=False,
+            engineio_logger=False,
+            serializer=serializer,
         )
 
     async def connect(self) -> bool:
@@ -75,10 +77,12 @@ class SocketTransport:
 
         url = (self._config.socket_url or self._config.base_url).strip().rstrip("/")
         path = (self._config.socket_path or "/socket.io").strip().lstrip("/")
-        self._client = client   # before connect() — see the ordering contract above
+        self._client = client  # before connect() — see the ordering contract above
         try:
             await client.connect(
-                url, transports=["websocket"], socketio_path=path,
+                url,
+                transports=["websocket"],
+                socketio_path=path,
                 auth={"token": self._config.claw_token},
                 wait_timeout=max(1.0, self._config.socket_connect_timeout_ms / 1000.0),
             )

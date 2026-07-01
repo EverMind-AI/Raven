@@ -70,8 +70,7 @@ class QuestionBroker:
         existing = self._pending.get(conversation_id)
         if existing is not None:
             logger.error(
-                "question_broker: overlapping question for conversation {}; "
-                "fail-safing the stale one",
+                "question_broker: overlapping question for conversation {}; fail-safing the stale one",
                 conversation_id,
             )
             self._by_request.pop(existing.request_id, None)
@@ -81,9 +80,7 @@ class QuestionBroker:
         request_id = uuid4().hex
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        self._pending[conversation_id] = _PendingQuestion(
-            future=future, request_id=request_id, default=default
-        )
+        self._pending[conversation_id] = _PendingQuestion(future=future, request_id=request_id, default=default)
         self._by_request[request_id] = conversation_id
         try:
             # ``clarify.request`` is the ui-tui frontend's existing multi-choice
@@ -106,9 +103,7 @@ class QuestionBroker:
         except (asyncio.TimeoutError, asyncio.CancelledError):
             return default
         except Exception:  # noqa: BLE001 — fail-safe: the loop needs a string back
-            logger.exception(
-                "question_broker: await_question failed for {}", conversation_id
-            )
+            logger.exception("question_broker: await_question failed for {}", conversation_id)
             return default
         finally:
             # Only retract our own entry: an overlapping question may have

@@ -56,11 +56,9 @@ class SlackChannel(ChannelBase):
             return
 
         self._running = True
-        self._stop_event = asyncio.Event()   # fresh per start (restart-safe)
+        self._stop_event = asyncio.Event()  # fresh per start (restart-safe)
         self._web_client = AsyncWebClient(token=self.config.bot_token)
-        self._socket_client = SocketModeClient(
-            app_token=self.config.app_token, web_client=self._web_client
-        )
+        self._socket_client = SocketModeClient(app_token=self.config.app_token, web_client=self._web_client)
         self._socket_client.socket_mode_request_listeners.append(self._on_socket_request)
 
         try:
@@ -102,9 +100,7 @@ class SlackChannel(ChannelBase):
                 )
             for media_path in media:
                 try:
-                    await self._web_client.files_upload_v2(
-                        channel=chat_id, file=media_path
-                    )
+                    await self._web_client.files_upload_v2(channel=chat_id, file=media_path)
                 except Exception as e:
                     if _transient_slack(e):
                         raise
@@ -142,7 +138,7 @@ class SlackChannel(ChannelBase):
         channel_type = event.get("channel_type") or ""
         if not parsing.sender_permitted(self.config, sender_id, chat_id, channel_type):
             return
-        if not self.is_allowed(sender_id):   # allow_from gate before the :eyes: react
+        if not self.is_allowed(sender_id):  # allow_from gate before the :eyes: react
             return
         if channel_type != "im" and not parsing.should_respond_in_channel(
             self.config, event_type, text, chat_id, self._bot_user_id
@@ -160,7 +156,9 @@ class SlackChannel(ChannelBase):
         session_key = f"slack:{chat_id}:{thread_ts}" if thread_ts and channel_type != "im" else None
         try:
             await self.intake.publish(
-                sender_id=sender_id, chat_id=chat_id, content=text,
+                sender_id=sender_id,
+                chat_id=chat_id,
+                content=text,
                 metadata={"slack": {"event": event, "thread_ts": thread_ts, "channel_type": channel_type}},
                 session_key=session_key,
             )

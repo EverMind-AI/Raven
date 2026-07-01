@@ -31,7 +31,6 @@ import pytest
 
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 
-
 # ---------------------------------------------------------------------------
 # Path attribute sanity (used by Sentinel's RoutineLearner)
 # ---------------------------------------------------------------------------
@@ -61,24 +60,28 @@ class TestReadHistoryTail:
 
     def test_returns_last_n_non_blank(self, store: MemoryStore) -> None:
         store.history_file.write_text(
-            "a\nb\n\n\nc\nd\ne\n", encoding="utf-8",
+            "a\nb\n\n\nc\nd\ne\n",
+            encoding="utf-8",
         )
         assert store.read_history_tail(2) == "d\ne"
 
     def test_lines_zero_returns_all_non_blank(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ) -> None:
         store.history_file.write_text("a\n\nb\nc\n", encoding="utf-8")
         assert store.read_history_tail(0) == "a\nb\nc"
 
     def test_lines_negative_returns_all_non_blank(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ) -> None:
         store.history_file.write_text("x\ny\n", encoding="utf-8")
         assert store.read_history_tail(-5) == "x\ny"
 
     def test_more_requested_than_present(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ) -> None:
         store.history_file.write_text("only\n", encoding="utf-8")
         assert store.read_history_tail(99) == "only"
@@ -117,14 +120,17 @@ class TestUpdateSection:
         assert "keep me" in text
 
     def test_at_end_true_moves_section_to_end(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ) -> None:
         store.write_long_term(
             "## Sentinel Observations\n\nold\n\n## Tail\n\nlast block\n",
         )
         with store.locked():
             store.update_section(
-                "## Sentinel Observations", "new", at_end=True,
+                "## Sentinel Observations",
+                "new",
+                at_end=True,
             )
         text = store.read_long_term()
         # After at_end splice, Sentinel section lives at the bottom.
@@ -133,14 +139,17 @@ class TestUpdateSection:
         assert sentinel_pos > tail_pos
 
     def test_at_end_false_preserves_position(
-        self, store: MemoryStore,
+        self,
+        store: MemoryStore,
     ) -> None:
         store.write_long_term(
             "## Profile\n\np\n\n## Sentinel Observations\n\nold\n\n## Tail\n\nt\n",
         )
         with store.locked():
             store.update_section(
-                "## Sentinel Observations", "fresh", at_end=False,
+                "## Sentinel Observations",
+                "fresh",
+                at_end=False,
             )
         text = store.read_long_term()
         # Section stayed in-place; `## Tail` still after it.
@@ -161,7 +170,8 @@ class TestLockedSectionWrite:
     writes serialize — neither read-modify-write loses to the other."""
 
     def test_concurrent_section_updates_serialize(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         store = MemoryStore(tmp_path)
         observed_orders: list[str] = []
@@ -196,7 +206,8 @@ class TestLockedSectionWrite:
         assert len(observed_orders) == 2
 
     def test_update_section_without_lock_works_in_single_thread(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Single-thread case: calling update_section without explicit
         ``locked`` still works — the lock is for cross-writer safety,

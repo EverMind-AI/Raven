@@ -13,10 +13,7 @@ LINES_PER_CALL = 5
 
 def _append_worker(path_str: str, writer_id: int) -> None:
     for call_idx in range(CALLS_PER_WRITER):
-        block = [
-            f"{writer_id}:{call_idx}:{line_idx}"
-            for line_idx in range(LINES_PER_CALL)
-        ]
+        block = [f"{writer_id}:{call_idx}:{line_idx}" for line_idx in range(LINES_PER_CALL)]
         locked_append(Path(path_str), block)
 
 
@@ -42,10 +39,7 @@ def test_locked_append_concurrent_writers_lose_nothing(tmp_path: Path):
     """Two processes appending concurrently: every line lands, and the
     lines of one locked_append call stay contiguous (turn-block invariant)."""
     path = tmp_path / "s.jsonl"
-    procs = [
-        multiprocessing.Process(target=_append_worker, args=(str(path), w))
-        for w in range(WRITERS)
-    ]
+    procs = [multiprocessing.Process(target=_append_worker, args=(str(path), w)) for w in range(WRITERS)]
     for p in procs:
         p.start()
     for p in procs:

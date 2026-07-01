@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -35,10 +35,10 @@ class FeedbackSignal(str, Enum):
     DISPATCHED = "dispatched"
     ACCEPTED = "accepted"
     DISMISSED = "dismissed"
-    IGNORED = "ignored"        # time-based: user didn't engage within window
-    NEUTRAL = "neutral"        # user replied but reply carried no clear
-                                # accept/dismiss intent (logged only;
-                                # excluded from acceptance_rate denominator)
+    IGNORED = "ignored"  # time-based: user didn't engage within window
+    NEUTRAL = "neutral"  # user replied but reply carried no clear
+    # accept/dismiss intent (logged only;
+    # excluded from acceptance_rate denominator)
 
 
 # Dispatch actions that expect user engagement, so prolonged silence on them
@@ -88,41 +88,49 @@ class NudgeFeedbackTracker:
         details: dict | None = None,
     ) -> None:
         """Call after any executor successfully dispatches a nudge."""
-        self._emit({
-            "id": nudge_id,
-            "signal": FeedbackSignal.DISPATCHED.value,
-            "action": action,
-            "session_key": session_key,
-            "priority": priority,
-            "proactivity_score": proactivity_score,
-            "source": source,
-            "details": details or {},
-        })
+        self._emit(
+            {
+                "id": nudge_id,
+                "signal": FeedbackSignal.DISPATCHED.value,
+                "action": action,
+                "session_key": session_key,
+                "priority": priority,
+                "proactivity_score": proactivity_score,
+                "source": source,
+                "details": details or {},
+            }
+        )
 
     def record_accepted(self, nudge_id: str, *, context: str | None = None) -> None:
         """User engaged — replied, took the suggested action, clicked, etc."""
-        self._emit({
-            "id": nudge_id,
-            "signal": FeedbackSignal.ACCEPTED.value,
-            "context": context,
-        })
+        self._emit(
+            {
+                "id": nudge_id,
+                "signal": FeedbackSignal.ACCEPTED.value,
+                "context": context,
+            }
+        )
 
     def record_dismissed(self, nudge_id: str, *, reason: str | None = None) -> None:
         """User explicitly dismissed. Also tell NudgePolicy to cool down
         that session — caller is responsible for the NudgePolicy call."""
-        self._emit({
-            "id": nudge_id,
-            "signal": FeedbackSignal.DISMISSED.value,
-            "reason": reason,
-        })
+        self._emit(
+            {
+                "id": nudge_id,
+                "signal": FeedbackSignal.DISMISSED.value,
+                "reason": reason,
+            }
+        )
 
     def record_ignored(self, nudge_id: str, *, window_seconds: int) -> None:
         """No engagement within window — soft negative signal."""
-        self._emit({
-            "id": nudge_id,
-            "signal": FeedbackSignal.IGNORED.value,
-            "window_seconds": window_seconds,
-        })
+        self._emit(
+            {
+                "id": nudge_id,
+                "signal": FeedbackSignal.IGNORED.value,
+                "window_seconds": window_seconds,
+            }
+        )
 
     def record_neutral(self, nudge_id: str, *, reason: str | None = None) -> None:
         """User replied but reply carried no clear accept/dismiss intent.
@@ -132,14 +140,19 @@ class NudgeFeedbackTracker:
         ambiguous replies neither inflates nor deflates the configured
         adaptive-quota signal.
         """
-        self._emit({
-            "id": nudge_id,
-            "signal": FeedbackSignal.NEUTRAL.value,
-            "reason": reason,
-        })
+        self._emit(
+            {
+                "id": nudge_id,
+                "signal": FeedbackSignal.NEUTRAL.value,
+                "reason": reason,
+            }
+        )
 
     def sweep_ignored(
-        self, *, window_seconds: int, now: datetime | None = None,
+        self,
+        *,
+        window_seconds: int,
+        now: datetime | None = None,
     ) -> int:
         """Record IGNORED for engagement-expecting dispatches gone silent.
 
@@ -251,9 +264,7 @@ class NudgeFeedbackTracker:
         neutral_ids: set[str] = set()
         # When filtering by topic_tag we need to know which DISPATCHED
         # records carry that tag; build the allowlist in the same pass.
-        topic_filter_ids: set[str] | None = (
-            set() if topic_tag is not None else None
-        )
+        topic_filter_ids: set[str] | None = set() if topic_tag is not None else None
         for rec in self._recent:
             ts = self._safe_parse_ts(rec.get("ts", ""))
             if ts is None or ts < cutoff:
@@ -356,13 +367,13 @@ class NudgeFeedbackTracker:
                 dispatched_hour[nid] = ts.hour
             elif signal == FeedbackSignal.ACCEPTED.value:
                 accepted_ids.add(nid)
-            elif signal in (FeedbackSignal.DISMISSED.value,
-                            FeedbackSignal.IGNORED.value):
+            elif signal in (FeedbackSignal.DISMISSED.value, FeedbackSignal.IGNORED.value):
                 rejected_ids.add(nid)
             elif signal == FeedbackSignal.NEUTRAL.value:
                 neutral_ids.add(nid)
         # Aggregate by hour, excluding NEUTRAL from both numerator + denominator.
         from collections import defaultdict
+
         hour_scored: dict[int, int] = defaultdict(int)
         hour_rejects: dict[int, int] = defaultdict(int)
         for nid, hr in dispatched_hour.items():
@@ -384,7 +395,10 @@ class NudgeFeedbackTracker:
         return out
 
     def recent_topic_rejects(
-        self, topic_tag: str, *, since_seconds: int = 86400,
+        self,
+        topic_tag: str,
+        *,
+        since_seconds: int = 86400,
     ) -> float:
         """Weighted reject count for ``topic_tag`` in the last ``since_seconds``.
 
@@ -431,11 +445,11 @@ class NudgeFeedbackTracker:
                 reject_weight[nid] = 1.0
             elif signal == FeedbackSignal.IGNORED.value:
                 reject_weight[nid] = max(
-                    reject_weight.get(nid, 0.0), _IGNORED_REJECT_WEIGHT,
+                    reject_weight.get(nid, 0.0),
+                    _IGNORED_REJECT_WEIGHT,
                 )
         return sum(
-            w for nid, w in reject_weight.items()
-            if topic_for_id.get(nid) == topic_tag and nid not in accepted_ids
+            w for nid, w in reject_weight.items() if topic_for_id.get(nid) == topic_tag and nid not in accepted_ids
         )
 
     def cleanup_older_than(self, days: int = 30) -> dict[str, int]:
@@ -462,8 +476,7 @@ class NudgeFeedbackTracker:
         kept = 0
         dropped = 0
         try:
-            with self.log_path.open("r", encoding="utf-8") as src, \
-                 tmp_path.open("w", encoding="utf-8") as dst:
+            with self.log_path.open("r", encoding="utf-8") as src, tmp_path.open("w", encoding="utf-8") as dst:
                 for line in src:
                     s = line.strip()
                     if not s:
@@ -503,7 +516,8 @@ class NudgeFeedbackTracker:
         # Mirror the disk filter in the in-memory cache so subsequent
         # acceptance_rate() / counts() don't see ghosts.
         self._recent = [
-            r for r in self._recent
+            r
+            for r in self._recent
             if isinstance(r.get("ts"), str)
             and self._safe_parse_ts(r["ts"]) is not None
             and self._safe_parse_ts(r["ts"]) >= cutoff
@@ -532,10 +546,7 @@ class NudgeFeedbackTracker:
         # Trim cache if it grows unboundedly beyond the window.
         if len(self._recent) > 10_000:
             cutoff = self._now_fn() - self._in_memory_window
-            self._recent = [
-                r for r in self._recent
-                if r.get("ts") and datetime.fromisoformat(r["ts"]) >= cutoff
-            ]
+            self._recent = [r for r in self._recent if r.get("ts") and datetime.fromisoformat(r["ts"]) >= cutoff]
 
 
 def new_nudge_id() -> str:

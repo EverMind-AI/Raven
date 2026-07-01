@@ -65,12 +65,15 @@ class TestSingleSource:
         assert [p.manifest.id for p in d.discover()] == ["real"]
 
     def test_malformed_manifest_skipped_silently(
-        self, tmp_path: Path, caplog,
+        self,
+        tmp_path: Path,
+        caplog,
     ) -> None:
         sub = tmp_path / "broken"
         sub.mkdir()
         (sub / "raven-plugin.toml").write_text(
-            "not valid toml [[[", encoding="utf-8",
+            "not valid toml [[[",
+            encoding="utf-8",
         )
         _write_manifest(tmp_path, "ok")
         d = PluginDiscovery(bundled_dir=tmp_path)
@@ -120,7 +123,9 @@ class TestConflictResolution:
         _write_manifest(user, "u-only")
         _write_manifest(project, "p-only")
         d = PluginDiscovery(
-            bundled_dir=bundled, user_dir=user, project_dir=project,
+            bundled_dir=bundled,
+            user_dir=user,
+            project_dir=project,
         )
         out = d.discover()
         by_id = {p.manifest.id: p.source for p in out}
@@ -128,7 +133,7 @@ class TestConflictResolution:
             "b-only": Source.BUNDLED,
             "u-only": Source.USER,
             "p-only": Source.PROJECT,
-            "x":      Source.BUNDLED,
+            "x": Source.BUNDLED,
         }
 
 
@@ -142,11 +147,14 @@ class TestSubdirNameMismatch:
         # Directory called "wrong-dirname" but manifest declares id "correct"
         sub = tmp_path / "wrong-dirname"
         sub.mkdir()
-        (sub / "raven-plugin.toml").write_text(textwrap.dedent("""
+        (sub / "raven-plugin.toml").write_text(
+            textwrap.dedent("""
             [plugin]
             id = "correct"
             version = "0.1"
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         d = PluginDiscovery(bundled_dir=tmp_path)
         out = d.discover()
         assert out[0].manifest.id == "correct"
@@ -159,8 +167,9 @@ class TestSubdirNameMismatch:
 
 class TestDiscoveredPluginRecord:
     def test_record_is_frozen(self, tmp_path: Path) -> None:
-        import pytest
         from dataclasses import FrozenInstanceError
+
+        import pytest
 
         _write_manifest(tmp_path, "x")
         out = PluginDiscovery(bundled_dir=tmp_path).discover()

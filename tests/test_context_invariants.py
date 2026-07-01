@@ -13,7 +13,6 @@ and router hits render into ``# Skills`` — one of each, no duplicates.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -62,7 +61,8 @@ def _budget() -> TokenBudget:
 
 async def _assemble(builder: ContextBuilder, curator, **kw):
     eng = ContextAssembler(
-        [IdentitySegmentBuilder(builder.workspace), curator], lambda: [],
+        [IdentitySegmentBuilder(builder.workspace), curator],
+        lambda: [],
     )
     return await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
 
@@ -74,26 +74,29 @@ async def _assemble(builder: ContextBuilder, curator, **kw):
 
 class TestCuratorBoundary:
     async def test_working_state_is_purely_additive_tail(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         """The Curator's seg6 appends at the tail; the prefix (seg1–5) is
         byte-identical with or without it."""
-        base = (await _assemble(builder, _FakeCurator("")))
-        with_ws = (await _assemble(builder, _FakeCurator("goals: ship it")))
+        base = await _assemble(builder, _FakeCurator(""))
+        with_ws = await _assemble(builder, _FakeCurator("goals: ship it"))
         base_sys = base.messages[0]["content"]
         ws_sys = with_ws.messages[0]["content"]
         assert ws_sys.startswith(base_sys)
-        assert ws_sys[len(base_sys):] == "\n\n---\n\n# Curator Working State\n\ngoals: ship it"
+        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# Curator Working State\n\ngoals: ship it"
 
     async def test_segments_1_to_5_independent_of_working_state(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         a = (await _assemble(builder, _FakeCurator("state A"))).messages[0]["content"]
         b = (await _assemble(builder, _FakeCurator("state B-different"))).messages[0]["content"]
         assert a.split("# Curator Working State")[0] == b.split("# Curator Working State")[0]
 
     async def test_history_slot_is_curator_owned(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         hist = [{"role": "user", "content": "earlier"}]
         ac = await _assemble(builder, _FakeCurator("", history=hist))
@@ -108,12 +111,19 @@ class TestCuratorBoundary:
 
 class TestOneOwnerPerSegment:
     async def test_no_transitional_blocks_recall_and_skills_co_located(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         backend = _Backend([Memory(text="user fact")])
-        router = SkillForgeRouter([_Source([
-            RouterHit(qualified_id="local/s", name="s", content="skill body", score=0.9),
-        ])])
+        router = SkillForgeRouter(
+            [
+                _Source(
+                    [
+                        RouterHit(qualified_id="local/s", name="s", content="skill body", score=0.9),
+                    ]
+                )
+            ]
+        )
         eng = ContextAssembler(
             [
                 IdentitySegmentBuilder(builder.workspace),
@@ -146,10 +156,17 @@ class _Backend:
     def __init__(self, mems):
         self._mems = mems
 
-    async def start(self): pass
-    async def stop(self): pass
-    async def feedback(self, signals): pass
-    async def store(self, session_id, messages): pass
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def feedback(self, signals):
+        pass
+
+    async def store(self, session_id, messages):
+        pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return list(self._mems)
@@ -176,19 +193,29 @@ class _Provider:
 
 def _budget():
     return TokenBudget(
-        context_length=100_000, reserved_output=4_000, reserved_tools=2_000,
-        reserved_system=1_000, available_history=93_000,
+        context_length=100_000,
+        reserved_output=4_000,
+        reserved_tools=2_000,
+        reserved_system=1_000,
+        available_history=93_000,
     )
 
 
 class TestEngineAssembledInvariants:
     async def test_fast_path_prompt_has_single_owned_segments(
-        self, builder: ContextBuilder,
+        self,
+        builder: ContextBuilder,
     ) -> None:
         backend = _Backend([Memory(text="user prefers dark mode")])
-        router = SkillForgeRouter([_Source([
-            RouterHit(qualified_id="local/g", name="g", content="how to git", score=0.9),
-        ])])
+        router = SkillForgeRouter(
+            [
+                _Source(
+                    [
+                        RouterHit(qualified_id="local/g", name="g", content="how to git", score=0.9),
+                    ]
+                )
+            ]
+        )
         eng = ContextAssembler(
             [
                 IdentitySegmentBuilder(builder.workspace),
@@ -197,15 +224,21 @@ class TestEngineAssembledInvariants:
                 ActiveSkillsSegmentBuilder(builder.skills),
                 SkillsSegmentBuilder(router),
                 CuratorSegmentBuilder(
-                    workspace=builder.workspace, config=ContextConfig(),
-                    provider=_Provider(), model="stub",
-                    context_window_tokens=100_000, get_tool_definitions=lambda: [],
+                    workspace=builder.workspace,
+                    config=ContextConfig(),
+                    provider=_Provider(),
+                    model="stub",
+                    context_window_tokens=100_000,
+                    get_tool_definitions=lambda: [],
                 ),
             ],
             lambda: [],
         )
         ac = await eng.assemble(
-            "s", [], _budget(), turn=TurnContext(current_message="hi"),
+            "s",
+            [],
+            _budget(),
+            turn=TurnContext(current_message="hi"),
         )
         sys_content = ac.messages[0]["content"]
         assert "# Recalled memory" not in sys_content

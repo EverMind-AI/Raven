@@ -62,9 +62,7 @@ class OriginPools:
 
 
 class Lane:
-    def __init__(
-        self, runner: TurnRunner, pools: OriginPools, sink: EventSink, conversation_id: str
-    ):
+    def __init__(self, runner: TurnRunner, pools: OriginPools, sink: EventSink, conversation_id: str):
         self._runner = runner
         self._pools = pools
         self._sink = sink
@@ -241,9 +239,7 @@ class Lane:
     def _make_emit(self, req: TurnRequest) -> Emit:
         async def emit(event: RunnerEvent) -> None:
             if not isinstance(event, _RUNNER_EVENT_TYPES):
-                raise TypeError(
-                    f"a runner may not emit lifecycle events; got {type(event).__name__}"
-                )
+                raise TypeError(f"a runner may not emit lifecycle events; got {type(event).__name__}")
             # Stamp the identity the runner leaves unset (only-None, never override):
             # source = the turn's reply address, conversation_id = its lane key (what
             # the hub correlates a stream by).
@@ -277,15 +273,11 @@ class Lane:
                 outcome = await self._runner.run(req, self._make_emit(req), drain)
         except asyncio.CancelledError:
             if started:  # only pair a TurnStarted; a pre-start cancel emits nothing
-                await self._sink(
-                    TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id)
-                )
+                await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
             raise
         except Exception as exc:
             if started:
-                await self._sink(
-                    TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id)
-                )
+                await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
             return None
         finally:
             # A drained inject shares this turn's outcome (None on cancel/failure);

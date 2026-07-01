@@ -28,8 +28,16 @@ class _ScriptedProvider(LLMProvider):
         self._script = script
         self.calls: list[str | None] = []
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         self.calls.append(model)
         queue = self._script.get(model, [])
         if queue:
@@ -51,15 +59,19 @@ async def test_no_fallbacks_preserves_single_model_behavior():
 @pytest.mark.asyncio
 async def test_exhausted_transient_falls_back_to_next_model():
     transient = LLMResponse(content="429 rate limit", finish_reason="error")
-    provider = _ScriptedProvider({
-        # primary: 4 transient attempts (3 sleep + 1 final) all fail
-        "primary": [transient] * 4,
-        "backup": [LLMResponse(content="recovered", finish_reason="stop")],
-    })
+    provider = _ScriptedProvider(
+        {
+            # primary: 4 transient attempts (3 sleep + 1 final) all fail
+            "primary": [transient] * 4,
+            "backup": [LLMResponse(content="recovered", finish_reason="stop")],
+        }
+    )
     # zero out sleeps to keep the test fast
     provider._CHAT_RETRY_DELAYS = (0, 0, 0)
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.content == "recovered"
     assert provider.calls == ["primary"] * 4 + ["backup"]
@@ -69,12 +81,16 @@ async def test_exhausted_transient_falls_back_to_next_model():
 async def test_billing_error_now_falls_back():
     # Structured classification: billing is non-retryable on the same model
     # (no retry ladder) but a different provider might have credit -> fall back.
-    provider = _ScriptedProvider({
-        "primary": [LLMResponse(content="insufficient credit / billing", finish_reason="error")],
-        "backup": [LLMResponse(content="ok", finish_reason="stop")],
-    })
+    provider = _ScriptedProvider(
+        {
+            "primary": [LLMResponse(content="insufficient credit / billing", finish_reason="error")],
+            "backup": [LLMResponse(content="ok", finish_reason="stop")],
+        }
+    )
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.content == "ok"
     # single fatal attempt on primary (no retries), then switch
@@ -84,12 +100,16 @@ async def test_billing_error_now_falls_back():
 @pytest.mark.asyncio
 async def test_auth_error_does_not_fall_back():
     # Auth is fatal config — neither retry nor a model swap fixes it.
-    provider = _ScriptedProvider({
-        "primary": [LLMResponse(content="401 unauthorized: invalid api key", finish_reason="error")],
-        "backup": [LLMResponse(content="ok", finish_reason="stop")],
-    })
+    provider = _ScriptedProvider(
+        {
+            "primary": [LLMResponse(content="401 unauthorized: invalid api key", finish_reason="error")],
+            "backup": [LLMResponse(content="ok", finish_reason="stop")],
+        }
+    )
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.finish_reason == "error"
     assert provider.calls == ["primary"]
@@ -97,12 +117,16 @@ async def test_auth_error_does_not_fall_back():
 
 @pytest.mark.asyncio
 async def test_invalid_request_does_not_fall_back():
-    provider = _ScriptedProvider({
-        "primary": [LLMResponse(content="400 invalid request: bad schema", finish_reason="error")],
-        "backup": [LLMResponse(content="ok", finish_reason="stop")],
-    })
+    provider = _ScriptedProvider(
+        {
+            "primary": [LLMResponse(content="400 invalid request: bad schema", finish_reason="error")],
+            "backup": [LLMResponse(content="ok", finish_reason="stop")],
+        }
+    )
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.finish_reason == "error"
     assert provider.calls == ["primary"]
@@ -110,15 +134,21 @@ async def test_invalid_request_does_not_fall_back():
 
 @pytest.mark.asyncio
 async def test_context_length_overflow_does_not_fall_back():
-    provider = _ScriptedProvider({
-        "primary": [LLMResponse(
-            content="This model's maximum context length is 8192 tokens",
-            finish_reason="error",
-        )],
-        "backup": [LLMResponse(content="ok", finish_reason="stop")],
-    })
+    provider = _ScriptedProvider(
+        {
+            "primary": [
+                LLMResponse(
+                    content="This model's maximum context length is 8192 tokens",
+                    finish_reason="error",
+                )
+            ],
+            "backup": [LLMResponse(content="ok", finish_reason="stop")],
+        }
+    )
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.finish_reason == "error"
     assert provider.calls == ["primary"]
@@ -127,14 +157,18 @@ async def test_context_length_overflow_does_not_fall_back():
 @pytest.mark.asyncio
 async def test_chain_exhausted_returns_last_error():
     err = LLMResponse(content="503 overloaded", finish_reason="error")
-    provider = _ScriptedProvider({
-        # each model exhausts its full ladder (3 sleep + 1 final = 4)
-        "primary": [err] * 4,
-        "backup": [err] * 4,
-    })
+    provider = _ScriptedProvider(
+        {
+            # each model exhausts its full ladder (3 sleep + 1 final = 4)
+            "primary": [err] * 4,
+            "backup": [err] * 4,
+        }
+    )
     provider._CHAT_RETRY_DELAYS = (0, 0, 0)
     resp = await provider.chat_with_retry(
-        messages=[], model="primary", fallback_models=["backup"],
+        messages=[],
+        model="primary",
+        fallback_models=["backup"],
     )
     assert resp.finish_reason == "error"
     # primary exhausts its ladder (4), backup exhausts its ladder (4)

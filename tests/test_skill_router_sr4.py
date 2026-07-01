@@ -6,13 +6,11 @@ from typing import Any
 
 import pytest
 
-from raven.memory_engine import Memory, MemoryBackend
+from raven.memory_engine import Memory
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
-    RouterHit,
     SkillSource,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stub MemoryBackend
@@ -27,19 +25,27 @@ class _FakeBackend:
         self.recall_response: list[Memory] = []
         self.recall_raises: Exception | None = None
 
-    async def start(self) -> None: pass
+    async def start(self) -> None:
+        pass
 
-    async def stop(self) -> None: pass
+    async def stop(self) -> None:
+        pass
 
-    async def feedback(self, signals) -> None: pass
+    async def feedback(self, signals) -> None:
+        pass
 
-    async def store(self, session_id, messages) -> None: pass
+    async def store(self, session_id, messages) -> None:
+        pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
-        self.recall_calls.append({
-            "query": query, "user_id": user_id, "agent_id": agent_id,
-            "top_k": top_k,
-        })
+        self.recall_calls.append(
+            {
+                "query": query,
+                "user_id": user_id,
+                "agent_id": agent_id,
+                "top_k": top_k,
+            }
+        )
         if self.recall_raises is not None:
             raise self.recall_raises
         return list(self.recall_response)
@@ -76,18 +82,24 @@ class TestProtocolShape:
 
 class TestRecallCall:
     async def test_passes_agent_id_from_constructor(
-        self, source, backend,
+        self,
+        source,
+        backend,
     ) -> None:
         await source.search("git", history=[], k=5)
         assert backend.recall_calls == [
             {
-                "query": "git", "user_id": None,
-                "agent_id": "agent:default", "top_k": 5,
+                "query": "git",
+                "user_id": None,
+                "agent_id": "agent:default",
+                "top_k": 5,
             },
         ]
 
     async def test_agent_id_does_not_change_across_calls(
-        self, source, backend,
+        self,
+        source,
+        backend,
     ) -> None:
         await source.search("a", history=[], k=1)
         await source.search("b", history=[], k=3)
@@ -102,7 +114,10 @@ class TestRecallCall:
         history = [{"role": "user", "content": "earlier"}]
         await source.search("now", history=history, k=1)
         assert set(backend.recall_calls[0]) == {
-            "query", "user_id", "agent_id", "top_k",
+            "query",
+            "user_id",
+            "agent_id",
+            "top_k",
         }
 
 
@@ -129,7 +144,9 @@ class TestHitMapping:
         assert h.score == pytest.approx(0.7)
 
     async def test_falls_back_to_text_hash_when_id_missing(
-        self, source, backend,
+        self,
+        source,
+        backend,
     ) -> None:
         text = "an evolved skill without an upstream id"
         backend.recall_response = [Memory(text=text, score=0.4)]
@@ -142,7 +159,9 @@ class TestHitMapping:
         assert hits2[0].qualified_id == qid
 
     async def test_falls_back_to_text_prefix_when_name_missing(
-        self, source, backend,
+        self,
+        source,
+        backend,
     ) -> None:
         backend.recall_response = [
             Memory(
@@ -156,7 +175,9 @@ class TestHitMapping:
         assert hits[0].name == "Detailed body of a skill"
 
     async def test_meta_carries_original_metadata(
-        self, source, backend,
+        self,
+        source,
+        backend,
     ) -> None:
         backend.recall_response = [
             Memory(
@@ -179,7 +200,8 @@ class TestHitMapping:
         assert m["episode_type"] == "skill"
 
     async def test_empty_backend_response_returns_empty_list(
-        self, source,
+        self,
+        source,
     ) -> None:
         hits = await source.search("nothing", history=[], k=5)
         assert hits == []

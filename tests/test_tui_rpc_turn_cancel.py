@@ -163,12 +163,14 @@ async def test_turn_cancel_rejects_missing_session_key(emitter: SubscriptionEmit
 async def test_turn_cancel_dispatches_via_dispatcher_with_no_active_turn(
     dispatcher: Dispatcher,
 ) -> None:
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.cancel",
-        "params": {"session_key": "tui:default"},
-    })
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.cancel",
+            "params": {"session_key": "tui:default"},
+        }
+    )
     assert "error" not in resp
     assert resp["result"] == {"cancelled": False}
 
@@ -176,18 +178,22 @@ async def test_turn_cancel_dispatches_via_dispatcher_with_no_active_turn(
 async def test_turn_cancel_dispatches_via_dispatcher_with_active_turn(
     dispatcher: Dispatcher,
 ) -> None:
-    await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "turn.send",
-        "params": {"session_key": "tui:default", "content": "hello"},
-    })
-    resp = await dispatcher.dispatch({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "turn.cancel",
-        "params": {"session_key": "tui:default"},
-    })
+    await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "turn.send",
+            "params": {"session_key": "tui:default", "content": "hello"},
+        }
+    )
+    resp = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "turn.cancel",
+            "params": {"session_key": "tui:default"},
+        }
+    )
 
     assert "error" not in resp
     assert resp["result"] == {"cancelled": True}

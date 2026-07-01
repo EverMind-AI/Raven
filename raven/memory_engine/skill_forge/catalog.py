@@ -49,20 +49,16 @@ class LocalSkillCatalog:
         if config is not None and getattr(config, "enabled", False):
             seen_names: dict[str, int] = {}
             for entry in getattr(config, "local_dirs", []) or []:
-                entry_path = Path(os.path.expanduser(
-                    getattr(entry, "path", "") or ""
-                )).resolve()
+                entry_path = Path(os.path.expanduser(getattr(entry, "path", "") or "")).resolve()
                 entry_enabled = getattr(entry, "enabled", True)
                 if not entry_enabled or not entry_path or not entry_path.is_dir():
                     if entry_enabled and getattr(entry, "path", ""):
                         log.warning(
-                            "local_dirs: path does not exist or is not "
-                            "a directory: %s", entry_path,
+                            "local_dirs: path does not exist or is not a directory: %s",
+                            entry_path,
                         )
                     continue
-                entry_name = (
-                    getattr(entry, "name", None) or entry_path.name
-                )
+                entry_name = getattr(entry, "name", None) or entry_path.name
                 seen_names[entry_name] = seen_names.get(entry_name, 0) + 1
                 if seen_names[entry_name] > 1:
                     entry_name = f"{entry_name}_{seen_names[entry_name]}"
@@ -73,9 +69,7 @@ class LocalSkillCatalog:
             workspace,
             builtin_skills_dir=builtin_skills_dir,
             extra_dirs=extra_dirs,
-            scan_max_depth=int(
-                getattr(config, "scan_max_depth", 5) if config else 5
-            ),
+            scan_max_depth=int(getattr(config, "scan_max_depth", 5) if config else 5),
         )
 
         self._config = config
@@ -165,6 +159,7 @@ class LocalSkillCatalog:
         if self._file_watcher is not None:
             return False
         from raven.memory_engine.skill_local.watcher import SkillFileWatcher
+
         watcher = SkillFileWatcher(
             roots=[self._registry.workspace_skills],
             on_change=self.invalidate_skill_cache,
@@ -193,20 +188,12 @@ class LocalSkillCatalog:
     # Legacy ``SkillsLoader`` API (signature-compatible drop-in)
     # ------------------------------------------------------------------
 
-    def list_skills(
-        self, filter_unavailable: bool = True
-    ) -> list[dict[str, str]]:
+    def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """All skills as legacy-shape dicts ``{name, path, source}``."""
         metas = self._registry.list_all()
         if filter_unavailable:
-            metas = [
-                m for m in metas
-                if self._registry.check_available(m.name, source=m.source)
-            ]
-        return [
-            {"name": m.name, "path": str(m.path), "source": m.source}
-            for m in metas
-        ]
+            metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
+        return [{"name": m.name, "path": str(m.path), "source": m.source} for m in metas]
 
     def load_skill(self, name: str) -> str | None:
         """Full SKILL.md content, or ``None`` if absent."""
@@ -226,10 +213,7 @@ class LocalSkillCatalog:
         # within each layer by discovery order.  Sort stably by
         # (source priority, name) so truncation is predictable.
         all_always = [
-            m
-            for m in self._registry.list_all()
-            if m.always
-            and self._registry.check_available(m.name, source=m.source)
+            m for m in self._registry.list_all() if m.always and self._registry.check_available(m.name, source=m.source)
         ]
         all_always.sort(key=lambda m: (m.source, m.name))
         cap = int(getattr(self._config, "always_max", 5) or 5)
@@ -238,7 +222,8 @@ class LocalSkillCatalog:
             dropped = all_always[cap:]
             log.warning(
                 "always skills (%d) exceed always_max (%d), dropped: %s",
-                len(all_always), cap,
+                len(all_always),
+                cap,
                 ", ".join(m.name for m in dropped),
             )
             return kept
@@ -287,12 +272,11 @@ class LocalSkillCatalog:
             # avoid emitting a nonsense path like ``sqlite:/scripts/foo.py``.
             path_obj = getattr(m, "path", None)
             path_str = str(path_obj) if path_obj is not None else ""
-            has_real_path = (
-                path_obj is not None and not path_str.startswith("sqlite:")
-            )
+            has_real_path = path_obj is not None and not path_str.startswith("sqlite:")
             if has_real_path:
                 base_dir = str(path_obj.parent)
                 import re as _re
+
                 # Markdown links to bundled files are the one unambiguous
                 # "read_file this" form — rewrite them to absolute, but only
                 # when the target exists on disk so we never emit a confident
@@ -320,10 +304,7 @@ class LocalSkillCatalog:
                 # Skip fenced code blocks: a link there is example markup,
                 # not a live ref — rewriting it would mutate sample code.
                 _segs = _re.split(r"(```.*?```)", body, flags=_re.S)
-                body = "".join(
-                    s if s.startswith("```") else _md_link_re.sub(_md_sub, s)
-                    for s in _segs
-                )
+                body = "".join(s if s.startswith("```") else _md_link_re.sub(_md_sub, s) for s in _segs)
                 # Directory header doubles as a resolution hint: relative refs
                 # the agent must turn absolute itself for read_file / exec.
                 # Only promise the directory when it actually exists on disk —
@@ -346,9 +327,7 @@ class LocalSkillCatalog:
                 # "{baseDir}/<ref>" for the missing ones (inert — the agent
                 # can't resolve a placeholder, vs. wasting a turn on a 404).
                 if "{baseDir}" in body:
-                    _bd_ref_re = _re.compile(
-                        r"\{baseDir\}/(\S+?)(?=[\s)\'\"`]|$)"
-                    )
+                    _bd_ref_re = _re.compile(r"\{baseDir\}/(\S+?)(?=[\s)\'\"`]|$)")
                     _resolved = False
 
                     def _bd_sub(_mo, _bd=base_dir, _par=path_obj.parent):
@@ -389,9 +368,7 @@ class LocalSkillCatalog:
         """Top-level frontmatter dict, or ``None`` if absent."""
         return self._registry.get_raw_metadata(name)
 
-    def build_skills_summary(
-        self, only: "list[SkillMeta] | list[str] | None" = None
-    ) -> str:
+    def build_skills_summary(self, only: "list[SkillMeta] | list[str] | None" = None) -> str:
         """XML-formatted skill directory.
 
         Args:
@@ -452,7 +429,9 @@ class LocalSkillCatalog:
         return self._registry.list_all()
 
     def _lookup_meta(
-        self, name: str, source: str | None,
+        self,
+        name: str,
+        source: str | None,
     ) -> SkillMeta | None:
         """Resolve a (name, source) to a ``SkillMeta`` via the local registry."""
         return self._registry.get(name, source=source)

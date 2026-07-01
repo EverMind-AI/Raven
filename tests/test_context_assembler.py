@@ -12,11 +12,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.config.raven import NudgePolicyConfig
+from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
-from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
+from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
 
 
 def _now():
@@ -42,6 +42,7 @@ def memory_store(workspace) -> MemoryStore:
 # ---------------------------------------------------------------------------
 # Empty sources — everything defaults to a safe empty context.
 
+
 def test_assemble_empty_sources():
     asm = ContextAssembler(now_fn=_now)
     ctx = asm.assemble()
@@ -58,6 +59,7 @@ def test_assemble_empty_sources():
 # ---------------------------------------------------------------------------
 # Memory + history
 
+
 def test_assemble_reads_memory_and_history(memory_store):
     asm = ContextAssembler(memory_store=memory_store, now_fn=_now)
     ctx = asm.assemble()
@@ -70,7 +72,9 @@ def test_history_tail_limits_lines(workspace, memory_store):
     for i in range(200):
         memory_store.append_history(f"[2026-04-{(i % 28) + 1:02d} 08:00] entry {i}")
     asm = ContextAssembler(
-        memory_store=memory_store, now_fn=_now, history_tail_lines=10,
+        memory_store=memory_store,
+        now_fn=_now,
+        history_tail_lines=10,
     )
     ctx = asm.assemble()
     # Each append writes "entry\n\n", so 10 tail lines → ≤ 20 incl blanks.
@@ -81,12 +85,18 @@ def test_history_tail_limits_lines(workspace, memory_store):
 # ---------------------------------------------------------------------------
 # Routines
 
+
 def test_assemble_learns_routines_from_history(memory_store):
     learner = RoutineLearner(
-        min_occurrences=3, hour_slot_size=3, learning_window_days=60, now_fn=_now,
+        min_occurrences=3,
+        hour_slot_size=3,
+        learning_window_days=60,
+        now_fn=_now,
     )
     asm = ContextAssembler(
-        memory_store=memory_store, routine_learner=learner, now_fn=_now,
+        memory_store=memory_store,
+        routine_learner=learner,
+        now_fn=_now,
     )
     ctx = asm.assemble()
     assert len(ctx.routines) >= 1
@@ -102,6 +112,7 @@ def test_assemble_no_routines_if_learner_absent(memory_store):
 
 # ---------------------------------------------------------------------------
 # Active sessions
+
 
 def test_assemble_active_sessions_from_manager():
     now = _now()
@@ -131,8 +142,9 @@ def test_assemble_excludes_stale_sessions():
     )
     session_manager = SimpleNamespace(sessions={"cli:old": stale})
     asm = ContextAssembler(
-        session_manager=session_manager, now_fn=_now,
-        active_session_window_seconds=3600,   # 1h window
+        session_manager=session_manager,
+        now_fn=_now,
+        active_session_window_seconds=3600,  # 1h window
     )
     ctx = asm.assemble()
     assert ctx.active_sessions == []
@@ -151,16 +163,24 @@ def test_assemble_sessions_sorted_recent_first():
 # ---------------------------------------------------------------------------
 # Nudge policy state snapshot
 
+
 def test_assemble_nudge_state():
-    policy = NudgePolicy(NudgePolicyConfig(
-        max_nudges_per_hour=3, max_nudges_per_day=10,
-        min_interval_seconds=300, quiet_hours=(23, 7),
-        cooldown_on_dismiss_seconds=1800,
-        high_priority_bypasses_limits=True,
-        dedup_window_seconds=3600,
-        inject_ttl_seconds=1800, inject_max_pending_per_session=3,
-        defer_idle_threshold_seconds=300, defer_max_wait_seconds=86400,
-    ), now_fn=_now)
+    policy = NudgePolicy(
+        NudgePolicyConfig(
+            max_nudges_per_hour=3,
+            max_nudges_per_day=10,
+            min_interval_seconds=300,
+            quiet_hours=(23, 7),
+            cooldown_on_dismiss_seconds=1800,
+            high_priority_bypasses_limits=True,
+            dedup_window_seconds=3600,
+            inject_ttl_seconds=1800,
+            inject_max_pending_per_session=3,
+            defer_idle_threshold_seconds=300,
+            defer_max_wait_seconds=86400,
+        ),
+        now_fn=_now,
+    )
     policy.record_fired("nudge", "s1", "test")
     asm = ContextAssembler(nudge_policy=policy, now_fn=_now)
     ctx = asm.assemble()
@@ -171,6 +191,7 @@ def test_assemble_nudge_state():
 
 # ---------------------------------------------------------------------------
 # Calendar injection
+
 
 def test_assemble_calendar_from_callback():
     asm = ContextAssembler(
@@ -185,6 +206,7 @@ def test_assemble_calendar_from_callback():
 def test_assemble_calendar_callback_error_silent():
     def boom():
         raise RuntimeError("boom")
+
     asm = ContextAssembler(now_fn=_now, calendar_fn=boom)
     ctx = asm.assemble()
     assert ctx.calendar == []
@@ -193,8 +215,10 @@ def test_assemble_calendar_callback_error_silent():
 # ---------------------------------------------------------------------------
 # Last decision
 
+
 def test_remember_last_decision_populates_ctx():
     from raven.proactive_engine.sentinel.types import PlannerDecision
+
     last = PlannerDecision(action="skip", reason="nothing", proactivity_score=0.1)
     asm = ContextAssembler(now_fn=_now)
     asm.remember_last_decision(last)
@@ -205,9 +229,11 @@ def test_remember_last_decision_populates_ctx():
 # ---------------------------------------------------------------------------
 # User profile passthrough
 
+
 def test_user_profile_passthrough():
     asm = ContextAssembler(
-        now_fn=_now, user_profile="Chinese native speaker, works in fintech",
+        now_fn=_now,
+        user_profile="Chinese native speaker, works in fintech",
     )
     ctx = asm.assemble()
     assert "Chinese" in ctx.user_profile

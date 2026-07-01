@@ -17,6 +17,7 @@ from raven.agent.tools.web import WebFetchTool
 def _resolve_to(monkeypatch: pytest.MonkeyPatch, ip: str) -> None:
     def fake_getaddrinfo(host, *_a, **_k):
         return [(0, 0, 0, "", (ip, 0))]
+
     monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
 
 
@@ -26,6 +27,7 @@ async def test_rejects_url_resolving_to_private_ip(monkeypatch):
     # If validation is bypassed this would attempt a real fetch; fail loudly.
     def _boom(*_a, **_k):
         raise AssertionError("HTTP client must not be constructed for a blocked URL")
+
     monkeypatch.setattr("httpx.AsyncClient", _boom)
 
     out = await WebFetchTool().execute(url="http://totally-public.example.com/x")
@@ -37,6 +39,7 @@ async def test_rejects_url_resolving_to_private_ip(monkeypatch):
 async def test_rejects_loopback(monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("HTTP client must not be constructed for a blocked URL")
+
     monkeypatch.setattr("httpx.AsyncClient", _boom)
 
     out = await WebFetchTool().execute(url="http://127.0.0.1/admin")

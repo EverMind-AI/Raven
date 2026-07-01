@@ -14,7 +14,6 @@ from raven.plugin import (
     PluginManifest,
 )
 
-
 # ---------------------------------------------------------------------------
 # Round-trip: minimal valid manifest
 # ---------------------------------------------------------------------------
@@ -37,17 +36,17 @@ class TestMinimalManifest:
         assert mf.config_schema == {}
 
     def test_id_required(self) -> None:
-        toml = "[plugin]\nversion = \"0.1.0\"\n"
+        toml = '[plugin]\nversion = "0.1.0"\n'
         with pytest.raises(ValidationError):
             PluginManifest.from_toml_str(toml)
 
     def test_version_required(self) -> None:
-        toml = "[plugin]\nid = \"x\"\n"
+        toml = '[plugin]\nid = "x"\n'
         with pytest.raises(ValidationError):
             PluginManifest.from_toml_str(toml)
 
     def test_id_must_be_non_empty(self) -> None:
-        toml = "[plugin]\nid = \"\"\nversion = \"0.1\"\n"
+        toml = '[plugin]\nid = ""\nversion = "0.1"\n'
         with pytest.raises(ValidationError):
             PluginManifest.from_toml_str(toml)
 
@@ -59,7 +58,7 @@ class TestMinimalManifest:
 
 class TestTopLevelTable:
     def test_missing_plugin_table_rejected(self) -> None:
-        toml = "id = \"x\"\nversion = \"0.1\"\n"
+        toml = 'id = "x"\nversion = "0.1"\n'
         with pytest.raises(ValueError, match=r"top-level \[plugin\]"):
             PluginManifest.from_toml_str(toml)
 
@@ -196,11 +195,14 @@ class TestFlagsAndSchema:
 class TestFromTomlPath:
     def test_reads_file(self, tmp_path: Path) -> None:
         path = tmp_path / "raven-plugin.toml"
-        path.write_text(textwrap.dedent("""
+        path.write_text(
+            textwrap.dedent("""
             [plugin]
             id = "x"
             version = "0.1"
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         mf = PluginManifest.from_toml_path(path)
         assert mf.id == "x"
 

@@ -12,8 +12,12 @@ from raven.config.schema import Config
 # load_raven_config (extract into overrides) reference this.
 # Add new extension blocks here — one place, no duplication.
 EXTENSION_KEYS = (
-    "context", "sentinel", "tokenWise", "skillForge",
-    "token_wise", "skill_forge",
+    "context",
+    "sentinel",
+    "tokenWise",
+    "skillForge",
+    "token_wise",
+    "skill_forge",
     # CFG-1 additions: each key is listed in both camelCase (preferred
     # by config files) and snake_case (preferred by Python).
     "plugins",
@@ -107,6 +111,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
     extension blocks from the migrated data (``load_raven_config``).
     """
     import logging as _logging
+
     _log = _logging.getLogger(__name__)
 
     # Move tools.exec.restrictToWorkspace → tools.restrictToWorkspace
@@ -135,14 +140,16 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
             # sourced from skill_forge.detect_min_tool_calls. snake_case and
             # camelCase both, since user configs may use either.
             for legacy_key in (
-                "minMessages", "min_messages",
-                "minToolCalls", "min_tool_calls",
+                "minMessages",
+                "min_messages",
+                "minToolCalls",
+                "min_tool_calls",
             ):
                 if legacy_key in legacy_esl:
                     legacy_esl.pop(legacy_key)
                     _log.info(
-                        "Migrated: dropped everosSkillLight.%s (retired; use "
-                        "skill_forge.detect_min_tool_calls)", legacy_key,
+                        "Migrated: dropped everosSkillLight.%s (retired; use skill_forge.detect_min_tool_calls)",
+                        legacy_key,
                     )
             if "skillForge" in data and isinstance(data["skillForge"], dict):
                 sf_key = "skillForge"
@@ -155,8 +162,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
             if "everos" not in skill_forge:
                 skill_forge["everos"] = legacy_esl
                 _log.info(
-                    "Migrated: agents.defaults.everosSkillLight → "
-                    "skillForge.everos",
+                    "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
                 )
 
     # skills_dir → local_dirs migration now handled by
@@ -168,16 +174,17 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
     sentinel = data.get("sentinel") if isinstance(data, dict) else None
     if isinstance(sentinel, dict):
         for legacy_key in (
-            "monitors",                          # dropped: never had a reader
-            "task_discovery_forward_channels",   # collapsed into task_discovery_targets
+            "monitors",  # dropped: never had a reader
+            "task_discovery_forward_channels",  # collapsed into task_discovery_targets
             "taskDiscoveryForwardChannels",
-            "auto_enabled",                      # retired sentinel.auto subsystem
+            "auto_enabled",  # retired sentinel.auto subsystem
             "autoEnabled",
         ):
             if legacy_key in sentinel:
                 sentinel.pop(legacy_key)
                 _log.info(
-                    "Migrated: dropped sentinel.%s (retired field)", legacy_key,
+                    "Migrated: dropped sentinel.%s (retired field)",
+                    legacy_key,
                 )
 
     # Nest the legacy top-level ``skillRouter`` / ``skill_router`` block
@@ -205,8 +212,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
         sf = data.get(sf_key)
         if isinstance(sf, dict) and isinstance(sf.get("router"), dict):
             if sf["router"].pop("mass", None) is not None:
-                _log.info("Migrated: dropped skillForge.router.mass (retired; "
-                          "use skillForge.router.hub)")
+                _log.info("Migrated: dropped skillForge.router.mass (retired; use skillForge.router.hub)")
             # ``hub.prefetch_bodies`` retired — body hydration moved into
             # SkillsSegmentBuilder (always-on for Hub hits the segment is
             # about to render), so the knob no longer has a reader.
@@ -217,7 +223,8 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
                         _log.info(
                             "Migrated: dropped skillForge.router.hub.%s "
                             "(retired; SkillsSegmentBuilder always "
-                            "hydrates Hub bodies)", legacy_key,
+                            "hydrates Hub bodies)",
+                            legacy_key,
                         )
 
     # ── Pop extension keys before base Config validates ──────────────

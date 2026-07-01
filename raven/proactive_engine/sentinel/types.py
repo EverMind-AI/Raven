@@ -7,16 +7,16 @@ from datetime import datetime
 from typing import Any, Literal
 
 Action = Literal[
-    "skip",            # nothing worth doing this tick
-    "nudge",           # send a standalone message NOW
-    "nudge_inject",    # append to agent's next reply in target_session
-                       # (use when user is mid-conversation and our info is
-                       # naturally additive to what agent is about to say)
-    "nudge_defer",     # wait until target_session's current thread settles,
-                       # then send as a follow-up (use when user is mid-task
-                       # and interrupting would hurt, but we still have value
-                       # to deliver after)
-    "spawn_agent",     # dispatch a micro-agent for a multi-step task
+    "skip",  # nothing worth doing this tick
+    "nudge",  # send a standalone message NOW
+    "nudge_inject",  # append to agent's next reply in target_session
+    # (use when user is mid-conversation and our info is
+    # naturally additive to what agent is about to say)
+    "nudge_defer",  # wait until target_session's current thread settles,
+    # then send as a follow-up (use when user is mid-task
+    # and interrupting would hurt, but we still have value
+    # to deliver after)
+    "spawn_agent",  # dispatch a micro-agent for a multi-step task
 ]
 Priority = Literal["low", "medium", "high"]
 RoutineStatus = Literal["candidate", "active", "paused", "retired"]
@@ -32,7 +32,7 @@ class LLMValidation:
     """
 
     is_routine: bool
-    confidence: float       # 0-1
+    confidence: float  # 0-1
     reason: str
     validated_at_ms: int
 
@@ -143,19 +143,19 @@ class PlannerDecision:
     nudge_message: str | None = None  # required when action in {nudge, nudge_inject, nudge_defer}
     spawn_task: str | None = None  # required when action=spawn_agent
     defer_condition: str | None = None  # required when action=nudge_defer;
-                                         # natural-language wait condition
-                                         # (e.g. "user's back-pain consultation thread ends")
+    # natural-language wait condition
+    # (e.g. "user's back-pain consultation thread ends")
     topic_tag: str | None = None  # short stable topic key for per-topic
-                                   # hour quota in NudgePolicy. Examples:
-                                   # "deadline_clawtrack", "birthday_xiaotang".
-                                   # None = exempt from topic gate.
+    # hour quota in NudgePolicy. Examples:
+    # "deadline_clawtrack", "birthday_xiaotang".
+    # None = exempt from topic gate.
     raw_llm_response: dict[str, Any] | None = None  # debugging
 
 
 ExecKind = Literal[
-    "reply",            # inject a user-side prompt for the agent to handle
-    "tool",             # invoke a tool from the agent's registry directly
-    "spawn",            # SubagentManager.spawn(...)
+    "reply",  # inject a user-side prompt for the agent to handle
+    "tool",  # invoke a tool from the agent's registry directly
+    "spawn",  # SubagentManager.spawn(...)
     "routine_confirm",  # upgrade a candidate Routine to active + optional cron
 ]
 TaskOptionType = Literal["routine_confirm", "ad_hoc"]
@@ -171,16 +171,16 @@ class TaskOption:
     routed back to.
     """
 
-    id: str                                  # "opt_<8hex>"
-    title: str                               # short user-facing title
-    why: str                                 # 1-line rationale
-    type: TaskOptionType                     # routine_confirm | ad_hoc
+    id: str  # "opt_<8hex>"
+    title: str  # short user-facing title
+    why: str  # 1-line rationale
+    type: TaskOptionType  # routine_confirm | ad_hoc
     exec_kind: ExecKind
     exec_payload: dict[str, Any] = field(default_factory=dict)
     source: Literal["history", "memory", "routine"] = "history"
     priority: Priority = "medium"
     created_at_ms: int = 0
-    deadline: str = ""                       # ISO date, "" if none
+    deadline: str = ""  # ISO date, "" if none
 
 
 @dataclass
@@ -207,7 +207,7 @@ class PendingDecision:
     skipped and pick → execute happens in one step.
     """
 
-    decision_id: str                         # "dec_<8hex>"
+    decision_id: str  # "dec_<8hex>"
     channel: str
     to: str
     created_at_ms: int
@@ -243,9 +243,12 @@ class RouteResult:
     consumed: bool
     pending_decision_id: str | None = None
     option: TaskOption | None = None
-    confidence: float = 0.0                  # /pick N regex hit = 1.0; LLM = [0, 1]
+    confidence: float = 0.0  # /pick N regex hit = 1.0; LLM = [0, 1]
     raw_match_method: Literal[
-        "regex_pick", "regex_yesno", "llm_classifier", "none",
+        "regex_pick",
+        "regex_yesno",
+        "llm_classifier",
+        "none",
     ] = "none"
     # Only set when the matched decision was awaiting_confirm. None for
     # first-leg pick / skip flows.

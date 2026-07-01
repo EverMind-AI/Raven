@@ -37,8 +37,8 @@ class AssembledContext:
     """
 
     messages: list[dict[str, Any]]
-    system_prompt_addition: str | None = None     # Injected summary / working-state
-    include_indices: list[int] | None = None      # Which session msg indices survived
+    system_prompt_addition: str | None = None  # Injected summary / working-state
+    include_indices: list[int] | None = None  # Which session msg indices survived
     metadata: dict[str, Any] = field(default_factory=dict)  # Debug / telemetry
 
 
@@ -46,11 +46,11 @@ class AssembledContext:
 class TokenBudget:
     """Token budget breakdown for one turn."""
 
-    context_length: int          # Model's context window
-    reserved_output: int         # Reserved for completion
-    reserved_tools: int          # Tool schemas + results in prompt
-    reserved_system: int         # System prompt overhead
-    available_history: int       # What's left for session history + archive injection
+    context_length: int  # Model's context window
+    reserved_output: int  # Reserved for completion
+    reserved_tools: int  # Tool schemas + results in prompt
+    reserved_system: int  # System prompt overhead
+    available_history: int  # What's left for session history + archive injection
 
     @property
     def total_reserved(self) -> int:

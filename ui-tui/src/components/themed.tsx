@@ -1,9 +1,11 @@
-import { Text } from '@hermes/ink'
-import { useStore } from '@nanostores/react'
 import type { ReactNode } from 'react'
 
-import { $uiState } from '../app/uiStore.js'
+import { Text } from '@hermes/ink'
+import { useStore } from '@nanostores/react'
+
 import type { ThemeColors } from '../theme.js'
+
+import { $uiState } from '../app/uiStore.js'
 
 export function Fg({ bold, c, children, dim, italic, literal, strikethrough, underline, wrap }: FgProps) {
   const { theme } = useStore($uiState)

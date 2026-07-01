@@ -17,8 +17,7 @@ from email.parser import BytesParser
 from email.utils import parseaddr
 from typing import Any
 
-_IMAP_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_IMAP_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def format_imap_date(value: date) -> str:
@@ -117,12 +116,12 @@ def parse_message(raw_bytes: bytes, max_body_chars: int, uid: str = "") -> dict[
         "sender": sender,
         "subject": subject,
         "message_id": message_id,
-        "content": (
-            f"Email received.\nFrom: {sender}\nSubject: {subject}\n"
-            f"Date: {date_value}\n\n{body}"
-        ),
+        "content": (f"Email received.\nFrom: {sender}\nSubject: {subject}\nDate: {date_value}\n\n{body}"),
         "metadata": {
-            "message_id": message_id, "subject": subject, "date": date_value,
-            "sender_email": sender, "uid": uid,
+            "message_id": message_id,
+            "subject": subject,
+            "date": date_value,
+            "sender_email": sender,
+            "uid": uid,
         },
     }

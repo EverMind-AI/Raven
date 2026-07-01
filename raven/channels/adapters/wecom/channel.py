@@ -43,13 +43,15 @@ class WecomChannel(ChannelBase):
             return
         self._running = True
 
-        self._client = WSClient({
-            "bot_id": self.config.bot_id,
-            "secret": self.config.secret,
-            "reconnect_interval": 1000,
-            "max_reconnect_attempts": -1,
-            "heartbeat_interval": 30000,
-        })
+        self._client = WSClient(
+            {
+                "bot_id": self.config.bot_id,
+                "secret": self.config.secret,
+                "reconnect_interval": 1000,
+                "max_reconnect_attempts": -1,
+                "heartbeat_interval": 30000,
+            }
+        )
         self._client.on("connected", self._log_event("WeCom WebSocket connected"))
         self._client.on("authenticated", self._log_event("WeCom authenticated"))
         self._client.on("disconnected", self._log_event("WeCom WebSocket disconnected", "warning"))
@@ -73,11 +75,13 @@ class WecomChannel(ChannelBase):
     def _log_event(message: str, level: str = "info", body: bool = False):
         async def handler(frame: Any) -> None:
             getattr(logger, level)("{}{}", message, f": {frame}" if body else "")
+
         return handler
 
     def _make_handler(self, msg_type: str):
         async def handler(frame: Any) -> None:
             await self._process(frame, msg_type)
+
         return handler
 
     # ── inbound ───────────────────────────────────────────────────────
@@ -120,7 +124,7 @@ class WecomChannel(ChannelBase):
             sender_id = from_info.get("userid", "unknown") if isinstance(from_info, dict) else "unknown"
             chat_type = body.get("chattype", "single")
             chat_id = body.get("chatid", sender_id)  # single chat: chatid == sender
-            if not self.is_allowed(sender_id):   # reject before media download in _extract
+            if not self.is_allowed(sender_id):  # reject before media download in _extract
                 return
 
             content = await self._extract(body, msg_type)
@@ -203,8 +207,7 @@ class WecomChannel(ChannelBase):
             # user instead of losing them silently.
             logger.warning("WeCom reply is text-only; {} attachment(s) not sent", len(media))
             notes = "\n".join(
-                f"[Attachment not sent: {safe_name(m)}]"
-                for m in media if isinstance(m, str) and m.strip()
+                f"[Attachment not sent: {safe_name(m)}]" for m in media if isinstance(m, str) and m.strip()
             )
             content = f"{content}\n{notes}".strip()
         if not content:

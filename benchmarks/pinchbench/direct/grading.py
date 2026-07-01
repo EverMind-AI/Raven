@@ -81,14 +81,16 @@ def grade_task(
 # Automated grading
 # ---------------------------------------------------------------------------
 
-def _grade_automated(
-    task: Task, execution_result: Dict[str, Any], verbose: bool = False
-) -> GradeResult:
+
+def _grade_automated(task: Task, execution_result: Dict[str, Any], verbose: bool = False) -> GradeResult:
     grading_code = _extract_grading_code(task)
     if not grading_code:
         return GradeResult(
-            task_id=task.task_id, score=0.0, max_score=1.0,
-            grading_type="automated", breakdown={},
+            task_id=task.task_id,
+            score=0.0,
+            max_score=1.0,
+            grading_type="automated",
+            breakdown={},
             notes="No automated grading code found",
         )
 
@@ -97,8 +99,11 @@ def _grade_automated(
     grade_func = namespace.get("grade")
     if not callable(grade_func):
         return GradeResult(
-            task_id=task.task_id, score=0.0, max_score=1.0,
-            grading_type="automated", breakdown={},
+            task_id=task.task_id,
+            score=0.0,
+            max_score=1.0,
+            grading_type="automated",
+            breakdown={},
             notes="Automated grading function missing",
         )
 
@@ -114,7 +119,9 @@ def _grade_automated(
 
     total = _average_scores(scores)
     return GradeResult(
-        task_id=task.task_id, score=total, max_score=1.0,
+        task_id=task.task_id,
+        score=total,
+        max_score=1.0,
         grading_type="automated",
         breakdown=_normalize_score_dict(scores),
         notes="",
@@ -124,6 +131,7 @@ def _grade_automated(
 # ---------------------------------------------------------------------------
 # LLM judge grading — calls OpenRouter directly via litellm
 # ---------------------------------------------------------------------------
+
 
 def _grade_llm_judge(
     *,
@@ -145,6 +153,7 @@ def _grade_llm_judge(
         import os
 
         import litellm
+
         os.environ.setdefault("OPENROUTER_API_KEY", judge_api_key)
 
         response = litellm.completion(
@@ -159,8 +168,11 @@ def _grade_llm_judge(
     except Exception as exc:
         logger.error("LLM judge failed: %s", exc)
         return GradeResult(
-            task_id=task.task_id, score=0.0, max_score=1.0,
-            grading_type="llm_judge", breakdown={},
+            task_id=task.task_id,
+            score=0.0,
+            max_score=1.0,
+            grading_type="llm_judge",
+            breakdown={},
             notes=f"Judge error: {exc}",
         )
 
@@ -189,9 +201,8 @@ def _grade_llm_judge(
 # Hybrid grading
 # ---------------------------------------------------------------------------
 
-def _combine_grades(
-    task: Task, auto_result: GradeResult, llm_result: GradeResult
-) -> GradeResult:
+
+def _combine_grades(task: Task, auto_result: GradeResult, llm_result: GradeResult) -> GradeResult:
     weights = task.grading_weights or {"automated": 0.5, "llm_judge": 0.5}
     aw = float(weights.get("automated", 0.5))
     lw = float(weights.get("llm_judge", 0.5))
@@ -203,14 +214,19 @@ def _combine_grades(
     }
     notes = " | ".join(filter(None, [auto_result.notes, llm_result.notes]))
     return GradeResult(
-        task_id=task.task_id, score=combined, max_score=1.0,
-        grading_type="hybrid", breakdown=breakdown, notes=notes,
+        task_id=task.task_id,
+        score=combined,
+        max_score=1.0,
+        grading_type="hybrid",
+        breakdown=breakdown,
+        notes=notes,
     )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _extract_grading_code(task: Task) -> str:
     if not task.automated_checks:
@@ -248,9 +264,7 @@ def _summarize_transcript(transcript: List[Dict[str, Any]]) -> str:
         if role == "assistant":
             for item in msg.get("content", []):
                 if item.get("type") == "toolCall":
-                    parts.append(
-                        f"Tool: {item.get('name')}({json.dumps(item.get('arguments', {}))})"
-                    )
+                    parts.append(f"Tool: {item.get('name')}({json.dumps(item.get('arguments', {}))})")
                 elif item.get("type") == "text":
                     text = item.get("text", "")
                     if text:
@@ -333,7 +347,8 @@ def _parse_judge_response_text(raw_text: str) -> Dict[str, Any]:
     # Fallback: regex for total score
     sm = re.search(
         r"(?:total|overall|final)\s*(?:score)?[:\s]*(0\.\d+|1\.0+)",
-        raw_text, re.IGNORECASE,
+        raw_text,
+        re.IGNORECASE,
     )
     if sm:
         try:

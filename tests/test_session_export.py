@@ -50,11 +50,13 @@ def test_user_and_assistant_headings():
 def test_reasoning_block_present_when_set():
     s = _session()
     s.add_message("user", "q")
-    s.record({
-        "role": "assistant",
-        "content": "final answer",
-        "reasoning_content": "let me think step by step",
-    })
+    s.record(
+        {
+            "role": "assistant",
+            "content": "final answer",
+            "reasoning_content": "let me think step by step",
+        }
+    )
     out = render_transcript(s)
     assert "let me think step by step" in out
     assert "final answer" in out
@@ -73,23 +75,27 @@ def test_reasoning_block_absent_when_unset():
 def test_tool_calls_and_results_rendered():
     s = _session()
     s.add_message("user", "read it")
-    s.record({
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": "c1",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path": "x.txt"}'},
-            }
-        ],
-    })
-    s.record({
-        "role": "tool",
-        "content": "the file body",
-        "tool_call_id": "c1",
-        "name": "read_file",
-    })
+    s.record(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "x.txt"}'},
+                }
+            ],
+        }
+    )
+    s.record(
+        {
+            "role": "tool",
+            "content": "the file body",
+            "tool_call_id": "c1",
+            "name": "read_file",
+        }
+    )
     out = render_transcript(s)
     assert "read_file" in out
     assert "x.txt" in out

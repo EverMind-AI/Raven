@@ -232,19 +232,14 @@ class SkillRegistry:
         # ``_dirty_sources``). Full rebuild path treats every source as
         # dirty, which ``filter_in`` below rejects → starts empty.
         if self._metas_cache is not None:
-            kept = [
-                m for m in self._metas_cache
-                if m.source not in self._dirty_sources
-            ]
+            kept = [m for m in self._metas_cache if m.source not in self._dirty_sources]
             wanted_dirty = self._dirty_sources
         else:
             kept = []
             wanted_dirty = None  # full scan: keep every source we find
 
         metas: list[SkillMeta] = list(kept)
-        full_key: dict[tuple[str, str], SkillMeta] = {
-            (m.source, m.name): m for m in kept
-        }
+        full_key: dict[tuple[str, str], SkillMeta] = {(m.source, m.name): m for m in kept}
         # Physical-directory dedupe runs on the directory name (a stable
         # key, possibly numeric for everos); ``full_key`` is keyed
         # by (source, display name) so by-name lookups still work when
@@ -265,7 +260,8 @@ class SkillRegistry:
             if root is None or not root.exists():
                 continue
             for skill_dir, source in self._iter_skill_dirs(
-                root, default_source=layer_label,
+                root,
+                default_source=layer_label,
                 max_depth=self._scan_max_depth,
             ):
                 if wanted_dirty is not None and source not in wanted_dirty:
@@ -275,7 +271,8 @@ class SkillRegistry:
                     continue
                 seen_dirs.add(dir_key)
                 meta = self._build_meta(
-                    skill_dir, source,
+                    skill_dir,
+                    source,
                     always_enabled=layer_always_enabled,
                 )
                 if meta is None:
@@ -304,7 +301,9 @@ class SkillRegistry:
             if prev is not None and prev.source != m.source:
                 log.warning(
                     "Skill '%s' from '%s' shadowed by '%s'",
-                    m.name, prev.source, m.source,
+                    m.name,
+                    prev.source,
+                    m.source,
                 )
             by_name[m.name] = m  # last write wins
 
@@ -312,11 +311,11 @@ class SkillRegistry:
         source_counts: dict[str, int] = {}
         for m in metas:
             source_counts[m.source] = source_counts.get(m.source, 0) + 1
-        parts_str = " ".join(
-            f"{s}={c}" for s, c in sorted(source_counts.items())
-        )
+        parts_str = " ".join(f"{s}={c}" for s, c in sorted(source_counts.items()))
         log.info(
-            "LocalPool loaded: %s (total=%d)", parts_str, len(metas),
+            "LocalPool loaded: %s (total=%d)",
+            parts_str,
+            len(metas),
         )
 
         self._metas_cache = metas
@@ -350,7 +349,9 @@ class SkillRegistry:
             return None
 
     def get_raw_metadata(
-        self, name: str, source: str | None = None,
+        self,
+        name: str,
+        source: str | None = None,
     ) -> dict | None:
         """Top-level frontmatter dict (YAML-lite parsed)."""
         body = self.get_body(name, source=source)
@@ -359,7 +360,9 @@ class SkillRegistry:
         return _parse_frontmatter(body)
 
     def check_available(
-        self, name: str, source: str | None = None,
+        self,
+        name: str,
+        source: str | None = None,
     ) -> bool:
         """True if all declared ``requires`` (bins, env) are satisfied."""
         meta = self.get(name, source=source)
@@ -368,7 +371,9 @@ class SkillRegistry:
         return _check_requirements(meta.requires)
 
     def get_missing_requirements(
-        self, name: str, source: str | None = None,
+        self,
+        name: str,
+        source: str | None = None,
     ) -> str:
         """Human-readable list of unmet requirements; empty when satisfied."""
         meta = self.get(name, source=source)
@@ -428,8 +433,11 @@ class SkillRegistry:
                 yield parent, parts[0]
 
     def _build_meta(
-        self, skill_dir: Path, source: str,
-        *, always_enabled: bool = True,
+        self,
+        skill_dir: Path,
+        source: str,
+        *,
+        always_enabled: bool = True,
     ) -> SkillMeta | None:
         skill_file = skill_dir / "SKILL.md"
         try:
@@ -498,7 +506,7 @@ def _parse_frontmatter(content: str) -> dict | None:
     for line in m.group(1).split("\n"):
         if ":" in line:
             key, value = line.split(":", 1)
-            metadata[key.strip()] = value.strip().strip('"\'')
+            metadata[key.strip()] = value.strip().strip("\"'")
     return metadata
 
 
@@ -509,7 +517,7 @@ def _strip_frontmatter(content: str) -> str:
     m = re.match(r"^---\n.*?\n---\n?", content, re.DOTALL)
     if not m:
         return content
-    return content[m.end():]
+    return content[m.end() :]
 
 
 def _parse_nested_metadata(raw: str) -> dict:
@@ -548,8 +556,8 @@ def _parse_always_value(raw: object) -> bool:
         lower = raw.strip().lower()
         if lower not in _ALWAYS_KNOWN:
             log.warning(
-                "Unrecognized 'always' value '%s' — treated as false. "
-                "Expected true/false/yes/no/1/0.", raw,
+                "Unrecognized 'always' value '%s' — treated as false. Expected true/false/yes/no/1/0.",
+                raw,
             )
         return lower in _ALWAYS_TRUTHY
     return False

@@ -22,9 +22,14 @@ def _cfg(**o):
         allow_from=o.get("dm_allow", []),
     )
     return SimpleNamespace(
-        bot_token="b", app_token="a", mode="socket",
-        group_policy=o.get("group_policy", "open"), group_allow_from=o.get("group_allow", []),
-        dm=dm, reply_in_thread=o.get("reply_in_thread", False), react_emoji="eyes",
+        bot_token="b",
+        app_token="a",
+        mode="socket",
+        group_policy=o.get("group_policy", "open"),
+        group_allow_from=o.get("group_allow", []),
+        dm=dm,
+        reply_in_thread=o.get("reply_in_thread", False),
+        react_emoji="eyes",
         allow_from=o.get("allow_from", ["*"]),
     )
 
@@ -60,20 +65,20 @@ def test_to_mrkdwn_bold_and_header():
 def test_to_mrkdwn_preserves_code():
     out = sp.to_mrkdwn("see `x=1` and\n```\n**not bold**\n```")
     assert "`x=1`" in out
-    assert "**not bold**" in out   # inside fence, untouched
+    assert "**not bold**" in out  # inside fence, untouched
 
 
 def test_to_mrkdwn_table_flattened():
     md = "| Name | Age |\n| --- | --- |\n| Alice | 30 |"
     out = sp.to_mrkdwn(md)
     assert "Alice" in out and "30" in out
-    assert "|" not in out          # table chars gone
+    assert "|" not in out  # table chars gone
 
 
 def test_strip_bot_mention():
     assert sp.strip_bot_mention("<@B1> hello", "B1") == "hello"
     assert sp.strip_bot_mention("plain", "B1") == "plain"
-    assert sp.strip_bot_mention("<@B1> x", None) == "<@B1> x"   # no bot id -> untouched
+    assert sp.strip_bot_mention("<@B1> x", None) == "<@B1> x"  # no bot id -> untouched
 
 
 # ── parsing: permission / respond / dedup ──────────────────────────────
@@ -97,7 +102,10 @@ def test_should_respond_in_channel():
     assert sp.should_respond_in_channel(_cfg(group_policy="mention"), "app_mention", "hi", "C1", "B1") is True
     assert sp.should_respond_in_channel(_cfg(group_policy="mention"), "message", "<@B1> hi", "C1", "B1") is True
     assert sp.should_respond_in_channel(_cfg(group_policy="mention"), "message", "hi", "C1", "B1") is False
-    assert sp.should_respond_in_channel(_cfg(group_policy="allowlist", group_allow=["C1"]), "message", "x", "C1", "B1") is True
+    assert (
+        sp.should_respond_in_channel(_cfg(group_policy="allowlist", group_allow=["C1"]), "message", "x", "C1", "B1")
+        is True
+    )
 
 
 def test_is_duplicate_mention():
@@ -125,9 +133,18 @@ def test_socket_ignores_non_events_api():
 
 def test_socket_app_mention_dispatches_stripped():
     ch = _channel()
-    client = _run(ch, {"type": "app_mention", "user": "U1", "channel": "C1",
-                       "text": "<@B1> hello there", "ts": "1.0", "channel_type": "channel"})
-    client.send_socket_mode_response.assert_awaited_once()   # ack
+    client = _run(
+        ch,
+        {
+            "type": "app_mention",
+            "user": "U1",
+            "channel": "C1",
+            "text": "<@B1> hello there",
+            "ts": "1.0",
+            "channel_type": "channel",
+        },
+    )
+    client.send_socket_mode_response.assert_awaited_once()  # ack
     ch.intake.publish.assert_awaited_once()
     kw = ch.intake.publish.await_args.kwargs
     assert kw["content"] == "hello there" and kw["chat_id"] == "C1" and kw["sender_id"] == "U1"
@@ -178,7 +195,7 @@ def test_send_postmessage_mrkdwn_carries_no_thread():
     call = ch._web_client.chat_postMessage.call_args
     assert call.kwargs["channel"] == "C1"
     assert "*bold*" in call.kwargs["text"]
-    assert "thread_ts" not in call.kwargs   # carry-nothing: no threading
+    assert "thread_ts" not in call.kwargs  # carry-nothing: no threading
 
 
 def test_send_media_only_skips_text():
@@ -199,10 +216,19 @@ def test_send_empty_sends_blank():
 
 def test_socket_reply_in_thread_sets_thread_ts():
     ch = _channel(reply_in_thread=True)
-    _run(ch, {"type": "app_mention", "user": "U1", "channel": "C1",
-              "text": "<@B1> hi", "ts": "5.5", "channel_type": "channel"})
+    _run(
+        ch,
+        {
+            "type": "app_mention",
+            "user": "U1",
+            "channel": "C1",
+            "text": "<@B1> hi",
+            "ts": "5.5",
+            "channel_type": "channel",
+        },
+    )
     meta = ch.intake.publish.await_args.kwargs["metadata"]["slack"]
-    assert meta["thread_ts"] == "5.5"   # reply_in_thread -> ts becomes thread root
+    assert meta["thread_ts"] == "5.5"  # reply_in_thread -> ts becomes thread root
     assert ch.intake.publish.await_args.kwargs["session_key"] == "slack:C1:5.5"
 
 
@@ -212,7 +238,7 @@ def test_socket_reply_in_thread_sets_thread_ts():
 def test_socket_unhandled_event_type_acked_not_dispatched():
     ch = _channel()
     client = _run(ch, {"type": "reaction_added", "user": "U1", "channel": "C1"})
-    client.send_socket_mode_response.assert_awaited_once()   # envelope still acked
+    client.send_socket_mode_response.assert_awaited_once()  # envelope still acked
     ch.intake.publish.assert_not_awaited()
 
 
@@ -233,16 +259,24 @@ def test_disallowed_sender_skips_react_and_publish():
     covers dm/group policy, not allow_from) — a denied sender gets no visible
     acknowledgement and never reaches the bus."""
     ch = _channel(allow_from=["only"])
-    _run(ch, {"type": "message", "user": "stranger", "channel": "D1", "text": "hi",
-              "ts": "3.3", "channel_type": "im"})
+    _run(ch, {"type": "message", "user": "stranger", "channel": "D1", "text": "hi", "ts": "3.3", "channel_type": "im"})
     ch._web_client.reactions_add.assert_not_awaited()
     ch.intake.publish.assert_not_awaited()
 
 
 def test_socket_reacts_to_triggering_message():
     ch = _channel()
-    _run(ch, {"type": "app_mention", "user": "U1", "channel": "C1",
-              "text": "<@B1> hi", "ts": "7.7", "channel_type": "channel"})
+    _run(
+        ch,
+        {
+            "type": "app_mention",
+            "user": "U1",
+            "channel": "C1",
+            "text": "<@B1> hi",
+            "ts": "7.7",
+            "channel_type": "channel",
+        },
+    )
     ch._web_client.reactions_add.assert_awaited_once()
     kw = ch._web_client.reactions_add.await_args.kwargs
     assert kw["channel"] == "C1" and kw["timestamp"] == "7.7" and kw["name"] == "eyes"
@@ -262,6 +296,7 @@ def test_send_reraises_transient_for_manager_retry():
     errors stay swallowed (see test_send_swallows_upload_error)."""
     import pytest
     from slack_sdk.errors import SlackApiError
+
     ch = _channel()
     err = SlackApiError("rate limited", SimpleNamespace(status_code=429))
     ch._web_client.chat_postMessage = AsyncMock(side_effect=err)
@@ -273,7 +308,7 @@ def test_send_swallows_upload_error():
     ch = _channel()
     ch._web_client.files_upload_v2 = AsyncMock(side_effect=RuntimeError("boom"))
     asyncio.run(ch.send("C1", "hi", media=["/tmp/a.png"]))
-    ch._web_client.chat_postMessage.assert_awaited_once()   # text still sent despite upload failure
+    ch._web_client.chat_postMessage.assert_awaited_once()  # text still sent despite upload failure
 
 
 # ── stop contract ──────────────────────────────────────────────────────
@@ -289,7 +324,7 @@ def test_stop_is_idempotent_and_wakes_keepalive():
     asyncio.run(ch.stop())
     assert ch._stop_event.is_set()
     socket_client.close.assert_awaited_once()
-    asyncio.run(ch.stop())            # second stop: no client left, no raise
+    asyncio.run(ch.stop())  # second stop: no client left, no raise
 
 
 # ── contract conformance ───────────────────────────────────────────────
@@ -298,9 +333,10 @@ def test_stop_is_idempotent_and_wakes_keepalive():
 def test_slack_satisfies_channel_contract():
     from raven.channels import Channel
     from raven.channels.contract import capability_violations
+
     ch = SlackChannel(_cfg())
-    assert isinstance(ch, Channel)              # name/capabilities/start/stop/send
-    assert capability_violations(ch) == []      # no login/streaming declared or implemented
+    assert isinstance(ch, Channel)  # name/capabilities/start/stop/send
+    assert capability_violations(ch) == []  # no login/streaming declared or implemented
 
 
 def test_slack_spec_import_is_cheap():
@@ -308,6 +344,7 @@ def test_slack_spec_import_is_cheap():
     is deferred into SPEC.factory)."""
     import subprocess
     import sys
+
     code = (
         "import sys, raven.channels.adapters.slack.spec as s;"
         "assert 'slack_sdk' not in sys.modules, 'spec import pulled in slack_sdk';"

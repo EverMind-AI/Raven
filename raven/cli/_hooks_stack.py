@@ -52,9 +52,7 @@ def build_hooks_stack(
     chain = CompositeHook()
     if eval_engine is not None:
         chain.extend(eval_engine.hooks())
-        logger.debug(
-            "Hooks stack: added %d Eval Engine hooks", len(eval_engine.hooks())
-        )
+        logger.debug("Hooks stack: added %d Eval Engine hooks", len(eval_engine.hooks()))
     if extra_hooks is not None:
         for hook in extra_hooks:
             chain.append(hook)

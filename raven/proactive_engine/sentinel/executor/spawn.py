@@ -90,7 +90,8 @@ class ProactiveSpawn:
         except Exception as exc:
             logger.warning(
                 "ProactiveSpawn: SubagentManager.spawn raised {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return ExecutionResult(
                 delivered=False,
@@ -99,14 +100,19 @@ class ProactiveSpawn:
             )
 
         self.policy.record_fired(
-            decision.action, target, decision.spawn_task,
+            decision.action,
+            target,
+            decision.spawn_task,
             topic_tag=decision.topic_tag,
         )
         now = self._now_fn()
         logger.info(
             "spawn_dispatched session_key={} priority={} score={:.2f} task_id={} label={!r}",
-            target, decision.priority, decision.proactivity_score,
-            task_id, label,
+            target,
+            decision.priority,
+            decision.proactivity_score,
+            task_id,
+            label,
         )
         return ExecutionResult(
             delivered=True,

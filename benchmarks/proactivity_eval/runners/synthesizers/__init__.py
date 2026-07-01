@@ -22,9 +22,7 @@ SYNTHESIZERS: dict[str, type] = {
 def get_synthesizer(name: str = "keyword", **kwargs) -> ContextSynthesizer:
     if name not in SYNTHESIZERS:
         available = ", ".join(sorted(SYNTHESIZERS))
-        raise KeyError(
-            f"Unknown synthesizer '{name}'. Registered: {available}"
-        )
+        raise KeyError(f"Unknown synthesizer '{name}'. Registered: {available}")
     return SYNTHESIZERS[name](**kwargs)
 
 

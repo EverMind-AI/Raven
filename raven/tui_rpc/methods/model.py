@@ -78,9 +78,7 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     configured = bool(info.get("configured"))
     warning = ""
     if is_oauth and not configured:
-        warning = (
-            f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
-        )
+        warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
     models = _provider_models(slug)
     return {
@@ -117,10 +115,7 @@ def _current_selection() -> tuple[str, str | None]:
 async def model_options(params: dict) -> dict:
     _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
-    entries = [
-        _build_provider_entry(p["name"], current_provider=current_provider)
-        for p in list_providers()
-    ]
+    entries = [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
     return {
         "model": current_model,
         "provider": current_provider or "",
@@ -139,8 +134,7 @@ async def model_save_key(params: dict) -> dict:
         )
     if spec.is_oauth:
         raise NotSupportedInV01Error(
-            f"{spec.label} uses OAuth; run "
-            f"`raven provider login {parsed.slug.replace('_', '-')}`",
+            f"{spec.label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
     if parsed.slug in _NEEDS_API_BASE and not parsed.api_base:

@@ -44,7 +44,8 @@ class ModelRouter:
         self._data = await self._cache.load()
         logger.info(
             "ModelRouter initialized: {} models, profile={}",
-            len(self._data), self._profile,
+            len(self._data),
+            self._profile,
         )
 
     async def route(self, prompt: str) -> SelectionResult | None:
@@ -65,7 +66,9 @@ class ModelRouter:
             result = select_model(self._data, classification.category, self._profile)
             logger.info(
                 "Routed to {} (category={}, score={:.3f})",
-                result.primary.model, result.primary.task_score, result.primary.composite_score,
+                result.primary.model,
+                result.primary.task_score,
+                result.primary.composite_score,
             )
             return result
         except Exception as e:

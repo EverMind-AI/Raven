@@ -37,6 +37,7 @@ def injector(clock):
 # ---------------------------------------------------------------------------
 # Basic queue / pop
 
+
 def test_queue_and_pop_returns_messages(injector):
     injector.queue("s1", "first")
     injector.queue("s1", "second")
@@ -62,6 +63,7 @@ def test_size_all_sessions(injector):
 # ---------------------------------------------------------------------------
 # Empty inputs
 
+
 def test_queue_empty_message_ignored(injector):
     injector.queue("s1", "")
     assert injector.size("s1") == 0
@@ -74,6 +76,7 @@ def test_queue_empty_session_key_ignored(injector):
 
 # ---------------------------------------------------------------------------
 # Callable protocol (response_modifier)
+
 
 def test_call_appends_single_message(injector):
     injector.queue("s1", "P.S. remember to hydrate")
@@ -98,13 +101,14 @@ def test_call_returns_content_unchanged_if_no_pending(injector):
 def test_call_is_per_session(injector):
     injector.queue("s1", "only s1")
     result = injector("s2", "different session")
-    assert result == "different session"   # no inject for s2
+    assert result == "different session"  # no inject for s2
     # s1's queue is intact.
     assert injector.size("s1") == 1
 
 
 # ---------------------------------------------------------------------------
 # TTL expiry
+
 
 def test_ttl_expires_pending(injector, clock):
     injector.queue("s1", "old")
@@ -122,7 +126,7 @@ def test_ttl_expires_one_but_keeps_newer(injector, clock):
     injector.queue("s1", "old")
     clock.advance(1000)
     injector.queue("s1", "new")
-    clock.advance(801)   # old now 1801s, new only 801s
+    clock.advance(801)  # old now 1801s, new only 801s
     popped = injector.pop_pending("s1")
     assert popped == ["new"]
 
@@ -138,6 +142,7 @@ def test_peek_filters_ttl_without_mutating(injector, clock):
 
 # ---------------------------------------------------------------------------
 # Per-session cap
+
 
 def test_cap_drops_oldest_when_full(injector):
     for i in range(5):
@@ -159,6 +164,7 @@ def test_cap_is_per_session(injector):
 # ---------------------------------------------------------------------------
 # Custom joiner
 
+
 def test_custom_joiner():
     inj = NudgeInjector(joiner=" | ")
     inj.queue("s1", "A")
@@ -168,6 +174,7 @@ def test_custom_joiner():
 
 # ---------------------------------------------------------------------------
 # response_modifier protocol — used by AgentLoop
+
 
 def test_callable_shape_matches_response_modifier(injector):
     # AgentLoop expects Callable[[str, str], str]; verify signature.

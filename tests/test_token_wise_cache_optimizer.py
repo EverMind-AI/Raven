@@ -124,14 +124,16 @@ async def test_string_content_is_wrapped_into_text_block():
 
 async def test_list_content_marks_only_last_block():
     opt = CacheOptimizer()
-    msgs = [{
-        "role": "system",
-        "content": [
-            {"type": "text", "text": "first"},
-            {"type": "text", "text": "second"},
-            {"type": "text", "text": "third"},
-        ],
-    }]
+    msgs = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+                {"type": "text", "text": "third"},
+            ],
+        }
+    ]
     out_m, _, _ = await opt.before_llm_call(msgs, None, ANTHROPIC_MODEL)
     sys = out_m[0]
     blocks = sys["content"]

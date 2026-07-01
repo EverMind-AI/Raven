@@ -31,11 +31,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -44,30 +42,30 @@ from raven.memory_engine.consolidate.consolidator import _parse_episode_line
 if TYPE_CHECKING:
     from raven.config.raven import DailyAnalysisConfig
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
     from raven.proactive_engine.sentinel.predictor.routine_store import (
         RoutineStore,
     )
+    from raven.providers.base import LLMProvider
     from raven.session.manager import SessionManager
 
 
 @dataclass
 class StanceEntry:
-    ts: str          # ISO datetime when the inbound was authored
-    text: str        # original sentence
+    ts: str  # ISO datetime when the inbound was authored
+    text: str  # original sentence
 
 
 @dataclass
 class Prediction:
-    date: str        # ISO YYYY-MM-DD
+    date: str  # ISO YYYY-MM-DD
     text: str
     confidence: str  # "low" | "medium" | "high"
-    basis: str       # evidence the LLM grounded on
+    basis: str  # evidence the LLM grounded on
 
 
 @dataclass
 class BehaviorPattern:
-    kind: str        # "temporal" | "workflow" | "topical"
+    kind: str  # "temporal" | "workflow" | "topical"
     text: str
     supporting_projects: list[str] = field(default_factory=list)
     confidence: str = "medium"
@@ -90,103 +88,112 @@ _FAILURE_COOLDOWN = timedelta(hours=1)
 
 
 def _tool_schema() -> list[dict[str, Any]]:
-    return [{
-        "type": "function",
-        "function": {
-            "name": _TOOL_NAME,
-            "description": (
-                "Emit a structured daily analysis covering three views of "
-                "the user's recent state. Empty arrays acceptable when "
-                "the input lacks signal for a given view — better to "
-                "skip than fabricate."
-            ),
-            "parameters": {
-                "type": "object",
-                "required": [
-                    "stance_entries", "predictions", "patterns",
-                ],
-                "properties": {
-                    "stance_entries": {
-                        "type": "array",
-                        "description": (
-                            "Sentences in the recent inbound window where "
-                            "the user expressed a preference / directive. "
-                            "Triggers: 'I prefer X', 'stop Y', 'always Z', "
-                            "'from now on...', 'avoid W'. Skip casual "
-                            "statements. Use the original sentence as "
-                            "``text``; ``source_ts`` is the inbound's "
-                            "timestamp."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "required": ["text", "source_ts"],
-                            "properties": {
-                                "text": {"type": "string"},
-                                "source_ts": {"type": "string"},
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": _TOOL_NAME,
+                "description": (
+                    "Emit a structured daily analysis covering three views of "
+                    "the user's recent state. Empty arrays acceptable when "
+                    "the input lacks signal for a given view — better to "
+                    "skip than fabricate."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "required": [
+                        "stance_entries",
+                        "predictions",
+                        "patterns",
+                    ],
+                    "properties": {
+                        "stance_entries": {
+                            "type": "array",
+                            "description": (
+                                "Sentences in the recent inbound window where "
+                                "the user expressed a preference / directive. "
+                                "Triggers: 'I prefer X', 'stop Y', 'always Z', "
+                                "'from now on...', 'avoid W'. Skip casual "
+                                "statements. Use the original sentence as "
+                                "``text``; ``source_ts`` is the inbound's "
+                                "timestamp."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "required": ["text", "source_ts"],
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "source_ts": {"type": "string"},
+                                },
                             },
                         },
-                    },
-                    "predictions": {
-                        "type": "array",
-                        "description": (
-                            "Three-day forecast — one entry per concrete "
-                            "predicted activity. Ground on the episodes "
-                            "+ active routines context. ``date`` ISO "
-                            "YYYY-MM-DD; ``confidence`` ∈ {low, medium, "
-                            "high}; ``basis`` cites evidence (e.g. "
-                            "'4/5 last Sundays at 19:00')."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "required": [
-                                "date", "text", "confidence", "basis",
-                            ],
-                            "properties": {
-                                "date": {"type": "string"},
-                                "text": {"type": "string"},
-                                "confidence": {
-                                    "type": "string",
-                                    "enum": ["low", "medium", "high"],
+                        "predictions": {
+                            "type": "array",
+                            "description": (
+                                "Three-day forecast — one entry per concrete "
+                                "predicted activity. Ground on the episodes "
+                                "+ active routines context. ``date`` ISO "
+                                "YYYY-MM-DD; ``confidence`` ∈ {low, medium, "
+                                "high}; ``basis`` cites evidence (e.g. "
+                                "'4/5 last Sundays at 19:00')."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "date",
+                                    "text",
+                                    "confidence",
+                                    "basis",
+                                ],
+                                "properties": {
+                                    "date": {"type": "string"},
+                                    "text": {"type": "string"},
+                                    "confidence": {
+                                        "type": "string",
+                                        "enum": ["low", "medium", "high"],
+                                    },
+                                    "basis": {"type": "string"},
                                 },
-                                "basis": {"type": "string"},
                             },
                         },
-                    },
-                    "patterns": {
-                        "type": "array",
-                        "description": (
-                            "Cross-project behavior summaries observed "
-                            "in the 14d window. ``kind`` ∈ {temporal, "
-                            "workflow, topical}. ``supporting_projects`` "
-                            "lists the project tags evidencing the "
-                            "pattern."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "required": ["kind", "text", "confidence"],
-                            "properties": {
-                                "kind": {
-                                    "type": "string",
-                                    "enum": [
-                                        "temporal", "workflow", "topical",
-                                    ],
-                                },
-                                "text": {"type": "string"},
-                                "supporting_projects": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                                "confidence": {
-                                    "type": "string",
-                                    "enum": ["low", "medium", "high"],
+                        "patterns": {
+                            "type": "array",
+                            "description": (
+                                "Cross-project behavior summaries observed "
+                                "in the 14d window. ``kind`` ∈ {temporal, "
+                                "workflow, topical}. ``supporting_projects`` "
+                                "lists the project tags evidencing the "
+                                "pattern."
+                            ),
+                            "items": {
+                                "type": "object",
+                                "required": ["kind", "text", "confidence"],
+                                "properties": {
+                                    "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                            "temporal",
+                                            "workflow",
+                                            "topical",
+                                        ],
+                                    },
+                                    "text": {"type": "string"},
+                                    "supporting_projects": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "confidence": {
+                                        "type": "string",
+                                        "enum": ["low", "medium", "high"],
+                                    },
                                 },
                             },
                         },
                     },
                 },
             },
-        },
-    }]
+        }
+    ]
 
 
 _SYSTEM_PROMPT = """\
@@ -251,7 +258,10 @@ class DailyAnalysisService:
         return self._cache
 
     async def get(
-        self, now: datetime, *, force: bool = False,
+        self,
+        now: datetime,
+        *,
+        force: bool = False,
     ) -> DailyAnalysisResult | None:
         """Return the cached result if fresh, otherwise run the LLM call
         and cache. Failure paths cache an empty result so the cooldown
@@ -272,16 +282,8 @@ class DailyAnalysisService:
                 # Empty cache (LLM failure or no-data) uses the short
                 # FAILURE_COOLDOWN so transient hiccups recover quickly;
                 # successful results use the full configured cooldown.
-                has_content = bool(
-                    self._cache.stance_entries
-                    or self._cache.predictions
-                    or self._cache.patterns
-                )
-                cooldown = (
-                    timedelta(hours=self._config.cooldown_hours)
-                    if has_content
-                    else _FAILURE_COOLDOWN
-                )
+                has_content = bool(self._cache.stance_entries or self._cache.predictions or self._cache.patterns)
+                cooldown = timedelta(hours=self._config.cooldown_hours) if has_content else _FAILURE_COOLDOWN
                 if now - self._cache.generated_at < cooldown:
                     return self._cache
 
@@ -290,7 +292,8 @@ class DailyAnalysisService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "DailyAnalysisService LLM call failed: {}: {}",
-                    type(exc).__name__, exc,
+                    type(exc).__name__,
+                    exc,
                 )
                 result = None
 
@@ -298,7 +301,8 @@ class DailyAnalysisService:
                 stance = self._prefix_fallback_stance(now)
                 if stance:
                     result = DailyAnalysisResult(
-                        generated_at=now, stance_entries=stance,
+                        generated_at=now,
+                        stance_entries=stance,
                     )
 
             if result is None:
@@ -309,7 +313,8 @@ class DailyAnalysisService:
     # ── LLM call ────────────────────────────────────────────────────
 
     async def _run_llm(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> DailyAnalysisResult | None:
         episodes = self._assemble_episodes(now)
         routines = self._assemble_routines()
@@ -361,14 +366,15 @@ class DailyAnalysisService:
             ts, _, _ = parsed
             try:
                 dt = datetime.strptime(
-                    ts.replace("T", " "), "%Y-%m-%d %H:%M",
+                    ts.replace("T", " "),
+                    "%Y-%m-%d %H:%M",
                 )
             except ValueError:
                 continue
             if dt < cutoff:
                 continue
             kept.append(line.strip())
-        return kept[-self._config.max_episodes:]
+        return kept[-self._config.max_episodes :]
 
     def _assemble_routines(self) -> list[str]:
         out: list[str] = []
@@ -377,16 +383,14 @@ class DailyAnalysisService:
                 if r.status not in {"active", "candidate"}:
                     continue
                 weight = r.weight or 0.0
-                out.append(
-                    f"- [{r.status}] {r.pattern} "
-                    f"(occ {r.occurrence_count}, weight {weight:.2f})"
-                )
+                out.append(f"- [{r.status}] {r.pattern} (occ {r.occurrence_count}, weight {weight:.2f})")
         except Exception:  # noqa: BLE001
             return []
         return out
 
     def _assemble_inbound(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> list[tuple[str, str, str]]:
         """Return ``[(session_key, ts_iso, text), ...]`` from session
         files within the inbound window."""
@@ -430,8 +434,7 @@ class DailyAnalysisService:
                             text = " ".join(
                                 blk.get("text", "")
                                 for blk in text
-                                if isinstance(blk, dict)
-                                and blk.get("type") == "text"
+                                if isinstance(blk, dict) and blk.get("type") == "text"
                             )
                         if not isinstance(text, str) or not text.strip():
                             continue
@@ -439,7 +442,7 @@ class DailyAnalysisService:
             except OSError:
                 continue
         out.sort(key=lambda t: t[1])
-        return out[-self._config.max_inbound_messages:]
+        return out[-self._config.max_inbound_messages :]
 
     def _render_prompt(
         self,
@@ -453,11 +456,7 @@ class DailyAnalysisService:
         parts.append(f"Day of week: {now.strftime('%A')}")
         parts.append("")
         if episodes:
-            parts.append(
-                f"## Recent episodes "
-                f"({self._config.episodes_window_days}d window, "
-                f"{len(episodes)} entries)"
-            )
+            parts.append(f"## Recent episodes ({self._config.episodes_window_days}d window, {len(episodes)} entries)")
             parts.extend(episodes)
             parts.append("")
         if routines:
@@ -466,9 +465,7 @@ class DailyAnalysisService:
             parts.append("")
         if inbound:
             parts.append(
-                f"## Recent user inbound "
-                f"({self._config.inbound_window_hours}h window, "
-                f"{len(inbound)} messages)"
+                f"## Recent user inbound ({self._config.inbound_window_hours}h window, {len(inbound)} messages)"
             )
             for key, ts, text in inbound:
                 parts.append(f"- [{ts[:16]}] {key}: {text}")
@@ -478,7 +475,8 @@ class DailyAnalysisService:
     # ── Prefix fallback ─────────────────────────────────────────────
 
     def _prefix_fallback_stance(
-        self, now: datetime,
+        self,
+        now: datetime,
     ) -> list[StanceEntry]:
         out: list[StanceEntry] = []
         prefixes = list(self._config.stance_prefix_fallback)
@@ -490,7 +488,8 @@ class DailyAnalysisService:
 
 
 def _parse_result(
-    args: dict[str, Any], now: datetime,
+    args: dict[str, Any],
+    now: datetime,
 ) -> DailyAnalysisResult:
     stance: list[StanceEntry] = []
     for raw in args.get("stance_entries", []) or []:
@@ -510,9 +509,14 @@ def _parse_result(
         basis = str(raw.get("basis") or "").strip()
         if not (date and text and confidence in {"low", "medium", "high"}):
             continue
-        predictions.append(Prediction(
-            date=date, text=text, confidence=confidence, basis=basis,
-        ))
+        predictions.append(
+            Prediction(
+                date=date,
+                text=text,
+                confidence=confidence,
+                basis=basis,
+            )
+        )
     patterns: list[BehaviorPattern] = []
     for raw in args.get("patterns", []) or []:
         if not isinstance(raw, dict):
@@ -526,10 +530,14 @@ def _parse_result(
         if not isinstance(sp_raw, list):
             sp_raw = []
         sp = [str(p).strip() for p in sp_raw if str(p).strip()]
-        patterns.append(BehaviorPattern(
-            kind=kind, text=text, supporting_projects=sp,
-            confidence=confidence,
-        ))
+        patterns.append(
+            BehaviorPattern(
+                kind=kind,
+                text=text,
+                supporting_projects=sp,
+                confidence=confidence,
+            )
+        )
     return DailyAnalysisResult(
         generated_at=now,
         stance_entries=stance,

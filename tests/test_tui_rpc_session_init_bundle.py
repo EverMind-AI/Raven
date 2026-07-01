@@ -122,13 +122,9 @@ def test_default_session_info_contains_real_tools(fake_agent_loop, config) -> No
     assert "builtin" in info["tools"], "info.tools must have a 'builtin' bucket (handoff §3.4 lock)"
     assert len(info["tools"]["builtin"]) >= 1, "builtin tools list must be non-empty"
     # sorted invariant
-    assert info["tools"]["builtin"] == sorted(info["tools"]["builtin"]), (
-        "tool names within bucket must be sorted"
-    )
+    assert info["tools"]["builtin"] == sorted(info["tools"]["builtin"]), "tool names within bucket must be sorted"
     # lazy: False on happy path (agent_loop present)
-    assert info["lazy"] is False, (
-        "lazy=False signals tools/skills are real values (vs placeholder True)"
-    )
+    assert info["lazy"] is False, "lazy=False signals tools/skills are real values (vs placeholder True)"
 
 
 def test_default_session_info_contains_real_skills(fake_agent_loop, config) -> None:
@@ -200,14 +196,10 @@ def test_default_session_info_falls_back_when_agent_loop_none(config) -> None:
     # version still real (importlib doesn't need agent_loop)
     assert info["version"] == importlib.metadata.version("raven")
     # lazy=True signals UI that tools/skills are placeholder (not "0 reality")
-    assert info["lazy"] is True, (
-        "lazy=True on agent_loop=None fallback signals UI that tools/skills are placeholder"
-    )
+    assert info["lazy"] is True, "lazy=True on agent_loop=None fallback signals UI that tools/skills are placeholder"
 
 
-def test_default_session_info_falls_back_when_no_usage_tracker(
-    fake_agent_loop_no_tracker, config
-) -> None:
+def test_default_session_info_falls_back_when_no_usage_tracker(fake_agent_loop_no_tracker, config) -> None:
     """agent_loop present but no UsageTracker registered.
 
     Config may default-off token_wise. Should return baseline zeros +
@@ -232,9 +224,7 @@ def test_register_session_methods_accepts_factory() -> None:
         "register_session_methods must accept agent_loop_factory keyword parameter"
     )
     factory_param = sig.parameters["agent_loop_factory"]
-    assert factory_param.default is None, (
-        "agent_loop_factory must default to None (backward compat)"
-    )
+    assert factory_param.default is None, "agent_loop_factory must default to None (backward compat)"
 
 
 def test_resolve_context_window_helper_removed() -> None:
@@ -275,8 +265,7 @@ def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, con
         "usage",
     }
     assert set(info) == expected_keys, (
-        f"init bundle key set drift: "
-        f"unexpected={set(info) - expected_keys}, missing={expected_keys - set(info)}"
+        f"init bundle key set drift: unexpected={set(info) - expected_keys}, missing={expected_keys - set(info)}"
     )
 
 

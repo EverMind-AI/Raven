@@ -33,8 +33,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.token_wise.base import TokenStrategy
 from raven.providers.registry import find_by_model
+from raven.token_wise.base import TokenStrategy
 
 _CACHE_CONTROL = {"type": "ephemeral"}
 
@@ -135,7 +135,8 @@ class CacheOptimizer(TokenStrategy):
         # covers both intra-turn tool chains and cross-turn prefix reuse.
         if budget > 0:
             non_sys = [
-                i for i in range(len(new_messages))
+                i
+                for i in range(len(new_messages))
                 if i not in marked_indices and new_messages[i].get("role") != "system"
             ]
             for idx in non_sys[-budget:]:
@@ -144,7 +145,5 @@ class CacheOptimizer(TokenStrategy):
                 budget -= 1
 
         used = self.max_breakpoints - budget
-        logger.debug(
-            "CacheOptimizer: placed {} breakpoint(s) on model={}", used, model
-        )
+        logger.debug("CacheOptimizer: placed {} breakpoint(s) on model={}", used, model)
         return new_messages, new_tools, model

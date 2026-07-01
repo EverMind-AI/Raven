@@ -88,9 +88,7 @@ def set_everos_section(section: str, fields: dict[str, Any]) -> None:
     the section and every other section are preserved.
     """
     if section not in WRITABLE_SECTIONS:
-        raise KeyError(
-            f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}"
-        )
+        raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
     data = load_everos_config()
     clean = {k: v for k, v in fields.items() if v is not None}
     data[section] = {**data.get(section, {}), **clean}
@@ -100,9 +98,7 @@ def set_everos_section(section: str, fields: dict[str, Any]) -> None:
 def clear_everos_section(section: str) -> None:
     """Drop ``[section]`` from the user-level toml (no-op if absent)."""
     if section not in WRITABLE_SECTIONS:
-        raise KeyError(
-            f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}"
-        )
+        raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
     data = load_everos_config()
     if section not in data:
         return

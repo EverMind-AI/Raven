@@ -15,6 +15,7 @@ The class object is part of the cache key (not just the home_dir) so that
 unit tests which ``mock.patch("boxlite.Boxlite")`` get a fresh mocked runtime
 on each patch instead of the cached real-Boxlite from a prior test.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

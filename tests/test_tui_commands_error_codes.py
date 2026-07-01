@@ -34,9 +34,7 @@ def _patch_agent_loop_to_raise(monkeypatch: pytest.MonkeyPatch, exc: BaseExcepti
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _Boom)
 
 
-def test_typeerror_in_build_raises_internal_error_minus_32603(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_typeerror_in_build_raises_internal_error_minus_32603(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """AgentLoop ctor raising TypeError (kwargs drift) → InternalError(-32603).
 
     Reason data field = "tui_init_crash"; exception_type echoed; log_path
@@ -60,9 +58,7 @@ def test_typeerror_in_build_raises_internal_error_minus_32603(
     assert data.get("log_path", "").endswith("tui.log")
 
 
-def test_attributeerror_in_build_raises_internal_error_minus_32603(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_attributeerror_in_build_raises_internal_error_minus_32603(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """AgentLoop ctor raising AttributeError (config rename) → InternalError(-32603)."""
     monkeypatch.chdir(tmp_path)
     _patch_agent_loop_to_raise(

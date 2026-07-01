@@ -34,7 +34,6 @@ from pydantic import (
     model_validator,
 )
 
-
 # A factory reference is ``module.path:callable``. The regex is
 # deliberately loose: any non-empty module-like path, a single colon,
 # any non-empty identifier-ish suffix.
@@ -125,8 +124,7 @@ class PluginManifest(_ManifestBase):
             if len(names) != len(set(names)):
                 dupes = sorted({n for n in names if names.count(n) > 1})
                 raise ValueError(
-                    f"duplicate {kind} name(s) in manifest "
-                    f"{self.id!r}: {dupes}",
+                    f"duplicate {kind} name(s) in manifest {self.id!r}: {dupes}",
                 )
         return self
 

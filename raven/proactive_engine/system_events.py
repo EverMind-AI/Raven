@@ -49,9 +49,7 @@ class SystemEventQueue:
         self._seq += 1
         event.seq = self._seq
         if event.context_key is not None:
-            self._events = [
-                e for e in self._events if e.context_key != event.context_key
-            ]
+            self._events = [e for e in self._events if e.context_key != event.context_key]
         self._events.append(event)
         if len(self._events) > self._max:
             dropped = self._events.pop(0)

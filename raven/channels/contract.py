@@ -53,7 +53,7 @@ class ChannelSpec:
     """
 
     display_name: str
-    factory: Callable[[Any], Channel]   # (config) -> Channel
+    factory: Callable[[Any], Channel]  # (config) -> Channel
     capabilities: Capabilities = field(default_factory=Capabilities)
 
 

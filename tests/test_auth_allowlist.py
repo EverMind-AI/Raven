@@ -68,9 +68,7 @@ class TestAllowlistSemantics:
             is_allowed("flaky_channel", "y", [])
             is_allowed("flaky_channel", "z", [])
 
-        warnings = [
-            r for r in caplog.records if "all access denied" in r.message
-        ]
+        warnings = [r for r in caplog.records if "all access denied" in r.message]
         # First call warns; subsequent calls deduplicate per channel.
         assert len(warnings) == 1
 
@@ -79,9 +77,7 @@ class TestAllowlistSemantics:
             is_allowed("channel_a", "x", [])
             is_allowed("channel_b", "x", [])
             is_allowed("channel_a", "y", [])  # already warned
-        warnings = [
-            r for r in caplog.records if "all access denied" in r.message
-        ]
+        warnings = [r for r in caplog.records if "all access denied" in r.message]
         assert len(warnings) == 2
 
 
@@ -134,6 +130,7 @@ class TestChannelBaseDelegation:
             name = "bare"
             config = _NoFieldConfig()
             from raven.channels.base import ChannelBase
+
             is_allowed = ChannelBase.is_allowed
 
         # When the config dataclass has no allow_from attribute,
@@ -149,9 +146,7 @@ class TestChannelBaseDelegation:
 class TestCapabilityTokens:
     def test_issue_and_verify_roundtrip(self):
         secret = "test-secret"
-        token = CapabilityToken(
-            agent_id="agent-1", capabilities=["read", "write"]
-        )
+        token = CapabilityToken(agent_id="agent-1", capabilities=["read", "write"])
         wire = issue_token(token, secret)
         recovered = verify_token(wire, secret)
         assert recovered is not None
@@ -192,9 +187,7 @@ class TestCapabilityTokens:
         assert verify_token("", "s") is None
 
     def test_token_payload_roundtrip(self):
-        token = CapabilityToken(
-            agent_id="a", capabilities=["c1"], metadata={"role": "subagent"}
-        )
+        token = CapabilityToken(agent_id="a", capabilities=["c1"], metadata={"role": "subagent"})
         payload = token.to_payload()
         rebuilt = CapabilityToken.from_payload(payload)
         assert rebuilt.agent_id == token.agent_id

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,7 +19,6 @@ from raven.proactive_engine.sentinel.predictor.task_discoverer import (
     _extract_sentinel_observations_block,
 )
 from raven.proactive_engine.sentinel.types import PendingDecision, TaskOption
-
 
 _NOW = datetime(2026, 5, 8, 8, 0)
 _NOW_MS = int(_NOW.timestamp() * 1000)
@@ -54,8 +52,10 @@ class _StubResponse:
             self._args = json.dumps({"options": options})
         self.has_tool_calls = self._args is not None
         if self.has_tool_calls:
+
             class _Call:
                 arguments = self._args
+
             _Call.arguments = self._args
             self.tool_calls = [_Call()]
         else:
@@ -70,12 +70,14 @@ class _StubProvider:
         self.calls: list[dict] = []
 
     async def chat_with_retry(self, *, messages, tools, model, tool_choice):
-        self.calls.append({
-            "messages": messages,
-            "tools": tools,
-            "model": model,
-            "tool_choice": tool_choice,
-        })
+        self.calls.append(
+            {
+                "messages": messages,
+                "tools": tools,
+                "model": model,
+                "tool_choice": tool_choice,
+            }
+        )
         return self._response
 
 
@@ -137,12 +139,22 @@ def test_render_menu_markdown_format():
         created_at_ms=_NOW_MS,
         ttl_min=60,
         options=[
-            TaskOption(id="opt_a", title="草拟回复 X", why="X 在昨天发了未回复",
-                       type="ad_hoc", exec_kind="reply", exec_payload={}),
-            TaskOption(id="opt_b", title="周二 PR review",
-                       why="最近 3 周这么做过",
-                       type="routine_confirm", exec_kind="routine_confirm",
-                       exec_payload={"routine_id": "dow1-h09-pr"}),
+            TaskOption(
+                id="opt_a",
+                title="草拟回复 X",
+                why="X 在昨天发了未回复",
+                type="ad_hoc",
+                exec_kind="reply",
+                exec_payload={},
+            ),
+            TaskOption(
+                id="opt_b",
+                title="周二 PR review",
+                why="最近 3 周这么做过",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={"routine_id": "dow1-h09-pr"},
+            ),
         ],
     )
     text = render_menu_markdown(decision)
@@ -155,11 +167,12 @@ def test_render_menu_markdown_format():
 
 def test_render_menu_markdown_omits_why_when_empty():
     decision = PendingDecision(
-        decision_id="dec_x", channel="feishu", to="ou_xxx",
+        decision_id="dec_x",
+        channel="feishu",
+        to="ou_xxx",
         created_at_ms=_NOW_MS,
         options=[
-            TaskOption(id="opt_a", title="bare option", why="",
-                       type="ad_hoc", exec_kind="reply", exec_payload={}),
+            TaskOption(id="opt_a", title="bare option", why="", type="ad_hoc", exec_kind="reply", exec_payload={}),
         ],
     )
     text = render_menu_markdown(decision)
@@ -196,9 +209,7 @@ def test_extract_observations_block_returns_empty_when_missing():
 
 
 @pytest.mark.asyncio
-async def test_supersede_notice_submits_sentinel_origin_when_wired(
-    memory_store, pending_store
-):
+async def test_supersede_notice_submits_sentinel_origin_when_wired(memory_store, pending_store):
     # Spine path: with submit wired, the supersede notice runs as a
     # SENTINEL-origin turn (a system notice — after_send is skipped) instead of
     # publishing to the bus.
@@ -223,7 +234,9 @@ async def test_supersede_notice_submits_sentinel_origin_when_wired(
     disco.set_submit(lambda req: (captured.__setitem__("req", req), _Handle())[1])
 
     await disco._notify_superseded_awaiting(
-        channel="feishu", to="ou_xxx", superseded_ids=["dec_old"],
+        channel="feishu",
+        to="ou_xxx",
+        superseded_ids=["dec_old"],
     )
 
     req = captured["req"]
@@ -235,15 +248,15 @@ async def test_supersede_notice_submits_sentinel_origin_when_wired(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_happy_path_creates_decision_and_dispatches(
-    memory_store, pending_store
-):
+async def test_discoverer_happy_path_creates_decision_and_dispatches(memory_store, pending_store):
     dispatcher, posted = _wire_dispatcher(lambda: _NOW)
-    response = _StubResponse([
-        _option_dict(title="task A"),
-        _option_dict(title="task B", priority="high"),
-        _option_dict(title="task C", source="memory"),
-    ])
+    response = _StubResponse(
+        [
+            _option_dict(title="task A"),
+            _option_dict(title="task B", priority="high"),
+            _option_dict(title="task C", source="memory"),
+        ]
+    )
     provider = _StubProvider(response)
 
     disco = TaskDiscoverer(
@@ -277,9 +290,7 @@ async def test_discoverer_happy_path_creates_decision_and_dispatches(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_returns_none_on_no_tool_call(
-    memory_store, pending_store
-):
+async def test_discoverer_returns_none_on_no_tool_call(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
     provider = _StubProvider(_StubResponse(options=None))
 
@@ -295,22 +306,21 @@ async def test_discoverer_returns_none_on_no_tool_call(
     result = await disco.run(channel="feishu", to="ou_xxx")
     assert result is None
     # Nothing persisted
-    assert pending_store.get_recent("feishu", "ou_xxx",
-                                    now_ms=_NOW_MS + 1) is None
+    assert pending_store.get_recent("feishu", "ou_xxx", now_ms=_NOW_MS + 1) is None
 
 
 @pytest.mark.asyncio
-async def test_discoverer_drops_malformed_options_keeps_valid(
-    memory_store, pending_store
-):
+async def test_discoverer_drops_malformed_options_keeps_valid(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
-    response = _StubResponse([
-        _option_dict(title="valid one"),
-        {"title": "missing fields"},   # missing exec_kind+payload → invalid
-        _option_dict(title="", exec_kind="reply"),   # empty title → dropped
-        _option_dict(title="bad kind", exec_kind="weird_kind"),  # unknown kind
-        _option_dict(title="another valid", priority="high"),
-    ])
+    response = _StubResponse(
+        [
+            _option_dict(title="valid one"),
+            {"title": "missing fields"},  # missing exec_kind+payload → invalid
+            _option_dict(title="", exec_kind="reply"),  # empty title → dropped
+            _option_dict(title="bad kind", exec_kind="weird_kind"),  # unknown kind
+            _option_dict(title="another valid", priority="high"),
+        ]
+    )
     provider = _StubProvider(response)
 
     disco = TaskDiscoverer(
@@ -329,43 +339,45 @@ async def test_discoverer_drops_malformed_options_keeps_valid(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_rejects_routine_confirm_without_routine_id(
-    memory_store, pending_store
-):
+async def test_discoverer_rejects_routine_confirm_without_routine_id(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
-    response = _StubResponse([
-        _option_dict(
-            title="bad routine",
-            type="routine_confirm",
-            exec_kind="routine_confirm",
-            exec_payload={},  # missing routine_id
-        ),
-        _option_dict(
-            title="good routine",
-            type="routine_confirm",
-            exec_kind="routine_confirm",
-            exec_payload={"routine_id": "dow1-h09-meeting", "make_cron": True},
-        ),
-    ])
+    response = _StubResponse(
+        [
+            _option_dict(
+                title="bad routine",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={},  # missing routine_id
+            ),
+            _option_dict(
+                title="good routine",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={"routine_id": "dow1-h09-meeting", "make_cron": True},
+            ),
+        ]
+    )
     provider = _StubProvider(response)
 
     # pad with 2 ad_hoc options so we get the minimum 3
-    response = _StubResponse([
-        _option_dict(
-            title="bad routine",
-            type="routine_confirm",
-            exec_kind="routine_confirm",
-            exec_payload={},
-        ),
-        _option_dict(
-            title="good routine",
-            type="routine_confirm",
-            exec_kind="routine_confirm",
-            exec_payload={"routine_id": "dow1-h09-meeting"},
-        ),
-        _option_dict(title="ad hoc 1"),
-        _option_dict(title="ad hoc 2"),
-    ])
+    response = _StubResponse(
+        [
+            _option_dict(
+                title="bad routine",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={},
+            ),
+            _option_dict(
+                title="good routine",
+                type="routine_confirm",
+                exec_kind="routine_confirm",
+                exec_payload={"routine_id": "dow1-h09-meeting"},
+            ),
+            _option_dict(title="ad hoc 1"),
+            _option_dict(title="ad hoc 2"),
+        ]
+    )
     provider = _StubProvider(response)
 
     disco = TaskDiscoverer(
@@ -385,13 +397,9 @@ async def test_discoverer_rejects_routine_confirm_without_routine_id(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_truncates_to_max_options(
-    memory_store, pending_store
-):
+async def test_discoverer_truncates_to_max_options(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
-    response = _StubResponse([
-        _option_dict(title=f"option {i}") for i in range(8)
-    ])
+    response = _StubResponse([_option_dict(title=f"option {i}") for i in range(8)])
     provider = _StubProvider(response)
 
     disco = TaskDiscoverer(
@@ -412,9 +420,7 @@ async def test_discoverer_truncates_to_max_options(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_overdue_survives_truncation(
-    memory_store, pending_store
-):
+async def test_discoverer_overdue_survives_truncation(memory_store, pending_store):
     """Regression: an overdue option emitted past max_options must float to
     the front BEFORE truncation, not get dropped (annotate-then-truncate)."""
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
@@ -441,15 +447,15 @@ async def test_discoverer_overdue_survives_truncation(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_handles_malformed_json_args_gracefully(
-    memory_store, pending_store
-):
+async def test_discoverer_handles_malformed_json_args_gracefully(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
     # Hand-craft response with non-JSON arg string
     response = _StubResponse(options=None, raw_args="this is not json")
     response.has_tool_calls = True
+
     class _C:
         arguments = "this is not json"
+
     response.tool_calls = [_C()]
     provider = _StubProvider(response)
 
@@ -467,26 +473,26 @@ async def test_discoverer_handles_malformed_json_args_gracefully(
 
 
 @pytest.mark.asyncio
-async def test_discoverer_supersedes_prior_decision_on_same_address(
-    memory_store, pending_store
-):
+async def test_discoverer_supersedes_prior_decision_on_same_address(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
 
     # Plant a pre-existing decision
     pre_existing = PendingDecision(
-        decision_id="dec_old", channel="feishu", to="ou_xxx",
+        decision_id="dec_old",
+        channel="feishu",
+        to="ou_xxx",
         created_at_ms=_NOW_MS - 1000,
-        options=[TaskOption(id="opt_old", title="old",
-                            why="", type="ad_hoc",
-                            exec_kind="reply", exec_payload={})],
+        options=[TaskOption(id="opt_old", title="old", why="", type="ad_hoc", exec_kind="reply", exec_payload={})],
     )
     pending_store.put(pre_existing)
 
-    response = _StubResponse([
-        _option_dict(title="new task A"),
-        _option_dict(title="new task B"),
-        _option_dict(title="new task C"),
-    ])
+    response = _StubResponse(
+        [
+            _option_dict(title="new task A"),
+            _option_dict(title="new task B"),
+            _option_dict(title="new task C"),
+        ]
+    )
     provider = _StubProvider(response)
     disco = TaskDiscoverer(
         memory_store=memory_store,
@@ -506,18 +512,21 @@ async def test_discoverer_supersedes_prior_decision_on_same_address(
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_dispatch_options_publishes_outbound(memory_store,
-                                                              pending_store):
+async def test_dispatcher_dispatch_options_publishes_outbound(memory_store, pending_store):
     """Discovery menus go to OUTBOUND so the user sees render_menu_markdown
     verbatim (no agent paraphrase). DecisionConsumerAdapter handles the
     pick path independently — see dispatcher.dispatch_options docstring."""
     dispatcher, posted = _wire_dispatcher(lambda: _NOW)
     decision = PendingDecision(
-        decision_id="dec_x", channel="feishu", to="ou_xxx",
+        decision_id="dec_x",
+        channel="feishu",
+        to="ou_xxx",
         created_at_ms=_NOW_MS,
-        options=[TaskOption(id="opt_a", title="alpha", why="why-a",
-                            type="ad_hoc", exec_kind="reply",
-                            exec_payload={"prompt": "go"})],
+        options=[
+            TaskOption(
+                id="opt_a", title="alpha", why="why-a", type="ad_hoc", exec_kind="reply", exec_payload={"prompt": "go"}
+            )
+        ],
     )
 
     result = await dispatcher.dispatch_options(decision)
@@ -536,7 +545,9 @@ async def test_dispatcher_dispatch_options_publishes_outbound(memory_store,
 async def test_dispatcher_dispatch_options_rejects_empty():
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
     decision = PendingDecision(
-        decision_id="dec_x", channel="feishu", to="ou_xxx",
+        decision_id="dec_x",
+        channel="feishu",
+        to="ou_xxx",
         created_at_ms=_NOW_MS,
         options=[],
     )

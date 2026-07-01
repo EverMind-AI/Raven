@@ -85,11 +85,13 @@ def test_bm25_empty_query_returns_zeros() -> None:
 
 
 def test_bm25_term_frequency_increases_score() -> None:
-    bm25 = _BM25Okapi([
-        ["pdf"],
-        ["pdf", "pdf"],
-        ["unrelated"],
-    ])
+    bm25 = _BM25Okapi(
+        [
+            ["pdf"],
+            ["pdf", "pdf"],
+            ["unrelated"],
+        ]
+    )
     s = bm25.get_scores(["pdf"])
     assert s[1] > s[0] > 0
     assert s[2] == 0
@@ -97,12 +99,14 @@ def test_bm25_term_frequency_increases_score() -> None:
 
 def test_bm25_rare_term_outweighs_common() -> None:
     """A rare term should win over a common one — that's the IDF point."""
-    bm25 = _BM25Okapi([
-        ["common", "rare"],
-        ["common"],
-        ["common"],
-        ["common"],
-    ])
+    bm25 = _BM25Okapi(
+        [
+            ["common", "rare"],
+            ["common"],
+            ["common"],
+            ["common"],
+        ]
+    )
     score_rare = bm25.get_scores(["rare"])[0]
     score_common = bm25.get_scores(["common"])[0]
     assert score_rare > score_common
@@ -141,10 +145,7 @@ def test_localpool_zero_score_skills_are_dropped() -> None:
 
 
 def test_localpool_top_k_truncation() -> None:
-    metas = [
-        _meta(f"skill_{i:02d}", description=f"skill number {i}", body="generate")
-        for i in range(20)
-    ]
+    metas = [_meta(f"skill_{i:02d}", description=f"skill number {i}", body="generate") for i in range(20)]
     pool = LocalPool(_StubRegistry(metas))
     hits = pool.search("generate", top_k=5)
     assert len(hits) == 5
@@ -192,16 +193,16 @@ def test_localpool_rebuild_index_picks_up_new_skills() -> None:
     pool = LocalPool(registry)
     first_index = pool._bm25
 
-    registry.set_metas([
-        _meta("weather", description="get current weather"),
-        _meta("pdf-gen", description="generate pdf reports"),
-    ])
+    registry.set_metas(
+        [
+            _meta("weather", description="get current weather"),
+            _meta("pdf-gen", description="generate pdf reports"),
+        ]
+    )
     pool.rebuild_index()
     hits = pool.search("pdf", top_k=10)
 
-    assert pool._bm25 is not first_index, (
-        "rebuild_index left the old _BM25Okapi in place"
-    )
+    assert pool._bm25 is not first_index, "rebuild_index left the old _BM25Okapi in place"
     assert hits and hits[0].name == "pdf-gen"
 
 
@@ -210,10 +211,7 @@ def test_localpool_concurrent_search_safe_during_rebuild() -> None:
     crash or return torn results. Each search either sees the pre-rebuild
     index or the post-rebuild one — never a half-swapped state.
     """
-    metas = [
-        _meta(f"skill_{i:02d}", description=f"alpha beta gamma {i}")
-        for i in range(30)
-    ]
+    metas = [_meta(f"skill_{i:02d}", description=f"alpha beta gamma {i}") for i in range(30)]
     pool = LocalPool(_StubRegistry(metas))
 
     n_threads = 16
@@ -264,8 +262,9 @@ def test_localpool_excludes_always_skills() -> None:
 
     # Query that matches memory directly — without the filter, memory would top the list.
     hits = pool.search("memory", top_k=10)
-    assert all(h.name != "memory" for h in hits), \
+    assert all(h.name != "memory" for h in hits), (
         f"always-true skill 'memory' leaked into BM25 results: {[h.name for h in hits]}"
+    )
     assert all(h.name != "self-improving" for h in hits)
 
     # Non-always skill still retrievable.

@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -35,7 +34,6 @@ sys.path.insert(0, str(_THIS_DIR))
 
 from _common.env_loader import load_dotenvs  # noqa: E402
 from _common.provider import make_provider  # noqa: E402
-
 
 _DATA_DIR = _THIS_DIR.parent / "data" / "longrun"
 _DEFAULT_MODEL = "openrouter/deepseek/deepseek-chat"
@@ -98,7 +96,7 @@ def _build_intents_prompt(persona: dict) -> str:
 输出样例结构：
 ```yaml
 generated_at: "..."
-persona_id: "{persona['id']}"
+persona_id: "{persona["id"]}"
 anchor_date: "{anchor}"
 total_days: 30
 events:
@@ -197,7 +195,7 @@ intent calendar:
 输出样例结构：
 ```yaml
 generated_at: "..."
-persona_id: "{persona['id']}"
+persona_id: "{persona["id"]}"
 total_points: 40
 type_a_proactive_only:
   - id: birthday_proactive_surface
@@ -240,16 +238,14 @@ def _extract_yaml_block(raw: str) -> str:
     if m:
         return m.group(1).strip()
     # (3) strip anything before the first yaml-like marker
-    for marker in ("generated_at:", "persona_id:", "events:", "total_points:",
-                   "type_a_proactive_only:"):
+    for marker in ("generated_at:", "persona_id:", "events:", "total_points:", "type_a_proactive_only:"):
         idx = raw.find(marker)
         if idx > 0:
             return raw[idx:].strip()
     return raw.strip()
 
 
-async def _generate(persona: dict, kind: str, model: str, intents: dict | None = None,
-                    max_retries: int = 3) -> dict:
+async def _generate(persona: dict, kind: str, model: str, intents: dict | None = None, max_retries: int = 3) -> dict:
     provider, resolved_model = make_provider({}, model_override=model)
     if kind == "intents":
         system = _INTENTS_SYSTEM
@@ -270,12 +266,13 @@ async def _generate(persona: dict, kind: str, model: str, intents: dict | None =
         ]
         if attempt > 1:
             messages[-1]["content"] += (
-                "\n\n⚠️ 上一次输出无法解析为 YAML。请**只输出 yaml**，"
-                "用 ```yaml ... ``` 包裹，不要加任何解释文字。"
+                "\n\n⚠️ 上一次输出无法解析为 YAML。请**只输出 yaml**，用 ```yaml ... ``` 包裹，不要加任何解释文字。"
             )
         resp = await provider.chat_with_retry(
-            messages=messages, model=resolved_model,
-            max_tokens=8000, temperature=0.3,
+            messages=messages,
+            model=resolved_model,
+            max_tokens=8000,
+            temperature=0.3,
         )
         raw = resp.content or ""
         yaml_text = _extract_yaml_block(raw)
@@ -283,8 +280,7 @@ async def _generate(persona: dict, kind: str, model: str, intents: dict | None =
             data = yaml.safe_load(yaml_text) or {}
         except yaml.YAMLError as exc:
             last_exc = exc
-            print(f"[warn] attempt {attempt}/{max_retries} yaml parse failed: "
-                  f"{str(exc)[:120]}", file=sys.stderr)
+            print(f"[warn] attempt {attempt}/{max_retries} yaml parse failed: {str(exc)[:120]}", file=sys.stderr)
             continue
 
         if not isinstance(data, dict):
@@ -295,9 +291,7 @@ async def _generate(persona: dict, kind: str, model: str, intents: dict | None =
             last_exc = ValueError("no 'events' list in output")
             print(f"[warn] attempt {attempt}/{max_retries} {last_exc}", file=sys.stderr)
             continue
-        if kind == "outcomes" and not any(
-            k.startswith("type_") for k in data.keys()
-        ):
+        if kind == "outcomes" and not any(k.startswith("type_") for k in data.keys()):
             last_exc = ValueError("no type_* section in output")
             print(f"[warn] attempt {attempt}/{max_retries} {last_exc}", file=sys.stderr)
             continue
@@ -320,23 +314,21 @@ def _load_persona(persona_id: str) -> dict:
 def _load_intents(persona_id: str) -> dict:
     path = _DATA_DIR / f"persona-{persona_id}-intents.yaml"
     if not path.exists():
-        raise FileNotFoundError(
-            f"intents missing: {path} — generate with --kind intents first"
-        )
+        raise FileNotFoundError(f"intents missing: {path} — generate with --kind intents first")
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--persona", required=True,
-                    help="Persona id (e.g. dev-01); reads data/longrun/persona-<id>.yaml")
-    ap.add_argument("--kind", required=True, choices=["intents", "outcomes", "both"],
-                    help="What to generate. 'both' does intents then outcomes.")
-    ap.add_argument("--model", default=_DEFAULT_MODEL,
-                    help=f"LLM model (default: {_DEFAULT_MODEL})")
-    ap.add_argument("--force", action="store_true",
-                    help="Overwrite existing fixture file")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--persona", required=True, help="Persona id (e.g. dev-01); reads data/longrun/persona-<id>.yaml")
+    ap.add_argument(
+        "--kind",
+        required=True,
+        choices=["intents", "outcomes", "both"],
+        help="What to generate. 'both' does intents then outcomes.",
+    )
+    ap.add_argument("--model", default=_DEFAULT_MODEL, help=f"LLM model (default: {_DEFAULT_MODEL})")
+    ap.add_argument("--force", action="store_true", help="Overwrite existing fixture file")
     args = ap.parse_args()
 
     load_dotenvs()
@@ -358,12 +350,9 @@ def main() -> None:
         n_items = 0
         if kind == "intents":
             n_items = len(data.get("events", []))
-            print(f"[done] {out_path.name} — {n_items} events over {data.get('total_days','?')} days")
+            print(f"[done] {out_path.name} — {n_items} events over {data.get('total_days', '?')} days")
         else:
-            type_counts = {
-                k: len(v) for k, v in data.items()
-                if k.startswith("type_") and isinstance(v, list)
-            }
+            type_counts = {k: len(v) for k, v in data.items() if k.startswith("type_") and isinstance(v, list)}
             total_pts = data.get("total_points", "?")
             print(f"[done] {out_path.name} — {type_counts} (total_points={total_pts})")
 

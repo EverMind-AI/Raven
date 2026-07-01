@@ -13,11 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.main import _filter_qualified_ids
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,10 +39,17 @@ class _FakeBackend:
         self.feedback_calls: list[dict] = []
         self.feedback_raises: Exception | None = None
 
-    async def start(self): pass
-    async def stop(self): pass
-    async def store(self, session_id, messages): pass
-    async def recall(self, query, *, user_id=None, agent_id=None, top_k): return []
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def store(self, session_id, messages):
+        pass
+
+    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+        return []
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         self.feedback_calls.append(signals)
@@ -95,7 +99,8 @@ class TestFilterQualifiedIds:
         — there's no safe routing target for them, so the dispatcher
         is conservatively silent rather than mis-routing."""
         out = _filter_qualified_ids(
-            ["git-resolver", "everos/abc"], "everos",
+            ["git-resolver", "everos/abc"],
+            "everos",
         )
         assert out == ["abc"]
 
@@ -112,7 +117,8 @@ class TestFilterQualifiedIds:
         the separator is the slash. The helper compares against
         ``everos/`` literally."""
         out = _filter_qualified_ids(
-            ["everos_light/x", "everos/y"], "everos",
+            ["everos_light/x", "everos/y"],
+            "everos",
         )
         assert out == ["y"]
 
@@ -127,16 +133,21 @@ class TestDispatcherFeedback:
         agent = _make_loop(tmp_path, backend=None)
         # Just returns without error.
         await agent._dispatch_backend_feedback(
-            "s", ["everos/a"], ["everos/b"],
+            "s",
+            ["everos/a"],
+            ["everos/b"],
         )
 
     async def test_no_everos_ids_skips_backend(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         b = _FakeBackend()
         agent = _make_loop(tmp_path, backend=b)
         await agent._dispatch_backend_feedback(
-            "s", ["local/x", "mass/y"], None,
+            "s",
+            ["local/x", "mass/y"],
+            None,
         )
         # local/ + mass/ → no everos ids → no backend call.
         assert b.feedback_calls == []
@@ -174,14 +185,16 @@ class TestDispatcherFeedback:
         b = _FakeBackend()
         agent = _make_loop(tmp_path, backend=b)
         await agent._dispatch_backend_feedback(
-            "s", injected_skill_ids=["everos/x"],
+            "s",
+            injected_skill_ids=["everos/x"],
         )
         assert len(b.feedback_calls) == 1
         assert b.feedback_calls[0]["injected"] == ["x"]
         assert b.feedback_calls[0]["used"] == []
 
     async def test_backend_feedback_exception_swallowed(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Feedback is best-effort telemetry — never aborts after-turn."""
         b = _FakeBackend()
@@ -193,7 +206,8 @@ class TestDispatcherFeedback:
         assert len(b.feedback_calls) == 1
 
     async def test_signal_shape_stable_for_consumers(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """The forwarded signal dict has a documented shape that
         EverosBackend (and future feedback consumers) can rely on."""
@@ -206,7 +220,10 @@ class TestDispatcherFeedback:
         )
         signals = b.feedback_calls[0]
         assert set(signals.keys()) == {
-            "kind", "session_id", "injected", "used",
+            "kind",
+            "session_id",
+            "injected",
+            "used",
         }
         assert isinstance(signals["injected"], list)
         assert isinstance(signals["used"], list)

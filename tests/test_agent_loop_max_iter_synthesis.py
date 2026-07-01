@@ -19,10 +19,10 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.main import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
-from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.spine.message import ChatType, Source
+from raven.spine.turn import Origin, TurnRequest
 
 
 @pytest.fixture
@@ -49,8 +49,16 @@ class _ToolThenSynthProvider(LLMProvider):
         self.tool_iterations = 0
         self.synth_calls = 0
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         if tools is None:
             self.synth_calls += 1
             return LLMResponse(
@@ -128,10 +136,7 @@ async def test_synthesized_reply_lands_in_history(workspace):
     assert messages[-1]["content"] == final
     # The injected synthesis prompt stays local to the helper — it must not
     # leak into the persisted history.
-    assert not any(
-        "used up the tool-calling budget" in (m.get("content") or "")
-        for m in messages
-    )
+    assert not any("used up the tool-calling budget" in (m.get("content") or "") for m in messages)
 
 
 # --------------------------------------------------------------------------- #
@@ -175,7 +180,7 @@ async def test_synthesis_withholds_tools_and_threads_fallback_chain():
     assert result == "wrapped up"
     assert len(provider.calls) == 1
     call = provider.calls[0]
-    assert call["tools"] is None             # no tools -> no ask_user/tool at the cliff
+    assert call["tools"] is None  # no tools -> no ask_user/tool at the cliff
     assert call["model"] == "primary"
     assert call["fallback_models"] == ["backup"]
     # The synthesis nudge is appended as a trailing user turn.

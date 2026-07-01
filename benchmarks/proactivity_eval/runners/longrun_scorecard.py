@@ -35,7 +35,7 @@ import asyncio
 import json
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -88,9 +88,11 @@ def _agent_initiated_events(events: list[dict]) -> list[dict]:
 
 
 def _user_send_events(events: list[dict]) -> list[dict]:
-    return [e for e in events
-            if e.get("kind") in ("user_send", "sim_action")
-            and (e.get("content") or e.get("kind") == "user_send")]
+    return [
+        e
+        for e in events
+        if e.get("kind") in ("user_send", "sim_action") and (e.get("content") or e.get("kind") == "user_send")
+    ]
 
 
 def _load_outcomes(persona_id: str) -> dict[str, Any]:
@@ -105,7 +107,9 @@ def _load_outcomes(persona_id: str) -> dict[str, Any]:
 
 
 def _detect_type_a(
-    outcome: dict, agent_events: list[dict], user_sends: list[dict],
+    outcome: dict,
+    agent_events: list[dict],
+    user_sends: list[dict],
 ) -> dict:
     """Detect agent-initiated coverage of a proactive outcome."""
     window = outcome.get("window") or []
@@ -139,11 +143,7 @@ def _detect_type_a(
     for t, ev in candidates:
         cutoff = t - timedelta(hours=novelty_hours)
         # User-initiated mentions in the prior window
-        prior = [
-            u for u in user_sends
-            if cutoff <= _iso(u) < t
-            and pattern and pattern.search(u.get("content") or "")
-        ]
+        prior = [u for u in user_sends if cutoff <= _iso(u) < t and pattern and pattern.search(u.get("content") or "")]
         if not prior:
             return {
                 "id": outcome["id"],
@@ -170,7 +170,8 @@ def _detect_type_a(
 
 
 def _detect_type_b(
-    outcome: dict, events: list[dict],
+    outcome: dict,
+    events: list[dict],
 ) -> dict:
     """Detect user asked → agent replied correctly."""
     trigger_re = outcome.get("trigger_regex_in_user_send", "")
@@ -226,13 +227,11 @@ def _detect_type_c(outcome: dict, agent_events: list[dict]) -> dict:
     if constraint.startswith("nudge_count_in_window == 0") and len(window_daily) == 2:
         start_t = _parse_hhmm(window_daily[0])
         end_t = _parse_hhmm(window_daily[1])
-        in_window = [
-            e for e in agent_events
-            if _in_daily_window(_iso(e).time(), start_t, end_t)
-        ]
+        in_window = [e for e in agent_events if _in_daily_window(_iso(e).time(), start_t, end_t)]
         passed = len(in_window) == 0
         return {
-            "id": outcome["id"], "pass": passed,
+            "id": outcome["id"],
+            "pass": passed,
             "violations": len(in_window),
             "points_earned": points if passed else 0,
             "points_max": points,
@@ -243,8 +242,10 @@ def _detect_type_c(outcome: dict, agent_events: list[dict]) -> dict:
         max_in_hour = _max_count_in_any_window(agent_events, timedelta(hours=1))
         passed = max_in_hour <= limit
         return {
-            "id": outcome["id"], "pass": passed,
-            "max_observed": max_in_hour, "limit": limit,
+            "id": outcome["id"],
+            "pass": passed,
+            "max_observed": max_in_hour,
+            "limit": limit,
             "points_earned": points if passed else 0,
             "points_max": points,
         }
@@ -262,18 +263,23 @@ def _detect_type_c(outcome: dict, agent_events: list[dict]) -> dict:
         ratio = (we_avg / wk_avg) if wk_avg > 0 else 0.0
         passed = ratio <= limit
         return {
-            "id": outcome["id"], "pass": passed,
-            "weekend_avg": round(we_avg, 2), "weekday_avg": round(wk_avg, 2),
-            "ratio": round(ratio, 3), "limit": limit,
+            "id": outcome["id"],
+            "pass": passed,
+            "weekend_avg": round(we_avg, 2),
+            "weekday_avg": round(wk_avg, 2),
+            "ratio": round(ratio, 3),
+            "limit": limit,
             "points_earned": points if passed else 0,
             "points_max": points,
         }
 
     # Fallback: unknown constraint, mark as unscored
     return {
-        "id": outcome["id"], "pass": None,
+        "id": outcome["id"],
+        "pass": None,
         "reason": f"unsupported_constraint:{constraint[:100]}",
-        "points_earned": 0, "points_max": points,
+        "points_earned": 0,
+        "points_max": points,
     }
 
 
@@ -282,7 +288,11 @@ def _detect_type_c(outcome: dict, agent_events: list[dict]) -> dict:
 
 
 async def _score_memory_accuracy(
-    ws_memory: str, persona: dict, intents: list[dict], provider, model: str,
+    ws_memory: str,
+    persona: dict,
+    intents: list[dict],
+    provider,
+    model: str,
 ) -> dict:
     """Single LLM call: given final MEMORY.md + ground-truth facts from
     persona + intents.reveals_new_fact, score coverage + hallucinations."""
@@ -295,7 +305,7 @@ async def _score_memory_accuracy(
     if revealed:
         lines = []
         for i in revealed:
-            lines.append(f"- {i.get('at','?')}: {i['reveals_new_fact']}")
+            lines.append(f"- {i.get('at', '?')}: {i['reveals_new_fact']}")
         ground_truth.append("## Facts revealed during sim:\n" + "\n".join(lines))
     gt = "\n\n".join(ground_truth)
 
@@ -325,7 +335,9 @@ async def _score_memory_accuracy(
     try:
         resp = await provider.chat_with_retry(
             messages=[{"role": "user", "content": prompt}],
-            model=model, max_tokens=800, temperature=0.2,
+            model=model,
+            max_tokens=800,
+            temperature=0.2,
         )
         raw = (resp.content or "").strip()
         # Strip ```json fences
@@ -333,10 +345,14 @@ async def _score_memory_accuracy(
         if m:
             return json.loads(m.group(0))
     except Exception as exc:
-        return {"error": f"{type(exc).__name__}: {exc}",
-                "coverage_score": 0.0, "covered_facts_count": 0,
-                "total_facts_count": 0, "hallucinations": [],
-                "rationale": "memory accuracy scoring failed"}
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "coverage_score": 0.0,
+            "covered_facts_count": 0,
+            "total_facts_count": 0,
+            "hallucinations": [],
+            "rationale": "memory accuracy scoring failed",
+        }
     return {"error": "no_json_in_output", "coverage_score": 0.0}
 
 
@@ -345,7 +361,11 @@ async def _score_memory_accuracy(
 
 
 async def score_trajectory(
-    persona_id: str, agent: str, *, provider=None, judge_model="qwen3.5-27B",
+    persona_id: str,
+    agent: str,
+    *,
+    provider=None,
+    judge_model="qwen3.5-27B",
     skip_memory_accuracy: bool = False,
 ) -> dict:
     traj_path = _OUTPUT_DIR / f"longrun-{persona_id}-{agent}-trajectory.jsonl"
@@ -355,32 +375,41 @@ async def score_trajectory(
     outcomes = _load_outcomes(persona_id)
     persona = yaml.safe_load((_DATA_DIR / f"persona-{persona_id}.yaml").read_text(encoding="utf-8"))
     intents_path = _DATA_DIR / f"persona-{persona_id}-intents.yaml"
-    intents = (yaml.safe_load(intents_path.read_text(encoding="utf-8")) or {}).get("events", []) \
-        if intents_path.exists() else []
+    intents = (
+        (yaml.safe_load(intents_path.read_text(encoding="utf-8")) or {}).get("events", [])
+        if intents_path.exists()
+        else []
+    )
 
     agent_events = _agent_initiated_events(events)
     user_sends = _user_send_events(events)
 
-    type_a_results = [_detect_type_a(o, agent_events, user_sends)
-                      for o in outcomes.get("type_a_proactive_only") or []]
-    type_b_results = [_detect_type_b(o, events)
-                      for o in outcomes.get("type_b_reactive_achievable") or []]
-    type_c_results = [_detect_type_c(o, agent_events)
-                      for o in outcomes.get("type_c_restraint") or []]
+    type_a_results = [_detect_type_a(o, agent_events, user_sends) for o in outcomes.get("type_a_proactive_only") or []]
+    type_b_results = [_detect_type_b(o, events) for o in outcomes.get("type_b_reactive_achievable") or []]
+    type_c_results = [_detect_type_c(o, agent_events) for o in outcomes.get("type_c_restraint") or []]
 
     def _sum(rs, key="points_earned"):
         return sum(r.get(key, 0) or 0 for r in rs)
 
     totals = {
-        "type_a": {"earned": _sum(type_a_results), "max": _sum(type_a_results, "points_max"),
-                   "count_pass": sum(1 for r in type_a_results if r.get("pass")),
-                   "count": len(type_a_results)},
-        "type_b": {"earned": _sum(type_b_results), "max": _sum(type_b_results, "points_max"),
-                   "count_pass": sum(1 for r in type_b_results if r.get("pass")),
-                   "count": len(type_b_results)},
-        "type_c": {"earned": _sum(type_c_results), "max": _sum(type_c_results, "points_max"),
-                   "count_pass": sum(1 for r in type_c_results if r.get("pass")),
-                   "count": len(type_c_results)},
+        "type_a": {
+            "earned": _sum(type_a_results),
+            "max": _sum(type_a_results, "points_max"),
+            "count_pass": sum(1 for r in type_a_results if r.get("pass")),
+            "count": len(type_a_results),
+        },
+        "type_b": {
+            "earned": _sum(type_b_results),
+            "max": _sum(type_b_results, "points_max"),
+            "count_pass": sum(1 for r in type_b_results if r.get("pass")),
+            "count": len(type_b_results),
+        },
+        "type_c": {
+            "earned": _sum(type_c_results),
+            "max": _sum(type_c_results, "points_max"),
+            "count_pass": sum(1 for r in type_c_results if r.get("pass")),
+            "count": len(type_c_results),
+        },
     }
     # Cross-axis sum intentionally omitted: Type A (rewards firing) and
     # Type C (rewards NOT firing) cancel under naïve summation. Headline
@@ -402,7 +431,11 @@ async def score_trajectory(
         final_mem = _try_find_final_memory(persona_id, agent)
         if final_mem:
             mem_acc = await _score_memory_accuracy(
-                final_mem, persona, intents, provider, judge_model,
+                final_mem,
+                persona,
+                intents,
+                provider,
+                judge_model,
             )
         else:
             mem_acc = {"skipped": True, "reason": "no final MEMORY.md found; need to enable dump"}
@@ -423,8 +456,7 @@ async def score_trajectory(
         "scored_at": datetime.now().isoformat(),
     }
     out_path = _OUTPUT_DIR / f"longrun-{persona_id}-{agent}-scorecard.json"
-    out_path.write_text(json.dumps(scorecard, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
+    out_path.write_text(json.dumps(scorecard, ensure_ascii=False, indent=2), encoding="utf-8")
     print(
         f"[done] {out_path} — "
         f"A {totals['type_a']['count_pass']}/{totals['type_a']['count']} · "
@@ -439,6 +471,7 @@ async def score_trajectory(
 def _try_find_final_memory(persona_id: str, agent: str) -> str | None:
     """Extract final MEMORY.md from the latest checkpoint tar if present."""
     import tarfile
+
     ckpt_dir = _OUTPUT_DIR / f"ckpt-{persona_id}-{agent}"
     if not ckpt_dir.exists():
         return None
@@ -470,11 +503,17 @@ def render_comparison(persona_id: str, scorecards: dict[str, dict]) -> str:
     header += f"_generated {datetime.now().isoformat()}_\n\n"
 
     # Summary table
-    lines = ["## Summary", "", "| | " + " | ".join(scorecards.keys()) + " |",
-             "|---|" + "|".join(["---"] * len(scorecards)) + "|"]
-    for label, key in (("Type A (proactive-only)", "type_a"),
-                       ("Type B (reactive-achievable)", "type_b"),
-                       ("Type C (restraint)", "type_c")):
+    lines = [
+        "## Summary",
+        "",
+        "| | " + " | ".join(scorecards.keys()) + " |",
+        "|---|" + "|".join(["---"] * len(scorecards)) + "|",
+    ]
+    for label, key in (
+        ("Type A (proactive-only)", "type_a"),
+        ("Type B (reactive-achievable)", "type_b"),
+        ("Type C (restraint)", "type_c"),
+    ):
         row = [label]
         for agent, sc in scorecards.items():
             t = sc["totals"][key]
@@ -503,9 +542,9 @@ def render_comparison(persona_id: str, scorecards: dict[str, dict]) -> str:
             evidence = ""
             if r.get("pass") and r.get("evidence"):
                 ev = r["evidence"]
-                evidence = f" — {ev.get('fake_now','?')} `{ev.get('content_preview','')[:80]}`"
+                evidence = f" — {ev.get('fake_now', '?')} `{ev.get('content_preview', '')[:80]}`"
             else:
-                evidence = f" — {r.get('reason','')}"
+                evidence = f" — {r.get('reason', '')}"
             lines.append(f"- **{agent}**: {status} {pts}{evidence}")
 
     # Memory accuracy
@@ -579,8 +618,7 @@ def _discover_scorecards() -> dict[str, list[dict]]:
         try:
             sc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"[warn] skipping unreadable scorecard {path.name}: {exc}",
-                  file=sys.stderr)
+            print(f"[warn] skipping unreadable scorecard {path.name}: {exc}", file=sys.stderr)
             continue
         agent = sc.get("agent")
         if agent:
@@ -601,8 +639,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     (restraint), and a separately-computed Scheduled-execution fire
     count derived directly from each trajectory.
     """
-    agents = [a for a in _AGENT_ORDER if a in by_agent] + \
-             [a for a in sorted(by_agent) if a not in _AGENT_ORDER]
+    agents = [a for a in _AGENT_ORDER if a in by_agent] + [a for a in sorted(by_agent) if a not in _AGENT_ORDER]
     if not agents:
         return "(no scorecards found; run `--all` first)\n"
 
@@ -617,8 +654,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     agg: dict[str, dict[str, dict[str, int]]] = {a: {} for a in agents}
     for agent in agents:
         for key in ("type_a", "type_b", "type_c"):
-            agg[agent][key] = {"earned": 0, "max": 0,
-                               "count_pass": 0, "count": 0}
+            agg[agent][key] = {"earned": 0, "max": 0, "count_pass": 0, "count": 0}
         for sc in by_agent[agent]:
             for key in ("type_a", "type_b", "type_c"):
                 t = sc.get("totals", {}).get(key) or {}
@@ -644,8 +680,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     lines.append("")
     lines.append(f"_generated {datetime.now().isoformat()}_")
     lines.append("")
-    lines.append(f"**Personas scored:** {len(all_personas)} "
-                 f"({', '.join(all_personas) or '—'})")
+    lines.append(f"**Personas scored:** {len(all_personas)} ({', '.join(all_personas) or '—'})")
     lines.append(f"**Agents:** {', '.join(agents)}")
     lines.append("")
     lines.append("## Capability table")
@@ -664,9 +699,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     row_a = ["**Anticipatory**<br>(rubric Type A 命中)"]
     for agent in agents:
         t = agg[agent]["type_a"]
-        row_a.append(
-            f"**{t['count_pass']}/{t['count']}** ({_pct(t['count_pass'], t['count'])})"
-        )
+        row_a.append(f"**{t['count_pass']}/{t['count']}** ({_pct(t['count_pass'], t['count'])})")
     row_a.append("agent 没被告知就想到该做 — 只有 L3 Sentinel 能做")
     lines.append("| " + " | ".join(row_a) + " |")
 
@@ -680,16 +713,14 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
         f = fires[agent]
         aside = f"<br>(+{f['sentinel']} sentinel anticipatory)" if f["sentinel"] else ""
         row_b.append(f"**{f['cron']} fires**{aside}")
-    row_b.append("user 显式说 \"X 时提醒\" 后 agent 真的注册并 fire")
+    row_b.append('user 显式说 "X 时提醒" 后 agent 真的注册并 fire')
     lines.append("| " + " | ".join(row_b) + " |")
 
     # Row 3: Reactive Q&A (rubric Type B).
     row_c = ["**Reactive Q&A**<br>(rubric Type B 命中)"]
     for agent in agents:
         t = agg[agent]["type_b"]
-        row_c.append(
-            f"{t['count_pass']}/{t['count']} ({_pct(t['count_pass'], t['count'])})"
-        )
+        row_c.append(f"{t['count_pass']}/{t['count']} ({_pct(t['count_pass'], t['count'])})")
     row_c.append("user 问问题时 agent 答对率")
     lines.append("| " + " | ".join(row_c) + " |")
 
@@ -700,9 +731,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     row_d = ["**Restraint**<br>(rubric Type C 命中)"]
     for agent in agents:
         t = agg[agent]["type_c"]
-        row_d.append(
-            f"{t['count_pass']}/{t['count']} ({_pct(t['count_pass'], t['count'])})"
-        )
+        row_d.append(f"{t['count_pass']}/{t['count']} ({_pct(t['count_pass'], t['count'])})")
     row_d.append("DND / 频率 / 周末 constraint 是否被破坏")
     lines.append("| " + " | ".join(row_d) + " |")
 
@@ -718,8 +747,7 @@ def render_aggregate(by_agent: dict[str, list[dict]]) -> str:
     for persona in all_personas:
         row = [persona]
         for agent in agents:
-            match = next((sc for sc in by_agent[agent]
-                          if sc.get("persona_id") == persona), None)
+            match = next((sc for sc in by_agent[agent] if sc.get("persona_id") == persona), None)
             if not match:
                 row.append("—")
                 continue
@@ -785,29 +813,32 @@ def _max_count_in_any_window(events: list[dict], window: timedelta) -> int:
 
 def main() -> None:
     global _OUTPUT_DIR
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--output-dir", default=None,
-                    help="Directory holding longrun-*-trajectory.jsonl + "
-                         "*-scorecard.json (default: output/longrun/). Point it "
-                         "at a snapshot dir (e.g. output/post-fix10-d30/) to "
-                         "score / aggregate that run without moving files.")
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory holding longrun-*-trajectory.jsonl + "
+        "*-scorecard.json (default: output/longrun/). Point it "
+        "at a snapshot dir (e.g. output/post-fix10-d30/) to "
+        "score / aggregate that run without moving files.",
+    )
     ap.add_argument("--persona", help="Score one persona only")
-    ap.add_argument("--agent", default="raven",
-                    help="Score a specific agent system (raven/hermes/openclaw)")
-    ap.add_argument("--all", action="store_true",
-                    help="Scan output/longrun/ for all trajectory files and score each")
-    ap.add_argument("--compare", action="store_true",
-                    help="With --all: produce cross-agent comparison-<persona>.md")
-    ap.add_argument("--aggregate", action="store_true",
-                    help="Aggregate every existing *-scorecard.json into a "
-                         "README-style cross-persona × cross-agent capability "
-                         "table. Re-runs scoring first when combined with --all.")
-    ap.add_argument("--aggregate-out", default=None,
-                    help="With --aggregate: path for the aggregate markdown "
-                         "(default: output/longrun/aggregate-scorecard.md)")
-    ap.add_argument("--skip-memory", action="store_true",
-                    help="Skip LLM-backed memory accuracy scoring")
+    ap.add_argument("--agent", default="raven", help="Score a specific agent system (raven/hermes/openclaw)")
+    ap.add_argument("--all", action="store_true", help="Scan output/longrun/ for all trajectory files and score each")
+    ap.add_argument("--compare", action="store_true", help="With --all: produce cross-agent comparison-<persona>.md")
+    ap.add_argument(
+        "--aggregate",
+        action="store_true",
+        help="Aggregate every existing *-scorecard.json into a "
+        "README-style cross-persona × cross-agent capability "
+        "table. Re-runs scoring first when combined with --all.",
+    )
+    ap.add_argument(
+        "--aggregate-out",
+        default=None,
+        help="With --aggregate: path for the aggregate markdown (default: output/longrun/aggregate-scorecard.md)",
+    )
+    ap.add_argument("--skip-memory", action="store_true", help="Skip LLM-backed memory accuracy scoring")
     args = ap.parse_args()
 
     if args.output_dir:
@@ -829,14 +860,13 @@ def main() -> None:
                 # persona always ends in "-01" per our naming; agent is raven/hermes/openclaw
                 for ag in ("raven", "hermes", "openclaw"):
                     if f"-{ag}-trajectory" in p.name:
-                        persona_id = p.name[len("longrun-"):-len(f"-{ag}-trajectory.jsonl")]
+                        persona_id = p.name[len("longrun-") : -len(f"-{ag}-trajectory.jsonl")]
                         pairs.add((persona_id, ag))
                         break
             by_persona: dict[str, dict[str, dict]] = defaultdict(dict)
             for persona, ag in sorted(pairs):
                 print(f"[score] {persona} × {ag}", file=sys.stderr)
-                sc = await score_trajectory(persona, ag,
-                                            skip_memory_accuracy=args.skip_memory)
+                sc = await score_trajectory(persona, ag, skip_memory_accuracy=args.skip_memory)
                 by_persona[persona][ag] = sc
             if args.compare:
                 for persona, scs in by_persona.items():
@@ -845,8 +875,7 @@ def main() -> None:
                     out.write_text(md, encoding="utf-8")
                     print(f"[done] {out}", file=sys.stderr)
         elif args.persona:
-            await score_trajectory(args.persona, args.agent,
-                                   skip_memory_accuracy=args.skip_memory)
+            await score_trajectory(args.persona, args.agent, skip_memory_accuracy=args.skip_memory)
         elif args.aggregate:
             pass  # handled after run()
         else:
@@ -855,8 +884,7 @@ def main() -> None:
         if args.aggregate:
             by_agent = _discover_scorecards()
             md = render_aggregate(by_agent)
-            out_path = Path(args.aggregate_out) if args.aggregate_out \
-                else _OUTPUT_DIR / "aggregate-scorecard.md"
+            out_path = Path(args.aggregate_out) if args.aggregate_out else _OUTPUT_DIR / "aggregate-scorecard.md"
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(md, encoding="utf-8")
             print(f"[done] {out_path}", file=sys.stderr)

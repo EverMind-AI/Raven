@@ -15,11 +15,8 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tarfile
-import tempfile
-import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,8 +27,7 @@ from loguru import logger
 from ..backend import Sample
 from ..driver import BenchmarkDriver
 from ..longrun_adapters import AgentAdapter, build_adapter
-from ..user_simulator import SimAction, SimContext, UserSimulator
-
+from ..user_simulator import SimContext, UserSimulator
 
 _DATA_DIR_ENV = "LONGRUN_DATA_DIR"
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "longrun"
@@ -80,10 +76,7 @@ class _ScenarioState:
             "last_action_kind": self.last_action_kind,
             "last_sentinel_tick": self.last_sentinel_tick.isoformat() if self.last_sentinel_tick else None,
             "action_count_today": self.action_count_today,
-            "last_new_session_at": (
-                self.last_new_session_at.isoformat()
-                if self.last_new_session_at else None
-            ),
+            "last_new_session_at": (self.last_new_session_at.isoformat() if self.last_new_session_at else None),
         }
 
     def apply_dict(self, d: dict[str, Any]) -> None:
@@ -110,14 +103,10 @@ class LongRunDriver(BenchmarkDriver):
 
     # ---- BenchmarkDriver required -----------------------------------------
 
-    def load_samples(self, *, n: int | None = None,
-                     filter_id: str | None = None) -> list[Sample]:
+    def load_samples(self, *, n: int | None = None, filter_id: str | None = None) -> list[Sample]:
         data_dir = _data_dir()
         if not data_dir.exists():
-            raise FileNotFoundError(
-                f"longrun data dir not found: {data_dir} "
-                f"(set {_DATA_DIR_ENV} to override)"
-            )
+            raise FileNotFoundError(f"longrun data dir not found: {data_dir} (set {_DATA_DIR_ENV} to override)")
         samples: list[Sample] = []
         for p in sorted(data_dir.glob("persona-*.yaml")):
             data = yaml.safe_load(p.read_text(encoding="utf-8"))
@@ -125,17 +114,18 @@ class LongRunDriver(BenchmarkDriver):
                 continue
             if filter_id and data["id"] != filter_id:
                 continue
-            samples.append(Sample(
-                meta={"file": str(p)},
-                raw=data,
-                session_hint=f"sim:{data['id']}",
-            ))
+            samples.append(
+                Sample(
+                    meta={"file": str(p)},
+                    raw=data,
+                    session_hint=f"sim:{data['id']}",
+                )
+            )
         if n is not None:
             samples = samples[:n]
         return samples
 
-    def build_prompt(self, sample: Sample,
-                     ctx: dict[str, Any] | None = None) -> str:
+    def build_prompt(self, sample: Sample, ctx: dict[str, Any] | None = None) -> str:
         # Not used — longrun is run via run_scenario, not the normal
         # backend.run_one path.
         return ""
@@ -150,15 +140,15 @@ class LongRunDriver(BenchmarkDriver):
 
     def dataset_description(self) -> str:
         n_files = len(list(_data_dir().glob("persona-*.yaml"))) if _data_dir().exists() else 0
-        return (
-            f"longrun benchmark — {n_files} persona × 30-day LLM-simulator "
-            f"trajectories ({_data_dir()})"
-        )
+        return f"longrun benchmark — {n_files} persona × 30-day LLM-simulator trajectories ({_data_dir()})"
 
     # ---- run.py multi-tick entry -------------------------------------------
 
     async def run_scenario(
-        self, sample: Sample, system: str, mode: str | None,
+        self,
+        sample: Sample,
+        system: str,
+        mode: str | None,
         overrides: dict[str, Any],
     ) -> dict[str, Any]:
         # All agents go through the generic AgentAdapter path. The old
@@ -172,7 +162,10 @@ class LongRunDriver(BenchmarkDriver):
     # ---- adapter-based scenario (hermes / openclaw) ----------------------
 
     async def _run_scenario_adapter(
-        self, sample: Sample, system: str, mode: str | None,
+        self,
+        sample: Sample,
+        system: str,
+        mode: str | None,
         overrides: dict[str, Any],
     ) -> dict[str, Any]:
         """Run a longrun scenario via the generic AgentAdapter path.
@@ -219,11 +212,10 @@ class LongRunDriver(BenchmarkDriver):
                 totals["nudges"] += 1
 
         last_day_end = _day_start_datetime(persona, day_limit)
-        pending = [i for i in intents
-                   if _parse_intent_time(i) >= state.fake_now
-                   and _parse_intent_time(i) < last_day_end]
-        logger.info("adapter[{}] persona={} {} intents to run",
-                    system, persona['id'], len(pending))
+        pending = [
+            i for i in intents if _parse_intent_time(i) >= state.fake_now and _parse_intent_time(i) < last_day_end
+        ]
+        logger.info("adapter[{}] persona={} {} intents to run", system, persona["id"], len(pending))
 
         try:
             await adapter.start()
@@ -244,15 +236,21 @@ class LongRunDriver(BenchmarkDriver):
                 # Materialize first user message via LLM simulator
                 sim_ctx = self._build_adapter_sim_context(state, adapter)
                 first_msg = await sim.materialize_intent(intent, sim_ctx)
-                self._log_event(state, "user_send", {
-                    "intent_id": intent.get("topic", "")[:50],
-                    "intent_kind": intent.get("kind", ""),
-                    "content": first_msg,
-                    "turn": "first",
-                })
+                self._log_event(
+                    state,
+                    "user_send",
+                    {
+                        "intent_id": intent.get("topic", "")[:50],
+                        "intent_kind": intent.get("kind", ""),
+                        "content": first_msg,
+                        "turn": "first",
+                    },
+                )
                 session_key = f"sim:{persona['id']}:main"
                 reply = await adapter.send_user_message(
-                    first_msg, session_key=session_key, fake_now=state.fake_now,
+                    first_msg,
+                    session_key=session_key,
+                    fake_now=state.fake_now,
                 )
                 self._log_event(state, "agent_reply", {"content": reply, "turn": "first"})
                 totals["actions"] += 1
@@ -262,22 +260,35 @@ class LongRunDriver(BenchmarkDriver):
                 for i in range(max(max_fu + 1, 5)):
                     followup_ctx = self._build_adapter_sim_context(state, adapter)
                     decision, content, reasoning = await sim.decide_followup(
-                        intent, followup_ctx, followups_taken=i,
+                        intent,
+                        followup_ctx,
+                        followups_taken=i,
                     )
-                    self._log_event(state, "sim_action", {
-                        "action_kind": "followup",
-                        "decision": decision,
-                        "content": content,
-                        "reasoning": reasoning,
-                    })
+                    self._log_event(
+                        state,
+                        "sim_action",
+                        {
+                            "action_kind": "followup",
+                            "decision": decision,
+                            "content": content,
+                            "reasoning": reasoning,
+                        },
+                    )
                     if decision != "send" or not content:
                         break
                     reply = await adapter.send_user_message(
-                        content, session_key=session_key, fake_now=state.fake_now,
+                        content,
+                        session_key=session_key,
+                        fake_now=state.fake_now,
                     )
-                    self._log_event(state, "agent_reply", {
-                        "content": reply, "turn": f"followup-{i+1}",
-                    })
+                    self._log_event(
+                        state,
+                        "agent_reply",
+                        {
+                            "content": reply,
+                            "turn": f"followup-{i + 1}",
+                        },
+                    )
                     totals["actions"] += 1
                     state.fake_now += timedelta(seconds=30)
 
@@ -298,7 +309,9 @@ class LongRunDriver(BenchmarkDriver):
             end_fake = _day_start_datetime(persona, day_limit)
             if state.fake_now < end_fake:
                 state.fake_now = await adapter.tick_to(
-                    end_fake, current_fake_now=state.fake_now, emit=_emit,
+                    end_fake,
+                    current_fake_now=state.fake_now,
+                    emit=_emit,
                 )
                 prev_day = state.day_index
                 await self._maybe_roll_day(state, None)
@@ -329,8 +342,11 @@ class LongRunDriver(BenchmarkDriver):
         }
 
     async def _react_to_pending_nudges(
-        self, state: _ScenarioState, sim: UserSimulator,
-        *, adapter: AgentAdapter,
+        self,
+        state: _ScenarioState,
+        sim: UserSimulator,
+        *,
+        adapter: AgentAdapter,
     ) -> None:
         """If nudges arrived during the latest idle window, give simulator a
         chance to engage / dismiss / ignore. Fires before the next intent's
@@ -350,13 +366,17 @@ class LongRunDriver(BenchmarkDriver):
             logger.warning("react_to_nudges raised: {}", exc)
             return
 
-        self._log_event(state, "sim_action", {
-            "action_kind": "react_to_nudge",
-            "reaction": reaction,
-            "content": content,
-            "reasoning": reasoning,
-            "n_nudges": len(nudges),
-        })
+        self._log_event(
+            state,
+            "sim_action",
+            {
+                "action_kind": "react_to_nudge",
+                "reaction": reaction,
+                "content": content,
+                "reasoning": reasoning,
+                "n_nudges": len(nudges),
+            },
+        )
 
         if reaction == "ignore":
             return  # no message to agent
@@ -375,13 +395,20 @@ class LongRunDriver(BenchmarkDriver):
             session_key=f"sim:{state.persona['id']}:main",
             fake_now=state.fake_now,
         )
-        self._log_event(state, "agent_reply", {
-            "content": reply, "turn": f"react:{reaction}",
-        })
+        self._log_event(
+            state,
+            "agent_reply",
+            {
+                "content": reply,
+                "turn": f"react:{reaction}",
+            },
+        )
         state.fake_now += timedelta(seconds=30)
 
     def _build_adapter_sim_context(
-        self, state: _ScenarioState, adapter: AgentAdapter,
+        self,
+        state: _ScenarioState,
+        adapter: AgentAdapter,
     ) -> SimContext:
         """SimContext for adapter path — memory comes from adapter, sessions are
         reconstructed by re-reading recent trajectory turns."""
@@ -491,6 +518,7 @@ def _build_simulator_provider(overrides: dict[str, Any]):
     For dev-01 30-day full run: Sonnet ~$3-5, deepseek ~$0.30.
     """
     from ..provider import make_provider
+
     model = overrides.get("simulator_model") or "openrouter/anthropic/claude-sonnet-4.5"
     provider, model_resolved = make_provider({}, model_override=model)
     return provider, model_resolved
@@ -503,6 +531,7 @@ def _build_planner_provider(model: str):
     uses (auto-detects OpenRouter ids by prefix). Returns (provider, model).
     """
     from ..provider import make_provider
+
     provider, model_resolved = make_provider({}, model_override=model)
     return provider, model_resolved
 
@@ -511,6 +540,7 @@ def _build_agent_provider(overrides: dict[str, Any]):
     """Agent + Sentinel = local qwen (from ~/.hermes/config.yaml)."""
     from ..hermes_home import load_config_from_hermes_home, load_env_from_hermes_home
     from ..provider import make_provider
+
     load_env_from_hermes_home()
     cfg = load_config_from_hermes_home()
     provider, _model = make_provider(cfg)
@@ -518,7 +548,11 @@ def _build_agent_provider(overrides: dict[str, Any]):
 
 
 def _write_checkpoint(
-    ws_root: Path, state: _ScenarioState, ckpt_dir: Path, *, day_completed: int,
+    ws_root: Path,
+    state: _ScenarioState,
+    ckpt_dir: Path,
+    *,
+    day_completed: int,
 ) -> Path:
     """Tar the workspace + scenario state into ``ckpt_dir/dayNN.tar``.
 

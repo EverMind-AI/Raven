@@ -26,9 +26,9 @@ from typing import Any, Dict, List
 # Add project root to path so we can import raven
 # Path: benchmarks/pinchbench/bot_runner/benchmark.py
 SCRIPT_DIR = Path(__file__).parent
-BENCHMARK_ROOT = SCRIPT_DIR.parent          # pinchbench/
-BENCHMARKS_ROOT = BENCHMARK_ROOT.parent     # benchmarks/
-PROJECT_ROOT = BENCHMARKS_ROOT.parent       # project root
+BENCHMARK_ROOT = SCRIPT_DIR.parent  # pinchbench/
+BENCHMARKS_ROOT = BENCHMARK_ROOT.parent  # benchmarks/
+PROJECT_ROOT = BENCHMARKS_ROOT.parent  # project root
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -51,31 +51,41 @@ logger = logging.getLogger("benchmark.bot")
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PinchBench for Raven (bot mode)")
     parser.add_argument(
-        "--model", default=DEFAULT_MODEL,
+        "--model",
+        default=DEFAULT_MODEL,
         help=f"Model identifier (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
-        "--api-key", default=DEFAULT_API_KEY,
+        "--api-key",
+        default=DEFAULT_API_KEY,
         help="OpenRouter API key (defaults to OPENROUTER_API_KEY)",
     )
     parser.add_argument(
-        "--suite", default="all",
+        "--suite",
+        default="all",
         help='Tasks: "all", "automated-only", or comma-separated task IDs',
     )
     parser.add_argument(
-        "--timeout-multiplier", type=float, default=1.0,
+        "--timeout-multiplier",
+        type=float,
+        default=1.0,
         help="Scale all task timeouts",
     )
     parser.add_argument(
-        "--runs", type=int, default=1,
+        "--runs",
+        type=int,
+        default=1,
         help="Number of runs per task for averaging",
     )
     parser.add_argument(
-        "--verbose", "-v", action="store_true",
+        "--verbose",
+        "-v",
+        action="store_true",
         help="Enable verbose logging",
     )
     parser.add_argument(
-        "--output-dir", default=str(BENCHMARK_ROOT / "results"),
+        "--output-dir",
+        default=str(BENCHMARK_ROOT / "results"),
         help="Results directory",
     )
     return parser.parse_args()
@@ -143,8 +153,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             logger.info("=" * 70)
             logger.info(
                 "  Task %d/%d (Run %d/%d): [%s] %s",
-                i, len(tasks_to_run), run_idx + 1, args.runs,
-                task.task_id, task.name,
+                i,
+                len(tasks_to_run),
+                run_idx + 1,
+                args.runs,
+                task.task_id,
+                task.name,
             )
             logger.info("=" * 70)
 
@@ -188,8 +202,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
                     note = f"Exec error: {execution_error} | {note}"
                 logger.warning("Grading failed for %s: %s", task.task_id, exc)
                 grade = GradeResult(
-                    task_id=task.task_id, score=0.0, max_score=1.0,
-                    grading_type=task.grading_type, breakdown={}, notes=note,
+                    task_id=task.task_id,
+                    score=0.0,
+                    max_score=1.0,
+                    grading_type=task.grading_type,
+                    breakdown={},
+                    notes=note,
                 )
 
             task_grades.append(grade)
@@ -200,7 +218,12 @@ async def run_benchmark(args: argparse.Namespace) -> None:
             emoji = "PASS" if grade.score >= grade.max_score else "PARTIAL" if grade.score > 0 else "FAIL"
             logger.info(
                 "  %s %s: %.2f/%.2f (%.0f%%) [%s]",
-                emoji, task.task_id, grade.score, grade.max_score, pct, grade.grading_type,
+                emoji,
+                task.task_id,
+                grade.score,
+                grade.max_score,
+                pct,
+                grade.grading_type,
             )
             if grade.notes:
                 logger.info("  Notes: %s", grade.notes[:300])

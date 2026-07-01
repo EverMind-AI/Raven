@@ -35,11 +35,7 @@ def tmp_logs(tmp_path: Path, monkeypatch):
     saved_filters = list(root.filters)
     saved_level = root.level
     manager = logging.root.manager
-    saved_named = {
-        name: list(lg.handlers)
-        for name, lg in manager.loggerDict.items()
-        if isinstance(lg, logging.Logger)
-    }
+    saved_named = {name: list(lg.handlers) for name, lg in manager.loggerDict.items() if isinstance(lg, logging.Logger)}
     try:
         yield tmp_path / "logs"
     finally:

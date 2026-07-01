@@ -147,9 +147,7 @@ def test_console_injection_patches_all_modules():
 
     The patch list was extended 4 → 12 after a merge introduced 8 new CLI modules.
     """
-    assert len(_CONSOLE_HOSTS) == 12, (
-        "patch list locks 12 console hosts"
-    )
+    assert len(_CONSOLE_HOSTS) == 12, "patch list locks 12 console hosts"
     originals = {mod: mod.console for mod in _CONSOLE_HOSTS}
 
     from rich.console import Console as RichConsole
@@ -250,8 +248,7 @@ def test_blacklist_full_coverage():
         ("onboard",),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 7 prefix tuples (+ agent REPL special-case), got "
-        f"{_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 7 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
@@ -357,8 +354,7 @@ def test_working_entries_remain_compatible(argv):
     regression of a working slash that the user could previously type.
     """
     assert _is_dispatch_compatible(list(argv)) is True, (
-        f"working entry {argv!r} regressed — reflection or filter now rejects "
-        f"what was previously dispatch-compatible"
+        f"working entry {argv!r} regressed — reflection or filter now rejects what was previously dispatch-compatible"
     )
 
 

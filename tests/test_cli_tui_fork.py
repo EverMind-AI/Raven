@@ -27,17 +27,13 @@ runner = CliRunner()
 def test_ui_tui_dir_resolves_under_repo_root():
     """Sanity: the launcher's _UI_TUI_DIR points to the vendored ui-tui tree."""
     assert _UI_TUI_DIR.name == "ui-tui"
-    assert (_UI_TUI_DIR / "package.json").exists(), (
-        f"After fork, ui-tui/package.json should exist at {_UI_TUI_DIR}"
-    )
+    assert (_UI_TUI_DIR / "package.json").exists(), f"After fork, ui-tui/package.json should exist at {_UI_TUI_DIR}"
     # Post-fork sanity — vendored hermes-ink package present.
     assert (_UI_TUI_DIR / "packages" / "hermes-ink" / "package.json").exists(), (
         "Vendored @hermes/ink package must be present after fork."
     )
     # GatewayClientStub source present.
-    assert (_UI_TUI_DIR / "src" / "gatewayClientStub.ts").exists(), (
-        "GatewayClientStub source must exist post-fork."
-    )
+    assert (_UI_TUI_DIR / "src" / "gatewayClientStub.ts").exists(), "GatewayClientStub source must exist post-fork."
 
 
 def test_check_exits_zero_when_node_ok_and_run_succeeds(monkeypatch):
@@ -200,7 +196,5 @@ def test_packages_hermes_ink_dist_gitignored_but_buildable(tmp_path: Path):
     source layout expected by `npm run build --prefix packages/hermes-ink`.
     """
     pkg = _UI_TUI_DIR / "packages" / "hermes-ink"
-    assert (pkg / "src" / "entry-exports.ts").exists(), (
-        "hermes-ink src/entry-exports.ts (esbuild entry) must exist."
-    )
+    assert (pkg / "src" / "entry-exports.ts").exists(), "hermes-ink src/entry-exports.ts (esbuild entry) must exist."
     assert (pkg / "package.json").exists()

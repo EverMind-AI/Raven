@@ -53,8 +53,7 @@ def _assert_session_info(info: dict) -> None:
     ``SessionPanel`` consumes (``ui-tui/src/types.ts:148``)."""
     # Must contain everything SessionPanel reads without optional-chaining.
     assert _SESSION_PANEL_REQUIRED_KEYS.issubset(set(info)), (
-        f"missing SessionPanel-required keys; got {set(info)}, "
-        f"missing {_SESSION_PANEL_REQUIRED_KEYS - set(info)}"
+        f"missing SessionPanel-required keys; got {set(info)}, missing {_SESSION_PANEL_REQUIRED_KEYS - set(info)}"
     )
     # Types: skills / tools must be dicts so ``Object.entries`` works in JS.
     assert isinstance(info["skills"], dict), "info.skills must be a dict (Object.entries target)"
@@ -107,9 +106,7 @@ async def test_session_info_skills_and_tools_are_empty_dicts_in_v01() -> None:
         ("session.resume", {"session_id", "info", "messages"}),
     ],
 )
-async def test_session_handlers_dispatch_via_dispatcher(
-    method: str, expected_keys: set[str]
-) -> None:
+async def test_session_handlers_dispatch_via_dispatcher(method: str, expected_keys: set[str]) -> None:
     """End-to-end: each handler is reachable through the Dispatcher and
     returns a JSON-RPC success frame (no ``error`` key)."""
     d = Dispatcher()
@@ -129,14 +126,10 @@ async def test_session_create_ignores_extra_params() -> None:
 async def test_session_create_returns_unique_ids_per_call() -> None:
     r1 = await session_create({})
     r2 = await session_create({})
-    assert r1["session_id"] != r2["session_id"], (
-        "two consecutive session.create calls returned the same session_id"
-    )
+    assert r1["session_id"] != r2["session_id"], "two consecutive session.create calls returned the same session_id"
 
 
-async def test_session_create_writes_no_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_create_writes_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Lazy mint: session.create must not create any file under the workspace.
 
     The handler does not touch the filesystem today; this test pins the seam
@@ -176,9 +169,7 @@ def _write_session(tmp_path: Path, session_key: str, messages: list[dict]) -> No
     mgr.save(session)
 
 
-async def test_session_resume_loads_n_stored_messages(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_resume_loads_n_stored_messages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resume of a session with 3 stored messages returns exactly 3 wire messages."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -274,9 +265,7 @@ async def test_session_resume_maps_tool_role_with_name_and_context(
     assert tool_msg["context"] == "ls -la"
 
 
-async def test_session_resume_skips_malformed_stored_lines(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_resume_skips_malformed_stored_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A roleless message line mid-transcript is skipped, not a -32603 crash.
 
     One corrupt line must never permanently brick resume for that id
@@ -355,9 +344,7 @@ async def test_session_resume_prefers_live_cache_with_unflushed_tail(
     assert msgs[1]["text"] == "unflushed tail"
 
 
-async def test_session_resume_unknown_id_does_not_create_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_resume_unknown_id_does_not_create_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resuming an unknown session_id does not write any file to the workspace."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -375,9 +362,7 @@ async def test_session_resume_unknown_id_does_not_create_file(
     assert not new_files, f"resume of unknown id must not write files; got: {new_files}"
 
 
-async def test_session_close_flushes_dirty_cached_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_close_flushes_dirty_cached_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """close flushes a dirty cached session — message added after last save lands on disk."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -405,9 +390,7 @@ async def test_session_close_flushes_dirty_cached_session(
     assert len(msg_lines) == 2, f"expected 2 messages on disk after flush, got {msg_lines}"
 
 
-async def test_session_close_save_failure_still_returns_ok(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_close_save_failure_still_returns_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A save that raises during close degrades to a warning, not a -32603."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -428,9 +411,7 @@ async def test_session_close_save_failure_still_returns_ok(
     assert result == {"ok": True}
 
 
-async def test_session_close_returns_ok_for_unknown_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_close_returns_ok_for_unknown_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """close with an unknown/absent session_key must not raise and returns ok."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -451,9 +432,7 @@ async def test_session_close_returns_ok_without_session_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_session_list_returns_sessions_for_tui_channel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_returns_sessions_for_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list returns a sessions list from the tui channel, sorted by updated_at desc."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -477,9 +456,7 @@ async def test_session_list_returns_sessions_for_tui_channel(
     assert "tui:20260610_110000_bbb222" in ids
 
 
-async def test_session_list_sorted_by_updated_at_desc(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_sorted_by_updated_at_desc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list returns sessions ordered by updated_at descending."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -504,9 +481,7 @@ async def test_session_list_sorted_by_updated_at_desc(
     assert items[1]["id"] == "tui:20260610_090000_old111"
 
 
-async def test_session_list_item_shape(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_item_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Each session.list item carries id, message_count, preview, started_at, title."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -532,9 +507,7 @@ async def test_session_list_item_shape(
     assert isinstance(item["started_at"], (int, float))
 
 
-async def test_session_list_only_tui_channel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_only_tui_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list does not include sessions from non-tui channels."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -557,9 +530,7 @@ async def test_session_list_only_tui_channel(
     assert "cli:20260610_100000_cli01" not in ids
 
 
-async def test_session_list_honors_limit_after_sort(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_honors_limit_after_sort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """limit slices AFTER the updated_at-desc sort — newest sessions win."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -581,9 +552,7 @@ async def test_session_list_honors_limit_after_sort(
     assert items[1]["id"] == "tui:20260610_100000_lim002"
 
 
-async def test_session_list_ignores_non_positive_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_ignores_non_positive_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A missing, zero, or invalid limit returns all sessions."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -603,9 +572,7 @@ async def test_session_list_ignores_non_positive_limit(
         assert len(result["sessions"]) == 2, f"params={params}"
 
 
-async def test_session_list_empty_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_empty_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list returns an empty list when no tui sessions exist."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -620,9 +587,7 @@ async def test_session_list_empty_workspace(
     assert result == {"sessions": []}
 
 
-async def test_session_delete_removes_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_delete_removes_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete returns {deleted: session_id} and removes the file."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -642,9 +607,7 @@ async def test_session_delete_removes_session(
     assert not path.exists()
 
 
-async def test_session_delete_unknown_key_returns_null(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_delete_unknown_key_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete on a missing session returns {deleted: null} so the UI
     can distinguish a typo from a real removal."""
     cfg = load_config()
@@ -660,9 +623,7 @@ async def test_session_delete_unknown_key_returns_null(
     assert result == {"deleted": None}
 
 
-async def test_session_delete_missing_param_returns_null(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_delete_missing_param_returns_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete with no session_id returns {deleted: null}."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -677,9 +638,7 @@ async def test_session_delete_missing_param_returns_null(
     assert result == {"deleted": None}
 
 
-async def test_session_most_recent_returns_session_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_most_recent_returns_session_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.most_recent returns the full session_key for the newest tui session."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -785,9 +744,7 @@ async def test_session_title_missing_session_id_returns_early(
     assert result == {"title": None, "session_key": "", "pending": False}
 
 
-async def test_session_title_get_returns_current_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_title_get_returns_current_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.title with no title param returns the current title from metadata."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -806,9 +763,7 @@ async def test_session_title_get_returns_current_title(
     assert result["title"] == "Existing Title"
 
 
-async def test_session_list_via_dispatcher(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_list_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.list is reachable through the Dispatcher."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -826,9 +781,7 @@ async def test_session_list_via_dispatcher(
     assert "sessions" in resp["result"]
 
 
-async def test_session_delete_via_dispatcher(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_delete_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.delete is reachable through the Dispatcher."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -844,17 +797,14 @@ async def test_session_delete_via_dispatcher(
 
     d = Dispatcher()
     register_session_methods(d)
-    resp = await d.dispatch({
-        "jsonrpc": "2.0", "id": 1, "method": "session.delete",
-        "params": {"session_id": "tui:20260610_100000_disp1"}
-    })
+    resp = await d.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "session.delete", "params": {"session_id": "tui:20260610_100000_disp1"}}
+    )
     assert "error" not in resp, f"session.delete dispatch failed: {resp}"
     assert resp["result"]["deleted"] == "tui:20260610_100000_disp1"
 
 
-async def test_session_most_recent_via_dispatcher(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_most_recent_via_dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """session.most_recent is reachable through the Dispatcher."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -877,9 +827,7 @@ async def test_session_most_recent_via_dispatcher(
 # ---------------------------------------------------------------------------
 
 
-def test_manager_for_reuses_shared_loop_manager(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_manager_for_reuses_shared_loop_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When agent_loop.sessions IS a SessionManager, _manager_for returns that
     exact instance — the shared loop manager is reused, not rebuilt."""
     from types import SimpleNamespace
@@ -897,9 +845,7 @@ def test_manager_for_reuses_shared_loop_manager(
     assert session_module._manager_for(loop, cfg) is shared
 
 
-def test_manager_for_falls_through_when_no_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_manager_for_falls_through_when_no_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """agent_loop=None falls through to a freshly built manager."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -1012,9 +958,7 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_session_branch_forks_and_returns_child_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_branch_forks_and_returns_child_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -1030,9 +974,7 @@ async def test_session_branch_forks_and_returns_child_key(
     assert [m["content"] for m in child.messages] == ["hi"]
 
 
-async def test_session_branch_returns_carried_message_count(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_branch_returns_carried_message_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -1052,9 +994,7 @@ async def test_session_branch_returns_carried_message_count(
     assert result["message_count"] == 3
 
 
-async def test_session_branch_uses_name_as_title(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_branch_uses_name_as_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -1068,9 +1008,7 @@ async def test_session_branch_uses_name_as_title(
     assert child.metadata["title"] == "Experiment"
 
 
-async def test_session_branch_empty_name_defaults_fork_suffix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_branch_empty_name_defaults_fork_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -1086,9 +1024,7 @@ async def test_session_branch_empty_name_defaults_fork_suffix(
     assert result["title"] == "Chat (fork)"
 
 
-async def test_session_branch_unknown_session_returns_no_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_branch_unknown_session_returns_no_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
@@ -1126,10 +1062,14 @@ async def test_session_export_writes_markdown_for_existing_session(
     monkeypatch.setattr(session_module, "load_config", lambda: cfg)
 
     session_key = "tui:20260622_120000_abcdef"
-    _write_session(tmp_path, session_key, [
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "hi there"},
-    ])
+    _write_session(
+        tmp_path,
+        session_key,
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ],
+    )
 
     result = await session_export({"session_id": session_key})
 
@@ -1142,9 +1082,7 @@ async def test_session_export_writes_markdown_for_existing_session(
     assert written.parent == (tmp_path / "exports")
 
 
-async def test_session_export_unknown_id_returns_not_found(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_export_unknown_id_returns_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An unresolvable id yields not_found and writes nothing."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -1156,9 +1094,7 @@ async def test_session_export_unknown_id_returns_not_found(
     assert not (tmp_path / "exports").exists()
 
 
-async def test_session_export_ambiguous_returns_candidates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_export_ambiguous_returns_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare id on two channels is ambiguous; both keys surface, nothing written."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -1189,9 +1125,7 @@ async def test_session_export_empty_session_id_returns_not_found(
     assert result == {"exported": False, "path": None, "reason": "not_found"}
 
 
-async def test_session_export_is_read_only_during_active_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Export does not reject on an active turn (read-only, unlike clear/undo)."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)

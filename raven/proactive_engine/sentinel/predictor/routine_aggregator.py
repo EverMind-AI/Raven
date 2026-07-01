@@ -28,8 +28,8 @@ from loguru import logger
 from raven.proactive_engine.sentinel.types import Routine
 
 if TYPE_CHECKING:
-    from raven.providers.base import LLMProvider
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
+    from raven.providers.base import LLMProvider
 
 
 _AGGREGATE_TOOL_SCHEMA: dict[str, Any] = {
@@ -53,10 +53,7 @@ _AGGREGATE_TOOL_SCHEMA: dict[str, Any] = {
                         "properties": {
                             "id": {
                                 "type": "string",
-                                "description": (
-                                    "The routine id you were given — "
-                                    "verbatim, no invention."
-                                ),
+                                "description": ("The routine id you were given — verbatim, no invention."),
                             },
                             "description": {
                                 "type": "string",
@@ -69,11 +66,7 @@ _AGGREGATE_TOOL_SCHEMA: dict[str, Any] = {
                             },
                             "semantic_group": {
                                 "type": "string",
-                                "description": (
-                                    "Short snake_case cluster key "
-                                    "(≤ 24 chars), e.g. "
-                                    "'morning_standup'."
-                                ),
+                                "description": ("Short snake_case cluster key (≤ 24 chars), e.g. 'morning_standup'."),
                             },
                         },
                         "required": ["id", "description"],
@@ -145,17 +138,20 @@ class RoutineAggregator:
                 continue
             if rid not in valid_ids:
                 logger.warning(
-                    "RoutineAggregator: LLM returned unknown id {!r}; "
-                    "ignoring", rid,
+                    "RoutineAggregator: LLM returned unknown id {!r}; ignoring",
+                    rid,
                 )
                 continue
             if self.routine_store.upsert_description(
-                rid, description=description, semantic_group=semantic_group,
+                rid,
+                description=description,
+                semantic_group=semantic_group,
             ):
                 applied += 1
         logger.info(
-            "RoutineAggregator: applied {} description(s) of {} "
-            "candidate(s)", applied, len(pending),
+            "RoutineAggregator: applied {} description(s) of {} candidate(s)",
+            applied,
+            len(pending),
         )
         return applied
 
@@ -167,15 +163,10 @@ class RoutineAggregator:
         lines: list[str] = []
         for r in routines:
             dow = dow_names[r.day_of_week] if r.day_of_week is not None else "*"
-            slot = (
-                f"{r.time_slot[0]:02d}:00-{r.time_slot[1]:02d}:00"
-                if r.time_slot else "*"
-            )
+            slot = f"{r.time_slot[0]:02d}:00-{r.time_slot[1]:02d}:00" if r.time_slot else "*"
             kw = ", ".join(r.keywords) if r.keywords else "(no keywords)"
             lines.append(
-                f"- id={r.id}, day={dow}, slot={slot}, "
-                f"count={r.occurrence_count}, weight={r.weight:.1f}, "
-                f"keywords={kw}"
+                f"- id={r.id}, day={dow}, slot={slot}, count={r.occurrence_count}, weight={r.weight:.1f}, keywords={kw}"
             )
         listing = "\n".join(lines)
         system = (
@@ -187,12 +178,7 @@ class RoutineAggregator:
             "should share the same semantic_group key so the menu "
             "can collapse them."
         )
-        user = (
-            "Routines to describe:\n"
-            f"{listing}\n\n"
-            "Return one entry per routine via the describe_routines "
-            "tool."
-        )
+        user = f"Routines to describe:\n{listing}\n\nReturn one entry per routine via the describe_routines tool."
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

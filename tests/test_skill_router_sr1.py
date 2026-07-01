@@ -9,9 +9,7 @@ logic (those have their own tests).
 
 from __future__ import annotations
 
-import textwrap
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,7 +20,6 @@ from raven.memory_engine.skill_forge import (
     RouterHit,
     SkillSource,
 )
-
 
 # ---------------------------------------------------------------------------
 # RouterHit dataclass
@@ -44,7 +41,10 @@ class TestRouterHitDataclass:
         from dataclasses import FrozenInstanceError
 
         h = RouterHit(
-            qualified_id="local/x", name="x", content="", score=0.0,
+            qualified_id="local/x",
+            name="x",
+            content="",
+            score=0.0,
         )
         with pytest.raises(FrozenInstanceError):
             h.score = 1.0  # type: ignore[misc]
@@ -112,11 +112,16 @@ class TestLocalSkillSource:
         builtin = tmp_path / "builtin"
         builtin.mkdir()
         _write_skill(
-            ws / "skills", "pdf-tool", body="generate pdf", desc="pdf gen",
+            ws / "skills",
+            "pdf-tool",
+            body="generate pdf",
+            desc="pdf gen",
         )
         _write_skill(
-            ws / "skills", "weather-tool",
-            body="weather forecast", desc="weather",
+            ws / "skills",
+            "weather-tool",
+            body="weather forecast",
+            desc="weather",
         )
         reg = SkillRegistry(
             workspace=ws,
@@ -126,7 +131,8 @@ class TestLocalSkillSource:
         return pool, reg
 
     async def test_emits_qualified_id_with_local_prefix(
-        self, pool_and_registry,
+        self,
+        pool_and_registry,
     ) -> None:
         pool, reg = pool_and_registry
         src = LocalSkillSource(pool, reg)
@@ -135,7 +141,8 @@ class TestLocalSkillSource:
         assert all(h.qualified_id.startswith("local/") for h in hits)
 
     async def test_emits_content_from_registry(
-        self, pool_and_registry,
+        self,
+        pool_and_registry,
     ) -> None:
         pool, reg = pool_and_registry
         src = LocalSkillSource(pool, reg)
@@ -145,7 +152,8 @@ class TestLocalSkillSource:
         assert "generate pdf" in pdf_hit.content
 
     async def test_meta_records_source_label(
-        self, pool_and_registry,
+        self,
+        pool_and_registry,
     ) -> None:
         pool, reg = pool_and_registry
         src = LocalSkillSource(pool, reg)
@@ -173,7 +181,6 @@ class TestLocalSkillSource:
     async def test_k_passes_through(self, pool_and_registry) -> None:
         pool, reg = pool_and_registry
         # Wrap pool.search to spy on the top_k it receives.
-        from raven.memory_engine.skill_local.local_pool import LocalPool
 
         spy = []
         orig = pool.search
@@ -210,7 +217,9 @@ class TestLocalSkillCatalog:
             encoding="utf-8",
         )
         return LocalSkillCatalog(
-            ws, builtin_skills_dir=builtin, start_watcher=False,
+            ws,
+            builtin_skills_dir=builtin,
+            start_watcher=False,
         )
 
     def test_pool_and_registry_exposed(self, catalog) -> None:

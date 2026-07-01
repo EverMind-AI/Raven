@@ -14,12 +14,7 @@ import pytest
 
 # Add runners/ to sys.path so the synthesizers package is importable.
 # Path: benchmarks/proactivity_eval/runners.
-_RUNNERS = (
-    Path(__file__).resolve().parent.parent
-    / "benchmarks"
-    / "proactivity_eval"
-    / "runners"
-)
+_RUNNERS = Path(__file__).resolve().parent.parent / "benchmarks" / "proactivity_eval" / "runners"
 if str(_RUNNERS) not in sys.path:
     sys.path.insert(0, str(_RUNNERS))
 
@@ -34,6 +29,7 @@ def synth():
 
 # ---------------------------------------------------------------------------
 # Profile detection
+
 
 def test_empty_obs_returns_general_profile(synth):
     ctx = synth.synthesize([])
@@ -86,7 +82,10 @@ def test_topic_regex_does_not_swallow_location_clause(synth):
     user_profile depends on category detection which is tested elsewhere.
     """
     obs = [
-        {"time": "1", "event": "User types a Markdown entry about research on sustainable branding in Visual Studio Code."},
+        {
+            "time": "1",
+            "event": "User types a Markdown entry about research on sustainable branding in Visual Studio Code.",
+        },
     ]
     topic = synth._extract_topic(obs)
     assert topic is not None
@@ -103,6 +102,7 @@ def test_falls_back_to_general_when_unknown(synth):
 # ---------------------------------------------------------------------------
 # Routine emission invariants
 
+
 def test_routines_below_threshold_not_emitted(synth):
     obs = [
         {"time": "1", "event": "User searches Google for 'ruby'"},
@@ -113,10 +113,7 @@ def test_routines_below_threshold_not_emitted(synth):
 
 
 def test_routines_at_threshold_emit_candidate(synth):
-    obs = [
-        {"time": str(i), "event": f"User searches for topic{i}"}
-        for i in range(3)
-    ]
+    obs = [{"time": str(i), "event": f"User searches for topic{i}"} for i in range(3)]
     ctx = synth.synthesize(obs)
     assert any("search" in r.pattern.lower() for r in ctx.routines)
 
@@ -147,16 +144,16 @@ def test_candidate_routines_never_user_confirmed(synth):
 
 def test_routine_count_upper_bound(synth):
     """Don't spam Planner with many candidate routines."""
-    obs = (
-        [{"time": str(i), "event": "User edits in VSCode"} for i in range(5)]
-        + [{"time": str(i), "event": "User searches Google"} for i in range(5, 15)]
-    )
+    obs = [{"time": str(i), "event": "User edits in VSCode"} for i in range(5)] + [
+        {"time": str(i), "event": "User searches Google"} for i in range(5, 15)
+    ]
     ctx = synth.synthesize(obs)
     assert len(ctx.routines) <= 2
 
 
 # ---------------------------------------------------------------------------
 # Memory line rules
+
 
 def test_memory_empty_for_short_sessions(synth):
     obs = [
@@ -191,6 +188,7 @@ def test_prose_timestamps_dont_crash(synth):
 
 # ---------------------------------------------------------------------------
 # Determinism + registry
+
 
 def test_deterministic(synth):
     obs = [

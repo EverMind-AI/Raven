@@ -115,9 +115,7 @@ def test_tui_agent_loop_receives_cron_service(patched_tui_build_deps) -> None:
     _build_tui_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
-    assert "cron_service" in kwargs, (
-        "AgentLoop ctor must receive cron_service kwarg for CronTool auto-register"
-    )
+    assert "cron_service" in kwargs, "AgentLoop ctor must receive cron_service kwarg for CronTool auto-register"
     assert kwargs["cron_service"] is not None
     cls = patched_tui_build_deps["cron_service_class"]
     assert isinstance(kwargs["cron_service"], cls)
@@ -137,9 +135,7 @@ def test_tui_cron_service_allowed_channels_is_tui(patched_tui_build_deps) -> Non
     _build_tui_agent_loop()
 
     cls = patched_tui_build_deps["cron_service_class"]
-    assert len(cls.instances) >= 1, (
-        "CronService should be constructed once in _build_tui_agent_loop"
-    )
+    assert len(cls.instances) >= 1, "CronService should be constructed once in _build_tui_agent_loop"
     cron = cls.instances[0]
     assert cron.allowed_channels == {"tui"}
 

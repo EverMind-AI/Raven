@@ -22,7 +22,6 @@ import pytest
 
 from tests.tui.autotest.runner import BackendError
 
-
 # (slash command, output regex, xfail (reason, strict) or None)
 #
 # `xfail (reason, strict=False)` marks "known-volatile" — tests where
@@ -75,14 +74,11 @@ def test_dogfood_slash_command(harness, slash, expected, xfail_marker, request):
         request.applymarker(pytest.mark.xfail(reason=reason, strict=strict))
 
     harness.spawn("uv run raven tui")
-    assert harness.wait(r"Raven", timeout=25.0), (
-        f"TUI not ready in 25s for /{slash}; screen=\n{harness.screen()}"
-    )
+    assert harness.wait(r"Raven", timeout=25.0), f"TUI not ready in 25s for /{slash}; screen=\n{harness.screen()}"
     harness.type(f"/{slash}")
     harness.press("enter")
     assert harness.wait(expected, timeout=10.0), (
-        f"slash /{slash} did not produce expected output (regex={expected!r}); "
-        f"screen=\n{harness.screen()}"
+        f"slash /{slash} did not produce expected output (regex={expected!r}); screen=\n{harness.screen()}"
     )
     # Escape dismisses any open overlay/panel (per Raven TUI footer hint
     # "Esc/q close"); the subsequent Ctrl+C exits. press() raises BackendError
@@ -93,6 +89,4 @@ def test_dogfood_slash_command(harness, slash, expected, xfail_marker, request):
         except BackendError:
             break
         time.sleep(0.5)
-    assert harness.expect_exit(0, timeout=10.0), (
-        f"TUI did not exit 0 after /{slash}; final screen=\n{harness.screen()}"
-    )
+    assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after /{slash}; final screen=\n{harness.screen()}"

@@ -2,21 +2,23 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 
-import { PassThrough } from 'stream'
-
 import { renderSync } from '@hermes/ink'
 import React from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it, vi } from 'vitest'
 
-import { ModelPicker } from '../components/modelPicker.js'
 import type { ModelOptionProvider } from '../gatewayTypes.js'
+
+import { ModelPicker } from '../components/modelPicker.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const waitForFrame = async (h: Pick<Harness, 'frame'>, text: string) => {
   for (let i = 0; i < 20; i++) {
-    if (h.frame().includes(text)) return
+    if (h.frame().includes(text)) {
+      return
+    }
     await delay(30)
   }
   expect(h.frame()).toContain(text)
@@ -46,7 +48,7 @@ const anthropic: ModelOptionProvider = {
   name: 'Anthropic',
   needs_api_base: false,
   slug: 'anthropic',
-  total_models: 1,
+  total_models: 1
 }
 
 const custom: ModelOptionProvider = {
@@ -59,7 +61,7 @@ const custom: ModelOptionProvider = {
   needs_api_base: true,
   slug: 'custom',
   total_models: 0,
-  warning: 'set key + base to activate',
+  warning: 'set key + base to activate'
 }
 
 const oauthProvider: ModelOptionProvider = {
@@ -72,7 +74,7 @@ const oauthProvider: ModelOptionProvider = {
   needs_api_base: false,
   slug: 'oauthvendor',
   total_models: 0,
-  warning: 'run raven model to authenticate',
+  warning: 'run raven model to authenticate'
 }
 
 interface Harness {
@@ -118,7 +120,7 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
       patchConsole: false,
       stderr: stderr as NodeJS.WriteStream,
       stdin: stdin as NodeJS.ReadStream,
-      stdout: stdout as NodeJS.WriteStream,
+      stdout: stdout as NodeJS.WriteStream
     }
   )
 
@@ -133,7 +135,7 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
     unmount: () => {
       instance.unmount()
       instance.cleanup()
-    },
+    }
   }
 }
 
@@ -219,7 +221,7 @@ describe('ModelPicker', () => {
 
   it('removes the selected model name via model.remove_model', async () => {
     const twoModels = { ...anthropic, models: ['claude-sonnet-4-6', 'claude-opus-4'], total_models: 2 }
-    const h = mount([twoModels], (method) => {
+    const h = mount([twoModels], method => {
       if (method === 'model.remove_model') {
         return { provider: { ...twoModels, models: ['claude-opus-4'], total_models: 1 } }
       }

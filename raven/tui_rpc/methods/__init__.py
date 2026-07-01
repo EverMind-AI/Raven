@@ -33,8 +33,8 @@ from raven.tui_rpc.methods.cli_dispatch import register_cli_methods
 from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
 from raven.tui_rpc.methods.confirm import register_confirm_methods
-from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.model import register_model_methods
+from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods

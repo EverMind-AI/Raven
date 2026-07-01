@@ -32,6 +32,7 @@ _TURN_FAILED_REPLY = "Sorry, I encountered an error."
 def _cid(req: TurnRequest) -> str:
     return req.conversation or f"{req.source.channel}:{req.source.chat_id}"
 
+
 # Origins whose submitter reads the turn's reply back to feed its own side effect
 # — only cron, which fills a system event from its reply. A delivery-only origin
 # (a channel user reply, or heartbeat: its reply rides emit -> hub -> outlet and
@@ -116,9 +117,7 @@ def build_gateway(
     user_pool: int = 4,
     system_pool: int = 2,
     send_max_retries: int = 3,
-) -> tuple[
-    Scheduler, DeliveryHub, dict[str, str], dict[str, Source], Callable[[], Awaitable[None]]
-]:
+) -> tuple[Scheduler, DeliveryHub, dict[str, str], dict[str, Source], Callable[[], Awaitable[None]]]:
     """Wire the gateway's spine pieces: a hub with a ChannelOutletAdapter per
     channel (so a reply reaches its target channel), and a Scheduler whose runner
     is the agent loop's non-streaming run_turn (proactive replies are one Text,

@@ -47,9 +47,10 @@ class ChannelManager:
                 logger.info("{} channel enabled", spec.display_name)
             except ImportError as e:
                 logger.warning(
-                    "{} channel disabled: missing dependency ({}). "
-                    "Run: uv sync --extra channel-{}",
-                    modname, e, modname,
+                    "{} channel disabled: missing dependency ({}). Run: uv sync --extra channel-{}",
+                    modname,
+                    e,
+                    modname,
                 )
 
         self._validate_allow_from()
@@ -99,10 +100,7 @@ class ChannelManager:
 
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""
-        return {
-            name: {"enabled": True, "running": channel.is_running}
-            for name, channel in self.channels.items()
-        }
+        return {name: {"enabled": True, "running": channel.is_running} for name, channel in self.channels.items()}
 
     @property
     def enabled_channels(self) -> list[str]:

@@ -49,14 +49,24 @@ def str_field(src: dict, *keys: str) -> str:
 
 
 def make_synthetic_event(
-    message_id: str, author: str, content: Any, meta: Any,
-    group_id: str, converse_id: str, timestamp: Any = None,
-    *, author_info: Any = None,
+    message_id: str,
+    author: str,
+    content: Any,
+    meta: Any,
+    group_id: str,
+    converse_id: str,
+    timestamp: Any = None,
+    *,
+    author_info: Any = None,
 ) -> dict[str, Any]:
     """Build a synthetic ``message.add`` event (used by the polling fallback)."""
     payload: dict[str, Any] = {
-        "messageId": message_id, "author": author, "content": content,
-        "meta": safe_dict(meta), "groupId": group_id, "converseId": converse_id,
+        "messageId": message_id,
+        "author": author,
+        "content": content,
+        "meta": safe_dict(meta),
+        "groupId": group_id,
+        "converseId": converse_id,
     }
     if author_info is not None:
         payload["authorInfo"] = safe_dict(author_info)
@@ -93,7 +103,7 @@ def resolve_target(raw: str) -> MochatTarget:
     cleaned, forced_panel = trimmed, False
     for prefix in ("mochat:", "group:", "channel:", "panel:"):
         if lowered.startswith(prefix):
-            cleaned = trimmed[len(prefix):].strip()
+            cleaned = trimmed[len(prefix) :].strip()
             forced_panel = prefix in {"group:", "channel:", "panel:"}
             break
     if not cleaned:
@@ -183,10 +193,7 @@ def build_entry(payload: dict[str, Any], timestamp: Any) -> MochatBufferedEntry:
 def mention_gate(config: MochatConfig, target_kind: str, target_id: str, group_id: str) -> tuple[bool, bool]:
     """Return ``(require_mention, use_delay)`` for a panel message. The caller
     drops the message when ``require_mention and not mentioned and not use_delay``."""
-    require_mention = (
-        target_kind == "panel" and bool(group_id)
-        and resolve_require_mention(config, target_id, group_id)
-    )
+    require_mention = target_kind == "panel" and bool(group_id) and resolve_require_mention(config, target_id, group_id)
     use_delay = target_kind == "panel" and config.reply_delay_mode == "non-mention"
     return require_mention, use_delay
 

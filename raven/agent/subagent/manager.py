@@ -44,6 +44,7 @@ class SubagentManager:
         max_spawns_per_hour: int = 30,
     ):
         from raven.config.schema import ExecToolConfig
+
         self.provider = provider
         self.workspace = workspace
         # Spine submit, late-bound (the scheduler pins its home loop at
@@ -87,7 +88,8 @@ class SubagentManager:
         if len(window) >= self._max_spawns_per_hour:
             logger.warning(
                 "Spawn refused: session {!r} hit spawn rate limit ({}/hour)",
-                quota_key, self._max_spawns_per_hour,
+                quota_key,
+                self._max_spawns_per_hour,
             )
             return (
                 f"Spawn refused: this session hit its subagent spawn rate limit "
@@ -100,9 +102,7 @@ class SubagentManager:
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id}
 
-        bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin)
-        )
+        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
@@ -157,13 +157,15 @@ class SubagentManager:
             tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-                path_append=self.exec_config.path_append,
-                executor=executor,
-            ))
+            tools.register(
+                ExecTool(
+                    working_dir=str(self.workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                    path_append=self.exec_config.path_append,
+                    executor=executor,
+                )
+            )
             tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
@@ -188,30 +190,33 @@ class SubagentManager:
                 )
 
                 if response.has_tool_calls:
-                    tool_call_dicts = [
-                        tc.to_openai_tool_call()
-                        for tc in response.tool_calls
-                    ]
-                    messages.append(build_assistant_message(
-                        response.content or "",
-                        tool_calls=tool_call_dicts,
-                        reasoning_content=response.reasoning_content,
-                        thinking_blocks=response.thinking_blocks,
-                    ))
+                    tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
+                    messages.append(
+                        build_assistant_message(
+                            response.content or "",
+                            tool_calls=tool_call_dicts,
+                            reasoning_content=response.reasoning_content,
+                            thinking_blocks=response.thinking_blocks,
+                        )
+                    )
 
                     # Execute tools
                     for tool_call in response.tool_calls:
                         args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                        logger.debug("Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str)
+                        logger.debug(
+                            "Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str
+                        )
                         result = await tools.execute(tool_call.name, tool_call.arguments)
                         # The subagent's loop is an untrusted-data path too — fence its
                         # tool output like the main loop does in add_tool_result.
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "content": wrap_untrusted(result, source=tool_call.name),
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.name,
+                                "content": wrap_untrusted(result, source=tool_call.name),
+                            }
+                        )
                 else:
                     final_result = response.content
                     break
@@ -269,16 +274,20 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         assert self._submit is not None
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
-        self._submit(TurnRequest(
-            origin=Origin.SUBAGENT,
-            source=Source(
-                channel=origin["channel"], chat_id=origin["chat_id"],
-                sender_id="subagent", chat_type=ChatType.DM,
-            ),
-            text=announce_content,
-            conversation=f"{origin['channel']}:{origin['chat_id']}",
-        ))
-        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
+        self._submit(
+            TurnRequest(
+                origin=Origin.SUBAGENT,
+                source=Source(
+                    channel=origin["channel"],
+                    chat_id=origin["chat_id"],
+                    sender_id="subagent",
+                    chat_type=ChatType.DM,
+                ),
+                text=announce_content,
+                conversation=f"{origin['channel']}:{origin['chat_id']}",
+            )
+        )
+        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin["channel"], origin["chat_id"])
 
     def _build_subagent_prompt(self) -> str:
         """Build a focused system prompt for the subagent."""
@@ -288,7 +297,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         # Use a transient ContextBuilder to access the runtime-context
         # builder; SubagentManager doesn't have its own ContextBuilder.
         time_ctx = ContextBuilder(self.workspace)._build_runtime_context(None, None)
-        parts = [f"""# Subagent
+        parts = [
+            f"""# Subagent
 
 {time_ctx}
 
@@ -296,10 +306,12 @@ You are a subagent spawned by the main agent to complete a specific task.
 Stay focused on the assigned task. Your final response will be reported back to the main agent.
 
 ## Workspace
-{self.workspace}"""]
+{self.workspace}"""
+        ]
 
         skills_summary = LocalSkillCatalog(
-            self.workspace, start_watcher=False,
+            self.workspace,
+            start_watcher=False,
         ).build_skills_summary()
         if skills_summary:
             parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
@@ -308,8 +320,11 @@ Stay focused on the assigned task. Your final response will be reported back to 
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
-        tasks = [self._running_tasks[tid] for tid in self._session_tasks.get(session_key, [])
-                 if tid in self._running_tasks and not self._running_tasks[tid].done()]
+        tasks = [
+            self._running_tasks[tid]
+            for tid in self._session_tasks.get(session_key, [])
+            if tid in self._running_tasks and not self._running_tasks[tid].done()
+        ]
         for t in tasks:
             t.cancel()
         if tasks:

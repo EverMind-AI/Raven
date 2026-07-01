@@ -3,7 +3,6 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { attachedImageNotice, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
 import type {
   BackgroundStartResponse,
   ConfigGetValueResponse,
@@ -15,13 +14,15 @@ import type {
   SessionUsageResponse,
   VoiceToggleResponse
 } from '../../../gatewayTypes.js'
+import type { PanelSection } from '../../../types.js'
+import type { SlashCommand } from '../types.js'
+
+import { attachedImageNotice, introMsg, toTranscriptMessages } from '../../../domain/messages.js'
 import { formatVoiceRecordKey, parseVoiceRecordKey } from '../../../lib/platform.js'
 import { fmtK } from '../../../lib/text.js'
-import type { PanelSection } from '../../../types.js'
 import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '../../interfaces.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
-import type { SlashCommand } from '../types.js'
 
 // v1 model switch is global-scope only. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
@@ -294,9 +295,7 @@ export const sessionCommands: SlashCommand[] = [
           const bareSessionId = (k: string) => (k.includes(':') ? k.slice(k.indexOf(':') + 1) : k)
           const messageCount = r.message_count ?? 0
           const title = r.title || '(untitled)'
-          ctx.transcript.sys(
-            `⑂ Forked "${title}" · ${messageCount} message${messageCount === 1 ? '' : 's'} carried`
-          )
+          ctx.transcript.sys(`⑂ Forked "${title}" · ${messageCount} message${messageCount === 1 ? '' : 's'} carried`)
           ctx.transcript.sys(`   parent  ${prevSid ? bareSessionId(prevSid) : '(none)'}`)
           ctx.transcript.sys(`   forked  ${bareSessionId(r.session_id)}`)
         })
@@ -507,31 +506,29 @@ export const sessionCommands: SlashCommand[] = [
           )
       }
 
-      ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', { key: 'reasoning', session_id: ctx.sid, value: arg })
-        .then(
-          ctx.guarded<ConfigSetResponse>(r => {
-            if (!r.value) {
-              return
-            }
+      ctx.gateway.rpc<ConfigSetResponse>('config.set', { key: 'reasoning', session_id: ctx.sid, value: arg }).then(
+        ctx.guarded<ConfigSetResponse>(r => {
+          if (!r.value) {
+            return
+          }
 
-            if (r.value === 'hide') {
-              patchUiState(state => ({
-                ...state,
-                sections: { ...state.sections, thinking: 'hidden' },
-                showReasoning: false
-              }))
-            } else if (r.value === 'show') {
-              patchUiState(state => ({
-                ...state,
-                sections: { ...state.sections, thinking: 'expanded' },
-                showReasoning: true
-              }))
-            }
+          if (r.value === 'hide') {
+            patchUiState(state => ({
+              ...state,
+              sections: { ...state.sections, thinking: 'hidden' },
+              showReasoning: false
+            }))
+          } else if (r.value === 'show') {
+            patchUiState(state => ({
+              ...state,
+              sections: { ...state.sections, thinking: 'expanded' },
+              showReasoning: true
+            }))
+          }
 
-            ctx.transcript.sys(`reasoning: ${r.value}`)
-          })
-        )
+          ctx.transcript.sys(`reasoning: ${r.value}`)
+        })
+      )
     }
   },
 

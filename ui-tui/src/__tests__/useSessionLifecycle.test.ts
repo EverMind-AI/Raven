@@ -1,10 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { GatewayRpc } from '../app/interfaces.js'
+
 import { getOverlayState, patchOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { performDeleteWithFallback, writeActiveSessionFile } from '../app/useSessionLifecycle.js'
 

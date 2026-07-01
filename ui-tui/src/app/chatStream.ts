@@ -29,9 +29,8 @@ import type {
   TurnEvent,
   TurnSendParams,
   TurnSendResult,
-  TurnSubscribeParams,
+  TurnSubscribeParams
 } from '../rpc/index.js'
-
 import type { Msg } from '../types.js'
 
 import { turnController } from './turnController.js'
@@ -50,7 +49,7 @@ export interface ChatStreamRpcClient {
     method: string,
     params: P,
     handler: (event: E) => void,
-    opts?: { unsubscribeMethod?: string },
+    opts?: { unsubscribeMethod?: string }
   ): Promise<{ subscription_id: string; unsubscribe: () => Promise<void> }>
 }
 
@@ -104,7 +103,7 @@ const dispatch = (
   state: InternalState,
   event: TurnEvent,
   sys?: (msg: string) => void,
-  appendMessage?: (msg: Msg) => void,
+  appendMessage?: (msg: Msg) => void
 ): void => {
   switch (event.type) {
     case 'message.start':
@@ -170,11 +169,7 @@ const onToolStart = (ev: ToolStartEvent): void => {
   const previewKey = Object.keys(args)[0]
   const previewVal = previewKey !== undefined ? args[previewKey] : undefined
   const context =
-    typeof previewVal === 'string'
-      ? previewVal
-      : previewVal !== undefined
-        ? JSON.stringify(previewVal)
-        : ''
+    typeof previewVal === 'string' ? previewVal : previewVal !== undefined ? JSON.stringify(previewVal) : ''
   turnController.recordToolStart(tool_call_id, name, context)
 }
 
@@ -187,7 +182,7 @@ const onToolComplete = (ev: ToolCompleteEvent): void => {
 const onMessageComplete = (
   state: InternalState,
   ev: MessageCompleteEvent,
-  appendMessage?: (msg: Msg) => void,
+  appendMessage?: (msg: Msg) => void
 ): void => {
   state.turnId = null
   // The typed message.complete carries `{turn_id, usage}` per CAP-CHAT-1
@@ -199,11 +194,9 @@ const onMessageComplete = (
   if (ev.payload.usage) {
     patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
   }
-  const { finalMessages, finalText, wasInterrupted } =
-    turnController.recordMessageComplete({})
+  const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete({})
   if (!wasInterrupted && appendMessage) {
-    const msgs: Msg[] =
-      finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
+    const msgs: Msg[] = finalMessages.length > 0 ? finalMessages : [{ role: 'assistant', text: finalText }]
     msgs.forEach(appendMessage)
   }
   patchUiState({ status: 'ready' })
@@ -248,7 +241,7 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
   const state: InternalState = {
     attached: false,
     unsubscribe: null,
-    turnId: null,
+    turnId: null
   }
 
   const watchdogMs = opts.watchdogMs ?? DEFAULT_WATCHDOG_MS
@@ -309,14 +302,14 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     const result = await opts.rpcClient.subscribe<TurnEvent, TurnSubscribeParams>(
       'turn.subscribe',
       params,
-      (event) => {
+      event => {
         // Any inbound event is the server ack proving the subscription is live
         // → disarm the ack watchdog. Terminal events additionally reset turn
         // state inside dispatch().
         clearWatchdog()
         dispatch(state, event, opts.sys, opts.appendMessage)
       },
-      { unsubscribeMethod: 'turn.unsubscribe' },
+      { unsubscribeMethod: 'turn.unsubscribe' }
     )
     state.unsubscribe = result.unsubscribe
     state.attached = true
@@ -343,7 +336,7 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     }
     const params: TurnSendParams = {
       session_key: opts.sessionKey,
-      content,
+      content
     }
     // Arm BEFORE the await so the ack watchdog covers a hung turn.send and so
     // the same-packet accept/message.start race always finds it armed (the
@@ -377,7 +370,7 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
       return
     }
     await opts.rpcClient.rpc<{ cancelled: boolean }, { session_key: string }>('turn.cancel', {
-      session_key: opts.sessionKey,
+      session_key: opts.sessionKey
     })
     // We do NOT clear state.turnId here — the server is expected to emit an
     // `error(reason=cancelled_by_client)` event that drives the actual

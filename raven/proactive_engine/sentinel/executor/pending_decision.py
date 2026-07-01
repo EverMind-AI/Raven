@@ -72,10 +72,7 @@ class PendingDecisionStore:
                     continue
                 if existing.is_expired(now_ms):
                     continue
-                same_addr = (
-                    existing.channel == decision.channel
-                    and existing.to == decision.to
-                )
+                same_addr = existing.channel == decision.channel and existing.to == decision.to
                 if same_addr and not existing.consumed:
                     superseded += 1
                     if existing.awaiting_confirm:
@@ -94,14 +91,17 @@ class PendingDecisionStore:
                         "PendingDecisionStore: superseded {} prior decision(s)"
                         " for ({}, {}) including {} in awaiting_confirm — "
                         "caller should notify user",
-                        superseded, decision.channel, decision.to,
+                        superseded,
+                        decision.channel,
+                        decision.to,
                         len(superseded_awaiting),
                     )
                 else:
                     logger.info(
-                        "PendingDecisionStore: superseded {} prior decision(s)"
-                        " for ({}, {})",
-                        superseded, decision.channel, decision.to,
+                        "PendingDecisionStore: superseded {} prior decision(s) for ({}, {})",
+                        superseded,
+                        decision.channel,
+                        decision.to,
                     )
             result["superseded_awaiting"] = superseded_awaiting
             return state
@@ -109,9 +109,7 @@ class PendingDecisionStore:
         self._store.update(_mutate)
         return result["superseded_awaiting"]
 
-    def get_recent(
-        self, channel: str, to: str, *, now_ms: int
-    ) -> PendingDecision | None:
+    def get_recent(self, channel: str, to: str, *, now_ms: int) -> PendingDecision | None:
         """Return the most-recent still-live (un-consumed, un-expired)
         decision for this (channel, to), or None."""
         raw_state = self._store.load()
@@ -163,9 +161,7 @@ class PendingDecisionStore:
                     d = self._raw_to_decision(raw)
                 except Exception:
                     continue
-                if (d.decision_id == decision_id
-                        and not d.consumed
-                        and not (require_pending and d.awaiting_confirm)):
+                if d.decision_id == decision_id and not d.consumed and not (require_pending and d.awaiting_confirm):
                     d.consumed = True
                     d.picked_option_id = picked_option_id
                     d.consumed_at_ms = consumed_at_ms
@@ -182,10 +178,10 @@ class PendingDecisionStore:
     # distinct cases (missing / already consumed / already awaiting) into
     # one False, which causes consumer code to silently misroute on
     # concurrent access. Callers can branch on the named result.
-    AWAIT_OK = "ok"               # transitioned pending → awaiting_confirm
-    AWAIT_NOT_FOUND = "not_found"      # decision_id not in store
-    AWAIT_CONSUMED = "consumed"        # already consumed (dismissed/picked-and-done)
-    AWAIT_ALREADY = "already_awaiting" # someone else already armed it
+    AWAIT_OK = "ok"  # transitioned pending → awaiting_confirm
+    AWAIT_NOT_FOUND = "not_found"  # decision_id not in store
+    AWAIT_CONSUMED = "consumed"  # already consumed (dismissed/picked-and-done)
+    AWAIT_ALREADY = "already_awaiting"  # someone else already armed it
 
     def mark_awaiting_confirm(
         self,
@@ -256,9 +252,7 @@ class PendingDecisionStore:
                     d = self._raw_to_decision(raw)
                 except Exception:
                     continue
-                if (d.decision_id == decision_id
-                        and not d.consumed
-                        and d.awaiting_confirm):
+                if d.decision_id == decision_id and not d.consumed and d.awaiting_confirm:
                     d.consumed = True
                     d.picked_option_id = None
                     d.consumed_at_ms = cancelled_at_ms
@@ -313,9 +307,10 @@ class PendingDecisionStore:
             out.append(d)
         return out
 
-
     def all_decisions(
-        self, *, include_consumed: bool = False,
+        self,
+        *,
+        include_consumed: bool = False,
         now_ms: int | None = None,
     ) -> list[PendingDecision]:
         """Return every decision in the store. Stable public surface

@@ -31,13 +31,40 @@ _MARKDOWN = create_markdown(
 )
 
 _ALLOWED_TAGS = {
-    "p", "a", "strong", "em", "del", "code", "pre", "blockquote",
-    "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6",
-    "hr", "br", "table", "thead", "tbody", "tr", "th", "td",
-    "caption", "sup", "sub", "img",
+    "p",
+    "a",
+    "strong",
+    "em",
+    "del",
+    "code",
+    "pre",
+    "blockquote",
+    "ul",
+    "ol",
+    "li",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "br",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
+    "caption",
+    "sup",
+    "sub",
+    "img",
 }
 _ALLOWED_ATTRS: dict[str, set[str]] = {
-    "a": {"href"}, "code": {"class"}, "ol": {"start"},
+    "a": {"href"},
+    "code": {"class"},
+    "ol": {"start"},
     "img": {"src", "alt", "title", "width", "height"},
 }
 _ALLOWED_SCHEMES = {"https", "http", "matrix", "mailto", "mxc"}
@@ -92,14 +119,21 @@ def build_text_content(text: str) -> dict[str, Any]:
 
 
 def build_attachment_content(
-    *, filename: str, mime: str, size_bytes: int,
-    mxc_url: str, encryption_info: dict[str, Any] | None = None,
+    *,
+    filename: str,
+    mime: str,
+    size_bytes: int,
+    mxc_url: str,
+    encryption_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the m.image/m.audio/m.video/m.file payload for an uploaded file."""
     msgtype = _KIND_TO_MSGTYPE.get(mime.split("/")[0], "m.file")
     content: dict[str, Any] = {
-        "msgtype": msgtype, "body": filename, "filename": filename,
-        "info": {"mimetype": mime, "size": size_bytes}, "m.mentions": {},
+        "msgtype": msgtype,
+        "body": filename,
+        "filename": filename,
+        "info": {"mimetype": mime, "size": size_bytes},
+        "m.mentions": {},
     }
     if encryption_info:
         content["file"] = {**encryption_info, "url": mxc_url}
@@ -119,8 +153,10 @@ def build_thread_relates_to(metadata: dict[str, Any] | None) -> dict[str, Any] |
     if not isinstance(reply_to, str) or not reply_to:
         return None
     return {
-        "rel_type": "m.thread", "event_id": root_id,
-        "m.in_reply_to": {"event_id": reply_to}, "is_falling_back": True,
+        "rel_type": "m.thread",
+        "event_id": root_id,
+        "m.in_reply_to": {"event_id": reply_to},
+        "is_falling_back": True,
     }
 
 
@@ -158,9 +194,11 @@ def attachment_kind(event: Any) -> str:
 
 
 def is_encrypted_media(event: Any) -> bool:
-    return (isinstance(getattr(event, "key", None), dict)
-            and isinstance(getattr(event, "hashes", None), dict)
-            and isinstance(getattr(event, "iv", None), str))
+    return (
+        isinstance(getattr(event, "key", None), dict)
+        and isinstance(getattr(event, "hashes", None), dict)
+        and isinstance(getattr(event, "iv", None), str)
+    )
 
 
 def declared_size_bytes(event: Any) -> int | None:

@@ -29,7 +29,6 @@ import raven
 from raven.memory_engine import Memory, MemoryBackend
 from raven.plugin import (
     PluginDiscovery,
-    PluginRegistry,
     ServiceLocator,
     Source,
     assemble_plugin_registry,
@@ -125,7 +124,8 @@ class TestActivationAndFactory:
         assert "everos" in reg.memory_backend_names()
 
     def test_build_returns_protocol_compliant_backend(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(

@@ -21,8 +21,7 @@ def test_legacy_attention_migrated(tmp_path: Path) -> None:
 
 def test_legacy_behaviors_migrated(tmp_path: Path) -> None:
     legacy = tmp_path / "BEHAVIORS.md"
-    legacy.write_text("## 2026-05-28 (Thu)\n\n### evt_x — 09:00–09:30\n",
-                      encoding="utf-8")
+    legacy.write_text("## 2026-05-28 (Thu)\n\n### evt_x — 09:00–09:30\n", encoding="utf-8")
 
     sync_workspace_templates(tmp_path, silent=True)
 

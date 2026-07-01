@@ -70,24 +70,16 @@ class CompositeHook(AgentHook):
     # Phase dispatchers
     # ─────────────────────────────────────────────────────────────────
 
-    async def before_user_inbound(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("before_user_inbound", ctx)
 
-    async def before_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("before_iteration", ctx)
 
-    async def before_execute_tools(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("before_execute_tools", ctx)
 
-    async def after_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         return await self._run_phase("after_iteration", ctx)
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
@@ -97,9 +89,7 @@ class CompositeHook(AgentHook):
     # Core dispatcher
     # ─────────────────────────────────────────────────────────────────
 
-    async def _run_phase(
-        self, phase: str, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def _run_phase(self, phase: str, ctx: AgentHookContext) -> HookDecision:
         """Invoke ``phase`` on every child hook, honoring short-circuit
         and content-chaining semantics.
 

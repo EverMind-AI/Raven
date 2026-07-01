@@ -103,9 +103,7 @@ def build_openclaw_config(
 
 def write_openclaw_home(dest: Path, config: dict[str, Any]) -> None:
     (dest / ".openclaw").mkdir(parents=True, exist_ok=True)
-    (dest / ".openclaw" / "openclaw.json").write_text(
-        json.dumps(config, indent=2, ensure_ascii=False)
-    )
+    (dest / ".openclaw" / "openclaw.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
 
 
 def build_subprocess_env(openclaw_home: Path) -> dict[str, str]:
@@ -193,11 +191,16 @@ def run_openclaw_one_shot(
     write_openclaw_home(home, config or build_openclaw_config())
 
     cli_args = [
-        "agent", "--local",
-        "--session-id", session_id,
-        "--message", prompt,
-        "--thinking", thinking,
-        "--timeout", str(cli_timeout_s),
+        "agent",
+        "--local",
+        "--session-id",
+        session_id,
+        "--message",
+        prompt,
+        "--thinking",
+        thinking,
+        "--timeout",
+        str(cli_timeout_s),
         "--json",
     ]
 
@@ -206,11 +209,17 @@ def run_openclaw_one_shot(
         safe_sid = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id[:16])
         container_name = f"oc-{safe_sid}-{time.monotonic_ns()}"
         cmd = [
-            "docker", "run", "--rm", "--init",
-            "--name", container_name,
-            "-v", f"{home}/.openclaw:/home/node/.openclaw",
+            "docker",
+            "run",
+            "--rm",
+            "--init",
+            "--name",
+            container_name,
+            "-v",
+            f"{home}/.openclaw:/home/node/.openclaw",
             docker_image,
-            "node", "dist/index.js",
+            "node",
+            "dist/index.js",
         ] + cli_args
         env = None
     else:
@@ -220,7 +229,10 @@ def run_openclaw_one_shot(
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, env=env, capture_output=True, text=True,
+            cmd,
+            env=env,
+            capture_output=True,
+            text=True,
             timeout=subprocess_timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
@@ -228,7 +240,8 @@ def run_openclaw_one_shot(
         if container_name:
             subprocess.run(
                 ["docker", "kill", container_name],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
         shutil.rmtree(home, ignore_errors=True)
         return {
@@ -244,6 +257,7 @@ def run_openclaw_one_shot(
             shutil.rmtree(home, ignore_errors=True)
         else:
             import sys as _sys
+
             print(f"OC_HOME_KEPT: {home}", file=_sys.stderr, flush=True)
 
     elapsed = round(time.monotonic() - started, 2)
@@ -253,14 +267,12 @@ def run_openclaw_one_shot(
     # becomes visible in the parent log.
     if os.environ.get("OC_DEBUG_TOOLS"):
         import sys as _sys
-        print(f"\n========== OC SUBPROCESS STDOUT ({len(proc.stdout)} chars) ==========",
-              file=_sys.stderr, flush=True)
+
+        print(f"\n========== OC SUBPROCESS STDOUT ({len(proc.stdout)} chars) ==========", file=_sys.stderr, flush=True)
         print(proc.stdout, file=_sys.stderr, flush=True)
-        print(f"========== OC SUBPROCESS STDERR ({len(proc.stderr)} chars) ==========",
-              file=_sys.stderr, flush=True)
+        print(f"========== OC SUBPROCESS STDERR ({len(proc.stderr)} chars) ==========", file=_sys.stderr, flush=True)
         print(proc.stderr, file=_sys.stderr, flush=True)
-        print("========== END OC SUBPROCESS DUMP ==========\n",
-              file=_sys.stderr, flush=True)
+        print("========== END OC SUBPROCESS DUMP ==========\n", file=_sys.stderr, flush=True)
 
     if proc.returncode != 0:
         return {

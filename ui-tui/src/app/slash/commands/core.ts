@@ -5,10 +5,6 @@
 
 import { forceRedraw } from '@hermes/ink'
 
-import { NO_CONFIRM_DESTRUCTIVE } from '../../../config/env.js'
-import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
-import { HOTKEYS } from '../../../content/hotkeys.js'
-import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
 import type {
   ConfigGetValueResponse,
   ConfigSetResponse,
@@ -18,14 +14,19 @@ import type {
   SessionTitleResponse,
   SessionUndoResponse
 } from '../../../gatewayTypes.js'
+import type { Msg, PanelSection } from '../../../types.js'
+import type { StatusBarMode } from '../../interfaces.js'
+import type { SlashCommand } from '../types.js'
+
+import { NO_CONFIRM_DESTRUCTIVE } from '../../../config/env.js'
+import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
+import { HOTKEYS } from '../../../content/hotkeys.js'
+import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
 import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
-import type { Msg, PanelSection } from '../../../types.js'
-import type { StatusBarMode } from '../../interfaces.js'
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
-import type { SlashCommand } from '../types.js'
 
 const flagFromArg = (arg: string, current: boolean): boolean | null => {
   if (!arg) {

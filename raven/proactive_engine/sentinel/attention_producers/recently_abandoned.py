@@ -35,8 +35,7 @@ class RecentlyAbandonedProducer(AttentionProducer):
     ) -> None:
         if abandon_days <= silence_days:
             raise ValueError(
-                f"abandon_days ({abandon_days}) must be > silence_days "
-                f"({silence_days})",
+                f"abandon_days ({abandon_days}) must be > silence_days ({silence_days})",
             )
         self._store = routine_store
         self._silence_ms = silence_days * 86_400_000
@@ -51,9 +50,12 @@ class RecentlyAbandonedProducer(AttentionProducer):
             if not r.last_triggered:
                 continue
             try:
-                last_ms = int(datetime.fromisoformat(
-                    r.last_triggered.replace("Z", "+00:00"),
-                ).timestamp() * 1000)
+                last_ms = int(
+                    datetime.fromisoformat(
+                        r.last_triggered.replace("Z", "+00:00"),
+                    ).timestamp()
+                    * 1000
+                )
             except (ValueError, AttributeError):
                 continue
             age = now_ms - last_ms

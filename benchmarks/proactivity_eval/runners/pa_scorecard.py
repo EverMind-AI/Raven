@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +57,7 @@ def _load(path: str | None) -> list[dict] | None:
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding='utf-8'))
+        return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
 
@@ -110,7 +110,10 @@ def _help_match_stats(rows: list[dict]) -> dict[str, Any]:
         "total": total,
         "match": total_match,
         "per_cat": per_cat,
-        "TP": TP, "FP": FP, "TN": TN, "FN": FN,
+        "TP": TP,
+        "FP": FP,
+        "TN": TN,
+        "FN": FN,
         "precision": precision,
         "recall": recall,
         "accuracy": accuracy,
@@ -129,7 +132,7 @@ def _fmt_rate(num: int, den: int) -> str:
 def _fmt_pct(num: int, den: int) -> str:
     if den == 0:
         return "—"
-    return f"{num/den*100:.0f}%"
+    return f"{num / den * 100:.0f}%"
 
 
 def _fmt_f1(f1: float, n: int) -> str:
@@ -163,7 +166,7 @@ def build_scorecard(
     out: list[str] = []
     out.append("# ProactiveBench Scorecard (reward_data S1 protocol)")
     out.append("")
-    out.append(f"Dataset: `data/pbench/test_data.jsonl` (stratified CD/CR/MN/FA)")
+    out.append("Dataset: `data/pbench/test_data.jsonl` (stratified CD/CR/MN/FA)")
     first_present = next((s for s in stats.values() if s), None)
     if first_present:
         out.append(f"Sample size: N = {first_present['total']}")
@@ -186,24 +189,19 @@ def build_scorecard(
     def row(label: str, values: list[str]) -> str:
         return "| " + " | ".join([label, *values]) + " |"
 
-    out.append(row("Accuracy (help_match)",
-                   [_fmt_pct(stats[k]["match"], stats[k]["total"])
-                    for k, _ in cols_present]))
-    out.append(row("F1",
-                   [_fmt_f1(stats[k]["f1"], stats[k]["total"])
-                    for k, _ in cols_present]))
-    out.append(row("Precision",
-                   [f"{stats[k]['precision']:.3f}" if stats[k]["total"] else "—"
-                    for k, _ in cols_present]))
-    out.append(row("Recall",
-                   [f"{stats[k]['recall']:.3f}" if stats[k]["total"] else "—"
-                    for k, _ in cols_present]))
-    out.append(row("False-alarm rate",
-                   [f"{stats[k]['false_alarm']:.3f}" if stats[k]["total"] else "—"
-                    for k, _ in cols_present]))
-    out.append(row("Parse failures",
-                   [str(stats[k]["parse_failures"])
-                    for k, _ in cols_present]))
+    out.append(row("Accuracy (help_match)", [_fmt_pct(stats[k]["match"], stats[k]["total"]) for k, _ in cols_present]))
+    out.append(row("F1", [_fmt_f1(stats[k]["f1"], stats[k]["total"]) for k, _ in cols_present]))
+    out.append(
+        row("Precision", [f"{stats[k]['precision']:.3f}" if stats[k]["total"] else "—" for k, _ in cols_present])
+    )
+    out.append(row("Recall", [f"{stats[k]['recall']:.3f}" if stats[k]["total"] else "—" for k, _ in cols_present]))
+    out.append(
+        row(
+            "False-alarm rate",
+            [f"{stats[k]['false_alarm']:.3f}" if stats[k]["total"] else "—" for k, _ in cols_present],
+        )
+    )
+    out.append(row("Parse failures", [str(stats[k]["parse_failures"]) for k, _ in cols_present]))
 
     out.append("")
     out.append("## Per-category help_match (match / total)")
@@ -231,11 +229,7 @@ def build_scorecard(
     out.append("## Cold → Warm deltas")
     out.append("")
     # Discover system bases: "<base>_cold" / "<base>_warm" pairs in data.
-    bases = sorted({
-        k.rsplit("_", 1)[0]
-        for k in data
-        if k.endswith("_cold") or k.endswith("_warm")
-    })
+    bases = sorted({k.rsplit("_", 1)[0] for k in data if k.endswith("_cold") or k.endswith("_warm")})
     out.append("| System | Δ accuracy | Δ F1 | Δ false-alarm |")
     out.append("|---|---|---|---|")
     for base in bases:
@@ -245,7 +239,7 @@ def build_scorecard(
         if not cs or not ws or cs["total"] == 0 or ws["total"] == 0:
             out.append(f"| {display} | — | — | — |")
             continue
-        d_acc = ws["match"]/ws["total"] - cs["match"]/cs["total"]
+        d_acc = ws["match"] / ws["total"] - cs["match"] / cs["total"]
         d_f1 = ws["f1"] - cs["f1"]
         d_fa = ws["false_alarm"] - cs["false_alarm"]
         out.append(f"| {display} | {d_acc:+.1%} | {d_f1:+.3f} | {d_fa:+.3f} |")
@@ -258,9 +252,10 @@ def build_scorecard(
     out.append("|---|---|---|---|")
     for k, label in cols_present:
         rows_k = data[k] or []
-        elapsed = [r.get("agent", {}).get("elapsed_s")
-                   for r in rows_k if r.get("agent", {}).get("elapsed_s") is not None]
-        mean_e = f"{sum(elapsed)/len(elapsed):.1f}s" if elapsed else "—"
+        elapsed = [
+            r.get("agent", {}).get("elapsed_s") for r in rows_k if r.get("agent", {}).get("elapsed_s") is not None
+        ]
+        mean_e = f"{sum(elapsed) / len(elapsed):.1f}s" if elapsed else "—"
         pf = stats[k]["parse_failures"] if stats[k] else "—"
         out.append(f"| {label} | {len(rows_k)} | {mean_e} | {pf} |")
 
@@ -283,15 +278,18 @@ def _parse_input_spec(specs: list[str]) -> dict[str, str]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Aggregate reward_data adapter outputs into a markdown scorecard."
-    )
+    ap = argparse.ArgumentParser(description="Aggregate reward_data adapter outputs into a markdown scorecard.")
     ap.add_argument(
-        "--input", action="append", default=[], metavar="NAME=PATH",
-        help=("one per system/mode, e.g. "
-              "--input ec_agent_warm=output/pa-ec-agent-warm.json. "
-              "Repeat for each system. Names ending in _cold or _warm are "
-              "grouped in the cold→warm deltas table."),
+        "--input",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "one per system/mode, e.g. "
+            "--input ec_agent_warm=output/pa-ec-agent-warm.json. "
+            "Repeat for each system. Names ending in _cold or _warm are "
+            "grouped in the cold→warm deltas table."
+        ),
     )
     # Legacy shorthands — kept so old scripts keep working. Each expands into
     # an entry in the `data` dict with the corresponding key.
@@ -310,9 +308,16 @@ def main() -> None:
 
     specs = _parse_input_spec(args.input)
     for flag_name in (
-        "planner_cold", "planner_warm", "ec_agent_cold", "ec_agent_warm",
-        "ec_sentinel_cold", "ec_sentinel_warm",
-        "hermes_cold", "hermes_warm", "openclaw_cold", "openclaw_warm",
+        "planner_cold",
+        "planner_warm",
+        "ec_agent_cold",
+        "ec_agent_warm",
+        "ec_sentinel_cold",
+        "ec_sentinel_warm",
+        "hermes_cold",
+        "hermes_warm",
+        "openclaw_cold",
+        "openclaw_warm",
     ):
         val = getattr(args, flag_name)
         if val:
@@ -324,7 +329,7 @@ def main() -> None:
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(md, encoding='utf-8')
+        out.write_text(md, encoding="utf-8")
         print(f"PA scorecard saved to {out}")
     else:
         print(md)

@@ -5,13 +5,14 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Msg } from '../types.js'
+
 import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { estimateTokensRough } from '../lib/text.js'
-import type { Msg } from '../types.js'
 
 const ref = <T>(current: T) => ({ current })
 
@@ -147,9 +148,7 @@ describe('createGatewayEventHandler', () => {
       type: 'review.summary'
     } as any)
 
-    expect(ctx.system.sys).toHaveBeenCalledWith(
-      "💾 Self-improvement review: Skill 'raven-release' patched"
-    )
+    expect(ctx.system.sys).toHaveBeenCalledWith("💾 Self-improvement review: Skill 'raven-release' patched")
   })
 
   it('ignores review.summary events with empty or missing text', () => {

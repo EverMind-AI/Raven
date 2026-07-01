@@ -40,16 +40,16 @@ from raven.proactive_engine.sentinel.types import (
 
 if TYPE_CHECKING:
     from raven.memory_engine.consolidate.consolidator import MemoryStore
-    from raven.providers.base import LLMProvider
-    from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
-    from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
     from raven.proactive_engine.sentinel.executor.dispatcher import NudgeDispatcher
-    from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
     from raven.proactive_engine.sentinel.executor.pending_decision import PendingDecisionStore
+    from raven.proactive_engine.sentinel.feedback.tracker import NudgeFeedbackTracker
+    from raven.proactive_engine.sentinel.predictor.context_assembler import ContextAssembler
     from raven.proactive_engine.sentinel.predictor.routine_aggregator import RoutineAggregator
     from raven.proactive_engine.sentinel.predictor.routine_learner import RoutineLearner
-    from raven.proactive_engine.sentinel.predictor.routine_validator import RoutineValidator
     from raven.proactive_engine.sentinel.predictor.routine_store import RoutineStore
+    from raven.proactive_engine.sentinel.predictor.routine_validator import RoutineValidator
+    from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
+    from raven.providers.base import LLMProvider
 
 
 # History lookback for the discovery prompt — long enough to capture
@@ -115,9 +115,7 @@ class TaskDiscoverer:
     # ------------------------------------------------------------------
     # Public — run one discovery pass
 
-    async def run(
-        self, *, channel: str, to: str
-    ) -> PendingDecision | None:
+    async def run(self, *, channel: str, to: str) -> PendingDecision | None:
         """Run discovery once for the given (channel, to). Returns the
         persisted PendingDecision (and dispatches the menu) on success,
         or None if the LLM declined to emit options.
@@ -133,9 +131,7 @@ class TaskDiscoverer:
     # ------------------------------------------------------------------
     # Internals
 
-    async def _run_inner(
-        self, *, channel: str, to: str
-    ) -> PendingDecision | None:
+    async def _run_inner(self, *, channel: str, to: str) -> PendingDecision | None:
         now = self._now_fn()
         now_ms = int(now.timestamp() * 1000)
         since_ms = now_ms - self.history_lookback_hours * 60 * 60_000
@@ -172,12 +168,12 @@ class TaskDiscoverer:
         )
 
         options = self._parse_options(response, now_ms=now_ms)
-        options = self._annotate_overdue(options, now)[:self.max_options]
+        options = self._annotate_overdue(options, now)[: self.max_options]
         if not options:
             logger.info(
-                "TaskDiscoverer: LLM emitted 0 options — skipping today's "
-                "menu for ({}, {})",
-                channel, to,
+                "TaskDiscoverer: LLM emitted 0 options — skipping today's menu for ({}, {})",
+                channel,
+                to,
             )
             return None
 
@@ -194,6 +190,7 @@ class TaskDiscoverer:
         # Render preview now so NudgePolicy.check sees the same content
         # that will dispatch (content is used for the dedup hash).
         from raven.proactive_engine.sentinel.executor.dispatcher import render_menu_markdown
+
         session_key = f"{channel}:{to}"
         menu_preview = render_menu_markdown(decision)
 
@@ -201,14 +198,16 @@ class TaskDiscoverer:
         # quiet_hours / quota / cooldown / dedup rules as reactive nudges.
         if self.policy is not None:
             check = self.policy.check(
-                "nudge", session_key=session_key,
-                content=menu_preview, priority="medium",
+                "nudge",
+                session_key=session_key,
+                content=menu_preview,
+                priority="medium",
             )
             if check.verdict == "deny":
                 logger.info(
-                    "TaskDiscoverer: discovery dispatch denied by NudgePolicy"
-                    " for {} — reason={!r}",
-                    session_key, check.reason,
+                    "TaskDiscoverer: discovery dispatch denied by NudgePolicy for {} — reason={!r}",
+                    session_key,
+                    check.reason,
                 )
                 return None
 
@@ -220,7 +219,9 @@ class TaskDiscoverer:
         except Exception as exc:
             logger.warning(
                 "TaskDiscoverer: dispatch_options failed for {}: {}: {}",
-                decision_id, type(exc).__name__, exc,
+                decision_id,
+                type(exc).__name__,
+                exc,
             )
             # Keep the decision persisted so user can respond once channel
             # is back; TTL handles eventual cleanup. Skip the supersede
@@ -233,7 +234,8 @@ class TaskDiscoverer:
         # notice promises a menu that never comes).
         if superseded_awaiting:
             await self._notify_superseded_awaiting(
-                channel=channel, to=to,
+                channel=channel,
+                to=to,
                 superseded_ids=superseded_awaiting,
             )
 
@@ -242,12 +244,14 @@ class TaskDiscoverer:
         if self.policy is not None:
             try:
                 self.policy.record_fired(
-                    "nudge", session_key=session_key,
+                    "nudge",
+                    session_key=session_key,
                     content=menu_preview,
                 )
             except Exception as exc:
                 logger.warning(
-                    "TaskDiscoverer: policy.record_fired failed: {}", exc,
+                    "TaskDiscoverer: policy.record_fired failed: {}",
+                    exc,
                 )
 
         # Feed adaptive tuning's 7-day rolling acceptance rate.
@@ -270,7 +274,10 @@ class TaskDiscoverer:
 
         logger.info(
             "TaskDiscoverer: dispatched menu {} with {} options to ({}, {})",
-            decision_id, len(options), channel, to,
+            decision_id,
+            len(options),
+            channel,
+            to,
         )
         return decision
 
@@ -288,10 +295,7 @@ class TaskDiscoverer:
         by today's fresh menu. Prevents the silent-data-loss footgun
         where a user replied '/pick 2' and is mid-confirm when a new
         discovery run drops the original menu."""
-        notice = (
-            "ℹ️ 您之前未确认的任务建议已被今天的新菜单替换。"
-            "如需继续之前的选择，请在新菜单中重新挑选。"
-        )
+        notice = "ℹ️ 您之前未确认的任务建议已被今天的新菜单替换。如需继续之前的选择，请在新菜单中重新挑选。"
         try:
             assert self._submit is not None
             from raven.spine import ChatType, Origin, Source, TurnRequest
@@ -299,23 +303,25 @@ class TaskDiscoverer:
             # Fire-and-forget: the notice turn's output is not read back, and the
             # reply rides emit -> hub -> outlet. Consistent with the action-reply
             # path.
-            self._submit(TurnRequest(
-                origin=Origin.SENTINEL,
-                source=Source(
-                    channel=channel, chat_id=to, sender_id="sentinel", chat_type=ChatType.DM
-                ),
-                text=notice,
-                conversation=f"{channel}:{to}",
-            ))
+            self._submit(
+                TurnRequest(
+                    origin=Origin.SENTINEL,
+                    source=Source(channel=channel, chat_id=to, sender_id="sentinel", chat_type=ChatType.DM),
+                    text=notice,
+                    conversation=f"{channel}:{to}",
+                )
+            )
             logger.warning(
-                "TaskDiscoverer: superseded {} awaiting-confirm "
-                "decision(s) for ({}, {}); user notified",
-                len(superseded_ids), channel, to,
+                "TaskDiscoverer: superseded {} awaiting-confirm decision(s) for ({}, {}); user notified",
+                len(superseded_ids),
+                channel,
+                to,
             )
         except Exception as exc:
             logger.warning(
                 "TaskDiscoverer: superseded notify failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
 
     # ------------------------------------------------------------------
@@ -331,9 +337,7 @@ class TaskDiscoverer:
         try:
             history_full = ""
             if self.memory_store.history_file.exists():
-                history_full = self.memory_store.history_file.read_text(
-                    encoding="utf-8"
-                )
+                history_full = self.memory_store.history_file.read_text(encoding="utf-8")
             learned = self.routine_learner.learn_with_decay(
                 history_full,
                 half_life_days=self.routine_half_life_days,
@@ -342,7 +346,8 @@ class TaskDiscoverer:
         except Exception as exc:
             logger.warning(
                 "TaskDiscoverer._refresh_routines failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
 
     async def _validate_uncached_routines(self, *, now_ms: int) -> None:
@@ -359,13 +364,12 @@ class TaskDiscoverer:
         except Exception as exc:
             logger.warning(
                 "RoutineValidator: store.candidates() failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
             return
         uncached = [
-            r for r in candidates
-            if r.llm_validation is None
-            and r.occurrence_count >= self.min_occurrences_to_surface
+            r for r in candidates if r.llm_validation is None and r.occurrence_count >= self.min_occurrences_to_surface
         ]
         if not uncached:
             return
@@ -382,13 +386,17 @@ class TaskDiscoverer:
         for r in uncached:
             try:
                 verdict = await self.routine_validator.validate(
-                    r, history_md, now_ms=now_ms,
+                    r,
+                    history_md,
+                    now_ms=now_ms,
                 )
             except Exception as exc:
                 errors += 1
                 logger.warning(
                     "RoutineValidator.validate raised for {}: {}: {}",
-                    r.id, type(exc).__name__, exc,
+                    r.id,
+                    type(exc).__name__,
+                    exc,
                 )
                 continue
             if verdict is None:
@@ -404,12 +412,15 @@ class TaskDiscoverer:
             except Exception as exc:
                 logger.warning(
                     "RoutineStore.set_llm_validation failed for {}: {}",
-                    r.id, exc,
+                    r.id,
+                    exc,
                 )
         logger.info(
-            "RoutineValidator: validated {} candidates → "
-            "{} accepted, {} rejected, {} errors",
-            len(uncached), accepted, rejected, errors,
+            "RoutineValidator: validated {} candidates → {} accepted, {} rejected, {} errors",
+            len(uncached),
+            accepted,
+            rejected,
+            errors,
         )
 
     async def _aggregate_routines(self) -> None:
@@ -426,7 +437,8 @@ class TaskDiscoverer:
         except Exception as exc:
             logger.warning(
                 "TaskDiscoverer._aggregate_routines failed: {}: {}",
-                type(exc).__name__, exc,
+                type(exc).__name__,
+                exc,
             )
 
     def _format_candidate_routines(self, now_ms: int) -> str:
@@ -451,10 +463,7 @@ class TaskDiscoverer:
         lines: list[str] = []
         for r in qualified[:6]:
             descr = r.description or r.pattern
-            lines.append(
-                f"- {r.id}: {descr} (count={r.occurrence_count}, "
-                f"weight={r.weight:.2f})"
-            )
+            lines.append(f"- {r.id}: {descr} (count={r.occurrence_count}, weight={r.weight:.2f})")
         return "\n".join(lines)
 
     def _format_fire_history(self) -> str:
@@ -520,8 +529,7 @@ class TaskDiscoverer:
             if not isinstance(raw, dict):
                 continue
             try:
-                option = self._raw_to_option(raw, now_ms=now_ms,
-                                              seen_ids=seen_ids)
+                option = self._raw_to_option(raw, now_ms=now_ms, seen_ids=seen_ids)
             except Exception as exc:
                 logger.warning("TaskDiscoverer: bad option {!r}: {}", raw, exc)
                 continue
@@ -536,7 +544,8 @@ class TaskDiscoverer:
 
     @staticmethod
     def _annotate_overdue(
-        options: list[TaskOption], now: datetime,
+        options: list[TaskOption],
+        now: datetime,
     ) -> list[TaskOption]:
         """Flag past-deadline options and float them to the front.
 

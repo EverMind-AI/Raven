@@ -42,7 +42,7 @@ class DingTalkCallbackHandler(CallbackHandler):
         try:
             chatbot_msg = ChatbotMessage.from_dict(message.data)
             parsed = parsing.parse_inbound(chatbot_msg, message.data)
-            if not self.channel.is_allowed(parsed.sender_id):   # reject before file download
+            if not self.channel.is_allowed(parsed.sender_id):  # reject before file download
                 return AckMessage.STATUS_OK, "OK"
 
             text = parsed.text
@@ -65,8 +65,12 @@ class DingTalkCallbackHandler(CallbackHandler):
             logger.info("Received DingTalk message from {} ({}): {}", parsed.sender_name, parsed.sender_id, text)
             self.channel._spawn(
                 self.channel._on_message(
-                    text, parsed.sender_id, parsed.sender_name,
-                    parsed.conversation_type, parsed.conversation_id, file_paths,
+                    text,
+                    parsed.sender_id,
+                    parsed.sender_name,
+                    parsed.conversation_type,
+                    parsed.conversation_id,
+                    file_paths,
                 )
             )
             return AckMessage.STATUS_OK, "OK"
@@ -148,8 +152,12 @@ class DingTalkChannel(ChannelBase):
         return str(path)
 
     async def _on_message(
-        self, content: str, sender_id: str, sender_name: str,
-        conversation_type: str | None = None, conversation_id: str | None = None,
+        self,
+        content: str,
+        sender_id: str,
+        sender_name: str,
+        conversation_type: str | None = None,
+        conversation_id: str | None = None,
         file_paths: list[str] | None = None,
     ) -> None:
         """Hand a parsed message to the spine via Intake, which enforces the
@@ -204,7 +212,9 @@ class DingTalkChannel(ChannelBase):
             return False
 
         filename = filename or parsing.guess_filename(media_ref, upload_type)
-        file_type = Path(filename).suffix.lower().lstrip(".") or (mimetypes.guess_extension(content_type or "") or ".bin").lstrip(".")
+        file_type = Path(filename).suffix.lower().lstrip(".") or (
+            mimetypes.guess_extension(content_type or "") or ".bin"
+        ).lstrip(".")
         if file_type == "jpeg":
             file_type = "jpg"
         mime = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"

@@ -188,8 +188,12 @@ const YELLOW_RAMP_16: readonly string[] = [
 ]
 
 function yellowRamp(tier: 0 | 1 | 2 | 3, scheme: ColorScheme): readonly string[] {
-  if (tier === 2) return scheme === 'light' ? YELLOW_RAMP_256_LIGHT : YELLOW_RAMP_256_DARK
-  if (tier === 1) return YELLOW_RAMP_16
+  if (tier === 2) {
+    return scheme === 'light' ? YELLOW_RAMP_256_LIGHT : YELLOW_RAMP_256_DARK
+  }
+  if (tier === 1) {
+    return YELLOW_RAMP_16
+  }
   return scheme === 'light' ? YELLOW_RAMP_TC_LIGHT : YELLOW_RAMP_TC_DARK
 }
 
@@ -430,13 +434,21 @@ const LIGHT_16: Theme = { ...LIGHT_THEME, color: LIGHT_16_COLORS, yellow: YELLOW
  */
 export function resolveTheme(scheme: ColorScheme, tier: 0 | 1 | 2 | 3): Theme {
   if (scheme === 'light') {
-    if (tier === 2) return LIGHT_256
-    if (tier === 1) return LIGHT_16
+    if (tier === 2) {
+      return LIGHT_256
+    }
+    if (tier === 1) {
+      return LIGHT_16
+    }
     return LIGHT_THEME
   }
 
-  if (tier === 2) return DARK_256
-  if (tier === 1) return DARK_16
+  if (tier === 2) {
+    return DARK_256
+  }
+  if (tier === 1) {
+    return DARK_16
+  }
   return DARK_THEME
 }
 
@@ -711,9 +723,7 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     statusBad: base.statusBad,
     statusCritical: base.statusCritical,
     selectionBg:
-      c('selection_bg') ??
-      c('completion_menu_current_bg') ??
-      (hasSkinColors ? completionCurrentBg : base.selectionBg),
+      c('selection_bg') ?? c('completion_menu_current_bg') ?? (hasSkinColors ? completionCurrentBg : base.selectionBg),
 
     diffAdded: base.diffAdded,
     diffRemoved: base.diffRemoved,

@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 BENCHMARKS_ROOT = SCRIPT_DIR.parent
 PROJECT_ROOT = BENCHMARKS_ROOT.parent
@@ -54,9 +53,7 @@ class UsageTrackingProvider:
         self.per_call: list[dict[str, Any]] = []
 
     async def chat_with_retry(self, messages, tools=None, model=None, **kwargs):
-        response = await self._inner.chat_with_retry(
-            messages, tools=tools, model=model, **kwargs
-        )
+        response = await self._inner.chat_with_retry(messages, tools=tools, model=model, **kwargs)
         usage = response.usage or {}
         prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
         completion_tokens = int(usage.get("completion_tokens", 0) or 0)
@@ -102,8 +99,8 @@ class RavenSession:
     ) -> None:
         from raven.agent.loop import AgentLoop
         from raven.cli.commands import _make_provider
-        from raven.config.raven import ContextConfig
         from raven.config.loader import load_config, set_config_path
+        from raven.config.raven import ContextConfig
         from raven.session.manager import SessionManager
 
         workspace.mkdir(parents=True, exist_ok=True)
@@ -129,9 +126,7 @@ class RavenSession:
         self.config.agents.defaults.workspace = str(workspace.resolve())
         self.provider = UsageTrackingProvider(_make_provider(self.config))
         self.model = self.config.agents.defaults.model
-        self.context_window = int(
-            context_window or self.config.agents.defaults.context_window_tokens
-        )
+        self.context_window = int(context_window or self.config.agents.defaults.context_window_tokens)
         self.curator_model = curator_model or self.model
         self.session_id = session_id
         self.previous_totals = dict(self.provider.accumulated)
@@ -180,9 +175,7 @@ class RavenSession:
         await self.agent.run_turn(
             TurnRequest(
                 origin=Origin.USER,
-                source=Source(
-                    channel="benchmark", chat_id=task_id, sender_id="user", chat_type=ChatType.DM
-                ),
+                source=Source(channel="benchmark", chat_id=task_id, sender_id="user", chat_type=ChatType.DM),
                 text=message,
                 conversation=self.session_id,
             ),
@@ -196,9 +189,7 @@ class RavenSession:
         self.previous_call_count = len(self.provider.per_call)
         calls = self.provider.per_call[before_calls:]
         last = calls[-1] if calls else {}
-        context_used = int(last.get("prompt_tokens", 0) or 0) + int(
-            last.get("completion_tokens", 0) or 0
-        )
+        context_used = int(last.get("prompt_tokens", 0) or 0) + int(last.get("completion_tokens", 0) or 0)
         return final_text or "", {
             "model_calls": len(calls),
             "call_usage_delta": self._delta(after, before),
@@ -207,14 +198,10 @@ class RavenSession:
             "context_window": self.context_window,
             "context_used": context_used,
             "context_remaining": self.context_window - context_used,
-            "context_used_pct": round(context_used / self.context_window, 4)
-            if self.context_window
-            else None,
+            "context_used_pct": round(context_used / self.context_window, 4) if self.context_window else None,
             "models_used": [call.get("model") for call in calls],
             "context_engine": self.agent.context_engine.name,
-            "curator_model": self.curator_model
-            if self.agent.context_engine.name == "curator"
-            else None,
+            "curator_model": self.curator_model if self.agent.context_engine.name == "curator" else None,
             "note": (
                 "context_used is final call prompt_tokens plus completion_tokens; "
                 "session_usage_total is cumulative across the streaming session"
@@ -318,9 +305,7 @@ def build_prompt(task: Any, task_dir: Path, workspace: Path, index: int, total: 
     )
 
 
-def prepare_task(
-    *, task: Any, task_dir: Path, workspace_root: Path, index: int, total: int
-) -> PreparedTask:
+def prepare_task(*, task: Any, task_dir: Path, workspace_root: Path, index: int, total: int) -> PreparedTask:
     workspace = workspace_root / f"{index:03d}_{safe_name(task.id)}"
     if workspace.exists():
         shutil.rmtree(workspace)
@@ -383,9 +368,7 @@ async def run_one_task(
         index=index,
         total=total,
     )
-    (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.prompt.txt").write_text(
-        prepared.prompt, encoding="utf-8"
-    )
+    (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.prompt.txt").write_text(prepared.prompt, encoding="utf-8")
 
     started = time.monotonic()
     final_text = ""
@@ -398,13 +381,9 @@ async def run_one_task(
         )
     except Exception as exc:
         error = str(exc)
-    (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.final.txt").write_text(
-        final_text, encoding="utf-8"
-    )
+    (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.final.txt").write_text(final_text, encoding="utf-8")
     if error:
-        (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.error.txt").write_text(
-            error, encoding="utf-8"
-        )
+        (transcripts_dir / f"{index:03d}_{safe_name(task.id)}.error.txt").write_text(error, encoding="utf-8")
 
     grade = (
         grade_task(task_dir, prepared.workspace)
@@ -500,9 +479,7 @@ def write_markdown(
         f"- Model: `{model}`",
         f"- Session: `{args.session_id}`",
         f"- Context engine: `{args.context_engine}`",
-        f"- Curator model: `{args.curator_model}`"
-        if args.context_engine == "curator"
-        else "- Curator model: n/a",
+        f"- Curator model: `{args.curator_model}`" if args.context_engine == "curator" else "- Curator model: n/a",
         f"- Max iterations: `{args.max_iterations}`",
         f"- Summary JSON: `{summary_path}`" if summary_path else "- Summary JSON: pending",
         f"- Tasks completed: {total}",
@@ -637,9 +614,7 @@ async def amain() -> int:
         "trace_run_dir": str(run_dir),
         "tasks_total": len(results),
         "tasks_passed": sum(1 for r in results if r.get("passed")),
-        "average_score": round(
-            sum(float(r.get("score", 0.0)) for r in results) / max(len(results), 1), 4
-        ),
+        "average_score": round(sum(float(r.get("score", 0.0)) for r in results) / max(len(results), 1), 4),
         "results": results,
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

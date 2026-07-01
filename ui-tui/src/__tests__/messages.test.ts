@@ -3,10 +3,9 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { PassThrough } from 'stream'
-
 import { renderSync } from '@hermes/ink'
 import React from 'react'
+import { PassThrough } from 'stream'
 import { describe, expect, it } from 'vitest'
 
 import { MessageLine } from '../components/messageLine.js'

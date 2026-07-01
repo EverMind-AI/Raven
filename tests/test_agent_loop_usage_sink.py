@@ -16,9 +16,9 @@ import httpx
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
-from raven.providers.base import LLMProvider, LLMResponse
 from raven.token_wise import pricing
 
 # The real fetch, captured before conftest's autouse guard stubs it to {}.
@@ -37,8 +37,16 @@ class UsageProvider(LLMProvider):
             "total_tokens": prompt_tokens + completion_tokens,
         }
 
-    async def chat(self, messages, tools=None, model=None, max_tokens=4096,
-                   temperature=0.7, reasoning_effort=None, tool_choice=None):
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
         return LLMResponse(content="ok", finish_reason="stop", usage=self._usage)
 
     def get_default_model(self) -> str:
@@ -95,11 +103,13 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
 @pytest.mark.asyncio
 async def test_usage_sink_context_max_from_live_openrouter(workspace, monkeypatch):
     """An OpenRouter model LiteLLM lags on gets its real window from /models."""
-    models = [{
-        "id": "deepseek/deepseek-v4-pro",
-        "context_length": 163840,
-        "pricing": {"prompt": "0.0000005", "completion": "0.0000015"},
-    }]
+    models = [
+        {
+            "id": "deepseek/deepseek-v4-pro",
+            "context_length": 163840,
+            "pricing": {"prompt": "0.0000005", "completion": "0.0000015"},
+        }
+    ]
 
     def handler(_req):
         return httpx.Response(200, content=json.dumps({"data": models}))
@@ -116,7 +126,10 @@ async def test_usage_sink_context_max_from_live_openrouter(workspace, monkeypatc
 
     provider = UsageProvider("openrouter/deepseek/deepseek-v4-pro", 1000, 500)
     agent = _make_agent(
-        workspace, provider, model="openrouter/deepseek/deepseek-v4-pro", window=8192,
+        workspace,
+        provider,
+        model="openrouter/deepseek/deepseek-v4-pro",
+        window=8192,
     )
     sink: dict = {}
 

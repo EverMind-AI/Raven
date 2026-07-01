@@ -31,10 +31,12 @@ _INNER_MODULE = Path(__file__).resolve().parent / "hermes_inner.py"
 
 
 def _find_hermes_python(hermes_src: Path) -> str:
-    for cand in (hermes_src / "venv" / "bin" / "python3",
-                 hermes_src / "venv" / "bin" / "python",
-                 hermes_src / ".venv" / "bin" / "python3",
-                 hermes_src / ".venv" / "bin" / "python"):
+    for cand in (
+        hermes_src / "venv" / "bin" / "python3",
+        hermes_src / "venv" / "bin" / "python",
+        hermes_src / ".venv" / "bin" / "python3",
+        hermes_src / ".venv" / "bin" / "python",
+    ):
         if cand.exists():
             return str(cand)
     return sys.executable
@@ -61,36 +63,29 @@ class HermesBackend(AgentBackend):
             )
         self.hermes_src = Path(hermes_src_raw).resolve()
         if not (self.hermes_src / "cron" / "scheduler.py").exists():
-            raise RuntimeError(
-                f"{self.hermes_src} is not a hermes-agent checkout "
-                "(missing cron/scheduler.py)"
-            )
+            raise RuntimeError(f"{self.hermes_src} is not a hermes-agent checkout (missing cron/scheduler.py)")
 
-        self.inherit_home = bool(
-            overrides.get("inherit_home",
-                          agent_cfg.get("inherit_home", True))
-        )
+        self.inherit_home = bool(overrides.get("inherit_home", agent_cfg.get("inherit_home", True)))
         self.subprocess_timeout_s = int(
-            overrides.get("subprocess_timeout_s")
-            or agent_cfg.get("subprocess_timeout_s") or 300
+            overrides.get("subprocess_timeout_s") or agent_cfg.get("subprocess_timeout_s") or 300
         )
         self.with_memory = bool(overrides.get("with_memory", False))
         self.python_exe = _find_hermes_python(self.hermes_src)
 
         # One-shot: bypass proxy for the Hermes-configured LAN vLLM host.
-        hermes_model_cfg = (load_config_from_hermes_home().get("model") or {})
+        hermes_model_cfg = load_config_from_hermes_home().get("model") or {}
         if isinstance(hermes_model_cfg, dict) and hermes_model_cfg.get("base_url"):
             bypass_proxy_for_url(hermes_model_cfg["base_url"])
 
-    async def run_one(self, sample: Sample, driver, *,
-                      session_id: str, ctx: dict[str, Any] | None = None) -> AgentOutcome:
+    async def run_one(
+        self, sample: Sample, driver, *, session_id: str, ctx: dict[str, Any] | None = None
+    ) -> AgentOutcome:
         to_cron = getattr(driver, "to_hermes_cron", None)
         if to_cron is None:
             return AgentOutcome(
                 status="exception",
                 elapsed_s=0.0,
-                error=f"driver '{driver.name}' does not support Hermes "
-                      "(missing to_hermes_cron)",
+                error=f"driver '{driver.name}' does not support Hermes (missing to_hermes_cron)",
             )
 
         # Propagate with_memory into ctx so driver.to_hermes_cron can inject.
@@ -108,9 +103,7 @@ class HermesBackend(AgentBackend):
                 meta={"reason": "no_prescription"},
             )
 
-        fake_now = cron_spec.get("fake_now") or (
-            ctx.get("fake_now") if ctx else None
-        )
+        fake_now = cron_spec.get("fake_now") or (ctx.get("fake_now") if ctx else None)
         if not fake_now:
             return AgentOutcome(
                 status="exception",
@@ -130,19 +123,24 @@ class HermesBackend(AgentBackend):
                     shutil.copy2(src, hermes_home / fn)
 
         env = strip_proxy_env_vars()
-        env.update({
-            "HERMES_HOME": str(hermes_home),
-            "HERMES_AGENT_SRC": str(self.hermes_src),
-            "HERMES_EVAL_FAKE_NOW": fake_now,
-            "HERMES_EVAL_CRON_JOB": json.dumps(cron_spec, ensure_ascii=False),
-            "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
-        })
+        env.update(
+            {
+                "HERMES_HOME": str(hermes_home),
+                "HERMES_AGENT_SRC": str(self.hermes_src),
+                "HERMES_EVAL_FAKE_NOW": fake_now,
+                "HERMES_EVAL_CRON_JOB": json.dumps(cron_spec, ensure_ascii=False),
+                "PYTHONPATH": f"{self.hermes_src}{os.pathsep}{os.environ.get('PYTHONPATH', '')}",
+            }
+        )
         cmd = [self.python_exe, str(_INNER_MODULE)]
         started = time.monotonic()
         try:
             proc = await asyncio.to_thread(
-                subprocess.run, cmd,
-                env=env, capture_output=True, text=True,
+                subprocess.run,
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
                 timeout=self.subprocess_timeout_s,
             )
         except subprocess.TimeoutExpired as exc:
@@ -154,10 +152,8 @@ class HermesBackend(AgentBackend):
                 elapsed_s=elapsed,
                 error=f"subprocess timeout after {self.subprocess_timeout_s}s",
                 meta={
-                    "stdout_tail": (exc.stdout or "")[-2000:]
-                                   if isinstance(exc.stdout, str) else "",
-                    "stderr_tail": (exc.stderr or "")[-2000:]
-                                   if isinstance(exc.stderr, str) else "",
+                    "stdout_tail": (exc.stdout or "")[-2000:] if isinstance(exc.stdout, str) else "",
+                    "stderr_tail": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
                 },
             )
         finally:
@@ -165,8 +161,8 @@ class HermesBackend(AgentBackend):
                 shutil.rmtree(hermes_home, ignore_errors=True)
             else:
                 import sys as _sys
-                print(f"HERMES_HOME_KEPT: {hermes_home}",
-                      file=_sys.stderr, flush=True)
+
+                print(f"HERMES_HOME_KEPT: {hermes_home}", file=_sys.stderr, flush=True)
 
         elapsed = round(time.monotonic() - started, 2)
 
@@ -175,14 +171,20 @@ class HermesBackend(AgentBackend):
         # traces become visible in the parent log.
         if os.environ.get("HERMES_DEBUG_TOOLS") and "proc" in dir():
             import sys as _sys
-            print(f"\n========== HERMES SUBPROCESS STDOUT ({len(proc.stdout)} chars) ==========",
-                  file=_sys.stderr, flush=True)
+
+            print(
+                f"\n========== HERMES SUBPROCESS STDOUT ({len(proc.stdout)} chars) ==========",
+                file=_sys.stderr,
+                flush=True,
+            )
             print(proc.stdout, file=_sys.stderr, flush=True)
-            print(f"========== HERMES SUBPROCESS STDERR ({len(proc.stderr)} chars) ==========",
-                  file=_sys.stderr, flush=True)
+            print(
+                f"========== HERMES SUBPROCESS STDERR ({len(proc.stderr)} chars) ==========",
+                file=_sys.stderr,
+                flush=True,
+            )
             print(proc.stderr, file=_sys.stderr, flush=True)
-            print("========== END HERMES SUBPROCESS DUMP ==========\n",
-                  file=_sys.stderr, flush=True)
+            print("========== END HERMES SUBPROCESS DUMP ==========\n", file=_sys.stderr, flush=True)
         if proc.returncode != 0:
             return AgentOutcome(
                 status="subprocess_error",

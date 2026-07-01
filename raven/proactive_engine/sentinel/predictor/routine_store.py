@@ -177,7 +177,8 @@ class RoutineStore:
         if hit["updated"]:
             logger.info(
                 "RoutineStore: upgraded routine '{}' to {}",
-                routine_id, new_status,
+                routine_id,
+                new_status,
             )
         return hit["updated"]
 
@@ -328,9 +329,7 @@ def _routine_to_raw(r: Routine) -> dict[str, Any]:
 def _raw_to_routine(raw: dict[str, Any]) -> Routine:
     time_slot_raw = raw.get("time_slot")
     if time_slot_raw is not None and len(time_slot_raw) == 2:
-        time_slot: tuple[int, int] | None = (
-            int(time_slot_raw[0]), int(time_slot_raw[1])
-        )
+        time_slot: tuple[int, int] | None = (int(time_slot_raw[0]), int(time_slot_raw[1]))
     else:
         time_slot = None
     return Routine(

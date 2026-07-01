@@ -20,9 +20,7 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _CODE_BLOCK_RE = re.compile(r"(```[\s\S]*?```)", re.MULTILINE)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\)]+)\)")
 _COMPLEX_RE = re.compile(r"```|^\|.+\|.*\n\s*\|[-:\s|]+\||^#{1,6}\s+", re.MULTILINE)
-_EMPHASIS_RE = re.compile(
-    r"\*\*.+?\*\*|__.+?__|(?<!\*)\*(?!\*).+?(?<!\*)\*(?!\*)|~~.+?~~", re.DOTALL
-)
+_EMPHASIS_RE = re.compile(r"\*\*.+?\*\*|__.+?__|(?<!\*)\*(?!\*).+?(?<!\*)\*(?!\*)|~~.+?~~", re.DOTALL)
 _BULLET_RE = re.compile(r"^[\s]*[-*+]\s+", re.MULTILINE)
 _ORDERED_RE = re.compile(r"^[\s]*\d+\.\s+", re.MULTILINE)
 
@@ -63,7 +61,7 @@ def post_payload(content: str) -> str:
         elements: list[dict] = []
         cursor = 0
         for m in _LINK_RE.finditer(line):
-            if before := line[cursor:m.start()]:
+            if before := line[cursor : m.start()]:
                 elements.append({"tag": "text", "text": before})
             elements.append({"tag": "a", "text": m.group(1), "href": m.group(2)})
             cursor = m.end()
@@ -91,7 +89,7 @@ def _build_elements(content: str) -> list[dict]:
     elements: list[dict] = []
     cursor = 0
     for m in _TABLE_RE.finditer(content):
-        if before := content[cursor:m.start()]:
+        if before := content[cursor : m.start()]:
             if before.strip():
                 elements += _split_headings(before)
         elements.append(parse_table(m.group(1)) or {"tag": "markdown", "content": m.group(1)})
@@ -112,10 +110,7 @@ def parse_table(table_text: str) -> dict | None:
 
     headers = cells(lines[0])
     rows = [cells(ln) for ln in lines[2:]]
-    columns = [
-        {"tag": "column", "name": f"c{i}", "display_name": h, "width": "auto"}
-        for i, h in enumerate(headers)
-    ]
+    columns = [{"tag": "column", "name": f"c{i}", "display_name": h, "width": "auto"} for i, h in enumerate(headers)]
     return {
         "tag": "table",
         "page_size": len(rows) + 1,
@@ -136,11 +131,9 @@ def _split_headings(content: str) -> list[dict]:
     elements: list[dict] = []
     cursor = 0
     for m in _HEADING_RE.finditer(shielded):
-        if before := shielded[cursor:m.start()].strip():
+        if before := shielded[cursor : m.start()].strip():
             elements.append({"tag": "markdown", "content": before})
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": f"**{m.group(2).strip()}**"}}
-        )
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": f"**{m.group(2).strip()}**"}})
         cursor = m.end()
     if rest := shielded[cursor:].strip():
         elements.append({"tag": "markdown", "content": rest})

@@ -84,7 +84,7 @@ class AgentHookContext:
     messages: list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] | None = None
     response: Any | None = None  # LLMResponse or dict; left as Any to avoid
-                                  # an import cycle from this base module.
+    # an import cycle from this base module.
 
     # ── after_send ──
     outbound_content: str | None = None
@@ -142,9 +142,7 @@ class AgentHook(ABC):
 
     # ── User-inbound phase ─────────────────────────────────────────────
 
-    async def before_user_inbound(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         """Fires when a fresh user message arrives, before AgentLoop
         dispatches it to the LLM.
 
@@ -163,9 +161,7 @@ class AgentHook(ABC):
 
     # ── ReAct iteration phases ────────────────────────────────────────
 
-    async def before_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
         """Fires before each LLM call in the ReAct loop.
 
         Used for:
@@ -178,9 +174,7 @@ class AgentHook(ABC):
         """
         return HookDecision()
 
-    async def before_execute_tools(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         """Fires after the LLM returns ``tool_calls`` but before the
         tools actually execute.
 
@@ -192,9 +186,7 @@ class AgentHook(ABC):
         """
         return HookDecision()
 
-    async def after_iteration(
-        self, ctx: AgentHookContext
-    ) -> HookDecision:
+    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         """Fires after each iteration completes (LLM call + any tool
         execution for that iteration).
 

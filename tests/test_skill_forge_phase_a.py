@@ -16,18 +16,17 @@ from pathlib import Path
 
 import pytest
 
-from raven.memory_engine.skill_local import SkillRegistry
-from raven.memory_engine.skill_local.registry import _strip_frontmatter
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_forge.catalog import _escape_xml
+from raven.memory_engine.skill_local import SkillRegistry
 from raven.memory_engine.skill_local.registry import (
     _check_requirements,
     _missing_requirements,
     _parse_frontmatter,
     _parse_nested_metadata,
     _resolve_always,
+    _strip_frontmatter,
 )
-
 
 # ----------------------------------------------------------------------
 # Fixtures
@@ -48,9 +47,7 @@ def _write_skill(
     front = f"name: {name}\ndescription: {description}\n"
     if frontmatter_extra:
         front += frontmatter_extra + "\n"
-    (skill_dir / "SKILL.md").write_text(
-        f"---\n{front}---\n\n{body}\n", encoding="utf-8"
-    )
+    (skill_dir / "SKILL.md").write_text(f"---\n{front}---\n\n{body}\n", encoding="utf-8")
 
 
 @pytest.fixture
@@ -200,7 +197,9 @@ class TestSkillRegistryCacheInvalidation:
         assert store._by_name is None
 
     def test_invalidate_source_picks_up_newly_added_skill(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         """A new SKILL.md materialized after the cache is primed should
         surface on the next list_all when its source is invalidated —
@@ -215,10 +214,7 @@ class TestSkillRegistryCacheInvalidation:
         nested_dir = tmp_workspace / "skills" / "everos" / "42"
         nested_dir.mkdir(parents=True)
         (nested_dir / "SKILL.md").write_text(
-            "---\n"
-            "name: dynamic-skill\n"
-            "description: added at runtime\n"
-            "---\n\nbody\n",
+            "---\nname: dynamic-skill\ndescription: added at runtime\n---\n\nbody\n",
             encoding="utf-8",
         )
 
@@ -235,7 +231,9 @@ class TestSkillRegistryCacheInvalidation:
         assert before.issubset({(m.source, m.name) for m in after})
 
     def test_invalidate_source_drops_removed_skill(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         """If a SKILL.md disappears, the source's incremental rescan
         should drop the stale entry."""
@@ -251,6 +249,7 @@ class TestSkillRegistryCacheInvalidation:
 
         # Wipe disk — emulate retire path.
         import shutil
+
         shutil.rmtree(nested_dir)
         store.invalidate_source("everos")
         assert not any(m.name == "gone-soon" for m in store.list_all())
@@ -258,7 +257,9 @@ class TestSkillRegistryCacheInvalidation:
         assert any(m.name == "simple" for m in store.list_all())
 
     def test_invalidate_source_when_cache_unprimed_is_noop(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         """``invalidate_source`` before any list_all must not crash;
         the very first list_all is still a full scan."""
@@ -280,7 +281,9 @@ class TestResolveSourceForPath:
         assert store.resolve_source_for_path(path) == "workspace"
 
     def test_workspace_nested_resolves_to_nested_source(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
         # Path need not exist on disk — resolution is lexical so
@@ -289,12 +292,12 @@ class TestResolveSourceForPath:
         assert store.resolve_source_for_path(path) == "everos"
 
     def test_workspace_deeply_nested_uses_first_segment(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
-        path = (
-            tmp_workspace / "skills" / "awesome" / "foo" / "bar" / "SKILL.md"
-        )
+        path = tmp_workspace / "skills" / "awesome" / "foo" / "bar" / "SKILL.md"
         assert store.resolve_source_for_path(path) == "awesome"
 
     def test_builtin_path_resolves_to_builtin(self, tmp_workspace, tmp_builtin):
@@ -316,12 +319,12 @@ class TestResolveSourceForPath:
     def test_unknown_path_returns_none(self, tmp_path, tmp_workspace, tmp_builtin):
         store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
         # Sibling of workspace, outside any layer root.
-        assert store.resolve_source_for_path(
-            tmp_path / "elsewhere" / "SKILL.md"
-        ) is None
+        assert store.resolve_source_for_path(tmp_path / "elsewhere" / "SKILL.md") is None
 
     def test_skill_md_at_layer_root_returns_none(
-        self, tmp_workspace, tmp_builtin,
+        self,
+        tmp_workspace,
+        tmp_builtin,
     ):
         """``_iter_skill_dirs`` skips SKILL.md directly under a layer
         root (``len(parts) == 0``) — the resolver must agree, else
@@ -402,9 +405,7 @@ class TestSkillServiceLegacyAPI:
         # Unavailable ones filtered by default
         assert not any(i["name"] == "needs_fake_bin" for i in items)
 
-    def test_list_skills_unfiltered_includes_unavailable(
-        self, tmp_workspace, tmp_builtin
-    ):
+    def test_list_skills_unfiltered_includes_unavailable(self, tmp_workspace, tmp_builtin):
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
         items = svc.list_skills(filter_unavailable=False)
         assert any(i["name"] == "needs_fake_bin" for i in items)
@@ -418,9 +419,7 @@ class TestSkillServiceLegacyAPI:
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
         assert svc.load_skill("does_not_exist") is None
 
-    def test_get_always_skills_excludes_unavailable(
-        self, tmp_workspace, tmp_builtin
-    ):
+    def test_get_always_skills_excludes_unavailable(self, tmp_workspace, tmp_builtin):
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
         always = {m.name for m in svc.get_always_skills()}
         assert "always_flag_top" in always
@@ -429,14 +428,9 @@ class TestSkillServiceLegacyAPI:
         assert "simple" not in always
         assert "user_custom" not in always
 
-    def test_load_skills_for_context_strips_frontmatter(
-        self, tmp_workspace, tmp_builtin
-    ):
+    def test_load_skills_for_context_strips_frontmatter(self, tmp_workspace, tmp_builtin):
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
-        metas = [
-            m for m in svc._registry.list_all()
-            if m.name in {"simple", "always_flag_top"}
-        ]
+        metas = [m for m in svc._registry.list_all() if m.name in {"simple", "always_flag_top"}]
         out = svc.load_skills_for_context(metas)
         assert "### Skill: simple" in out
         assert "### Skill: always_flag_top" in out
@@ -460,9 +454,7 @@ class TestBuildSkillsSummary:
         for name in ("simple", "always_flag_top", "user_custom", "needs_fake_bin"):
             assert f"<name>{name}</name>" in xml
 
-    def test_unavailable_skill_marked_false_with_requires(
-        self, tmp_workspace, tmp_builtin
-    ):
+    def test_unavailable_skill_marked_false_with_requires(self, tmp_workspace, tmp_builtin):
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
         xml = svc.build_skills_summary()
         assert 'available="false"' in xml
@@ -505,9 +497,7 @@ class TestRenderingHelpers:
 
 
 class TestContextBuilderIntegration:
-    def test_skill_names_narrows_xml_directory(
-        self, tmp_workspace, tmp_builtin, monkeypatch
-    ):
+    def test_skill_names_narrows_xml_directory(self, tmp_workspace, tmp_builtin, monkeypatch):
         # ContextBuilder uses the real built-in directory by default; point it
         # at our synthetic one so the test is deterministic.
         from raven.agent.context import ContextBuilder
@@ -535,9 +525,7 @@ class TestContextBuilderIntegration:
         assert "<name>simple</name>" in xml_block
         assert "<name>always_flag_top</name>" not in xml_block
 
-    def test_empty_skill_names_falls_back_to_full_directory(
-        self, tmp_workspace, tmp_builtin
-    ):
+    def test_empty_skill_names_falls_back_to_full_directory(self, tmp_workspace, tmp_builtin):
         """Phase A stub selector returns [] — must fall back, not strip all."""
         from raven.agent.context import ContextBuilder
         from raven.memory_engine.skill_forge import LocalSkillCatalog

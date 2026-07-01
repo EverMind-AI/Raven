@@ -36,17 +36,23 @@ from raven.memory_engine.skill_forge import (
     LocalSkillSource,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
 
 
 class _FakeBackend:
-    async def start(self): pass
-    async def stop(self): pass
-    async def feedback(self, signals): pass
-    async def store(self, session_id, messages): pass
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def feedback(self, signals):
+        pass
+
+    async def store(self, session_id, messages):
+        pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return []
@@ -142,9 +148,7 @@ class TestSkillForgeRouterAssembly:
         assert HubSkillSource not in types
 
     def test_hub_source_present_when_endpoint_set(self, tmp_path: Path) -> None:
-        types, _ = _router_sources(
-            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test")
-        )
+        types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
         assert HubSkillSource in types
 
     def test_track_ids_from_memory_config(self, tmp_path: Path) -> None:
