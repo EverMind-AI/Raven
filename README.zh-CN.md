@@ -92,7 +92,7 @@ Raven 把这些问题当成产品本身，而不是边缘 case。
 **macOS / Linux：**
 
 ```bash
-curl -fsSL http://raven.evermind.ai/install.sh | bash
+curl -fsSL https://raven.evermind.ai/install.sh | sh
 ```
 
 **Windows（PowerShell）：**

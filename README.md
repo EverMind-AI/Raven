@@ -99,7 +99,7 @@ Raven treats those problems as the product, not edge cases.
 **macOS / Linux:**
 
 ```bash
-curl -fsSL http://raven.evermind.ai/install.sh | bash
+curl -fsSL https://raven.evermind.ai/install.sh | sh
 ```
 
 **Windows (PowerShell):**
