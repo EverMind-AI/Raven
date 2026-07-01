@@ -229,14 +229,13 @@ def test_redirect_terminal_fds_captures_print_and_raw_fd_write(tmp_path, capfd) 
 
     with capfd.disabled():
         with redirect_terminal_fds_to_file(target):
-            # Flush sys.stdout to drain any buffered Python-level bytes, then
-            # write via the underlying fd — this is exactly the PrintLogger path.
-            sys.stdout.flush()
-            os.write(1, b"print-leak-line\n")
+            # Real print() through sys.stdout — this is the structlog PrintLogger path.
+            print("print-leak-line", flush=True)
+            # Raw fd write — exercises the os.write path directly.
             os.write(1, b"raw-fd-write\n")
 
     content = target.read_bytes()
-    assert b"print-leak-line" in content, "os.write(1, ...) of print payload must land in the file"
+    assert b"print-leak-line" in content, "print() output must land in the redirect file (structlog PrintLogger path)"
     assert b"raw-fd-write" in content, "os.write(1, ...) during redirect must land in the file"
 
 
