@@ -38,6 +38,31 @@ describe('shortCwd', () => {
   })
 })
 
+describe('shortCwd on Windows (USERPROFILE, no HOME)', () => {
+  const origHome = process.env.HOME
+  const origUserProfile = process.env.USERPROFILE
+
+  beforeEach(() => {
+    delete process.env.HOME
+    process.env.USERPROFILE = 'C:\\Users\\bb'
+  })
+
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.HOME
+    else process.env.HOME = origHome
+    if (origUserProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = origUserProfile
+  })
+
+  it('collapses USERPROFILE to ~ when HOME is unset', () => {
+    expect(shortCwd('C:\\Users\\bb\\proj\\repo')).toBe('~\\proj\\repo')
+  })
+
+  it('leaves non-home Windows paths alone', () => {
+    expect(shortCwd('D:\\work')).toBe('D:\\work')
+  })
+})
+
 describe('fmtCwdBranch', () => {
   const origHome = process.env.HOME
 
