@@ -15,12 +15,12 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
@@ -83,30 +83,30 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     else:
         # Priority 2: active venv
         if venv := os.environ.get("VIRTUAL_ENV"):
-            if sys.platform == "win32":
+            if os.name == "nt":
                 candidates.append(str(Path(venv) / "Scripts" / "node.exe"))
-            candidates.append(str(Path(venv) / "bin" / "node"))
+            else:
+                candidates.append(str(Path(venv) / "bin" / "node"))
 
         # Priority 3: PATH
         if path_node := shutil.which("node"):
             candidates.append(path_node)
 
-        # Priority 4: Raven-managed private runtime installed by install.sh
-        # into ~/.raven/runtime/. This is the zero-config fallback so a user
-        # who has no system Node still gets a working `raven tui` after the
-        # one-line installer provisioned a private Node here. Glob to tolerate
-        # the versioned dir name (e.g. node-v22.x.y-darwin-arm64/bin/node).
+        # Priority 4: Raven-managed private runtime installed by the one-line
+        # installer into ~/.raven/runtime/. This is the zero-config fallback so
+        # a user who has no system Node still gets a working `raven tui` after
+        # the installer provisioned a private Node here. Glob to tolerate the
+        # versioned dir name. The on-disk layout differs by OS: POSIX tarballs
+        # nest the binary under bin/ (node-v22.x.y-darwin-arm64/bin/node) while
+        # the Windows zip puts node.exe at the top level
+        # (node-v22.x.y-win-x64/node.exe) — install.ps1 provisions the latter.
         runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
         if runtime_root.is_dir():
-            if sys.platform == "win32":
+            if os.name == "nt":
                 direct = runtime_root / "node" / "node.exe"
                 if direct.exists():
                     candidates.append(str(direct))
-                direct_bin = runtime_root / "node" / "bin" / "node.exe"
-                if direct_bin.exists():
-                    candidates.append(str(direct_bin))
                 candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/node.exe")))
-                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node.exe")))
             else:
                 direct = runtime_root / "node" / "bin" / "node"
                 if direct.exists():
@@ -191,14 +191,17 @@ def run_subprocess(
 _RPC_HANDSHAKE_TIMEOUT_S: float = 5.0
 _RPC_HANDSHAKE_EXIT_CODE: int = 3
 
-# Q11 (2026-05-14): production transport is a per-session unix domain socket.
-# The pass_fds variant below is retained for `--check` smoke parity and for
-# the existing Python-only handshake-timeout test; the production path here
-# replaces it because the Node child cannot reliably wrap an inherited bare
-# pipe FD as a stream (see `scripts/run_v001_demo.py` file-top note + the
-# v0.0.1 demo discovery log).
-_RPC_SOCKET_DIR_PREFIX: str = "eve-rpc-"
+# Q11 (2026-05-14): production transport was a per-session unix domain socket.
+# CROSS-PLATFORM (2026-06-30): switched to a TCP loopback socket bound to
+# 127.0.0.1:<ephemeral> because Windows has no usable AF_UNIX in CPython and
+# cannot os.dup a socket fd. The Node child connects to the host:port exported
+# in RAVEN_RPC_SOCKET and authenticates with the RAVEN_RPC_TOKEN shared secret
+# (loopback is reachable by any local process, unlike an AF_UNIX file guarded
+# by 0600 perms, so the token restores the trust boundary). The pass_fds /
+# os.pipe variant is retained for `--check` smoke parity and the Python-only
+# handshake-timeout test.
 _RPC_SOCKET_ENV: str = "RAVEN_RPC_SOCKET"
+_RPC_TOKEN_ENV: str = "RAVEN_RPC_TOKEN"  # noqa: S105 -- env var name, not a secret
 
 
 def _suppress_noisy_watchers() -> None:
@@ -425,8 +428,8 @@ def _build_tui_agent_loop():
 
 
 async def _run_rpc_server_until_done(
-    request_fd: int,
-    notify_fd: int,
+    conn: socket.socket,
+    auth_token: str,
     handshake_deadline_s: float,
     proc_done: asyncio.Event,
 ) -> bool:
@@ -466,7 +469,7 @@ async def _run_rpc_server_until_done(
     # registered) — RpcServer.send_frame raises until serve_forever has set
     # up the write transport, but emitter only emits after a subscribe call,
     # which can only happen post-handshake / post-serve.
-    server = RpcServer(request_fd, notify_fd, dispatcher)
+    server = RpcServer(dispatcher=dispatcher, sock=conn, auth_token=auth_token)
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
     # ConfirmBroker shares the same send_frame sink; it lets a paused
     # cli.dispatch (typer.confirm) emit a confirm.request and await the
@@ -615,61 +618,42 @@ async def _run_rpc_server_until_done(
             pass
 
 
-def _create_rpc_socket_dir() -> Path:
-    """Create a 0700-mode tempdir to hold a session-private rpc socket.
-
-    Each call mints a fresh directory under ``$TMPDIR`` (mkdtemp prefixes
-    with ``eve-rpc-``). The 0700 perms ensure no other local user can even
-    enumerate the socket path. Caller is responsible for removing the dir
-    on teardown.
-    """
-    dir_path = Path(tempfile.mkdtemp(prefix=_RPC_SOCKET_DIR_PREFIX))
-    # mkdtemp already creates with 0700 on POSIX; chmod is defensive.
-    try:
-        os.chmod(dir_path, 0o700)
-    except OSError:
-        pass
-    return dir_path
-
-
 def _spawn_with_rpc_socket(
     node_path: str,
     args: list[str],
     cwd: Path,
-) -> tuple[subprocess.Popen[bytes], socket.socket, Path]:
-    """Spawn `[node_path, *args]` with a per-session unix domain socket.
+) -> tuple[subprocess.Popen[bytes], socket.socket, str]:
+    """Spawn `[node_path, *args]` with a per-session TCP-loopback socket.
 
-    Topology:
+    Topology (cross-platform: macOS / Linux / Windows):
 
-        parent: socket()/bind()/listen() on `<tmpdir>/sock` (mode 0700/0600)
-                exports the path as ``RAVEN_RPC_SOCKET`` env var
-        child:  reads ``RAVEN_RPC_SOCKET``, ``net.createConnection(path)``,
-                emits JSON-RPC frames + reads responses on the same socket
+        parent: socket()/bind()/listen() on 127.0.0.1:<ephemeral>; exports the
+                ``host:port`` as ``RAVEN_RPC_SOCKET`` and a random shared secret
+                as ``RAVEN_RPC_TOKEN``
+        child:  reads ``RAVEN_RPC_SOCKET``, ``net.createConnection({host,port})``,
+                sends ``RAVEN_RPC_TOKEN`` as the first line, then emits JSON-RPC
+                frames + reads responses on the same socket
 
-    Returns ``(popen, listening_server_socket, sock_dir_path)``. Caller must
-    eventually:
+    Loopback (127.0.0.1) is reachable by any local process, so the token --
+    known only to the child we spawn (passed via env) -- is what keeps a rogue
+    local process from talking to us; the parent validates it as the first line
+    (see ``RpcServer(auth_token=...)``) before any dispatch.
 
-        * ``server_sock.close()``
-        * ``shutil.rmtree(sock_dir_path, ignore_errors=True)``
-
-    The accepted client connection is NOT created here — that's done by
-    :func:`_run_rpc_server_until_done` once the asyncio loop is up so the
-    accept can be cancelled cleanly on handshake timeout.
+    Returns ``(popen, listening_server_socket, auth_token)``. Caller must
+    eventually ``server_sock.close()``. The accepted client connection is NOT
+    created here -- that's done by :func:`_run_rpc_server_until_done` once the
+    asyncio loop is up so the accept can be cancelled cleanly on handshake
+    timeout.
     """
-    sock_dir = _create_rpc_socket_dir()
-    sock_path = sock_dir / "sock"
-
-    server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server_sock.bind(str(sock_path))
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.bind(("127.0.0.1", 0))
     server_sock.listen(1)
-    # 0600 on the socket file — only the owning user can connect.
-    try:
-        os.chmod(sock_path, 0o600)
-    except OSError:
-        pass
+    host, port = server_sock.getsockname()[:2]
 
+    token = secrets.token_hex(32)
     env = os.environ.copy()
-    env[_RPC_SOCKET_ENV] = str(sock_path)
+    env[_RPC_SOCKET_ENV] = f"{host}:{port}"
+    env[_RPC_TOKEN_ENV] = token
 
     proc = subprocess.Popen(
         [node_path, *args],
@@ -680,7 +664,7 @@ def _spawn_with_rpc_socket(
         env=env,
     )
 
-    return proc, server_sock, sock_dir
+    return proc, server_sock, token
 
 
 async def _accept_with_timeout(
@@ -707,21 +691,22 @@ def run_subprocess_with_rpc(
     cwd: Path,
     forward_signals: bool = True,
 ) -> int:
-    """Spawn Node child with a per-session unix socket; run RpcServer; enforce handshake.
+    """Spawn Node child with a per-session TCP-loopback socket; run RpcServer; enforce handshake.
 
-    Q11 (2026-05-14): production transport is a unix domain socket. The Node
-    side cannot reliably wrap inherited pipe FDs as Node streams, so the
-    parent listens on ``<tmpdir>/sock`` (mode 0700/0600) and exports the
-    path via ``RAVEN_RPC_SOCKET``. The wire framing (newline JSON) is
-    unchanged from the pass_fds variant; ``RpcServer`` itself is reused
-    verbatim by dup-ing the accepted socket fd into separate read / write
-    ends so ``connect_read_pipe`` + ``connect_write_pipe`` still apply.
+    Cross-platform transport (macOS / Linux / Windows): the parent listens on
+    ``127.0.0.1:<ephemeral>`` and exports the ``host:port`` via
+    ``RAVEN_RPC_SOCKET`` plus a random shared secret via ``RAVEN_RPC_TOKEN``.
+    The Node child connects, sends the token as the first newline-terminated
+    line, then speaks newline-JSON frames. The accepted socket *object* is
+    handed to ``RpcServer`` (no os.dup of a socket fd -- unsupported on
+    Windows), which wires it via ``loop.connect_accepted_socket`` and validates
+    the token before any dispatch.
 
     Returns the child's exit code, OR ``_RPC_HANDSHAKE_EXIT_CODE`` (3) if
     the handshake times out (either because the child never connected, or
-    because it connected but never sent ``system.hello``).
+    because it connected but never sent the token + ``system.hello``).
     """
-    proc, server_sock, sock_dir = _spawn_with_rpc_socket(node_path, args, cwd)
+    proc, server_sock, auth_token = _spawn_with_rpc_socket(node_path, args, cwd)
 
     if forward_signals:
 
@@ -751,9 +736,8 @@ def run_subprocess_with_rpc(
 
     _loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
 
-    # Track FDs we allocate inside _main so the outer cleanup can close them.
-    _fd_holder: dict[str, int] = {}
     _conn_holder: dict[str, socket.socket] = {}
+    _flags = {"handed_off": False}
 
     async def _main() -> bool:
         _loop_holder["loop"] = asyncio.get_running_loop()
@@ -783,17 +767,12 @@ def run_subprocess_with_rpc(
             return False
         _conn_holder["conn"] = conn
 
-        # dup once for read, once for write — both ends of the same socket fd
-        # — so RpcServer's connect_read_pipe + connect_write_pipe (each of
-        # which takes ownership of its fd) cannot trigger a double-close.
-        req_fd = os.dup(conn.fileno())
-        notif_fd = os.dup(conn.fileno())
-        _fd_holder["req"] = req_fd
-        _fd_holder["notif"] = notif_fd
-
-        # We've duped what we need; the original `conn` can be closed by the
-        # outer scope.
-        return await _run_rpc_server_until_done(req_fd, notif_fd, _RPC_HANDSHAKE_TIMEOUT_S, proc_done)
+        # Hand the connected socket object straight to RpcServer. We do NOT
+        # os.dup the fd (unsupported on Windows) — connect_accepted_socket takes
+        # ownership of this one socket and closes it on teardown, so the outer
+        # cleanup must not double-close it.
+        _flags["handed_off"] = True
+        return await _run_rpc_server_until_done(conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done)
 
     waiter = threading.Thread(target=_waiter, daemon=True)
     waiter.start()
@@ -802,8 +781,10 @@ def run_subprocess_with_rpc(
     try:
         handshake_ok = asyncio.run(_main())
     finally:
-        # 1) Close the parent-side conn (server already dup'd what it needs).
-        if "conn" in _conn_holder:
+        # 1) Close the accepted conn only if it was never handed to RpcServer.
+        # Once handed off, the server owns it (connect_accepted_socket) and
+        # closes it on teardown; double-closing here would race that.
+        if "conn" in _conn_holder and not _flags["handed_off"]:
             try:
                 _conn_holder["conn"].close()
             except OSError:
@@ -811,11 +792,6 @@ def run_subprocess_with_rpc(
         # 2) Close the listening socket.
         try:
             server_sock.close()
-        except OSError:
-            pass
-        # 3) Remove the tempdir + socket file.
-        try:
-            shutil.rmtree(sock_dir, ignore_errors=True)
         except OSError:
             pass
 

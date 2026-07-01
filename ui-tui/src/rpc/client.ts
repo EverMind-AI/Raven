@@ -1,10 +1,11 @@
 // Raven TUI RPC — production JSON-RPC 2.0 client.
 //
-// Transport: unix domain socket (per Q11 decision — see
-// `docs/RepoMem/temp/tui-ipc-bridge/11-tui-commands-transport-decision.md`).
-// The Python parent listens; the Node child connects via `net.createConnection`.
-// Bare FD inheritance (pass_fds=(3,4)) was rejected — Node has no stable way
-// to wrap inherited pipe FDs as streams when running as the child process.
+// Transport: TCP loopback (cross-platform — Windows has no usable AF_UNIX).
+// The Python parent listens on 127.0.0.1:<ephemeral>; the Node child connects
+// via `net.createConnection({host, port})`, sends RAVEN_RPC_TOKEN as the first
+// line (the parent validates it before any dispatch), then speaks JSON frames.
+// A unix-socket path is still accepted for legacy setups. Bare FD inheritance
+// (pass_fds=(3,4)) was rejected — Node can't reliably wrap inherited pipe FDs.
 //
 // Framing: newline-delimited UTF-8 JSON (specs §2.5). Each frame is
 // `JSON.stringify(obj) + '\n'`. Single frame limit: 1 MiB.
@@ -33,7 +34,7 @@ type Pending = {
 }
 
 export interface RpcClientOptions {
-  /** Unix socket path. Defaults to env `RAVEN_RPC_SOCKET`. */
+  /** RPC target: "host:port" (TCP loopback) or a unix socket path. Defaults to env `RAVEN_RPC_SOCKET`. */
   socketPath?: string
   /** Optional logger for non-fatal protocol oddities. Defaults to stderr. */
   warn?: (msg: string) => void
@@ -62,20 +63,36 @@ export class RpcClient {
   private readonly connectPromise: Promise<void>
 
   constructor(opts: RpcClientOptions = {}) {
-    const socketPath = opts.socketPath ?? process.env.RAVEN_RPC_SOCKET
-    if (!socketPath) {
-      throw new Error('RpcClient: no socket path supplied; pass `socketPath` or set ' + 'RAVEN_RPC_SOCKET env var.')
+    const target = opts.socketPath ?? process.env.RAVEN_RPC_SOCKET
+    if (!target) {
+      throw new Error('RpcClient: no RPC target supplied; pass `socketPath` or set ' + 'RAVEN_RPC_SOCKET env var.')
     }
     this.warn = opts.warn ?? (m => process.stderr.write(`[rpc-client] ${m}\n`))
     this.onNotification = opts.onNotification
 
-    this.socket = createConnection(socketPath)
+    // Cross-platform transport: the parent exports either a TCP-loopback
+    // "host:port" (current Python parent; works on Windows too) or, for legacy
+    // setups, a unix socket path. A trailing ":<digits>" disambiguates TCP.
+    const tcp = /^(.+):(\d+)$/.exec(target)
+    if (tcp) {
+      this.socket = createConnection({ host: tcp[1], port: Number(tcp[2]) })
+    } else {
+      this.socket = createConnection(target)
+    }
     this.socket.setEncoding('utf-8')
+
+    // Shared secret the parent validates as the first line before any frame
+    // (the loopback port is reachable by any local process, so this gates it).
+    const authToken = process.env.RAVEN_RPC_TOKEN
 
     this.connectPromise = new Promise<void>((resolve, reject) => {
       const onConnect = () => {
         this.connected = true
         this.socket.off('error', onError)
+        // Must be the very first bytes on the wire, ahead of any RPC frame.
+        if (authToken) {
+          this.socket.write(authToken + '\n')
+        }
         resolve()
       }
       const onError = (err: Error) => {

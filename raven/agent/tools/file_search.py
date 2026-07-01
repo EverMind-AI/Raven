@@ -52,9 +52,16 @@ _WALK_DEADLINE_S = 20.0
 def _denied_traversal_root(base: Path) -> bool:
     """True if ``base`` resolves to a system root that must not be tree-walked."""
     try:
-        return base.resolve() in _DENY_TRAVERSAL_ROOTS
+        resolved = base.resolve()
     except OSError:
         return False
+    # Any filesystem/drive root is its own parent — catches POSIX "/" and the
+    # Windows drive/UNC roots ("C:\\", "\\\\server\\share") that the POSIX-only
+    # _DENY_TRAVERSAL_ROOTS set misses (a search at C:\ would otherwise walk the
+    # whole drive).
+    if resolved.parent == resolved:
+        return True
+    return resolved in _DENY_TRAVERSAL_ROOTS
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +197,10 @@ class GrepTool(_FsTool):
             args += ["--line-number", "--no-heading", "--with-filename"]
             if context:
                 args += ["-C", str(context)]
+        # Force forward-slash separators in rg's output paths on every platform
+        # so results read the same on Windows as POSIX (only affects path fields,
+        # not matched content).
+        args += ["--path-separator", "/"]
         args += ["-e", pattern, "--", str(base)]
 
         proc = await asyncio.create_subprocess_exec(
@@ -209,7 +220,10 @@ class GrepTool(_FsTool):
 
         text = out.decode("utf-8", "replace")
         # Make paths relative to the search root for compact, readable output.
-        text = text.replace(str(base) + os.sep, "").replace(str(base), base.name or ".")
+        # rg emits forward-slash paths (--path-separator above); match that when
+        # stripping the search-root prefix so the strip works on Windows too.
+        base_str = str(base).replace(os.sep, "/")
+        text = text.replace(base_str + "/", "").replace(base_str, base.name or ".")
         lines = [ln for ln in text.splitlines() if ln]
         if not lines:
             return "No matches found."
@@ -302,9 +316,9 @@ class GrepTool(_FsTool):
     @staticmethod
     def _relpath(fp: Path, base: Path) -> str:
         try:
-            return str(fp.relative_to(base if base.is_dir() else base.parent))
+            return fp.relative_to(base if base.is_dir() else base.parent).as_posix()
         except ValueError:
-            return str(fp)
+            return fp.as_posix()
 
     def _format_lines(self, lines: list[str], cap: int, unit: str) -> str:
         total = len(lines)
@@ -410,7 +424,7 @@ class FindTool(_FsTool):
         matches.sort(key=lambda p: self._mtime(p), reverse=True)
         total = len(matches)
         shown = matches[:cap]
-        lines = [f"{p.relative_to(base)}/" if p.is_dir() else str(p.relative_to(base)) for p in shown]
+        lines = [f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix() for p in shown]
         result = "\n".join(lines)
         if total > cap:
             result += f"\n\n(showing first {cap} of {total} results)"

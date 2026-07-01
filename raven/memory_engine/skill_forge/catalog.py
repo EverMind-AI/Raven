@@ -344,7 +344,10 @@ class LocalSkillCatalog:
                     # — it must NOT touch the literal "{baseDir}/<missing-ref>"
                     # left in place above, else those re-absolutize into 404s.
                     if path_obj.parent.exists():
-                        body, _bare = _re.subn(r"\{baseDir\}(?!/)", base_dir, body)
+                        # Function replacement, not a string: base_dir may hold
+                        # Windows backslashes that re.subn would treat as escape
+                        # sequences (\U, \a, ...) → re.error "bad escape".
+                        body, _bare = _re.subn(r"\{baseDir\}(?!/)", lambda _m: base_dir, body)
                         if _bare:
                             _resolved = True
                     header = _dir_header if _resolved else f"### Skill: {m.name}\n\n"

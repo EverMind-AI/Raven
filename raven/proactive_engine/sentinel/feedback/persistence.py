@@ -6,22 +6,14 @@ heaps. Without coordination, two concurrent processes can double-nudge the
 user and violate the hour/day quotas.
 
 This module provides a single JSON file backing them, guarded by a
-POSIX advisory lock (fcntl) so only one process at a time can
+cross-platform advisory lock so only one process at a time can
 read-mutate-write. Writes are atomic via temp-file rename.
-
-Not Windows-compatible. Raven's channel layer is POSIX-only anyway.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import sys
-
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -42,8 +34,6 @@ class JsonStateStore:
     """
 
     def __init__(self, path: Path) -> None:
-        if sys.platform == "win32":
-            raise NotImplementedError("JsonStateStore requires POSIX fcntl")
         self.path = Path(path)
         self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,13 +49,11 @@ class JsonStateStore:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        """Hold an exclusive fcntl lock. Safe to nest via recursive callers."""
-        with self.lock_path.open("a") as lock_fd:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        """Hold an exclusive cross-platform advisory lock (POSIX + Windows)."""
+        from raven.utils.portable_lock import file_lock
+
+        with file_lock(self.lock_path):
+            yield
 
     def update(self, fn: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
         """Atomic read-modify-write. Callback receives current state, returns

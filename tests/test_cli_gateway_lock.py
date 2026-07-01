@@ -92,10 +92,15 @@ def test_read_payload_corrupt_returns_placeholder(tmp_instance: Path) -> None:
     assert info.config_path == ""
 
 
-def test_acquire_degrades_without_fcntl(tmp_instance: Path, monkeypatch) -> None:
-    """Windows path: fcntl is None → acquire never locks, never raises."""
-    monkeypatch.setattr(_gateway_lock, "fcntl", None)
-    first = acquire(now=1.0)
-    second = acquire(now=2.0)  # no contention without a real lock
-    first.close()
-    second.close()
+def test_payload_readable_while_lock_held(tmp_instance: Path) -> None:
+    """The lock anchor is a separate file from the payload, so a concurrent
+    reader (doctor) can read the owner payload even while the lock is held —
+    including on Windows, where the lock is mandatory and would otherwise
+    block a read of the locked file."""
+    held = acquire(now=222.0)
+    try:
+        info = _gateway_lock._read_payload(tmp_instance / "gateway.lock")
+        assert info.pid == os.getpid()
+        assert info.started_at == 222.0
+    finally:
+        held.close()
