@@ -386,10 +386,6 @@ If Raven is the kind of command line agent you want to exist, star the repo.
 It helps more terminal-native builders discover the project and gives the
 EverMind ecosystem a stronger signal to keep investing in open agents.
 
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
-
 <br>
 <div align="right">
 
