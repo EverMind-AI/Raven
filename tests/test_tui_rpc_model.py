@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.providers.common_models import common_models_for
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
 from raven.tui_rpc.methods.model import (
     model_add_model,
@@ -249,3 +250,40 @@ async def test_options_accepts_session_id(fake_home: Path) -> None:
 async def test_save_key_custom_without_api_base_rejected(fake_home: Path) -> None:
     with pytest.raises(ConfigValidationError):
         await model_save_key({"slug": "custom", "api_key": "x"})
+
+
+# ----------------------------------------------------------------------------
+# common-model shortlist (curated defaults shown in the picker)
+# ----------------------------------------------------------------------------
+
+
+async def test_options_openrouter_seeds_common_models(fake_home: Path) -> None:
+    # A provider with a key but no explicitly configured models still lists the
+    # curated "common" shortlist, so the picker is never empty.
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "openrouter/anthropic/claude-opus-4.8"}},
+            "providers": {"openrouter": {"apiKey": "sk-or-xxx", "models": []}},
+        },
+    )
+    entry = _entry(await model_options({}), "openrouter")
+    assert entry["models"] == common_models_for("openrouter")
+    assert entry["total_models"] == len(common_models_for("openrouter"))
+
+
+async def test_options_config_models_rank_before_common_and_dedup(fake_home: Path) -> None:
+    # Configured models come first; the common shortlist follows with duplicates
+    # removed (a configured id already in the shortlist is not listed twice).
+    dup = common_models_for("openrouter")[0]
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": dup}},
+            "providers": {"openrouter": {"apiKey": "sk-or-xxx", "models": ["my/custom-model", dup]}},
+        },
+    )
+    models = _entry(await model_options({}), "openrouter")["models"]
+    assert models[:2] == ["my/custom-model", dup]
+    assert models.count(dup) == 1
+    assert set(common_models_for("openrouter")).issubset(set(models))
