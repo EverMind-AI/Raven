@@ -38,7 +38,7 @@ become reusable Agent Templates and digital workers.
 
 <br>
 
-- [Quick Start](#quick-start)
+- [Quick Install](#quick-install)
 - [What You Can Do in 2 Minutes](#what-you-can-do-in-2-minutes)
 - [Messaging Gateways](#messaging-gateways)
 - [Why Raven](#why-raven)
@@ -57,13 +57,32 @@ become reusable Agent Templates and digital workers.
 
 </details>
 
-## Quick Start
+## Quick Install
 
-Install Raven, run the setup wizard, then start the native terminal UI:
+### Linux, macOS, WSL2
 
 ```bash
 curl -fsSL https://raven.evermind.ai/install.sh | bash
-source ~/.bashrc    # or: source ~/.zshrc
+```
+
+### Windows (native, PowerShell)
+
+> **Heads up:** Native Windows runs Raven without WSL. CLI, TUI, gateway, and
+> tools install natively. If you would rather use WSL2, the Linux/macOS
+> one-liner above works there too.
+
+Run this in PowerShell:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/EverMind-AI/Raven/main/install.ps1)
+```
+
+The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
+
+After installation:
+
+```bash
+source ~/.bashrc    # reload shell (or: source ~/.zshrc)
 raven onboard
 raven
 ```
@@ -248,7 +267,7 @@ official endorsement unless explicitly approved by EverMind.
 
 | Goal | Start here |
 | --- | --- |
-| First-time install and setup | [Quick Start](#quick-start) |
+| First-time install and setup | [Quick Install](#quick-install) |
 | Source-based development | [Developer Workflow](#developer-workflow) and [docs/dev.md](docs/dev.md) |
 | Memory and plugin architecture | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
 | Sandbox usage and debugging | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
