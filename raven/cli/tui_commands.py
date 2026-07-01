@@ -339,6 +339,11 @@ def _build_tui_agent_loop():
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.cli._helpers import load_runtime_config, make_provider
+        from raven.cli._plugin_stack import (
+            build_plugin_registry,
+            build_plugin_tools,
+            maybe_build_memory_backend,
+        )
         from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
@@ -355,6 +360,18 @@ def _build_tui_agent_loop():
         cron = CronService(
             get_cron_dir() / "jobs.json",
             allowed_channels={"tui"},
+        )
+
+        plugin_registry = build_plugin_registry(ec_config)
+        backend = maybe_build_memory_backend(
+            config.workspace_path,
+            ec_config,
+            registry=plugin_registry,
+        )
+        plugin_tools = build_plugin_tools(
+            config.workspace_path,
+            ec_config,
+            registry=plugin_registry,
         )
 
         agent_loop = AgentLoop(
@@ -378,6 +395,8 @@ def _build_tui_agent_loop():
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
             runtime_config=ec_config.runtime,
+            backend=backend,
+            plugin_tools=plugin_tools,
             # TUI is always a multi-turn interactive session.
             interactive=True,
         )
