@@ -87,7 +87,7 @@ def _intercept_stdlib_logging(logger) -> None:
 
 def _strip_tty_stream_handlers() -> None:
     """Remove TTY ``StreamHandler``s that third-party libs attach directly to
-    named loggers.
+    named loggers or the root logger.
 
     ``basicConfig(force=True)`` only resets the ROOT logger's handlers. Some
     libraries (notably ``litellm``) install their own ``StreamHandler(stderr)``
@@ -96,14 +96,23 @@ def _strip_tty_stream_handlers() -> None:
     direct-to-TTY write overlays the Ink alt-screen. Stripping
     them keeps records reaching the file sink via ``propagate=True`` → root →
     InterceptHandler.
+
+    Also strips TTY StreamHandlers from the root logger itself, which some
+    libraries (e.g. everos configure_logging) install after basicConfig runs.
     """
     tty_streams = (sys.stderr, sys.stdout)
+
+    def _strip_from(logger_obj: _stdlib_logging.Logger) -> None:
+        for handler in list(logger_obj.handlers):
+            if isinstance(handler, _stdlib_logging.StreamHandler) and getattr(handler, "stream", None) in tty_streams:
+                logger_obj.removeHandler(handler)
+
+    _strip_from(_stdlib_logging.getLogger())
+
     for obj in list(_stdlib_logging.Logger.manager.loggerDict.values()):
         if not isinstance(obj, _stdlib_logging.Logger):
             continue  # skip PlaceHolder entries
-        for handler in list(obj.handlers):
-            if isinstance(handler, _stdlib_logging.StreamHandler) and getattr(handler, "stream", None) in tty_streams:
-                obj.removeHandler(handler)
+        _strip_from(obj)
 
 
 __all__ = ["redirect_loguru_to_file"]

@@ -9,6 +9,7 @@ has its own real-litellm regression guard in
 from __future__ import annotations
 
 import logging
+import logging.handlers
 from pathlib import Path
 
 import pytest
@@ -160,3 +161,46 @@ def test_file_sink_does_not_dump_local_variable_values(tmp_logs: Path) -> None:
     content = _flush_and_read(log_path)
     assert "processing failed" in content
     assert "SECRET-TOKEN-9z9z9z" not in content
+
+
+# ---------------------------------------------------------------------------
+# Root-logger TTY StreamHandler stripping
+# ---------------------------------------------------------------------------
+
+
+def test_strip_tty_stream_handlers_removes_root_stdout_handler(tmp_logs: Path) -> None:
+    """_strip_tty_stream_handlers() must remove a StreamHandler(sys.stdout)
+    installed on the ROOT logger (not just on named loggers)."""
+    import sys
+
+    from raven.cli._log_file import _strip_tty_stream_handlers
+
+    root = logging.getLogger()
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    root.addHandler(stdout_handler)
+
+    try:
+        _strip_tty_stream_handlers()
+        assert stdout_handler not in root.handlers, (
+            "_strip_tty_stream_handlers must remove root stdout StreamHandler"
+        )
+    finally:
+        root.removeHandler(stdout_handler)
+
+
+def test_strip_tty_stream_handlers_keeps_root_non_tty_handler(tmp_logs: Path) -> None:
+    """_strip_tty_stream_handlers() must NOT remove a non-TTY handler (e.g. a
+    MemoryHandler) from the ROOT logger."""
+    from raven.cli._log_file import _strip_tty_stream_handlers
+
+    root = logging.getLogger()
+    mem_handler = logging.handlers.MemoryHandler(capacity=10)
+    root.addHandler(mem_handler)
+
+    try:
+        _strip_tty_stream_handlers()
+        assert mem_handler in root.handlers, (
+            "_strip_tty_stream_handlers must not remove non-TTY root handlers"
+        )
+    finally:
+        root.removeHandler(mem_handler)

@@ -383,3 +383,37 @@ async def test_rpc_runner_skips_lifecycle_when_no_backend(rpc_server_deps, monke
 
     assert rpc_server_deps["start_calls"] == []
     assert rpc_server_deps["stop_calls"] == []
+
+
+# ---------------------------------------------------------------------------
+# Root-logger TTY handler stripped after backend.start()
+# ---------------------------------------------------------------------------
+
+
+async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(
+    rpc_server_deps, monkeypatch
+) -> None:
+    """``_run_rpc_server_until_done`` must strip a root stdout StreamHandler
+    installed during ``backend.start()`` (mimicking everos configure_logging)
+    before the RPC server begins serving."""
+    import logging
+    import sys
+
+    installed_handler: list[logging.Handler] = []
+
+    original_start = rpc_server_deps["backend"].start
+
+    async def _start_with_root_handler():
+        h = logging.StreamHandler(sys.stdout)
+        logging.getLogger().addHandler(h)
+        installed_handler.append(h)
+        await original_start()
+
+    rpc_server_deps["backend"].start = _start_with_root_handler
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert len(installed_handler) == 1, "spy backend.start() did not run"
+    assert installed_handler[0] not in logging.getLogger().handlers, (
+        "_run_rpc_server_until_done must strip root stdout StreamHandler installed by backend.start()"
+    )

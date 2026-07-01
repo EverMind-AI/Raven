@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._log_file import redirect_loguru_to_file
+from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
@@ -601,6 +601,9 @@ async def _run_rpc_server_until_done(
             _logger.exception(
                 "tui: memory backend start failed; continuing with degraded memory path",
             )
+    # everos configure_logging installs a root stdout StreamHandler during start();
+    # strip it so everos records flow to the file sink and never reach the terminal.
+    _strip_tty_stream_handlers()
 
     serve_task = asyncio.create_task(server.serve_forever())
 
