@@ -397,6 +397,10 @@ Raven 仍处于 pre-alpha，变化会很快。API 可能调整，但核心产品
 self-improving agent builders 发现项目，也会给 EverMind 生态一个更强的信号，
 继续投入开源 Agent。
 
+### Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
+
 <br>
 <div align="right">
 
