@@ -9,21 +9,43 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-[官网](https://raven.evermind.ai) · [EverOS](https://github.com/EverMind-AI/EverOS) · [English](README.md)
+<p align="center">
+  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/EverMind-AI/raven/releases"><img src="https://img.shields.io/github/v/release/EverMind-AI/raven?label=Release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven" alt="License"></a>
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
+</p>
+
+[官网](https://raven.evermind.ai) · [English](README.md)
 
 </div>
 
 <br>
+
+# Raven
+
+Raven 是一个面向个人 Agent 和可复用 Agent Templates 的 **memory-first**
+Agent OS。
+
+Raven 由 EverMind 构建，底层基于
+[EverOS](https://github.com/EverMind-AI/EverOS)。EverOS 为 Raven 提供跨会话
+持久存在的用户记忆、Agent 记忆和世界知识。今天你可以把 Raven 作为原生终端
+TUI 和 CLI 使用；如果你在构建自己的 Agent，也可以基于 Raven 把可重复工作流
+封装成可分享的 digital workers。
 
 <details>
   <summary><kbd>目录</kbd></summary>
 
 <br>
 
+- [快速开始](#快速开始)
+- [2 分钟能做什么](#2-分钟能做什么)
+- [消息网关](#消息网关)
 - [为什么是 Raven](#为什么是-raven)
-- [快速安装](#快速安装)
-- [开始使用](#开始使用)
 - [Raven 适合什么](#raven-适合什么)
+- [Agent Templates](#agent-templates)
+- [常用命令](#常用命令)
+- [按目标阅读文档](#按目标阅读文档)
 - [架构](#架构)
 - [开发工作流](#开发工作流)
 - [当前状态](#当前状态)
@@ -35,12 +57,56 @@
 
 </details>
 
-## 为什么是 Raven
+## 快速开始
 
-Raven 是一个原生 Command Line Agent，不是给 shell 套了一层聊天框。
-它面向已经生活在终端、仓库、日志、脚本、会话和长流程里的用户。
-目标很直接：让你的终端拥有一个会记忆、会行动、会使用工具、会管理
-上下文，并且能持续沉淀自身技能的 Agent。
+安装 Raven，运行配置向导，然后启动原生终端 UI：
+
+```bash
+curl -fsSL https://raven.evermind.ai/install.sh | bash
+source ~/.bashrc    # 或：source ~/.zshrc
+raven onboard
+raven
+```
+
+Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
+OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoints。
+
+如果配置失败，或者 provider 还没有准备好，运行：
+
+```bash
+raven doctor
+```
+
+## 2 分钟能做什么
+
+- 用 `raven` 或 `raven tui` 启动一个终端原生 Agent。
+- 用 `raven agent -m "..."` 从 shell 里执行一次性任务。
+- 用 `raven onboard` 配置 providers、sandbox、channels 和 memory。
+- 用 `raven skill list` 浏览内置和本地 SkillForge skills。
+- 用 `raven sessions list` 恢复、fork、导出或删除之前的工作。
+- 用 `raven sentinel status` 查看主动记忆和 scheduled nudges 状态。
+
+## 消息网关
+
+Raven 目前内置 12 个 gateway adapters。用 `raven channels list` 查看本地安装中
+可用的 adapters，用 `raven gateway` 启动 gateway daemon。
+
+| Gateway | Package id | 说明 |
+| --- | --- | --- |
+| Telegram | `telegram` | Bot-based messaging |
+| Slack | `slack` | Workspace messaging |
+| Discord | `discord` | Server 和 bot messaging |
+| WhatsApp | `whatsapp` | 使用内置 TypeScript bridge |
+| Matrix | `matrix` | Matrix rooms 和 direct messages |
+| Feishu | `feishu` | Lark/Feishu app integration |
+| WeCom | `wecom` | 企业微信群和 app messaging |
+| Mochat | `mochat` | API/socket-based messaging |
+| QQ | `qq` | QQ bot integration |
+| DingTalk | `dingtalk` | DingTalk stream integration |
+| Email | `email` | IMAP/SMTP mailbox integration |
+| WeChat | `weixin` | 个人微信 integration |
+
+## 为什么是 Raven
 
 大多数 Agent CLI 只做到 "LLM + tools + loop"。Demo 阶段够用，但一旦进入
 真实日常工作就会遇到这些问题：
@@ -51,6 +117,15 @@ Raven 是一个原生 Command Line Agent，不是给 shell 套了一层聊天框
 - 有用的工作流留在聊天记录里，没有变成可复用技能。
 
 Raven 把这些问题当成产品本身，而不是边缘 case。
+
+Raven 围绕三个产品判断构建：
+
+- **Memory-first：** 用户记忆、Agent 记忆和世界知识彼此独立、持久存在，并且
+  可以跨会话复用。
+- **Self-improving skills：** 重复工作流可以沉淀成 skills，记录反馈，并在失效时
+  继续进化，而不是埋在聊天记录里。
+- **Agent Templates：** 构建者可以从 Raven 出发，为具体场景定义一个 Agent，并在
+  不重做底层 operating layer 的情况下分享出去。
 
 <table>
 <tr>
@@ -87,52 +162,6 @@ Raven 把这些问题当成产品本身，而不是边缘 case。
 
 <br>
 
-## 快速安装
-
-```bash
-curl -fsSL http://raven.evermind.ai/install.sh | bash
-```
-
-安装后重新加载 shell，并运行 setup wizard：
-
-```bash
-source ~/.bashrc    # 或：source ~/.zshrc
-raven onboard
-```
-
-Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
-OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoint。
-
-## 开始使用
-
-```bash
-raven                  # 原生 TUI，开始一段对话
-raven tui              # 显式启动原生 TUI
-raven tui --check      # 启动前检查 TUI runtime
-raven onboard          # 配置 provider、sandbox、channels 和 memory
-raven agent -m "..."   # 从 shell 里执行一次性任务
-raven provider list    # 查看 LLM providers 与模型配置
-raven channels list    # 列出可用消息渠道
-raven gateway          # 启动 messaging gateway
-raven sessions list    # 列出、恢复、fork、导出或删除 sessions
-raven cron list        # 查看 scheduled jobs 与 automations
-raven skill list       # 浏览 SkillForge skills
-raven sentinel status  # 查看主动记忆与 nudge 状态
-raven plugins          # 列出已安装插件和当前 memory backend
-raven sandbox list     # sandbox debug 开启时查看 sandbox VMs
-raven status           # 查看本地配置与运行状态
-raven doctor           # 诊断 config、routing 和 LLM readiness
-```
-
-源码开发请看 [开发工作流](#开发工作流)。
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
-
 ## Raven 适合什么
 
 Raven 面向那些普通聊天 Agent 显得太轻、太浅、太短的工作流。
@@ -162,6 +191,62 @@ Sentinel 监听事件、调度检查、判断 nudge 是否有用，并通过 gua
 
 SkillForge 把 skills 当成 procedural memory。它可以识别可复用工作流、写入
 skill 文件、追踪执行反馈，并在 instruction 失效时进化它。
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## Agent Templates
+
+Raven 是 EverMind 构建的 Apache-2.0 licensed、memory-first agent library。
+它提供 runtime、memory layer、tools 和 Agent Templates，用来构建定制 Agent
+和 digital workers。
+
+当你想复用 Raven 的 operating layer，但又需要自己的场景、人格、workflow
+policy、skills、integrations 或分发方式时，就可以从 Agent Template 开始。
+一个 template 可以先是某个人的个人 Agent，之后再变成团队或社区可复用的
+digital worker。
+
+用 Raven 创建的 agents、templates、skills、workflows 和 modules 属于它们的
+创建者。构建者可以在 Apache-2.0 license 下使用、修改、商业化和分享基于 Raven
+或 Raven Agent Templates 创建的 Agent。
+
+我们鼓励构建者标注 "Built with Raven" 并链接回这个仓库。未经 EverMind 明确
+授权，不得使用 Raven 或 EverMind 的名称和 logo 暗示官方背书。
+
+## 常用命令
+
+| 目标 | 命令 |
+| --- | --- |
+| 启动原生 TUI | `raven` 或 `raven tui` |
+| 检查 TUI runtime | `raven tui --check` |
+| 配置 Raven | `raven onboard` |
+| 执行一次 shell 任务 | `raven agent -m "..."` |
+| 查看 providers | `raven provider list` |
+| 列出消息渠道 | `raven channels list` |
+| 启动 messaging gateway | `raven gateway` |
+| 管理 sessions | `raven sessions list` |
+| 查看 scheduled jobs | `raven cron list` |
+| 浏览 skills | `raven skill list` |
+| 查看 proactive state | `raven sentinel status` |
+| 查看 plugins 和 memory backend | `raven plugins` |
+| 调试 sandbox VMs | `raven sandbox list` |
+| 查看本地状态 | `raven status` |
+| 诊断配置 | `raven doctor` |
+
+## 按目标阅读文档
+
+| 目标 | 从这里开始 |
+| --- | --- |
+| 第一次安装和配置 | [快速开始](#快速开始) |
+| 源码开发 | [开发工作流](#开发工作流) 和 [docs/dev.md](docs/dev.md) |
+| Memory 和 plugin 架构 | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
+| Sandbox 使用和调试 | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
+| Proactivity 设计 | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
+| 详细设计文档 | [docs/README.md](docs/README.md) |
 
 <br>
 <div align="right">
