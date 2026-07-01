@@ -24,14 +24,9 @@
 
 # Raven
 
-Raven is **The Self-Improving Agent Harness**, built on top of
-[EverOS](https://github.com/EverMind-AI/EverOS).
+Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.com/EverMind-AI/EverOS).
 
-Raven continuously improves the harness that surrounds an agent: tools, skills,
-memory, code execution runtime, policies, and working environment. EverOS gives
-the harness durable user memory, agent memory, and world knowledge across
-sessions, so each run can refine how the agent acts, what it knows, and how
-repeatable workflows become reusable Agent Templates and digital workers.
+Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
 
 <details>
   <summary><kbd>Table of Contents</kbd></summary>
