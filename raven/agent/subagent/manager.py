@@ -100,7 +100,7 @@ class SubagentManager:
         window.append(now)
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
-        origin = {"channel": origin_channel, "chat_id": origin_chat_id}
+        origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
 
         bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
         self._running_tasks[task_id] = bg_task
@@ -284,10 +284,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
                     chat_type=ChatType.DM,
                 ),
                 text=announce_content,
-                conversation=f"{origin['channel']}:{origin['chat_id']}",
+                conversation=origin["session_key"],
             )
         )
-        logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin["channel"], origin["chat_id"])
+        logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
     def _build_subagent_prompt(self) -> str:
         """Build a focused system prompt for the subagent."""
@@ -296,7 +296,7 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
         # Use a transient ContextBuilder to access the runtime-context
         # builder; SubagentManager doesn't have its own ContextBuilder.
-        time_ctx = ContextBuilder(self.workspace)._build_runtime_context(None, None)
+        time_ctx = ContextBuilder(self.workspace, start_watcher=False)._build_runtime_context(None, None)
         parts = [
             f"""# Subagent
 

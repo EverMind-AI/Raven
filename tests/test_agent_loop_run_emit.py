@@ -580,9 +580,9 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     seen: dict = {}
     real = loop._set_tool_context
 
-    def _spy(channel, chat_id, message_id=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None):
         seen["message_id"] = message_id
-        return real(channel, chat_id, message_id)
+        return real(channel, chat_id, message_id, session_key=session_key)
 
     loop._set_tool_context = _spy
 
@@ -611,7 +611,7 @@ async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     _stub_edges(loop)
     seen: dict = {"message_id": "sentinel"}
 
-    def _spy(channel, chat_id, message_id=None):
+    def _spy(channel, chat_id, message_id=None, session_key=None):
         seen["message_id"] = message_id
 
     loop._set_tool_context = _spy

@@ -1125,7 +1125,9 @@ class TestSubagentSandboxLifecycle:
                 await manager._announce_result(task_id, label, task, "done", origin, "ok")
 
             manager._run_subagent_inner = _fast_inner
-            await manager._run_subagent("t1", "test task", "test", {"channel": "cli", "chat_id": "direct"})
+            await manager._run_subagent(
+                "t1", "test task", "test", {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"}
+            )
         finally:
             subagent_mod.build_executor = original
 
@@ -1158,7 +1160,7 @@ class TestSubagentSandboxLifecycle:
             "label",
             "task",
             "done",
-            {"channel": "weixin", "chat_id": "u1"},
+            {"channel": "weixin", "chat_id": "u1", "session_key": "weixin:u1"},
             "ok",
         )
 
