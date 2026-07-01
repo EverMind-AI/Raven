@@ -497,6 +497,48 @@ class TestStoreConversion:
 
 
 # ---------------------------------------------------------------------------
+# Default identity alignment (store side must match recall-side defaults)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultIdentityAlignment:
+    async def test_user_track_default_owner_is_default(self, tmp_path: Path) -> None:
+        """Backend with no user_id in config stamps user messages with
+        'default', not 'raven-user', so store and recall use the same owner."""
+        adapter = _FakeAdapter()
+        b = EverosBackend(_ctx(tmp_path), adapter=adapter)
+        await b.store("s", [{"role": "user", "content": "hi"}])
+        payload = adapter.memorize_calls[0]["payload_messages"]
+        assert payload[0]["sender_id"] == "default"
+
+    async def test_agent_track_default_id_is_default(self, tmp_path: Path) -> None:
+        """Backend with no agent_id in config resolves _agent_id to 'default',
+        not 'agent:default', and stamps assistant messages accordingly."""
+        adapter = _FakeAdapter()
+        b = EverosBackend(_ctx(tmp_path), adapter=adapter)
+        assert b._agent_id == "default"
+        await b.store("s", [{"role": "assistant", "content": "hello"}])
+        payload = adapter.memorize_calls[0]["payload_messages"]
+        assert payload[0]["sender_id"] == "default"
+
+    async def test_explicit_user_and_agent_id_preserved(self, tmp_path: Path) -> None:
+        """Explicitly configured user_id and agent_id are used verbatim."""
+        adapter = _FakeAdapter()
+        b = EverosBackend(_ctx(tmp_path, user_id="alice", agent_id="bob"), adapter=adapter)
+        await b.store(
+            "s",
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+            ],
+        )
+        payload = adapter.memorize_calls[0]["payload_messages"]
+        by_role = {m["role"]: m["sender_id"] for m in payload}
+        assert by_role["user"] == "alice"
+        assert by_role["assistant"] == "bob"
+
+
+# ---------------------------------------------------------------------------
 # Feedback — no-op contract
 # ---------------------------------------------------------------------------
 

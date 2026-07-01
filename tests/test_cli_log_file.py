@@ -9,6 +9,7 @@ has its own real-litellm regression guard in
 from __future__ import annotations
 
 import logging
+import logging.handlers
 from pathlib import Path
 
 import pytest
@@ -160,3 +161,116 @@ def test_file_sink_does_not_dump_local_variable_values(tmp_logs: Path) -> None:
     content = _flush_and_read(log_path)
     assert "processing failed" in content
     assert "SECRET-TOKEN-9z9z9z" not in content
+
+
+# ---------------------------------------------------------------------------
+# Root-logger TTY StreamHandler stripping
+# ---------------------------------------------------------------------------
+
+
+def test_strip_tty_stream_handlers_removes_root_stdout_handler(tmp_logs: Path) -> None:
+    """_strip_tty_stream_handlers() must remove a StreamHandler(sys.stdout)
+    installed on the ROOT logger (not just on named loggers)."""
+    import sys
+
+    from raven.cli._log_file import _strip_tty_stream_handlers
+
+    root = logging.getLogger()
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    root.addHandler(stdout_handler)
+
+    try:
+        _strip_tty_stream_handlers()
+        assert stdout_handler not in root.handlers, "_strip_tty_stream_handlers must remove root stdout StreamHandler"
+    finally:
+        root.removeHandler(stdout_handler)
+
+
+def test_strip_tty_stream_handlers_keeps_root_non_tty_handler(tmp_logs: Path) -> None:
+    """_strip_tty_stream_handlers() must NOT remove a non-TTY handler (e.g. a
+    MemoryHandler) from the ROOT logger."""
+    from raven.cli._log_file import _strip_tty_stream_handlers
+
+    root = logging.getLogger()
+    mem_handler = logging.handlers.MemoryHandler(capacity=10)
+    root.addHandler(mem_handler)
+
+    try:
+        _strip_tty_stream_handlers()
+        assert mem_handler in root.handlers, "_strip_tty_stream_handlers must not remove non-TTY root handlers"
+    finally:
+        root.removeHandler(mem_handler)
+
+
+# ---------------------------------------------------------------------------
+# redirect_terminal_fds_to_file — fd-level stdout/stderr capture
+# ---------------------------------------------------------------------------
+
+
+def test_redirect_terminal_fds_captures_print_and_raw_fd_write(tmp_path, capfd) -> None:
+    """Inside redirect_terminal_fds_to_file, both print() (flushed to the real fd)
+    and os.write(1, ...) must land in the target file, not the terminal.
+
+    This proves the context manager captures the structlog PrintLogger path
+    (which does print(message, file=None) writing to the live fd 1) AND raw fd writes.
+    We run under capfd.disabled() so pytest is not fighting for the fds during
+    the redirect — the fd-level dup2 takes exclusive effect.
+    """
+    import os
+
+    from raven.cli._log_file import redirect_terminal_fds_to_file
+
+    target = tmp_path / "capture.log"
+
+    with capfd.disabled():
+        with redirect_terminal_fds_to_file(target):
+            # Real print() through sys.stdout — this is the structlog PrintLogger path.
+            print("print-leak-line", flush=True)
+            # Raw fd write — exercises the os.write path directly.
+            os.write(1, b"raw-fd-write\n")
+
+    content = target.read_bytes()
+    assert b"print-leak-line" in content, "print() output must land in the redirect file (structlog PrintLogger path)"
+    assert b"raw-fd-write" in content, "os.write(1, ...) during redirect must land in the file"
+
+
+def test_redirect_terminal_fds_restores_fd1_after_exit(tmp_path, capfd) -> None:
+    """After the context manager exits, fd1 must be restored to the original
+    target (e.g. the original stdout) — writes after exit must NOT go to the
+    redirect file."""
+    import os
+
+    from raven.cli._log_file import redirect_terminal_fds_to_file
+
+    target = tmp_path / "capture.log"
+    marker_after = b"marker-after-restore\n"
+
+    with capfd.disabled():
+        with redirect_terminal_fds_to_file(target):
+            pass
+        # After exit: write a marker — it should NOT appear in the file.
+        os.write(1, marker_after)
+
+    content = target.read_bytes() if target.exists() else b""
+    assert marker_after not in content, "writes after CM exit must not go to the redirect file"
+
+
+def test_redirect_terminal_fds_restores_on_exception(tmp_path, capfd) -> None:
+    """fd1/fd2 must be restored even when an exception is raised inside the CM."""
+    import os
+
+    from raven.cli._log_file import redirect_terminal_fds_to_file
+
+    target = tmp_path / "capture.log"
+    marker_after = b"marker-after-exception\n"
+
+    with capfd.disabled():
+        try:
+            with redirect_terminal_fds_to_file(target):
+                raise RuntimeError("boom inside CM")
+        except RuntimeError:
+            pass
+        os.write(1, marker_after)
+
+    content = target.read_bytes() if target.exists() else b""
+    assert marker_after not in content, "fd1 must be restored on exception so writes land back on real stdout"

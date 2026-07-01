@@ -13,10 +13,11 @@ Env vars:
 
 from __future__ import annotations
 
+import contextlib
 import logging as _stdlib_logging
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 
 from raven.config.paths import get_logs_dir
@@ -87,7 +88,7 @@ def _intercept_stdlib_logging(logger) -> None:
 
 def _strip_tty_stream_handlers() -> None:
     """Remove TTY ``StreamHandler``s that third-party libs attach directly to
-    named loggers.
+    named loggers or the root logger.
 
     ``basicConfig(force=True)`` only resets the ROOT logger's handlers. Some
     libraries (notably ``litellm``) install their own ``StreamHandler(stderr)``
@@ -96,14 +97,54 @@ def _strip_tty_stream_handlers() -> None:
     direct-to-TTY write overlays the Ink alt-screen. Stripping
     them keeps records reaching the file sink via ``propagate=True`` → root →
     InterceptHandler.
+
+    Also strips TTY StreamHandlers from the root logger itself, which some
+    libraries (e.g. everos configure_logging) install after basicConfig runs.
     """
     tty_streams = (sys.stderr, sys.stdout)
+
+    def _strip_from(logger_obj: _stdlib_logging.Logger) -> None:
+        for handler in list(logger_obj.handlers):
+            if isinstance(handler, _stdlib_logging.StreamHandler) and getattr(handler, "stream", None) in tty_streams:
+                logger_obj.removeHandler(handler)
+
+    _strip_from(_stdlib_logging.getLogger())
+
     for obj in list(_stdlib_logging.Logger.manager.loggerDict.values()):
         if not isinstance(obj, _stdlib_logging.Logger):
             continue  # skip PlaceHolder entries
-        for handler in list(obj.handlers):
-            if isinstance(handler, _stdlib_logging.StreamHandler) and getattr(handler, "stream", None) in tty_streams:
-                obj.removeHandler(handler)
+        _strip_from(obj)
 
 
-__all__ = ["redirect_loguru_to_file"]
+@contextlib.contextmanager
+def redirect_terminal_fds_to_file(path: Path) -> Generator[None, None, None]:
+    """Redirect fd 1 (stdout) and fd 2 (stderr) to ``path`` for the duration of
+    the block, then restore the originals.
+
+    everos embedded structlog prints directly to stdout via PrintLogger, bypassing
+    the stdlib logging module entirely; redirecting fds at the OS level is the only
+    layer that catches those writes before they corrupt the full-screen TUI.
+    The file is opened in append mode so it coexists with loguru's rotating sink
+    targeting the same path.  Restore is guaranteed via a finally block.
+    """
+    saved_out = os.dup(1)
+    saved_err = os.dup(2)
+    file_fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.dup2(file_fd, 1)
+        os.dup2(file_fd, 2)
+        os.close(file_fd)
+        file_fd = -1
+        try:
+            yield
+        finally:
+            os.dup2(saved_out, 1)
+            os.dup2(saved_err, 2)
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        os.close(saved_out)
+        os.close(saved_err)
+
+
+__all__ = ["redirect_loguru_to_file", "redirect_terminal_fds_to_file"]
