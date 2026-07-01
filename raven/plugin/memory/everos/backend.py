@@ -54,12 +54,8 @@ _OwnerType = Literal["user", "agent"]
 # request for a new adapter — see ``EverosBackend._validate_config``.
 _VALID_MODES: tuple[str, ...] = ("embedded", "http")
 
-# Default agent identity stamped on stored agent-track messages when
-# ``plugins.config["everos-memory"].agent_id`` is unset. The agent is a
-# stable, pre-configured entity (its skills / cases accrue under this id
-# across sessions). Must match the ``agent_id`` the host passes to
-# recall for stored agent memory to be retrievable.
-_DEFAULT_AGENT_ID: str = "agent:default"
+_DEFAULT_AGENT_ID: str = "default"
+_DEFAULT_USER_ID: str = "default"
 
 
 # ---------------------------------------------------------------------------
@@ -401,14 +397,8 @@ class EverosBackend:
         self._services = ctx.services
         self._logger = ctx.logger
         self._mode = self._config.get("mode", "embedded")
-        # Agent identity stamped on stored agent-track messages. Must
-        # match the ``agent_id`` the host passes to recall for stored
-        # agent memory to be retrievable.
         self._agent_id: str = self._config.get("agent_id") or _DEFAULT_AGENT_ID
-        # User identity stamped on stored user-track messages. Must match
-        # the ``user_id`` the host passes to recall for stored user
-        # memory to be retrievable.
-        self._user_id: str | None = self._config.get("user_id")
+        self._user_id: str = self._config.get("user_id") or _DEFAULT_USER_ID
         # everos accumulates raw turns and only extracts episodes / cases /
         # skills on a boundary flush. Flush every N store() calls so short
         # sessions still build memory (mirrors the EverMe plugin's
@@ -688,7 +678,7 @@ class EverosBackend:
         messages: list[dict[str, Any]],
         *,
         agent_id: str,
-        user_id: str | None = None,
+        user_id: str = "default",
     ) -> list[dict[str, Any]]:
         """Adapt raven AgentLoop messages into EverOS's MessageItemDTO shape.
 
@@ -708,7 +698,7 @@ class EverosBackend:
           ``recall(user_id=<X>)`` must use that same ``<X>``.
 
         Other conversions: drop ``system``; missing ``sender_id`` on a
-        user message → ``"raven-user"``; missing ``timestamp`` → now (ms);
+        user message → ``user_id``; missing ``timestamp`` → now (ms);
         multimodal ``content`` → space-joined text; empty text → drop.
         """
         now_ms = int(time.time() * 1000)
@@ -736,7 +726,7 @@ class EverosBackend:
             entry: dict[str, Any] = {
                 "sender_id": agent_id
                 if role in ("assistant", "tool")
-                else (m.get("sender_id") or user_id or "raven-user"),
+                else (m.get("sender_id") or user_id),
                 "role": role,
                 "timestamp": m.get("timestamp") or now_ms,
                 "content": content,
