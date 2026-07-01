@@ -28,6 +28,10 @@ Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.
 
 Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="Starting Raven from the command line" width="100%">
+</p>
+
 <details>
   <summary><kbd>Table of Contents</kbd></summary>
 
