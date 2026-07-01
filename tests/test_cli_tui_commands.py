@@ -7,8 +7,9 @@ in ``test_cli_agent_commands.py``.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
-from unittest.mock import MagicMock, sentinel
+from unittest.mock import AsyncMock, MagicMock, sentinel
 
 import pytest
 
@@ -196,3 +197,187 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     tools_reg = next(r for name, r in passed_registries if name == "tools")
     assert backend_reg is sentinel.shared_registry
     assert tools_reg is sentinel.shared_registry
+
+
+# ---------------------------------------------------------------------------
+# _run_rpc_server_until_done — embedded backend lifecycle
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
+    """Stub all heavy deps of ``_run_rpc_server_until_done`` so the function
+    can be exercised in-process without a real socket or Node child.
+
+    Returns a ``ctx`` dict with the spy backend and call-tracking lists.
+    """
+    ctx: dict[str, Any] = {
+        "start_calls": [],
+        "stop_calls": [],
+    }
+
+    class _SpyBackend:
+        async def start(self):
+            ctx["start_calls"].append("start")
+
+        async def stop(self):
+            ctx["stop_calls"].append("stop")
+
+    spy_backend = _SpyBackend()
+    ctx["backend"] = spy_backend
+
+    fake_agent_loop = MagicMock()
+    fake_agent_loop.backend = spy_backend
+    fake_agent_loop.cron_service = None
+    fake_agent_loop.tools.get.return_value = None
+    fake_agent_loop.subagents.set_submit = MagicMock()
+    ctx["agent_loop"] = fake_agent_loop
+
+    monkeypatch.setattr(
+        "raven.cli.tui_commands._build_tui_agent_loop",
+        lambda: fake_agent_loop,
+    )
+
+    # Stub RPC machinery so _run_rpc_server_until_done can import + construct
+    # without a real socket transport.
+    fake_dispatcher = MagicMock()
+    fake_dispatcher.register = MagicMock()
+    monkeypatch.setattr("raven.tui_rpc.dispatcher.Dispatcher", lambda: fake_dispatcher)
+
+    async def _fake_serve_forever():
+        await asyncio.sleep(0)
+
+    fake_server = MagicMock()
+    fake_server.send_frame = AsyncMock()
+    fake_server.serve_forever = _fake_serve_forever
+    monkeypatch.setattr(
+        "raven.tui_rpc.server.RpcServer",
+        lambda **kw: fake_server,
+    )
+
+    fake_emitter = MagicMock()
+    monkeypatch.setattr(
+        "raven.tui_rpc.subscriptions.SubscriptionEmitter",
+        lambda **kw: fake_emitter,
+    )
+
+    fake_confirm_broker = MagicMock()
+    fake_confirm_broker.cancel_all = MagicMock()
+    monkeypatch.setattr(
+        "raven.tui_rpc.confirm_broker.ConfirmBroker",
+        lambda **kw: fake_confirm_broker,
+    )
+
+    fake_question_broker = MagicMock()
+    monkeypatch.setattr(
+        "raven.tui_rpc.question_broker.QuestionBroker",
+        lambda **kw: fake_question_broker,
+    )
+
+    async def _fake_system_hello(params):
+        return {"version": "0.0.0"}
+
+    monkeypatch.setattr("raven.tui_rpc.methods.system.system_hello", _fake_system_hello)
+    monkeypatch.setattr("raven.tui_rpc.methods.system.system_ping", AsyncMock())
+    monkeypatch.setattr("raven.tui_rpc.methods.system.system_version", AsyncMock())
+    monkeypatch.setattr(
+        "raven.tui_rpc.methods.register_aligned_methods_except_system",
+        MagicMock(),
+    )
+
+    fake_turn_scheduler = MagicMock()
+    fake_turn_hub = MagicMock()
+    fake_turn_ids: dict = {}
+
+    async def _fake_turn_teardown():
+        pass
+
+    monkeypatch.setattr(
+        "raven.tui_rpc.spine.build_tui",
+        lambda *a, **kw: (fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown),
+    )
+
+    monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
+    monkeypatch.setattr("raven.tui_rpc.methods.turn.clear_active", MagicMock())
+
+    ctx["fake_server"] = fake_server
+    ctx["fake_confirm_broker"] = fake_confirm_broker
+    return ctx
+
+
+async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):
+    """Helper: drive ``_run_rpc_server_until_done`` with proc_done set immediately
+    so the function exits as fast as possible (handshake timeout path — still
+    exercises the full try/finally, including start/stop)."""
+    from raven.cli.tui_commands import _run_rpc_server_until_done
+
+    proc_done = asyncio.Event()
+    proc_done.set()
+
+    fake_sock = MagicMock()
+    await _run_rpc_server_until_done(fake_sock, "test-token", 0.01, proc_done)
+
+
+async def test_rpc_runner_calls_backend_start_before_serving(rpc_server_deps, monkeypatch) -> None:
+    """``_run_rpc_server_until_done`` must await ``backend.start()`` once before
+    entering the serve loop when ``agent_loop.backend`` is not None."""
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["start_calls"] == ["start"], (
+        "backend.start() must be called exactly once before serving"
+    )
+
+
+async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatch) -> None:
+    """``_run_rpc_server_until_done`` must await ``backend.stop()`` in the finally
+    block so the embedded index lock is released on normal exit."""
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["stop_calls"] == ["stop"], (
+        "backend.stop() must be called exactly once in the finally block"
+    )
+
+
+async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, monkeypatch) -> None:
+    """``backend.stop()`` must be awaited even when the serve task raises, verifying
+    the try/finally pairing (the embedded index lock is released regardless).
+
+    The serve exception is swallowed by the finally cleanup (by design — the task
+    is cancelled there), so we only assert stop() was called, not that the error
+    propagates.
+    """
+    async def _boom():
+        raise RuntimeError("simulated serve error")
+
+    fake_server = rpc_server_deps["fake_server"]
+    fake_server.serve_forever = _boom
+
+    from raven.cli.tui_commands import _run_rpc_server_until_done
+
+    proc_done = asyncio.Event()
+    proc_done.set()
+    fake_sock = MagicMock()
+
+    await _run_rpc_server_until_done(fake_sock, "test-token", 0.01, proc_done)
+
+    assert rpc_server_deps["stop_calls"] == ["stop"], (
+        "backend.stop() must still run via finally even after serve raises"
+    )
+
+
+async def test_rpc_runner_start_and_stop_each_called_once(rpc_server_deps, monkeypatch) -> None:
+    """Exactly one start and one stop — no double-start or double-stop."""
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert len(rpc_server_deps["start_calls"]) == 1
+    assert len(rpc_server_deps["stop_calls"]) == 1
+
+
+async def test_rpc_runner_skips_lifecycle_when_no_backend(rpc_server_deps, monkeypatch) -> None:
+    """When ``agent_loop.backend is None`` (no plugin wired), start/stop are skipped."""
+    rpc_server_deps["agent_loop"].backend = None
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["start_calls"] == []
+    assert rpc_server_deps["stop_calls"] == []

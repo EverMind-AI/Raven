@@ -590,6 +590,18 @@ async def _run_rpc_server_until_done(
         build_error=build_error,
     )
 
+    # Start the embedded backend before serving so the EverOS runtime is up
+    # and its index lock is held for the session. No-op for http/no-op backends.
+    if agent_loop is not None and agent_loop.backend is not None:
+        try:
+            await agent_loop.backend.start()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception(
+                "tui: memory backend start failed; continuing with degraded memory path",
+            )
+
     serve_task = asyncio.create_task(server.serve_forever())
 
     try:
@@ -630,6 +642,16 @@ async def _run_rpc_server_until_done(
                 await turn_teardown()
             except Exception:
                 pass
+        # Release the embedded index lock so the next process can start.
+        if agent_loop is not None and agent_loop.backend is not None:
+            try:
+                await agent_loop.backend.stop()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception(
+                    "tui: memory backend stop failed; continuing shutdown",
+                )
         serve_task.cancel()
         try:
             await serve_task
