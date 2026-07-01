@@ -339,29 +339,31 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
 
 
 async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, monkeypatch) -> None:
-    """``backend.stop()`` must be awaited even when the serve task raises, verifying
-    the try/finally pairing (the embedded index lock is released regardless).
+    """``backend.stop()`` must be awaited even when an exception propagates through
+    the try block of ``_run_rpc_server_until_done``, proving the embedded index lock
+    is released regardless of errors.
 
-    The serve exception is swallowed by the finally cleanup (by design — the task
-    is cancelled there), so we only assert stop() was called, not that the error
-    propagates.
+    ``asyncio.wait`` is patched to raise inside the try body so the exception
+    genuinely propagates through the try block (not just through the finally during
+    task cancellation). The exception is expected to surface out of the function.
     """
-    async def _boom():
-        raise RuntimeError("simulated serve error")
+    exc = RuntimeError("simulated asyncio.wait failure")
 
-    fake_server = rpc_server_deps["fake_server"]
-    fake_server.serve_forever = _boom
+    async def _raising_wait(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr("raven.cli.tui_commands.asyncio.wait", _raising_wait)
 
     from raven.cli.tui_commands import _run_rpc_server_until_done
 
     proc_done = asyncio.Event()
-    proc_done.set()
     fake_sock = MagicMock()
 
-    await _run_rpc_server_until_done(fake_sock, "test-token", 0.01, proc_done)
+    with pytest.raises(RuntimeError, match="simulated asyncio.wait failure"):
+        await _run_rpc_server_until_done(fake_sock, "test-token", 0.01, proc_done)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], (
-        "backend.stop() must still run via finally even after serve raises"
+        "backend.stop() must still run via finally even when an exception propagates through the try block"
     )
 
 
