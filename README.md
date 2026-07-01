@@ -27,11 +27,11 @@
 Raven is **The Self-Improving Agent Harness**, built on top of
 [EverOS](https://github.com/EverMind-AI/EverOS).
 
-Raven continuously improves the harness around an agent: tools, skills, memory,
-code execution runtime, policies, and working environment. EverOS gives Raven
-durable user memory, agent memory, and world knowledge across sessions, so each
-run can refine how the agent acts, what it knows, and how repeatable workflows
-become reusable Agent Templates and digital workers.
+Raven continuously improves the harness that surrounds an agent: tools, skills,
+memory, code execution runtime, policies, and working environment. EverOS gives
+the harness durable user memory, agent memory, and world knowledge across
+sessions, so each run can refine how the agent acts, what it knows, and how
+repeatable workflows become reusable Agent Templates and digital workers.
 
 <details>
   <summary><kbd>Table of Contents</kbd></summary>
@@ -98,8 +98,8 @@ raven doctor
 
 ## What You Can Do in 2 Minutes
 
-- Start a terminal-native agent with `raven` or `raven tui`.
-- Run a one-shot task from your shell with `raven agent -m "..."`.
+- Start the Raven harness in a terminal-native TUI with `raven` or `raven tui`.
+- Run a one-shot agent task from your shell with `raven agent -m "..."`.
 - Configure providers, sandboxing, channels, and memory with `raven onboard`.
 - Browse built-in and local SkillForge skills with `raven skill list`.
 - Resume, fork, export, or delete previous work with `raven sessions list`.
@@ -128,7 +128,7 @@ daemon.
 
 ## Why Raven
 
-Most agent CLIs stop at "LLM + tools + loop." That works for demos, but it
+Most agent tools stop at "LLM + tools + loop." That works for demos, but it
 breaks down when the agent becomes part of your daily environment:
 
 - Long sessions overflow context and lose important details.
@@ -137,22 +137,23 @@ breaks down when the agent becomes part of your daily environment:
 - Useful workflows stay trapped in chat history instead of becoming reusable
   skills.
 
-Raven treats those problems as the product, not edge cases.
+Raven treats the harness around the agent as the product, not a thin wrapper or
+an edge case.
 
-Raven is built around three product bets:
+Raven's self-improving harness is built around three product bets:
 
-- **Memory-first:** user memory, agent memory, and world knowledge stay
+- **Memory-first harness:** user memory, agent memory, and world knowledge stay
   separate, durable, and reusable across sessions.
 - **Self-improving skills:** repeated workflows can become skills, collect
   feedback, and evolve instead of staying buried in chat history.
 - **Agent Templates:** builders can start from Raven, define an agent for a
-  scenario, and share it without rebuilding the operating layer.
+  scenario, and share it without rebuilding the harness layer.
 
 <table>
 <tr>
 <th width="28%">Capability</th>
 <th width="36%">Raven</th>
-<th width="36%">Typical agent CLI</th>
+<th width="36%">Typical tool-based agent</th>
 </tr>
 <tr>
 <td><strong>Native terminal product</strong></td>
@@ -185,31 +186,32 @@ Raven is built around three product bets:
 
 ## What Raven Is Built For
 
-Raven is designed for the workflows where ordinary chat agents feel too small.
+Raven is designed for the workflows where ordinary chat agents and static tool
+loops feel too small.
 
 ### 1. Terminal-Native Daily Work
 
-Raven can run as a native TUI, a direct CLI agent, or a gateway-backed agent.
-The TUI is not a web shell: it is a React/Ink application talking to Raven's
-Python runtime through a typed RPC protocol.
+Raven can run the harness as a native TUI, a direct CLI entry point, or a
+gateway-backed runtime. The TUI is not a web shell: it is a React/Ink
+application talking to Raven's Python runtime through a typed RPC protocol.
 
 ### 2. Memory That Becomes Useful
 
-Raven connects to EverOS for long-term user and agent memory. Sessions,
-procedures, and reusable patterns can be turned into local skill material
-instead of disappearing into old transcripts.
+Raven connects the harness to EverOS for long-term user and agent memory.
+Sessions, procedures, and reusable patterns can be turned into local skill
+material instead of disappearing into old transcripts.
 
 ### 3. Context That Does Not Collapse Under Pressure
 
-The context stack has a legacy path and a Curator path. Under pressure, Raven
-can archive, retrieve, and assemble context with explicit budgets instead of
-blindly clipping the oldest messages.
+The context stack has a legacy path and a Curator path. Under pressure, the
+harness can archive, retrieve, and assemble context with explicit budgets
+instead of blindly clipping the oldest messages.
 
 ### 4. Agents That Can Reach Out First
 
 Sentinel watches events, schedules checks, evaluates whether a nudge is useful,
 and routes proactive actions through guardrails. The point is not noisy
-notifications; the point is an agent that can notice.
+notifications; the point is an agent harness that can notice.
 
 ### 5. Skills That Improve
 
@@ -226,11 +228,11 @@ stop working.
 
 ## Agent Templates
 
-Raven is an Apache-2.0 licensed, memory-first agent library built by EverMind.
+Raven is an Apache-2.0 licensed, self-improving agent harness built by EverMind.
 It provides the runtime, memory layer, tools, and Agent Templates for building
 custom agents and digital workers.
 
-Use an Agent Template when you want Raven's operating layer but your own
+Use an Agent Template when you want Raven's harness layer but your own
 scenario, personality, workflow policy, skills, integrations, or distribution
 model. A template can start as one person's agent and later become a repeatable
 digital worker for a team or community.
@@ -402,9 +404,13 @@ core product surfaces are already in the repository.
 
 ## Star Us
 
-If Raven is the kind of command line agent you want to exist, star the repo.
-It helps more terminal-native builders discover the project and gives the
+If Raven is the kind of agent harness you want to exist, star the repo. It
+helps more builders of self-improving agents discover the project and gives the
 EverMind ecosystem a stronger signal to keep investing in open agents.
+
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
 
 <br>
 <div align="right">
@@ -427,8 +433,8 @@ agents, AI-native interfaces, and memory evaluation.
 <td><a href="https://github.com/EverMind-AI/EverOS">EverOS</a> - the local memory operating system and research-backed runtime for agent and user memory.</td>
 </tr>
 <tr>
-<td><strong>AI-Native CLI Agent</strong></td>
-<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - the native command line agent that brings memory, proactivity, context control, and skill evolution into the terminal.</td>
+<td><strong>Self-Improving Agent Harness</strong></td>
+<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - the self-improving agent harness that brings memory, proactivity, context control, and skill evolution into terminal-native agents.</td>
 </tr>
 <tr>
 <td><strong>Algorithm Engine</strong></td>
