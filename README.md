@@ -9,13 +9,6 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI" alt="CI"></a>
-  <a href="https://github.com/EverMind-AI/raven/releases"><img src="https://img.shields.io/github/v/release/EverMind-AI/raven?label=Release" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven" alt="License"></a>
-  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
-</p>
-
 [Website](https://raven.evermind.ai) · [中文](README.zh-CN.md)
 
 </div>
@@ -32,7 +25,7 @@ Raven helps agents improve across runs by continuously refining the systems arou
   <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="Starting Raven from the command line" width="100%">
 </p>
 
-<details open>
+<details>
   <summary><kbd>Table of Contents</kbd></summary>
 
 <br>
