@@ -1,7 +1,7 @@
 # Raven one-line installer for native Windows PowerShell.
 #
 # Remote:
-#   irm http://raven.evermind.ai/install.ps1 | iex
+#   irm https://raven.evermind.ai/install.ps1 | iex
 #
 # Goal: a clean Windows machine ends up able to run `raven` / `raven tui`
 # without admin rights. The script is idempotent: it reuses existing tools when

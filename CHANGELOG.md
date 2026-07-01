@@ -24,7 +24,7 @@ internals may still evolve before v1.0.
 ### Installation
 
 ```bash
-curl -fsSL http://raven.evermind.ai/install.sh | bash
+curl -fsSL https://raven.evermind.ai/install.sh | bash
 ```
 
 ### Release Status
