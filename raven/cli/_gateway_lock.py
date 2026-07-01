@@ -1,9 +1,9 @@
 """Per-instance single-run guard for the gateway.
 
-An advisory ``fcntl.flock`` is held for the whole process lifetime, so the
-kernel releases it automatically on death (incl. SIGKILL) — no stale-lock
-cleanup is ever needed. Degrades to lock-less on Windows, mirroring the cron
-service. The lock is anchored at ``<instance data dir>/gateway.lock`` so that a
+A cross-platform advisory lock (portalocker: POSIX ``fcntl`` + Windows
+``LockFileEx``) is held for the whole process lifetime, so the OS releases it
+automatically on death (incl. SIGKILL) — no stale-lock cleanup is ever needed.
+The lock is anchored at ``<instance data dir>/gateway.lock`` so that a
 ``--config`` instance guards independently of the default one.
 """
 
@@ -14,10 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
+import portalocker
 
 from raven.config.loader import get_config_path
 from raven.config.paths import get_data_dir
@@ -47,7 +44,7 @@ def _lock_path() -> Path:
 def _read_payload(path: Path) -> LockInfo:
     """Best-effort read of the lock payload; never raises on missing/corrupt."""
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         return LockInfo(
             pid=int(data.get("pid", -1)),
             started_at=float(data.get("started_at", 0.0)),
@@ -62,26 +59,28 @@ def acquire(now: float):
 
     Returns an open file handle the caller MUST keep alive for the whole
     process — closing it (or letting it be garbage-collected) releases the lock.
-    On Windows (no ``fcntl``) returns the handle without locking.
     """
-    path = _lock_path()
-    fd = path.open("a+")
-    if fcntl is None:
-        return fd
+    payload = _lock_path()
+    anchor = payload.with_name(payload.name + ".lck")
+    anchor.parent.mkdir(parents=True, exist_ok=True)
+    # Lock a separate anchor file, not the payload itself: on Windows the lock
+    # is mandatory, so locking the payload would block doctor's read-back of the
+    # owner pid. The anchor carries the lock; the payload stays readable.
+    fd = anchor.open("a+")
     try:
-        fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        info = _read_payload(path)
+        portalocker.lock(fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
+    except portalocker.exceptions.LockException:
+        info = _read_payload(payload)
         fd.close()
         raise GatewayAlreadyRunningError(info)
-    fd.seek(0)
-    fd.truncate()
-    fd.write(json.dumps({
-        "pid": os.getpid(),
-        "started_at": now,
-        "config_path": str(get_config_path()),
-    }))
-    fd.flush()
+    payload.write_text(
+        json.dumps({
+            "pid": os.getpid(),
+            "started_at": now,
+            "config_path": str(get_config_path()),
+        }),
+        encoding="utf-8",
+    )
     return fd
 
 
@@ -92,16 +91,17 @@ def read_status(now: float) -> LockInfo | None:
     immediately and report not-running); a blocked acquire means a live
     instance owns it, so return its payload.
     """
-    path = _lock_path()
-    if not path.exists() or fcntl is None:
+    payload = _lock_path()
+    anchor = payload.with_name(payload.name + ".lck")
+    if not anchor.exists():
         return None
-    with path.open("a+") as fd:
+    with anchor.open("a+") as fd:
         try:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            portalocker.lock(fd, portalocker.LOCK_EX | portalocker.LOCK_NB)
+            portalocker.unlock(fd)
             return None
-        except OSError:
-            return _read_payload(path)
+        except portalocker.exceptions.LockException:
+            return _read_payload(payload)
 
 
 __all__ = ["acquire", "read_status", "GatewayAlreadyRunningError", "LockInfo"]
