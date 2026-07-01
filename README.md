@@ -32,7 +32,7 @@ Raven helps agents improve across runs by continuously refining the systems arou
   <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="Starting Raven from the command line" width="100%">
 </p>
 
-<details>
+<details open>
   <summary><kbd>Table of Contents</kbd></summary>
 
 <br>
@@ -73,15 +73,23 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 Run this in PowerShell:
 
 ```powershell
-irm http://raven.evermind.ai/install.ps1 | iex
+irm https://raven.evermind.ai/install.ps1 | iex
 ```
+
+### After installation
 
 The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
 
-After installation:
+Open a new terminal. On Linux, macOS, or WSL2, you can also reload your current
+shell:
 
 ```bash
-source ~/.bashrc    # reload shell (or: source ~/.zshrc)
+source ~/.bashrc    # or: source ~/.zshrc
+```
+
+Then run:
+
+```bash
 raven onboard
 raven
 ```
@@ -98,7 +106,7 @@ raven doctor
 ## What You Can Do in 2 Minutes
 
 - Start the Raven harness in a terminal-native TUI with `raven` or `raven tui`.
-- Run a one-shot agent task from your shell with `raven agent -m "..."`.
+- Run a one-shot shell task with `raven agent -m "..."`.
 - Configure providers, sandboxing, channels, and memory with `raven onboard`.
 - Browse built-in and local SkillForge skills with `raven skill list`.
 - Resume, fork, export, or delete previous work with `raven sessions list`.
@@ -110,7 +118,7 @@ Raven currently ships 12 gateway adapters. Use `raven channels list` to see the
 adapters available in your local install and `raven gateway` to run the gateway
 daemon.
 
-| Gateway | Package id | Notes |
+| Gateway | Adapter id | Notes |
 | --- | --- | --- |
 | Telegram | `telegram` | Bot-based messaging |
 | Slack | `slack` | Workspace messaging |
@@ -123,7 +131,7 @@ daemon.
 | QQ | `qq` | QQ bot integration |
 | DingTalk | `dingtalk` | DingTalk stream integration |
 | Email | `email` | IMAP/SMTP mailbox integration |
-| WeChat | `weixin` | Personal WeChat integration |
+| WeChat | `weixin` | Personal WeChat adapter; `weixin` is the current CLI id |
 
 ## Why Raven
 
@@ -251,7 +259,7 @@ official endorsement unless explicitly approved by EverMind.
 | Start the native TUI | `raven` or `raven tui` |
 | Check the TUI runtime | `raven tui --check` |
 | Configure Raven | `raven onboard` |
-| Run one shell task | `raven agent -m "..."` |
+| Run a one-shot shell task | `raven agent -m "..."` |
 | Review providers | `raven provider list` |
 | List messaging channels | `raven channels list` |
 | Start the messaging gateway | `raven gateway` |
@@ -337,39 +345,10 @@ bridge/                 # WhatsApp TypeScript bridge
 
 ## Developer Workflow
 
-Install everything and set up hooks:
-
-```bash
-make install
-```
-
-Run the local CI gate:
-
-```bash
-make ci
-```
-
-Focused commands:
-
-```bash
-make lint-python
-make lint-tui
-make lint-bridge
-make test-python
-make test-tui
-```
-
-The repository uses:
-
-- `uv` for Python dependency management;
-- `ruff` and `pre-commit` for Python and repository hygiene;
-- `commitlint` plus a Python checker for Conventional Commit subjects and
-  ASCII-only public history;
-- `eslint`, `tsc`, `vitest`, and RPC drift checks for the TUI;
-- `npm ci`, `tsc`, and `npm audit --audit-level=critical` for the bridge.
-
-`CLAUDE.md` contains the full collaboration rules for branch naming, commit
-format, dependency updates, testing, and PR hygiene.
+Source setup, focused checks, and PR rules live in
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/dev.md](docs/dev.md).
+AI-collaboration rules live in [AGENTS.md](AGENTS.md); `CLAUDE.md` is kept as a
+compatibility entry point.
 
 <br>
 <div align="right">
@@ -428,12 +407,12 @@ agents, AI-native interfaces, and memory evaluation.
 <th colspan="2">EverMind Open-Source Ecosystem</th>
 </tr>
 <tr>
-<td><strong>Memory Runtime</strong></td>
-<td><a href="https://github.com/EverMind-AI/EverOS">EverOS</a> - the local memory operating system and research-backed runtime for agent and user memory.</td>
+<td><strong>Self-Improving Agent Harness</strong></td>
+<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - the terminal-native agent harness for tools, skills, memory, proactivity, context control, and reusable Agent Templates.</td>
 </tr>
 <tr>
-<td><strong>Self-Improving Agent Harness</strong></td>
-<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - the self-improving agent harness that brings memory, proactivity, context control, and skill evolution into terminal-native agents.</td>
+<td><strong>Memory Runtime</strong></td>
+<td><a href="https://github.com/EverMind-AI/EverOS">EverOS</a> - the memory substrate Raven uses for durable user memory, agent memory, case extraction, skill extraction, and multimodal parsing.</td>
 </tr>
 <tr>
 <td><strong>Algorithm Engine</strong></td>
@@ -480,7 +459,7 @@ benchmarks, documentation, and issue reports.
 
 Before opening a PR:
 
-1. Read `CLAUDE.md`.
+1. Read [AGENTS.md](AGENTS.md).
 2. Keep the change scoped.
 3. Add or update tests for behavior changes.
 4. Run the relevant `make` targets.
@@ -491,4 +470,4 @@ Before opening a PR:
 Raven is licensed under the Apache License 2.0. Portions of the runtime and
 TUI layer originated from MIT-licensed upstream projects; their copyright
 notices and license texts are retained in [NOTICES.md](NOTICES.md) and
-[LICENSES/](LICENSES/).
+[LICENSES](LICENSES/).

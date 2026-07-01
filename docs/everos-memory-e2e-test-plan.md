@@ -100,7 +100,7 @@ uv run pytest tests/integration -m real_llm
 4. **Store pollution** — the fixture forces `EVEROS_MEMORY__ROOT` to a
    temp dir and clears the settings cache so `~/.everos` is never touched.
 
-## Naming compliance note (CLAUDE.md §5.2)
+## Naming compliance note (AGENTS.md §5.2)
 
 The production-path / demo smokes were renamed to drop their
 ticket/version scope: `tests/integration/test_tui_rpc_production_smoke.py`
