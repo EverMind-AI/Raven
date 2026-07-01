@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/224c1623-2705-4a48-8a60-fd5681ca0cb2)
+![Raven banner](https://github.com/user-attachments/assets/5a99d736-49ee-49c9-8b51-890f14078e78)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -9,22 +9,43 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI" alt="CI"></a>
+  <a href="https://github.com/EverMind-AI/raven/releases"><img src="https://img.shields.io/github/v/release/EverMind-AI/raven?label=Release" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven" alt="License"></a>
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
+</p>
+
 [Website](https://raven.evermind.ai) · [中文](README.zh-CN.md)
 
 </div>
 
 <br>
 
+# Raven
+
+Raven is **The Self-Improving Agent Harness**, built on top of
+[EverOS](https://github.com/EverMind-AI/EverOS).
+
+Raven continuously improves the harness around an agent: tools, skills, memory,
+code execution runtime, policies, and working environment. EverOS gives Raven
+durable user memory, agent memory, and world knowledge across sessions, so each
+run can refine how the agent acts, what it knows, and how repeatable workflows
+become reusable Agent Templates and digital workers.
+
 <details>
   <summary><kbd>Table of Contents</kbd></summary>
 
 <br>
 
-- [Why Raven](#why-raven)
 - [Quick Install](#quick-install)
-- [Getting Started](#getting-started)
+- [What You Can Do in 2 Minutes](#what-you-can-do-in-2-minutes)
+- [Messaging Gateways](#messaging-gateways)
+- [Why Raven](#why-raven)
 - [What Raven Is Built For](#what-raven-is-built-for)
-- [Raven Templates and Ecosystem](#raven-templates-and-ecosystem)
+- [Agent Templates](#agent-templates)
+- [Useful Commands](#useful-commands)
+- [Docs by Goal](#docs-by-goal)
 - [Architecture](#architecture)
 - [Developer Workflow](#developer-workflow)
 - [Status](#status)
@@ -36,17 +57,76 @@
 
 </details>
 
-## Why Raven
+## Quick Install
 
-Raven is a **memory-first**, self-improving agent library and template system
-built by EverMind on top of [EverOS](https://github.com/EverMind-AI/EverOS),
-the memory layer that gives Raven durable agent memory, user memory, and world
-knowledge across sessions.
-Unlike a chat box wrapped around a shell, Raven is a native command line agent
-whose model, code, modules, and policy are decoupled so it can improve across
-the whole stack, not just the skills layer. With 100,000 built-in skills, Raven
-serves personal agents, cloud fleets, and reusable digital workers that get
-better every time you use them.
+### Linux, macOS, WSL2
+
+```bash
+curl -fsSL https://raven.evermind.ai/install.sh | bash
+```
+
+### Windows (native, PowerShell)
+
+> **Heads up:** Native Windows runs Raven without WSL. CLI, TUI, gateway, and
+> tools install natively. If you would rather use WSL2, the Linux/macOS
+> one-liner above works there too.
+
+Run this in PowerShell:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/EverMind-AI/Raven/main/install.ps1)
+```
+
+The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
+
+After installation:
+
+```bash
+source ~/.bashrc    # reload shell (or: source ~/.zshrc)
+raven onboard
+raven
+```
+
+Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
+OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.
+
+If setup fails or a provider is not ready, run:
+
+```bash
+raven doctor
+```
+
+## What You Can Do in 2 Minutes
+
+- Start a terminal-native agent with `raven` or `raven tui`.
+- Run a one-shot task from your shell with `raven agent -m "..."`.
+- Configure providers, sandboxing, channels, and memory with `raven onboard`.
+- Browse built-in and local SkillForge skills with `raven skill list`.
+- Resume, fork, export, or delete previous work with `raven sessions list`.
+- Check proactive memory and scheduled nudges with `raven sentinel status`.
+
+## Messaging Gateways
+
+Raven currently ships 12 gateway adapters. Use `raven channels list` to see the
+adapters available in your local install and `raven gateway` to run the gateway
+daemon.
+
+| Gateway | Package id | Notes |
+| --- | --- | --- |
+| Telegram | `telegram` | Bot-based messaging |
+| Slack | `slack` | Workspace messaging |
+| Discord | `discord` | Server and bot messaging |
+| WhatsApp | `whatsapp` | Uses the bundled TypeScript bridge |
+| Matrix | `matrix` | Matrix rooms and direct messages |
+| Feishu | `feishu` | Lark/Feishu app integration |
+| WeCom | `wecom` | WeCom group and app messaging |
+| Mochat | `mochat` | API/socket-based messaging |
+| QQ | `qq` | QQ bot integration |
+| DingTalk | `dingtalk` | DingTalk stream integration |
+| Email | `email` | IMAP/SMTP mailbox integration |
+| WeChat | `weixin` | Personal WeChat integration |
+
+## Why Raven
 
 Most agent CLIs stop at "LLM + tools + loop." That works for demos, but it
 breaks down when the agent becomes part of your daily environment:
@@ -58,6 +138,15 @@ breaks down when the agent becomes part of your daily environment:
   skills.
 
 Raven treats those problems as the product, not edge cases.
+
+Raven is built around three product bets:
+
+- **Memory-first:** user memory, agent memory, and world knowledge stay
+  separate, durable, and reusable across sessions.
+- **Self-improving skills:** repeated workflows can become skills, collect
+  feedback, and evolve instead of staying buried in chat history.
+- **Agent Templates:** builders can start from Raven, define an agent for a
+  scenario, and share it without rebuilding the operating layer.
 
 <table>
 <tr>
@@ -93,52 +182,6 @@ Raven treats those problems as the product, not edge cases.
 </table>
 
 <br>
-
-## Quick Install
-
-```bash
-curl -fsSL http://raven.evermind.ai/install.sh | bash
-```
-
-After installation, reload your shell and run the setup wizard:
-
-```bash
-source ~/.bashrc    # or: source ~/.zshrc
-raven onboard
-```
-
-Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
-OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.
-
-## Getting Started
-
-```bash
-raven                  # Native TUI - start a conversation
-raven tui              # Explicitly launch the native TUI
-raven tui --check      # Verify the TUI runtime before launching
-raven onboard          # Configure provider, sandbox, channels, and memory
-raven agent -m "..."   # Run a one-shot task from the shell
-raven provider list    # Review LLM providers and model configuration
-raven channels list    # List available messaging channels
-raven gateway          # Start the messaging gateway
-raven sessions list    # List, resume, fork, export, or delete sessions
-raven cron list        # Inspect scheduled jobs and automations
-raven skill list       # Browse SkillForge skills
-raven sentinel status  # Inspect proactive memory and nudge state
-raven plugins          # List installed plugins and the active memory backend
-raven sandbox list     # Inspect sandbox VMs when sandbox debugging is enabled
-raven status           # Show local config and runtime status
-raven doctor           # Diagnose config, routing, and LLM readiness
-```
-
-For source-based development, use the [Developer Workflow](#developer-workflow).
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
 
 ## What Raven Is Built For
 
@@ -181,11 +224,16 @@ stop working.
 
 </div>
 
-## Raven Templates and Ecosystem
+## Agent Templates
 
 Raven is an Apache-2.0 licensed, memory-first agent library built by EverMind.
 It provides the runtime, memory layer, tools, and Agent Templates for building
 custom agents and digital workers.
+
+Use an Agent Template when you want Raven's operating layer but your own
+scenario, personality, workflow policy, skills, integrations, or distribution
+model. A template can start as one person's agent and later become a repeatable
+digital worker for a team or community.
 
 Agents, templates, skills, workflows, and modules created with Raven belong to
 their creators. Builders may use, modify, commercialize, and share agents built
@@ -194,6 +242,37 @@ with Raven or based on Raven Agent Templates under the Apache-2.0 license.
 We encourage builders to say "Built with Raven" and link back to this
 repository. The Raven and EverMind names and logos may not be used to imply
 official endorsement unless explicitly approved by EverMind.
+
+## Useful Commands
+
+| Goal | Command |
+| --- | --- |
+| Start the native TUI | `raven` or `raven tui` |
+| Check the TUI runtime | `raven tui --check` |
+| Configure Raven | `raven onboard` |
+| Run one shell task | `raven agent -m "..."` |
+| Review providers | `raven provider list` |
+| List messaging channels | `raven channels list` |
+| Start the messaging gateway | `raven gateway` |
+| Manage sessions | `raven sessions list` |
+| Inspect scheduled jobs | `raven cron list` |
+| Browse skills | `raven skill list` |
+| Inspect proactive state | `raven sentinel status` |
+| Show plugins and memory backend | `raven plugins` |
+| Debug sandbox VMs | `raven sandbox list` |
+| Show local status | `raven status` |
+| Diagnose setup | `raven doctor` |
+
+## Docs by Goal
+
+| Goal | Start here |
+| --- | --- |
+| First-time install and setup | [Quick Install](#quick-install) |
+| Source-based development | [Developer Workflow](#developer-workflow) and [docs/dev.md](docs/dev.md) |
+| Memory and plugin architecture | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
+| Sandbox usage and debugging | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
+| Proactivity design | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
+| Detailed design notes | [docs/README.md](docs/README.md) |
 
 <br>
 <div align="right">
@@ -326,10 +405,6 @@ core product surfaces are already in the repository.
 If Raven is the kind of command line agent you want to exist, star the repo.
 It helps more terminal-native builders discover the project and gives the
 EverMind ecosystem a stronger signal to keep investing in open agents.
-
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
 
 <br>
 <div align="right">

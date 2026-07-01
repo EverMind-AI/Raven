@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import stat
+import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
@@ -156,6 +159,32 @@ def test_raven_node_override_no_fallback(monkeypatch, tmp_path):
     node_path, version = find_node()
     assert node_path is None, "RAVEN_NODE override must not fall back to venv/PATH"
     assert version is None
+
+
+def test_find_node_discovers_windows_private_runtime(monkeypatch, tmp_path):
+    """The Windows installer unpacks Node from the official zip, whose binary
+    lives at ``node-v22.x.y-win-x64/node.exe`` rather than ``bin/node``."""
+    if sys.platform == "win32":
+        pytest.skip("uses a POSIX fake node executable")
+
+    from raven.cli import tui_commands
+
+    node_dir = tmp_path / "runtime" / "node-v22.20.0-win-x64"
+    node_dir.mkdir(parents=True)
+    node = node_dir / "node.exe"
+    node.write_text("#!/bin/sh\necho v22.20.0\n", encoding="utf-8")
+    node.chmod(node.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.setattr(tui_commands.sys, "platform", "win32")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", "")
+
+    node_path, version = tui_commands.find_node()
+
+    assert node_path == str(node)
+    assert version == (22, 20, 0)
 
 
 def test_dev_npx_derived_from_node_path(monkeypatch, tmp_path):

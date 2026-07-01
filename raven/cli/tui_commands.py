@@ -83,6 +83,8 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     else:
         # Priority 2: active venv
         if venv := os.environ.get("VIRTUAL_ENV"):
+            if sys.platform == "win32":
+                candidates.append(str(Path(venv) / "Scripts" / "node.exe"))
             candidates.append(str(Path(venv) / "bin" / "node"))
 
         # Priority 3: PATH
@@ -96,10 +98,20 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # the versioned dir name (e.g. node-v22.x.y-darwin-arm64/bin/node).
         runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
         if runtime_root.is_dir():
-            direct = runtime_root / "node" / "bin" / "node"
-            if direct.exists():
-                candidates.append(str(direct))
-            candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
+            if sys.platform == "win32":
+                direct = runtime_root / "node" / "node.exe"
+                if direct.exists():
+                    candidates.append(str(direct))
+                direct_bin = runtime_root / "node" / "bin" / "node.exe"
+                if direct_bin.exists():
+                    candidates.append(str(direct_bin))
+                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/node.exe")))
+                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node.exe")))
+            else:
+                direct = runtime_root / "node" / "bin" / "node"
+                if direct.exists():
+                    candidates.append(str(direct))
+                candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
 
     for node_path in candidates:
         if not Path(node_path).exists():
