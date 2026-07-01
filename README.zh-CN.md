@@ -32,6 +32,10 @@ runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持
 记忆、Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，
 并把可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="从命令行启动 Raven" width="100%">
+</p>
+
 <details>
   <summary><kbd>目录</kbd></summary>
 
