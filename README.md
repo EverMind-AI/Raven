@@ -24,7 +24,7 @@
 
 # Raven
 
-Raven is **A First-of-Its-Kind Self-Improving Agent Harness**, built on top of
+Raven is **The Self-Improving Agent Harness**, built on top of
 [EverOS](https://github.com/EverMind-AI/EverOS).
 
 Raven continuously improves the harness around an agent: tools, skills, memory,
