@@ -194,7 +194,10 @@ class SkillHubClient:
                     continue
                 target = (dest / name).resolve()
                 # Path traversal is a security boundary, never tolerated.
-                if not str(target).startswith(str(dest.resolve()) + "/"):
+                # Use Path containment (not string prefix + "/"): on Windows the
+                # separator is "\\", so a hardcoded "/" never matches and every
+                # entry would be wrongly rejected as unsafe.
+                if not target.is_relative_to(dest.resolve()):
                     raise SkillHubError(f"unsafe zip path: {name!r}")
                 if Path(name).suffix.lower() not in _ALLOWED_SUFFIXES:
                     logger.warning("skipping disallowed file in skill zip: %r", name)
