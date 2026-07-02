@@ -69,8 +69,7 @@ def test_hazard_gate_fires_and_hard_exit_is_clean():
         "hazard gate did not detect the live lancedb thread after building the loop"
     )
     assert result.returncode == 0, (
-        f"hard-exit path did not exit 0 (rc={result.returncode}); "
-        f"stderr tail:\n{result.stderr[-1500:]}"
+        f"hard-exit path did not exit 0 (rc={result.returncode}); stderr tail:\n{result.stderr[-1500:]}"
     )
 
 
@@ -88,6 +87,4 @@ def test_normal_finalization_still_reproduces_the_crash():
     # subprocess.run reports a signal-killed child as a negative return code
     # (-11 for SIGSEGV, -6 for a Rust abort, etc.); the native runtime tearing
     # down mid-finalization is a fatal signal, never a clean nonzero exit.
-    assert result.returncode < 0, (
-        f"expected a fatal-signal crash on finalization, got rc={result.returncode}"
-    )
+    assert result.returncode < 0, f"expected a fatal-signal crash on finalization, got rc={result.returncode}"
