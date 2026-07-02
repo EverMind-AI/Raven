@@ -85,7 +85,7 @@ export const normalizeMouseTracking = (display: { mouse_tracking?: unknown; tui_
 
 const MTIME_POLL_MS = 5000
 
-const quietRpc = async <T extends Record<string, any> = Record<string, any>>(
+const quietRpc = async <T extends object = Record<string, unknown>>(
   gw: GatewayClient,
   method: string,
   params: Record<string, unknown> = {}

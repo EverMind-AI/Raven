@@ -14,7 +14,7 @@ Two responsibilities, split deliberately:
    landing in PG-3.
 
 Across-manifest name conflicts (two activated plugins both contributing
-a memory_backend named ``"everos"``) raise :class:`PluginConflict` —
+a memory_backend named ``"everos"``) raise :class:`PluginConflictError` —
 which the host treats as a startup failure. The discovery layer already
 deduplicated *plugins* by id; the registry adds the second layer of
 deduplication on *contribution names*.
@@ -50,7 +50,7 @@ class PluginError(Exception):
     CLI / host startup can render a unified diagnostic banner."""
 
 
-class PluginConflict(PluginError):
+class PluginConflictError(PluginError):
     """Two activated plugins contributed the same name into one slot."""
 
 
@@ -59,7 +59,7 @@ class PluginFactoryImportError(PluginError):
     or resolve."""
 
 
-class PluginNotFound(PluginError):
+class PluginNotFoundError(PluginError):
     """The user asked for a backend name no activated plugin contributes."""
 
 
@@ -113,7 +113,7 @@ class PluginRegistry:
     def _activate_one(self, mf: PluginManifest) -> None:
         if mf.id in self._manifests:
             # Discovery should have deduped this already; defensive.
-            raise PluginConflict(
+            raise PluginConflictError(
                 f"plugin id {mf.id!r} activated twice",
             )
         self._manifests[mf.id] = mf
@@ -121,7 +121,7 @@ class PluginRegistry:
         for contribution in mf.contributes.memory_backends:
             if contribution.name in self._memory_backends:
                 prev = self._memory_backends[contribution.name]
-                raise PluginConflict(
+                raise PluginConflictError(
                     f"memory_backend {contribution.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
                 )
             factory = self._resolve_factory(mf.id, contribution.factory)
@@ -139,7 +139,7 @@ class PluginRegistry:
         for tool in mf.contributes.tools:
             if tool.name in self._tools:
                 prev = self._tools[tool.name]
-                raise PluginConflict(
+                raise PluginConflictError(
                     f"tool {tool.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
                 )
             factory = self._resolve_factory(mf.id, tool.factory)
@@ -187,11 +187,11 @@ class PluginRegistry:
         return sorted(self._memory_backends)
 
     def get_memory_backend_factory(self, name: str) -> MemoryBackendFactory:
-        """Look up the factory for ``name``. Raises ``PluginNotFound``."""
+        """Look up the factory for ``name``. Raises ``PluginNotFoundError``."""
         try:
             return self._memory_backends[name].factory
         except KeyError as e:
-            raise PluginNotFound(
+            raise PluginNotFoundError(
                 f"no memory_backend named {name!r} (registered: {self.memory_backend_names()})",
             ) from e
 
@@ -205,11 +205,11 @@ class PluginRegistry:
         return entry.plugin_id if entry is not None else None
 
     def get_tool_factory(self, name: str) -> ToolFactory:
-        """Look up the factory for tool ``name``. Raises ``PluginNotFound``."""
+        """Look up the factory for tool ``name``. Raises ``PluginNotFoundError``."""
         try:
             return self._tools[name].factory
         except KeyError as e:
-            raise PluginNotFound(
+            raise PluginNotFoundError(
                 f"no tool named {name!r} (registered: {self.tool_names()})",
             ) from e
 
@@ -279,10 +279,10 @@ from raven.plugin.context import ServiceLocator  # noqa: E402
 
 __all__ = [
     "MemoryBackendFactory",
-    "PluginConflict",
+    "PluginConflictError",
     "PluginError",
     "PluginFactoryImportError",
-    "PluginNotFound",
+    "PluginNotFoundError",
     "PluginRegistry",
     "ToolFactory",
 ]

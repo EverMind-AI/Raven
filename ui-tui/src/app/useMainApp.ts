@@ -360,7 +360,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   }, [])
 
   const rpc: GatewayRpc = useCallback(
-    async <T extends Record<string, any> = Record<string, any>>(
+    async <T extends object = Record<string, unknown>>(
       method: string,
       params: Record<string, unknown> = {}
     ) => {

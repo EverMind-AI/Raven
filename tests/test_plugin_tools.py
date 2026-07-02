@@ -15,10 +15,10 @@ from pydantic import ValidationError
 from raven.plugin import (
     Contributes,
     DiscoveredPlugin,
-    PluginConflict,
+    PluginConflictError,
     PluginContext,
     PluginManifest,
-    PluginNotFound,
+    PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
     Source,
@@ -158,7 +158,7 @@ class TestRegistryTools:
 
         _install_test_module("_tp_tools_c", {"make_tool": f})
         reg = PluginRegistry()
-        with pytest.raises(PluginConflict, match="tool 'dup'"):
+        with pytest.raises(PluginConflictError, match="tool 'dup'"):
             reg.activate(
                 [
                     _discovered_with_tools("one", [("dup", "_tp_tools_c:make_tool")]),
@@ -168,7 +168,7 @@ class TestRegistryTools:
 
     def test_unknown_tool_raises(self) -> None:
         reg = PluginRegistry()
-        with pytest.raises(PluginNotFound):
+        with pytest.raises(PluginNotFoundError):
             reg.get_tool_factory("nope")
 
 
@@ -326,13 +326,13 @@ class TestUnderstandMediaTool:
 
     async def test_degrades_when_unavailable(self, monkeypatch) -> None:
         # When the multimodal runtime is unavailable, understand_files
-        # raises MultimodalUnavailable and the tool surfaces one clear
+        # raises MultimodalUnavailableError and the tool surfaces one clear
         # error message rather than propagating the exception.
         import raven.plugin.memory.everos.tools as tools_mod
-        from raven.plugin.memory.everos.multimodal import MultimodalUnavailable
+        from raven.plugin.memory.everos.multimodal import MultimodalUnavailableError
 
         async def fake_unavailable(paths):
-            raise MultimodalUnavailable("multimodal extra not configured")
+            raise MultimodalUnavailableError("multimodal extra not configured")
 
         monkeypatch.setattr(tools_mod, "understand_files", fake_unavailable)
         out = await UnderstandMediaTool().execute(paths=["/tmp/x.pdf"])

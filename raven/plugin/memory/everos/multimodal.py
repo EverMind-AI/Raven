@@ -46,7 +46,7 @@ _DOC_EXTS = {
 }
 
 
-class MultimodalUnavailable(RuntimeError):
+class MultimodalUnavailableError(RuntimeError):
     """EverOS's multimodal parser/LLM isn't installed or configured.
 
     Raised once for the whole call (not per file) so the tool can surface
@@ -116,7 +116,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
     which EverOS doesn't parse yet) doesn't abort the rest.
 
     Raises:
-        MultimodalUnavailable: EverOS multimodal extra not installed, or the
+        MultimodalUnavailableError: EverOS multimodal extra not installed, or the
             multimodal LLM isn't configured (``EVEROS_MULTIMODAL__*``).
     """
     try:
@@ -130,7 +130,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             require_multimodal,
         )
     except ImportError as e:
-        raise MultimodalUnavailable(
+        raise MultimodalUnavailableError(
             f"EverOS multimodal parser not installed (`pip install 'everos[multimodal]'`): {e}"
         ) from e
 
@@ -138,7 +138,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
         require_multimodal()
         llm = get_multimodal_llm_client()
     except (MultimodalError, LLMNotConfiguredError) as e:
-        raise MultimodalUnavailable(str(e)) from e
+        raise MultimodalUnavailableError(str(e)) from e
 
     out: list[dict[str, Any]] = []
     for p in paths:
@@ -192,4 +192,4 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
     return out
 
 
-__all__ = ["MultimodalUnavailable", "understand_files"]
+__all__ = ["MultimodalUnavailableError", "understand_files"]

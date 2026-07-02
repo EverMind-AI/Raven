@@ -12,11 +12,11 @@ from raven.plugin import (
     Contributes,
     DiscoveredPlugin,
     MemoryBackendContribution,
-    PluginConflict,
+    PluginConflictError,
     PluginContext,
     PluginFactoryImportError,
     PluginManifest,
-    PluginNotFound,
+    PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
     Source,
@@ -190,7 +190,7 @@ class TestConflicts:
         _install_test_module("_test_plugin_f", {"make_backend": fake_b})
 
         reg = PluginRegistry()
-        with pytest.raises(PluginConflict, match="everos"):
+        with pytest.raises(PluginConflictError, match="everos"):
             reg.activate(
                 [
                     _make_discovered(
@@ -268,7 +268,7 @@ class TestFactoryResolutionErrors:
 class TestLookup:
     def test_unknown_name_raises_not_found(self) -> None:
         reg = PluginRegistry()
-        with pytest.raises(PluginNotFound, match="no memory_backend named 'x'"):
+        with pytest.raises(PluginNotFoundError, match="no memory_backend named 'x'"):
             reg.get_memory_backend_factory("x")
 
     def test_manifest_for_returns_none_when_missing(self) -> None:

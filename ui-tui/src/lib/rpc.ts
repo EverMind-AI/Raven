@@ -1,8 +1,8 @@
 import type { CommandDispatchResponse } from '../gatewayTypes.js'
 
-export type RpcResult = Record<string, any>
+export type RpcResult = Record<string, unknown>
 
-export const asRpcResult = <T extends RpcResult = RpcResult>(value: unknown): T | null =>
+export const asRpcResult = <T extends object = RpcResult>(value: unknown): T | null =>
   !value || typeof value !== 'object' || Array.isArray(value) ? null : (value as T)
 
 export const asCommandDispatch = (value: unknown): CommandDispatchResponse | null => {

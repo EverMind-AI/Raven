@@ -245,7 +245,7 @@ function Chevron({
   tone = 'dim'
 }: {
   count?: number
-  onClick: (deep?: boolean) => void
+  onClick: () => void
   open: boolean
   suffix?: string
   t: Theme
@@ -255,7 +255,7 @@ function Chevron({
   const color = tone === 'error' ? t.color.error : tone === 'warn' ? t.color.warn : t.color.muted
 
   return (
-    <Box onClick={(e: any) => onClick(!!e?.shiftKey || !!e?.ctrlKey)}>
+    <Box onClick={() => onClick()}>
       <Text color={color} dim={tone === 'dim'}>
         <Text color={t.color.accent}>{open ? '▾ ' : '▸ '}</Text>
         {title}
@@ -318,15 +318,6 @@ function SubagentAccordion({
     setOpenNotes(true)
     setOpenKids(true)
   }, [expanded])
-
-  const expandAll = () => {
-    setOpen(true)
-    setDeep(true)
-    setOpenThinking(true)
-    setOpenTools(true)
-    setOpenNotes(true)
-    setOpenKids(true)
-  }
 
   const item = node.item
   const children = node.children
@@ -414,13 +405,7 @@ function SubagentAccordion({
       header: (
         <Chevron
           count={item.thinking.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenThinking(v => !v)
-            }
-          }}
+          onClick={() => setOpenThinking(v => !v)}
           open={openThinking}
           t={t}
           title="Thinking"
@@ -447,13 +432,7 @@ function SubagentAccordion({
       header: (
         <Chevron
           count={item.tools.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenTools(v => !v)
-            }
-          }}
+          onClick={() => setOpenTools(v => !v)}
           open={openTools}
           t={t}
           title="Tool calls"
@@ -488,13 +467,7 @@ function SubagentAccordion({
       header: (
         <Chevron
           count={noteRows.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenNotes(v => !v)
-            }
-          }}
+          onClick={() => setOpenNotes(v => !v)}
           open={openNotes}
           t={t}
           title="Progress"
@@ -528,13 +501,7 @@ function SubagentAccordion({
       header: (
         <Chevron
           count={children.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenKids(v => !v)
-            }
-          }}
+          onClick={() => setOpenKids(v => !v)}
           open={openKids}
           suffix={`d${item.depth + 1} · ${aggregate.descendantCount} total`}
           t={t}
@@ -570,13 +537,7 @@ function SubagentAccordion({
       branch={branch}
       header={
         <Chevron
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-
-              return
-            }
-
+          onClick={() => {
             setOpen(v => {
               if (!v) {
                 setDeep(false)
@@ -940,28 +901,6 @@ export const ToolTrail = memo(function ToolTrail({
   }
 
   // ── Tree render fragments ──────────────────────────────────────
-  //
-  // Shift+click on any chevron expands every NON-hidden section at once —
-  // hidden sections stay hidden so the override is honoured.
-
-  const expandAll = () => {
-    if (visible.thinking !== 'hidden') {
-      setOpenThinking(true)
-    }
-
-    if (visible.tools !== 'hidden') {
-      setOpenTools(true)
-    }
-
-    if (visible.subagents !== 'hidden') {
-      setOpenSubagents(true)
-      setDeepSubagents(true)
-    }
-
-    if (visible.activity !== 'hidden') {
-      setOpenMeta(true)
-    }
-  }
 
   const metaTone: 'dim' | 'error' | 'warn' = activity.some(i => i.tone === 'error')
     ? 'error'
@@ -995,15 +934,7 @@ export const ToolTrail = memo(function ToolTrail({
   if (hasThinking && visible.thinking !== 'hidden') {
     panels.push({
       header: (
-        <Box
-          onClick={(e: any) => {
-            if (e?.shiftKey || e?.ctrlKey) {
-              expandAll()
-            } else {
-              setOpenThinking(v => !v)
-            }
-          }}
-        >
+        <Box onClick={() => setOpenThinking(v => !v)}>
           <Text color={t.color.muted} dim={!thinkingLive}>
             <Text color={t.color.accent}>{openThinking ? '▾ ' : '▸ '}</Text>
             {thinkingLive ? (
@@ -1045,13 +976,7 @@ export const ToolTrail = memo(function ToolTrail({
       header: (
         <Chevron
           count={groups.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenTools(v => !v)
-            }
-          }}
+          onClick={() => setOpenTools(v => !v)}
           open={openTools}
           suffix={toolTokensLabel}
           t={t}
@@ -1108,14 +1033,9 @@ export const ToolTrail = memo(function ToolTrail({
       header: (
         <Chevron
           count={spawnTotals.descendantCount}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-              setDeepSubagents(true)
-            } else {
-              setOpenSubagents(v => !v)
-              setDeepSubagents(false)
-            }
+          onClick={() => {
+            setOpenSubagents(v => !v)
+            setDeepSubagents(false)
           }}
           open={openSubagents}
           suffix={suffix}
@@ -1134,13 +1054,7 @@ export const ToolTrail = memo(function ToolTrail({
       header: (
         <Chevron
           count={meta.length}
-          onClick={shift => {
-            if (shift) {
-              expandAll()
-            } else {
-              setOpenMeta(v => !v)
-            }
-          }}
+          onClick={() => setOpenMeta(v => !v)}
           open={openMeta}
           t={t}
           title="Activity"

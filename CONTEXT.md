@@ -354,7 +354,7 @@ verbatim to the factory as `PluginContext.config`.
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting
 `enabled_by_default`), resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
-(`PluginConflict` on collision). `build_memory_backend()` / `build_tool()` construct a
+(`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.
 
 ### Security & Access
