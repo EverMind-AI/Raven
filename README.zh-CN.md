@@ -9,13 +9,6 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/EverMind-AI/raven/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/EverMind-AI/raven/ci.yml?branch=main&label=CI" alt="CI"></a>
-  <a href="https://github.com/EverMind-AI/raven/releases"><img src="https://img.shields.io/github/v/release/EverMind-AI/raven?label=Release" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/EverMind-AI/raven" alt="License"></a>
-  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+">
-</p>
-
 [官网](https://raven.evermind.ai) · [English](README.md)
 
 </div>
@@ -36,7 +29,7 @@ runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持
   <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="从命令行启动 Raven" width="100%">
 </p>
 
-<details open>
+<details>
   <summary><kbd>目录</kbd></summary>
 
 <br>
