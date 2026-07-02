@@ -30,9 +30,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from raven.plugin import (
-    PluginConflict,
+    PluginConflictError,
     PluginFactoryImportError,
-    PluginNotFound,
+    PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
     assemble_plugin_registry,
@@ -73,7 +73,7 @@ def build_plugin_registry(
 
     Reads ``config.plugins.disabled`` and forwards it to
     :func:`assemble_plugin_registry`. Activation errors
-    (:class:`PluginConflict`, :class:`PluginFactoryImportError`) are
+    (:class:`PluginConflictError`, :class:`PluginFactoryImportError`) are
     caught and logged — the caller receives an **empty** registry so
     AgentLoop can still boot and fall back to the legacy path.
 
@@ -93,7 +93,7 @@ def build_plugin_registry(
             **plugin_discovery_sources(),
             disabled=disabled,
         )
-    except (PluginConflict, PluginFactoryImportError) as e:
+    except (PluginConflictError, PluginFactoryImportError) as e:
         logger.warning(
             "plugin activation failed (%s); continuing without plugins. AgentLoop will use its legacy memory path.",
             e,
@@ -139,7 +139,7 @@ def maybe_build_memory_backend(
             config=plugin_slice,
             services=services,
         )
-    except PluginNotFound:
+    except PluginNotFoundError:
         logger.warning(
             "memory.backend=%r requested but no plugin contributes it. "
             "The everos backend ships bundled with raven — run `uv sync` "

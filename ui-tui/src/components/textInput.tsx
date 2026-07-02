@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import type { InputEvent, Key } from '@hermes/ink'
+import type { DOMElement, InputEvent, Key } from '@hermes/ink'
 
 import * as Ink from '@hermes/ink'
 import { useStore } from '@nanostores/react'
@@ -24,7 +24,7 @@ import {
 
 type InkExt = typeof Ink & {
   stringWidth: (s: string) => number
-  useDeclaredCursor: (a: { line: number; column: number; active: boolean }) => (el: any) => void
+  useDeclaredCursor: (a: { line: number; column: number; active: boolean }) => (el: DOMElement | null) => void
   useStdout: () => { stdout?: NodeJS.WriteStream }
   useTerminalFocus: () => boolean
 }

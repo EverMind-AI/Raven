@@ -204,11 +204,6 @@ ignore = ["E501"]
 "raven/proactive_engine/sentinel/executor/defer_manager.py" = ["S101"]
 "raven/proactive_engine/sentinel/predictor/task_discoverer.py" = ["S101"]
 
-# exception naming; rename deferred to v2.
-"raven/cli/sandbox_commands.py" = ["N818"]
-"raven/plugin/memory/everos/multimodal.py" = ["N818"]
-"raven/plugin/registry.py" = ["N818"]
-
 # scripts/: dev utilities; partial-path subprocess, asserts.
 "scripts/check_commit_file.py" = ["S607"]
 "scripts/check_commit_messages.py" = ["S607"]

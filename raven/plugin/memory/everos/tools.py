@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 from raven.agent.tools.base import Tool
-from raven.plugin.memory.everos.multimodal import MultimodalUnavailable, understand_files
+from raven.plugin.memory.everos.multimodal import MultimodalUnavailableError, understand_files
 
 logger = logging.getLogger("raven.plugin.memory.everos")
 
@@ -70,7 +70,7 @@ class UnderstandMediaTool(Tool):
 
         try:
             results = await understand_files([str(p) for p in paths])
-        except MultimodalUnavailable as e:
+        except MultimodalUnavailableError as e:
             return f"Error: multimodal understanding is unavailable. {e}"
 
         parts: list[str] = []

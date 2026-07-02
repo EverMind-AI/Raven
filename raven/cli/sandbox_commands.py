@@ -20,7 +20,7 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 
-class _SocketClosed(Exception):
+class _SocketClosedError(Exception):
     """Raised when the debug server closes the connection without sending a response."""
 
 
@@ -90,7 +90,7 @@ async def _send(writer: asyncio.StreamWriter, obj: dict) -> None:
 async def _recv(reader: asyncio.StreamReader) -> dict:
     line = await reader.readline()
     if not line:
-        raise _SocketClosed("server closed connection without sending a response")
+        raise _SocketClosedError("server closed connection without sending a response")
     try:
         return json.loads(line.decode())
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -98,7 +98,7 @@ async def _recv(reader: asyncio.StreamReader) -> dict:
         # never happen in practice — but if it does (truncated line, garbage,
         # protocol mismatch), surface it as a clean error rather than a
         # traceback in the user's terminal.
-        raise _SocketClosed(f"server sent malformed response: {exc}") from exc
+        raise _SocketClosedError(f"server sent malformed response: {exc}") from exc
 
 
 def _close(writer: asyncio.StreamWriter) -> None:
@@ -123,7 +123,7 @@ def _run_list() -> None:
             await _send(writer, {"cmd": "list"})
             try:
                 msg = await _recv(reader)
-            except _SocketClosed as exc:
+            except _SocketClosedError as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 raise typer.Exit(1) from exc
         finally:
@@ -242,7 +242,7 @@ def sandbox_exec(
             while True:
                 try:
                     msg = await _recv(reader)
-                except _SocketClosed as exc:
+                except _SocketClosedError as exc:
                     _flush_stderr_tail()
                     console.print(f"[red]Error: {exc}[/red]")
                     return 1
@@ -298,7 +298,7 @@ def sandbox_shell(
             # Wait for ready or error before entering raw mode
             try:
                 first = await _recv(reader)
-            except _SocketClosed as exc:
+            except _SocketClosedError as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 return 1
             if first.get("type") == "error":
@@ -379,7 +379,7 @@ def sandbox_shell(
                             _restore()
                             console.print(f"\r\n[red]Error: {msg.get('message')}[/red]")
                             break
-                except _SocketClosed as exc:
+                except _SocketClosedError as exc:
                     # Distinguish a server-side disconnect from a clean exit so
                     # the user sees *why* the shell ended (agent crashed, server
                     # restarted, malformed protocol, …) instead of a silent close.

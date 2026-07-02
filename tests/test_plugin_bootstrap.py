@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from raven.plugin import (
-    PluginConflict,
-    PluginNotFound,
+    PluginConflictError,
+    PluginNotFoundError,
     PluginRegistry,
     ServiceLocator,
     assemble_plugin_registry,
@@ -97,7 +97,7 @@ class TestEndToEnd:
             bundled_dir=tmp_path,
             entry_points_group=None,
         )
-        with pytest.raises(PluginNotFound):
+        with pytest.raises(PluginNotFoundError):
             registry.build_memory_backend(
                 "everos",
                 config={},
@@ -185,7 +185,7 @@ class TestConflict:
             factory_ref="_pb:mk",
             backend_name="everos",
         )
-        with pytest.raises(PluginConflict, match="everos"):
+        with pytest.raises(PluginConflictError, match="everos"):
             assemble_plugin_registry(
                 bundled_dir=bundled,
                 entry_points_group=None,
