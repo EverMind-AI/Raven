@@ -102,6 +102,11 @@ export interface InterruptDeps {
   sys: (text: string) => void
 }
 
+export interface FinalizeInterruptDeps {
+  appendMessage?: (msg: Msg) => void
+  sys?: (text: string) => void
+}
+
 type Timer = null | ReturnType<typeof setTimeout>
 
 const clear = (t: Timer): null => {
@@ -186,10 +191,18 @@ class TurnController {
     resetFlowOverlays()
   }
 
-  interruptTurn({ appendMessage, gw, sid, sys }: InterruptDeps) {
+  // Preserve the interrupted turn's already-streamed content in the transcript
+  // and drop live turn state. Shared by the legacy `interruptTurn` and the
+  // typed spine cancel path (chatStream.restoreInputPrompt) so the two cannot
+  // diverge on what survives a cancel. `appendMessage`/`sys` are optional:
+  // callers without a transcript sink (older/no-op cases) get the idle-only
+  // teardown with nothing appended.
+  finalizeInterruptedTurn({ appendMessage, sys }: FinalizeInterruptDeps) {
+    // A re-entrant call (e.g. a second Ctrl+C force-reset racing the server's
+    // cancel error) finds turn state already drained: it must not re-emit the
+    // bare interrupted indicator that the first call already surfaced.
+    const reentrant = this.interrupted
     this.interrupted = true
-    gw.request<SessionInterruptResponse>('session.interrupt', { session_id: sid }).catch(() => {})
-
     this.closeReasoningSegment()
 
     const segments = this.segmentMessages
@@ -203,6 +216,10 @@ class TurnController {
     this.clearReasoning()
     this.turnTools = []
     patchTurnState({ activity: [], outcome: '' })
+
+    if (!appendMessage) {
+      return
+    }
 
     for (const msg of segments) {
       appendMessage(msg)
@@ -218,9 +235,15 @@ class TurnController {
         text: partial ? `${partial}\n\n*[interrupted]*` : '*[interrupted]*',
         ...(tools.length && { tools })
       })
-    } else {
-      sys('interrupted')
+    } else if (!reentrant) {
+      sys?.('interrupted')
     }
+  }
+
+  interruptTurn({ appendMessage, gw, sid, sys }: InterruptDeps) {
+    gw.request<SessionInterruptResponse>('session.interrupt', { session_id: sid }).catch(() => {})
+
+    this.finalizeInterruptedTurn({ appendMessage, sys })
 
     patchUiState({ status: 'interrupted' })
     this.clearStatusTimer()
