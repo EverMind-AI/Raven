@@ -32,10 +32,10 @@ from raven.plugin.manifest import (
 )
 from raven.plugin.registry import (
     MemoryBackendFactory,
-    PluginConflict,
+    PluginConflictError,
     PluginError,
     PluginFactoryImportError,
-    PluginNotFound,
+    PluginNotFoundError,
     PluginRegistry,
     ToolFactory,
 )
@@ -46,13 +46,13 @@ __all__ = [
     "assemble_plugin_registry",
     "MemoryBackendContribution",
     "MemoryBackendFactory",
-    "PluginConflict",
+    "PluginConflictError",
     "PluginContext",
     "PluginDiscovery",
     "PluginError",
     "PluginFactoryImportError",
     "PluginManifest",
-    "PluginNotFound",
+    "PluginNotFoundError",
     "PluginRegistry",
     "ServiceLocator",
     "Source",
