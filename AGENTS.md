@@ -296,7 +296,6 @@ Filling rules:
 
 **Not allowed:**
 - pushing and walking away, leaving PR creation to the user;
-- running `gh pr create` without letting the user preview the description (they must get a chance to edit);
 - delivering a description without grepping for non-English residue.
 
 ---
