@@ -45,7 +45,7 @@ def _default_range() -> str | None:
 
 def _commit_messages(revision_range: str) -> list[tuple[str, str]]:
     output = subprocess.check_output(
-        ["git", "log", "--format=%H%x00%B%x00", revision_range],
+        ["git", "log", "--no-merges", "--format=%H%x00%B%x00", revision_range],
         text=True,
     )
     chunks = output.rstrip("\0").split("\0")
