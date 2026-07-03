@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { TurnEvent, TurnSendResult } from '../rpc/index.js'
+import type { Msg } from '../types.js'
 
 import { createChatStream, type ChatStreamRpcClient } from '../app/chatStream.js'
 import { turnController } from '../app/turnController.js'
@@ -276,5 +277,114 @@ describe('createChatStream — wedge defenses', () => {
 
     expect(sysCalls.some(m => /no response/i.test(m))).toBe(false)
     expect(stream.isTurnActive()).toBe(true)
+  })
+})
+
+describe('createChatStream — cancel preserves streamed content', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+
+  it('keeps the streamed partial in the transcript on a server cancelled_by_client', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Partial answer so far' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' }
+    })
+
+    const assistant = appended.find(m => m.role === 'assistant')
+    expect(assistant).toBeDefined()
+    expect(assistant!.text).toContain('Partial answer so far')
+    expect(assistant!.text).toContain('[interrupted]')
+  })
+
+  it('keeps the streamed partial in the transcript on a local forceReset', async () => {
+    const appended: Msg[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default'
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'Half a reply' } })
+
+    stream.forceReset()
+
+    const assistant = appended.find(m => m.role === 'assistant')
+    expect(assistant).toBeDefined()
+    expect(assistant!.text).toContain('Half a reply')
+    expect(assistant!.text).toContain('[interrupted]')
+  })
+
+  it('does not emit a redundant interrupted note when a second cancel re-enters after content was already preserved', async () => {
+    const appended: Msg[] = []
+    const sysCalls: string[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'token.delta', payload: { text: 'A streamed reply' } })
+
+    // First Ctrl+C escape hatch preserves the partial.
+    stream.forceReset()
+    // The server's cancel error then arrives (turnId was not cleared on cancel),
+    // re-entering finalize on now-empty state.
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' }
+    })
+
+    // Content preserved exactly once; no spurious second interrupted sys note.
+    expect(appended.filter(m => m.role === 'assistant')).toHaveLength(1)
+    expect(sysCalls.filter(m => m === 'interrupted')).toHaveLength(0)
+  })
+
+  it('does not append an empty assistant message when nothing was streamed', async () => {
+    const appended: Msg[] = []
+    const sysCalls: string[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: m => appended.push(m),
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    // No token.delta: the turn is cancelled before any content streamed.
+    stream.forceReset()
+
+    expect(appended.some(m => m.role === 'assistant')).toBe(false)
+    expect(sysCalls).toContain('interrupted')
   })
 })

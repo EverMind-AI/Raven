@@ -132,7 +132,7 @@ const dispatch = (
       onMessageComplete(state, event, appendMessage)
       return
     case 'error':
-      onError(state, event, sys)
+      onError(state, event, sys, appendMessage)
       return
     case 'cron.delivered': {
       if (sys) {
@@ -202,11 +202,16 @@ const onMessageComplete = (
   patchUiState({ status: 'ready' })
 }
 
-const onError = (state: InternalState, ev: ErrorEvent, sys?: (msg: string) => void): void => {
+const onError = (
+  state: InternalState,
+  ev: ErrorEvent,
+  sys?: (msg: string) => void,
+  appendMessage?: (msg: Msg) => void
+): void => {
   const { reason, message, code } = ev.payload
   state.turnId = null
   if (reason === 'cancelled_by_client') {
-    restoreInputPrompt()
+    restoreInputPrompt(appendMessage, sys)
     return
   }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
@@ -219,17 +224,16 @@ const onError = (state: InternalState, ev: ErrorEvent, sys?: (msg: string) => vo
   patchTurnState({ activity: [], outcome: '' })
 }
 
-const restoreInputPrompt = (): void => {
+const restoreInputPrompt = (appendMessage?: (msg: Msg) => void, sys?: (msg: string) => void): void => {
   // Mirror the visible end-state of turnController.interruptTurn without
-  // routing through the legacy `session.interrupt` RPC: drop streaming state,
-  // clear pending tools, release `busy`, and settle status. The
-  // 'interrupted' status hint is consistent with the legacy interrupt path
-  // so users see the same affordance regardless of which chat path is live.
-  turnController.idle()
-  turnController.clearReasoning()
+  // routing through the legacy `session.interrupt` RPC: preserve the streamed
+  // content into the transcript (shared finalize), drop streaming state,
+  // release `busy`, and settle status. The 'interrupted' status hint is
+  // consistent with the legacy interrupt path so users see the same
+  // affordance regardless of which chat path is live.
+  turnController.finalizeInterruptedTurn({ appendMessage, sys })
   turnController.clearStatusTimer()
   patchUiState({ busy: false, status: 'interrupted' })
-  patchTurnState({ activity: [], outcome: '' })
   // Reset to 'ready' after the brief cooldown window so the prompt looks
   // settled if the user is just watching.
   setTimeout(() => {
@@ -266,7 +270,7 @@ export const createChatStream = (opts: ChatStreamOptions): ChatStreamHandle => {
     clearWatchdog()
     sendInFlight = false
     state.turnId = null
-    restoreInputPrompt()
+    restoreInputPrompt(opts.appendMessage, opts.sys)
   }
 
   const armAckWatchdog = (): void => {
