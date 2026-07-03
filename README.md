@@ -73,19 +73,15 @@ irm https://raven.evermind.ai/install.ps1 | iex
 
 The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
 
-Open a new terminal. On Linux, macOS, or WSL2, you can also reload your current
-shell:
-
-```bash
-source ~/.bashrc    # or: source ~/.zshrc
-```
-
-Then run:
+Run:
 
 ```bash
 raven onboard
 raven
 ```
+
+If your shell cannot find `raven`, open a new terminal and run the commands
+again. The installer prints a PATH warning whenever this step is needed.
 
 Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
 OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.

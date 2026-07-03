@@ -77,18 +77,15 @@ irm https://raven.evermind.ai/install.ps1 | iex
 
 安装器会处理全部依赖：uv、Python 3.12、Node.js 22 和 Raven。
 
-打开一个新终端。Linux、macOS 或 WSL2 也可以刷新当前 shell：
-
-```bash
-source ~/.bashrc    # 或：source ~/.zshrc
-```
-
-然后运行：
+直接运行：
 
 ```bash
 raven onboard
 raven
 ```
+
+如果 shell 找不到 `raven` 命令，打开一个新终端再运行即可——需要这一步时，
+安装器会打印 PATH 警告提示你。
 
 Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
 OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoints。
