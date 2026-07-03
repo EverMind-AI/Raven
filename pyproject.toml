@@ -114,7 +114,7 @@ eval = [
 ]
 
 [project.scripts]
-raven = "raven.cli.commands:app"
+raven = "raven.cli.commands:run"
 
 [build-system]
 requires = ["hatchling"]
