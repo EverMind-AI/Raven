@@ -14,7 +14,7 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 | 4 | [Dependencies](#4-dependencies-uv-only) | `uv` only — never `pip` / hand-edit lockfile |
 | 5 | [Tests](#5-tests) | `uv run pytest`; strict file-naming |
 | 6 | [Domain terms](#6-domain-terms) | Consult `CONTEXT-MAP.md` before naming; use canonical terms |
-| 7 | [Repository assets](#7-repository-assets) | No images, videos, PDFs, or large files in PRs |
+| 7 | [Repository assets](#7-repository-assets) | No report assets, web artifacts, or large files in PRs |
 
 ---
 
@@ -386,7 +386,8 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 
 ## 7. Repository assets
 
-- Do not commit images, videos, or PDFs. Store report assets outside git and link to them when needed.
+- Do not commit report assets or standalone web artifacts, regardless of size. This includes images, GIFs, SVGs, videos, audio files, PDFs, HTML files, web manifests, and WASM bundles.
+- Store public-report assets outside git and link to them when needed.
 - Do not add or modify files over 1 MiB unless the maintainer explicitly approves it before the commit.
 - Run `make check-large-files` when touching docs, demos, reports, assets, or generated outputs; CI enforces the same rule on added and modified PR files.
 
