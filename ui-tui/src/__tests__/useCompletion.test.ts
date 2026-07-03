@@ -35,6 +35,22 @@ describe('completionRequestForInput', () => {
     expect(completionRequestForInput('hello there')).toBeNull()
   })
 
+  it('routes a bare @ token through path completion (R16)', () => {
+    expect(completionRequestForInput('@notes.md')).toMatchObject({
+      method: 'complete.path',
+      params: { word: '@notes.md' },
+      replaceFrom: 0
+    })
+  })
+
+  it('routes a trailing @ token after leading text (R16)', () => {
+    expect(completionRequestForInput('read @docs/plan.md')).toMatchObject({
+      method: 'complete.path',
+      params: { word: '@docs/plan.md' },
+      replaceFrom: 5
+    })
+  })
+
   it('returns null for /model (preserved short-circuit)', () => {
     expect(completionRequestForInput('/model')).toBeNull()
     expect(completionRequestForInput('/model ')).toBeNull()

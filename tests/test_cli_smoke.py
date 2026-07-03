@@ -19,12 +19,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
 runner = CliRunner()
+
+
+def _registered_command_names() -> set[str]:
+    """All top-level command / subcommand-group names on the root app."""
+    return set(typer.main.get_command(app).commands.keys())
 
 
 @pytest.fixture
@@ -143,3 +149,33 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
     r = runner.invoke(app, ["cron", "list"])
     assert r.exception is None
     assert r.exit_code == 0
+
+
+# Full set of top-level commands + subcommand groups registered on the root
+# app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
+REGISTERED_COMMAND_NAMES = {
+    "agent",
+    "channels",
+    "cron",
+    "doctor",
+    "gateway",
+    "onboard",
+    "plugins",
+    "provider",
+    "sandbox",
+    "sentinel",
+    "sessions",
+    "skill",
+    "status",
+    "tui",
+}
+
+
+def test_no_logs_subcommand_registered() -> None:
+    """There is no ``raven logs`` command; adding one must break this test."""
+    assert "logs" not in _registered_command_names()
+
+
+def test_registered_command_set_is_pinned() -> None:
+    """Pin the exact command surface so any add/remove trips a test."""
+    assert _registered_command_names() == REGISTERED_COMMAND_NAMES

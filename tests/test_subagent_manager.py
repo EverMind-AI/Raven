@@ -170,6 +170,32 @@ async def test_cancel_by_session_clears_spawn_history(monkeypatch):
     assert "sessA" not in mgr._session_spawn_times
 
 
+async def test_cancel_by_session_cancels_live_task(monkeypatch):
+    """cancel_by_session cancels a still-running asyncio.Task registered under
+    the session (not just the rate-limit bookkeeping)."""
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _blocking_inner(task_id, task, label, origin, executor) -> None:
+        entered.set()
+        await release.wait()  # never set — keeps the task live until cancelled
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _blocking_inner)
+
+    assert "started" in await mgr.spawn(task="long", session_key="sessLive")
+    await _settle(entered.is_set)
+    assert mgr.get_running_count() == 1
+    (live_task,) = list(mgr._running_tasks.values())
+
+    cancelled = await mgr.cancel_by_session("sessLive")
+    assert cancelled == 1
+    assert live_task.cancelled()
+    await _settle(lambda: mgr.get_running_count() == 0)
+
+
 async def test_announce_result_routes_to_tui_session_key(monkeypatch):
     """TUI origins pass an authoritative session_key distinct from channel:chat_id
     (chat_id falls back to "default" while the live subscription is keyed by
