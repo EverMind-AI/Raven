@@ -339,6 +339,18 @@ def test_fork_unknown_id_errors(patched_workspace: Path) -> None:
     assert r.exit_code != 0
 
 
+def test_fork_empty_session_errors(patched_workspace: Path, manager: SessionManager) -> None:
+    cid = new_chat_id()
+    empty = manager.get_or_create(f"cli:{cid}")
+    manager.save(empty)  # persisted metadata line, zero messages
+    assert manager.exists(f"cli:{cid}")
+
+    r = runner.invoke(session_app, ["fork", cid])
+    assert r.exit_code != 0
+    normalized = " ".join(r.stdout.split())
+    assert "session is empty or missing" in normalized
+
+
 def test_fork_title_option(two_sessions: list[str], patched_workspace: Path, manager: SessionManager) -> None:
     cid = two_sessions[0]
     r = runner.invoke(session_app, ["fork", cid, "--title", "Spinoff"])
