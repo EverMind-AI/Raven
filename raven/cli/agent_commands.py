@@ -14,7 +14,6 @@ This module owns:
 from __future__ import annotations
 
 import asyncio
-import os
 import signal
 import sys
 
@@ -461,15 +460,10 @@ def register(app: typer.Typer) -> None:
                             )
 
             asyncio.run(run_once())
-            # One-shot headless exit: torch's global teardown segfaults during
-            # interpreter finalization (faulthandler shows a C-level fault with
-            # no Python frame, torch._C in the loaded extensions). The response
-            # is already printed and MCP/extractions drained inside run_once(),
-            # so hard-exit to skip the buggy native destructors. Scripted /
-            # subprocess callers otherwise see a spurious returncode 139.
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(0)
+            # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
+            # thread, torch) segfault during interpreter finalization. The exit
+            # chokepoint in raven.cli.commands.run hard-exits past finalization
+            # when that hazard is live, so this path just returns normally.
         else:
             # Interactive mode — user turns run through spine (submit -> lane ->
             # hub -> CliOutlet); cron/sentinel nudges go via the spine hub
