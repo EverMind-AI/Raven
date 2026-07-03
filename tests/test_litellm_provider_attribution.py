@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from raven.providers.litellm_provider import LiteLLMProvider
+from raven.providers.litellm_provider import _ANTHROPIC_EXTRA_KEYS, LiteLLMProvider
 
 
 def _make_provider(provider_name: str, extra_headers: dict | None = None) -> LiteLLMProvider:
@@ -38,3 +38,27 @@ def test_non_openrouter_provider_has_no_attribution():
     assert "X-OpenRouter-Title" not in provider.extra_headers
     assert "HTTP-Referer" not in provider.extra_headers
     assert "X-OpenRouter-Categories" not in provider.extra_headers
+
+
+# --- anthropic wire-format branch of _extra_msg_keys (keyless, no live call) ---
+# Pins the branch at litellm_provider.py `_extra_msg_keys`: the anthropic
+# spec / a "claude" model / an "anthropic/"-prefixed resolved model preserves
+# the `thinking_blocks` message key; everything else preserves nothing.
+
+
+def test_extra_msg_keys_anthropic_spec_preserves_thinking_blocks():
+    keys = LiteLLMProvider._extra_msg_keys("anthropic/claude-opus-4-5", "anthropic/claude-opus-4-5")
+    assert keys == _ANTHROPIC_EXTRA_KEYS
+    assert keys == frozenset({"thinking_blocks"})
+
+
+def test_extra_msg_keys_matches_on_claude_in_original_model():
+    assert LiteLLMProvider._extra_msg_keys("claude-3", "openai/claude-3") == _ANTHROPIC_EXTRA_KEYS
+
+
+def test_extra_msg_keys_matches_on_resolved_anthropic_prefix():
+    assert LiteLLMProvider._extra_msg_keys("some-alias", "anthropic/foo") == _ANTHROPIC_EXTRA_KEYS
+
+
+def test_extra_msg_keys_non_anthropic_preserves_nothing():
+    assert LiteLLMProvider._extra_msg_keys("gpt-4o", "gpt-4o") == frozenset()

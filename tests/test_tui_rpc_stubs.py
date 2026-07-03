@@ -99,6 +99,43 @@ async def test_stub_handler_callable_raises_directly(method: str, _msg: str, _hi
         await handler({})
 
 
+def test_no_per_task_progress_rpc_method() -> None:
+    """R7 negative pin: the full production dispatcher exposes NO per-task
+    "progress" RPC method (spawn_tree topology is stub-only). Wiring a real
+    ``task.progress`` / ``spawn_tree.progress`` endpoint later must break here.
+    """
+    from raven.tui_rpc.methods import register_aligned_methods
+
+    d = Dispatcher()
+    register_aligned_methods(d)
+    progress_methods = [m for m in d.methods() if "progress" in m.lower()]
+    assert progress_methods == [], f"unexpected progress RPC method(s): {progress_methods}"
+
+
+def test_process_stop_is_not_supported_stub_exact_shape() -> None:
+    """R8 pin: single-task stop (``process.stop``) is a not-supported stub, not a
+    real endpoint. Assert the EXACT error/hint shape so promoting it to a real
+    per-task stop handler breaks this test."""
+    assert "process.stop" in HERMES_ONLY_STUB_METHODS
+
+    from raven.tui_rpc.methods import register_aligned_methods
+
+    d = Dispatcher()
+    register_aligned_methods(d)
+    assert "process.stop" in d.methods()
+
+
+async def test_process_stop_stub_error_and_hint_exact() -> None:
+    d = Dispatcher()
+    register_stub_methods(d)
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "process.stop", "params": {}})
+    err = resp["error"]
+    assert err["code"] == -32012
+    assert err["message"] == "not_supported_in_v01"
+    assert err["data"]["error"] == "process.stop not supported; use Ctrl+C"
+    assert err["data"]["hint"] == "Press Ctrl+C in the TUI to interrupt a running turn."
+
+
 async def test_stub_calls_do_not_mutate_dispatcher_state() -> None:
     """Calling stubs repeatedly must not corrupt subsequent dispatches."""
     d = Dispatcher()
