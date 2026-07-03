@@ -23,6 +23,7 @@ make lint-tui
 make lint-bridge
 make test-python
 make test-tui
+make check-large-files
 ```
 
 The repository uses:
@@ -31,6 +32,7 @@ The repository uses:
 - `ruff` and `pre-commit` for Python and repository hygiene.
 - `commitlint` plus a Python checker for Conventional Commit subjects and
   ASCII-only public history.
+- PR file checks that reject images, videos, PDFs, and files over 1 MiB.
 - `eslint`, `tsc`, `vitest`, and RPC drift checks for the TUI.
 - `npm ci`, `tsc`, and `npm audit --audit-level=critical` for the bridge.
 

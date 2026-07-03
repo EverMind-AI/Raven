@@ -207,6 +207,7 @@ ignore = ["E501"]
 # scripts/: dev utilities; partial-path subprocess, asserts.
 "scripts/check_commit_file.py" = ["S607"]
 "scripts/check_commit_messages.py" = ["S607"]
+"scripts/check_large_files.py" = ["S607"]
 "scripts/skill_hub_e2e.py" = ["S101"]
 
 # benchmarks/: eval harness; naming, ambiguous names, unused vars,

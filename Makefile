@@ -1,8 +1,8 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge check-commits check-pr-title ci clean
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge check-commits check-pr-title check-large-files ci clean
 
 PYTHON ?= python3
-PYTHON_LINT_TARGETS ?= scripts/check_commit_file.py scripts/check_commit_messages.py scripts/check_pr_title.py scripts/commit_lint.py tests/test_commit_lint.py
-COMMIT_RANGE ?=
+PYTHON_LINT_TARGETS ?= scripts/check_commit_file.py scripts/check_commit_messages.py scripts/check_pr_title.py scripts/check_large_files.py scripts/commit_lint.py tests/test_commit_lint.py tests/test_large_file_check.py
+COMMIT_RANGE ?= origin/main..HEAD
 
 help:
 	@echo "Targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  test           Run focused Python checks and TUI tests"
 	@echo "  check-commits  Validate Conventional Commit subjects"
 	@echo "  check-pr-title Validate the PR title in PR_TITLE"
+	@echo "  check-large-files Validate PR files avoid blocked assets and size bloat"
 	@echo "  ci             Run the local CI gate"
 	@echo "  clean          Remove generated caches and build output"
 
@@ -45,7 +46,7 @@ lint-bridge:
 test: test-python test-tui
 
 test-python:
-	uv run --extra dev pytest tests/test_commit_lint.py -q
+	uv run --extra dev pytest tests/test_commit_lint.py tests/test_large_file_check.py -q
 
 test-tui:
 	npm test --prefix ui-tui
@@ -64,6 +65,9 @@ check-commits:
 
 check-pr-title:
 	PYTHONPATH=. uv run --extra dev python scripts/check_pr_title.py
+
+check-large-files:
+	PYTHONPATH=. uv run --extra dev python scripts/check_large_files.py $(COMMIT_RANGE)
 
 ci: lint test build
 
