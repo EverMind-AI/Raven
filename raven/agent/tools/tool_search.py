@@ -165,7 +165,7 @@ class ToolSearchTool(Tool):
                     "type": "integer",
                     "description": "Max number of results.",
                     "minimum": 1,
-                    "maximum": 25,
+                    "maximum": 10,
                 },
             },
             "required": ["query"],
