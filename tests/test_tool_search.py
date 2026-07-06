@@ -206,10 +206,10 @@ def test_meta_no_longer_includes_describe() -> None:
     assert META_TOOL_NAMES == {"tool_search", TOOL_CALL_NAME}
 
 
-def test_default_search_result_limit_is_five() -> None:
-    assert ToolSearchConfig().search_result_limit == 5
+def test_default_search_result_limit_is_ten() -> None:
+    assert ToolSearchConfig().search_result_limit == 10
     ctrl = ToolSearchController(ToolRegistry(), always_visible=set())
-    assert ctrl.search_result_limit == 5
+    assert ctrl.search_result_limit == 10
 
 
 def test_default_always_visible_covers_core_and_interaction_primitives() -> None:

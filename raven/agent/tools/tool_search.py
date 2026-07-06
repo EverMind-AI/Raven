@@ -72,7 +72,7 @@ class ToolSearchController:
         registry: "ToolRegistry",
         *,
         always_visible: set[str],
-        search_result_limit: int = 5,
+        search_result_limit: int = 10,
     ) -> None:
         self._registry = registry
         self.always_visible = set(always_visible) | META_TOOL_NAMES

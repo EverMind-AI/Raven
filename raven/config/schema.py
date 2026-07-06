@@ -514,7 +514,7 @@ class ToolSearchConfig(Base):
     compaction_threshold: int = 50
     """Tool-catalog size that triggers compaction: at or below this many tools
     everything is exposed directly; above it, schemas are withheld."""
-    search_result_limit: int = 5
+    search_result_limit: int = 10
     """Default number of hits ``tool_search`` returns per query."""
     always_visible: list[str] = Field(default_factory=list)
     """Extra tool names kept exposed every turn, on top of the core set."""
