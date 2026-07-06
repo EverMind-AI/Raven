@@ -648,7 +648,6 @@ class AgentLoop:
             from raven.agent.tools.tool_search import (
                 DEFAULT_ALWAYS_VISIBLE,
                 ToolCallTool,
-                ToolDescribeTool,
                 ToolSearchController,
                 ToolSearchStrategy,
                 ToolSearchTool,
@@ -661,7 +660,6 @@ class AgentLoop:
                 search_result_limit=cfg.search_result_limit,
             )
             self.tools.register(ToolSearchTool(self.tool_search_controller))
-            self.tools.register(ToolDescribeTool(self.tool_search_controller))
             self.tools.register(ToolCallTool(self.tool_search_controller))
             # ``first=True``: filter the tool list before CacheOptimizer marks
             # the final tool with ``cache_control`` (else the marked tool may be

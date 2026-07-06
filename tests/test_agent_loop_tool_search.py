@@ -66,7 +66,7 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
 
 def test_enabled_registers_meta_tools(workspace) -> None:
     loop = _make_loop(workspace, ToolSearchConfig(enabled=True))
-    for name in ("tool_search", "tool_describe", "tool_call"):
+    for name in ("tool_search", "tool_call"):
         assert loop.tools.has(name), f"{name} should be registered"
     assert loop.strategies.get("tool_search") is not None
 
@@ -83,7 +83,7 @@ def test_strategy_registered_first(workspace) -> None:
 
 def test_disabled_registers_nothing(workspace) -> None:
     loop = _make_loop(workspace, ToolSearchConfig(enabled=False))
-    for name in ("tool_search", "tool_describe", "tool_call"):
+    for name in ("tool_search", "tool_call"):
         assert not loop.tools.has(name)
     assert loop.strategies.get("tool_search") is None
 
@@ -106,5 +106,5 @@ async def test_enabled_loop_keeps_interaction_primitives_visible(workspace) -> N
     _, out, _ = await loop.strategies.before_llm_call([], tools, "stub")
     names = {t["function"]["name"] for t in out}
     assert {"read_file", "message", "ask_user", "spawn"} <= names, "primitives must stay visible"
-    assert {"tool_search", "tool_describe", "tool_call"} <= names, "meta-tools must stay visible"
+    assert {"tool_search", "tool_call"} <= names, "meta-tools must stay visible"
     assert "web_search" not in names, "cataloged domain tools are withheld above threshold"

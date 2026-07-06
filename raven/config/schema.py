@@ -504,18 +504,17 @@ class ToolSearchConfig(Base):
 
     When the live tool catalog (built-ins + plugins + MCP) grows past
     ``compaction_threshold``, most tool schemas are withheld from each request and reached
-    on demand through the ``tool_search`` / ``tool_describe`` / ``tool_call``
-    meta-tools, so context cost stops scaling with tool count and the per-turn
-    tool list (and thus the prompt cache) stays stable. At or below the
-    threshold every tool is exposed directly (unchanged behavior) and the
-    meta-tools are omitted.
+    on demand through the ``tool_search`` / ``tool_call`` meta-tools, so context
+    cost stops scaling with tool count and the per-turn tool list (and thus the
+    prompt cache) stays stable. At or below the threshold every tool is exposed
+    directly (unchanged behavior) and the meta-tools are omitted.
     """
 
     enabled: bool = False
     compaction_threshold: int = 50
     """Tool-catalog size that triggers compaction: at or below this many tools
     everything is exposed directly; above it, schemas are withheld."""
-    search_result_limit: int = 10
+    search_result_limit: int = 5
     """Default number of hits ``tool_search`` returns per query."""
     always_visible: list[str] = Field(default_factory=list)
     """Extra tool names kept exposed every turn, on top of the core set."""

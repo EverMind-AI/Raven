@@ -2,17 +2,17 @@
 
 When built-ins + plugins + MCP push the tool count past a threshold, injecting
 every schema into each request burns context that scales with tool count. This
-module withholds most schemas and exposes three meta-tools instead:
+module withholds most schemas and exposes two meta-tools instead:
 
-  - ``tool_search``   — BM25 keyword search over the hidden catalog; compact
-                        hits (name + description, no parameters).
-  - ``tool_describe`` — one tool's full parameter schema (so the model knows
-                        the argument shape before calling it).
-  - ``tool_call``     — invoke a cataloged tool by name; forwards through the
-                        registry, which still validates arguments.
+  - ``tool_search`` — BM25 keyword search over the hidden catalog; each hit
+                      carries name + description + parameter schema, enough to
+                      call the tool without a second lookup.
+  - ``tool_call``   — invoke a cataloged tool by name; forwards through the
+                      registry, which validates arguments and returns a
+                      correctable error when they don't fit the schema.
 
 The tool list sent to the model never changes turn-to-turn (always the core
-set + these three meta-tools), so the prompt cache stays stable across the
+set + these two meta-tools), so the prompt cache stays stable across the
 whole session — tools sit ahead of system+messages in the cached prefix, so a
 changing tool list would invalidate everything after it. The cost is that
 cataloged tools are invoked through ``tool_call`` rather than native
@@ -56,7 +56,7 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
 
 TOOL_CALL_NAME: str = "tool_call"
 # The meta-tools: always registered when the feature is on, never cataloged.
-META_TOOL_NAMES: frozenset[str] = frozenset({"tool_search", "tool_describe", TOOL_CALL_NAME})
+META_TOOL_NAMES: frozenset[str] = frozenset({"tool_search", TOOL_CALL_NAME})
 
 
 class ToolSearchController:
@@ -72,7 +72,7 @@ class ToolSearchController:
         registry: "ToolRegistry",
         *,
         always_visible: set[str],
-        search_result_limit: int = 10,
+        search_result_limit: int = 5,
     ) -> None:
         self._registry = registry
         self.always_visible = set(always_visible) | META_TOOL_NAMES
@@ -98,22 +98,22 @@ class ToolSearchController:
         return self.always_visible
 
     def search(self, query: str, limit: int | None = None) -> list[dict[str, Any]]:
-        """Compact hits: name + description, never parameters."""
+        """Hits carry name + description + parameter schema, so the model can go
+        straight to tool_call without a separate describe round-trip."""
         names = self._index.search(query, limit or self.search_result_limit)
         hits = []
         for name in names:
             tool = self._registry.get(name)
             if tool is None:
                 continue
-            hits.append({"name": name, "description": tool.description})
+            hits.append(
+                {
+                    "name": name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                }
+            )
         return hits
-
-    def describe(self, name: str) -> dict[str, Any] | None:
-        """Return the tool's full function schema (for argument shape)."""
-        tool = self._registry.get(name)
-        if tool is None or name in META_TOOL_NAMES:
-            return None
-        return tool.to_schema()["function"]
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -147,10 +147,9 @@ class ToolSearchTool(Tool):
     def description(self) -> str:
         return (
             "Search the catalog of additional tools that are available but not "
-            "currently loaded. Returns matching tool names with a short "
-            "description (no parameters). Use tool_describe to see a tool's "
-            "arguments, then tool_call to invoke it. Query with task keywords, "
-            "e.g. 'create github issue' or '生成图片'."
+            "currently loaded. Returns matching tools with their description and "
+            "parameter schema, ready to invoke with tool_call. Query with task "
+            "keywords, e.g. 'create github issue' or '生成图片'."
         )
 
     @property
@@ -179,43 +178,6 @@ class ToolSearchTool(Tool):
         return json.dumps(hits, ensure_ascii=False)
 
 
-class ToolDescribeTool(Tool):
-    """Return a cataloged tool's full parameter schema."""
-
-    def __init__(self, controller: ToolSearchController) -> None:
-        self._ctrl = controller
-
-    @property
-    def name(self) -> str:
-        return "tool_describe"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Show the full parameter schema of a tool found via tool_search, so "
-            "you know its arguments. Invoke the tool afterwards with tool_call."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Exact tool name from a tool_search result.",
-                },
-            },
-            "required": ["name"],
-        }
-
-    async def execute(self, name: str) -> str:
-        schema = self._ctrl.describe(name)
-        if schema is None:
-            return f"Tool '{name}' not found. Use tool_search to find available tools."
-        return json.dumps(schema, ensure_ascii=False)
-
-
 class ToolCallTool(Tool):
     """Invoke a cataloged tool by name. Arguments are validated by the registry."""
 
@@ -230,7 +192,8 @@ class ToolCallTool(Tool):
     def description(self) -> str:
         return (
             "Invoke a tool found via tool_search by name, passing its arguments. "
-            "Use tool_describe first to learn the argument shape."
+            "If the arguments don't fit the tool's schema the registry returns a "
+            "validation error describing the fix; adjust and call again."
         )
 
     @property
