@@ -131,6 +131,24 @@ def test_meta_includes_tool_call() -> None:
     assert TOOL_CALL_NAME in META_TOOL_NAMES
 
 
+def test_default_always_visible_covers_core_and_interaction_primitives() -> None:
+    # File/search/exec primitives plus the interaction/orchestration primitives
+    # (message / ask_user / spawn) the agent must reach on any turn. Guards
+    # against silently dropping one (which would strand it behind tool_search).
+    assert set(DEFAULT_ALWAYS_VISIBLE) >= {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "grep",
+        "find",
+        "exec",
+        "message",
+        "ask_user",
+        "spawn",
+    }
+
+
 def test_visible_names_are_stable_and_include_meta() -> None:
     ctrl = ToolSearchController(ToolRegistry(), always_visible={"read_file"})
     assert META_TOOL_NAMES <= ctrl.visible_names()
@@ -251,6 +269,20 @@ async def test_strategy_large_catalog_compacts_to_visible() -> None:
     out_names = {t["function"]["name"] for t in out}
     assert META_TOOL_NAMES <= out_names, "meta-tools stay visible above threshold"
     assert "extra_0" not in out_names, "cataloged tools are withheld above threshold"
+
+
+@pytest.mark.asyncio
+async def test_strategy_keeps_interaction_primitives_visible_above_threshold() -> None:
+    # ask_user / spawn are in DEFAULT_ALWAYS_VISIBLE, so above the threshold they
+    # keep their schema while ordinary cataloged tools are withheld.
+    reg, ctrl = _registry_with_n(40)
+    reg.register(_FakeTool("ask_user", "ask the user a clarifying question"))
+    reg.register(_FakeTool("spawn", "spawn a subagent to handle a subtask"))
+    strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
+    _, out, _ = await strat.before_llm_call([], reg.get_definitions(), "m")
+    out_names = {t["function"]["name"] for t in out}
+    assert {"ask_user", "spawn"} <= out_names, "interaction primitives must stay visible"
+    assert "extra_0" not in out_names, "ordinary cataloged tools are still withheld"
 
 
 @pytest.mark.asyncio

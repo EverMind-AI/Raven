@@ -92,3 +92,19 @@ def test_none_config_registers_nothing(workspace) -> None:
     loop = _make_loop(workspace, None)
     assert not loop.tools.has("tool_search")
     assert loop.strategies.get("tool_search") is None
+
+
+@pytest.mark.asyncio
+async def test_enabled_loop_keeps_interaction_primitives_visible(workspace) -> None:
+    # Above the threshold the strategy compacts the real loop's tool list: the
+    # file/interaction/orchestration primitives (read_file / message / ask_user /
+    # spawn) and the meta-tools keep their schema, while a cataloged domain tool
+    # (web_search) is withheld and reachable only via tool_search.
+    loop = _make_loop(workspace, ToolSearchConfig(enabled=True, compaction_threshold=5))
+    assert loop.tools.has("ask_user") and loop.tools.has("spawn") and loop.tools.has("web_search")
+    tools = loop.tools.get_definitions()
+    _, out, _ = await loop.strategies.before_llm_call([], tools, "stub")
+    names = {t["function"]["name"] for t in out}
+    assert {"read_file", "message", "ask_user", "spawn"} <= names, "primitives must stay visible"
+    assert {"tool_search", "tool_describe", "tool_call"} <= names, "meta-tools must stay visible"
+    assert "web_search" not in names, "cataloged domain tools are withheld above threshold"
