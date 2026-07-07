@@ -1548,3 +1548,45 @@ def test_bootstrap_backfills_preexisting_config(tmp_env: Path, monkeypatch: pyte
     assert data["memory"]["userId"] == "default"
     assert data["plugins"]["config"]["everos-memory"]["mode"] == "embedded"
     assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
+
+
+def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Optional fields get an ``(optional)`` label + skip hint; a required field
+    that is not the first prompt (feishu ``app_secret``) must NOT show a skip
+    hint. Regression guard for the ``idx>0`` heuristic that told users they
+    could skip a required credential.
+    """
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", "en")
+    captured: list[tuple[str, Any]] = []
+
+    class _Prompt:
+        def __init__(self, label: str, placeholder: Any = None, **_: Any) -> None:
+            self._label = label
+            self._placeholder = placeholder
+
+        def ask(self) -> str:
+            captured.append((self._label, self._placeholder))
+            return "x"  # non-empty: records the field without triggering back/skip
+
+    monkeypatch.setattr(questionary, "text", lambda label, **kw: _Prompt(label, **kw))
+    monkeypatch.setattr(questionary, "password", lambda label, **kw: _Prompt(label, **kw))
+
+    onboard_commands._prompt_channel_fields("feishu")
+
+    # promptable order: app_id, app_secret (both required), encrypt_key, verification_token (optional)
+    def _ph_text(placeholder: Any) -> Any:
+        return placeholder[0][1] if placeholder else None
+
+    app_id_lbl, app_id_ph = captured[0]
+    app_secret_lbl, app_secret_ph = captured[1]
+    encrypt_lbl, encrypt_ph = captured[2]
+
+    assert "(optional)" not in app_id_lbl
+    assert "(optional)" not in app_secret_lbl
+    assert "(optional)" in encrypt_lbl
+
+    assert "back" in _ph_text(app_id_ph)  # first field: rewind affordance
+    assert app_secret_ph is None  # required later field: no skip hint
+    assert "skip" in _ph_text(encrypt_ph)  # optional field: skip hint

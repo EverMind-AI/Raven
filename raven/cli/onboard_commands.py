@@ -376,6 +376,20 @@ def _back_placeholder(allow_back: bool) -> Any:
     return [("fg:#6c6c6c italic", _t("empty ↵ to go back", "留空回车返回上一步"))]
 
 
+def _field_placeholder(allow_back: bool, required: bool) -> Any:
+    """In-field hint for a channel credential prompt.
+
+    First field: empty submit rewinds to the channel picker (back). Later
+    optional fields: empty submit skips them. Required later fields get no
+    hint — an empty submit there silently drops a value the channel needs.
+    """
+    if allow_back:
+        return _back_placeholder(True)
+    if not required:
+        return [("fg:#6c6c6c italic", _t("empty ↵ to skip", "留空回车跳过"))]
+    return None
+
+
 def _collect_fields(prompts: list[Callable[[], Any]]) -> Optional[list[Any]]:
     """Run text-prompt callables in order with empty-submit = back.
 
@@ -1547,23 +1561,26 @@ def _prompt_channel_fields(channel: str) -> Any:
 
     fields: dict[str, Any] = {}
     for idx, (path, spec) in enumerate(promptable):
+        required = bool(spec.get("required"))
         description = spec.get("description", "")
-        prompt_label = f"{path}" + (f" — {description}" if description else "") + ":"
-        # First field: an empty submit rewinds to the channel picker. Later
-        # fields keep the "empty = skip this optional field" semantics, so the
-        # back hint only shows on the first one.
+        opt_tag = "" if required else _t(" (optional)", " (可选)")
+        prompt_label = f"{path}{opt_tag}" + (f" — {description}" if description else "") + ":"
+        # First field's empty submit rewinds to the channel picker; later
+        # optional fields' empty submit skips them. Required later fields get
+        # no skip hint so we don't invite dropping a value the channel needs.
         allow_back = idx == 0
+        placeholder = _field_placeholder(allow_back, required)
         if spec.get("is_secret"):
             value = questionary.password(
                 prompt_label,
-                placeholder=_back_placeholder(allow_back),
+                placeholder=placeholder,
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
         else:
             value = questionary.text(
                 prompt_label,
-                placeholder=_back_placeholder(allow_back),
+                placeholder=placeholder,
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()

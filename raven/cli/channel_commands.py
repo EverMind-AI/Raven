@@ -65,6 +65,7 @@ def _print_schema_table(name: str) -> None:
     table.add_column("Flag", style="cyan", no_wrap=True)
     table.add_column("Type", overflow="fold")
     table.add_column("Default", no_wrap=True)
+    table.add_column("Required?", no_wrap=True, justify="center")
     table.add_column("Secret?", no_wrap=True, justify="center")
     table.add_column("Description", overflow="fold")
     for path, spec in specs.items():
@@ -75,6 +76,7 @@ def _print_schema_table(name: str) -> None:
             flag,
             spec["type"],
             default_str,
+            "✓" if spec.get("required") else "",
             "✓" if spec["is_secret"] else "",
             spec.get("description", "") or "",
         )

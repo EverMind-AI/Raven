@@ -221,6 +221,20 @@ def test_field_specs_marks_known_secrets() -> None:
     assert channel_field_specs("slack")["dm.policy"]["is_secret"] is False
 
 
+def test_field_specs_marks_required() -> None:
+    fs = channel_field_specs("feishu")
+    assert fs["app_id"]["required"] is True
+    assert fs["app_secret"]["required"] is True
+    # Optional credential fields must NOT be marked required.
+    assert fs["encrypt_key"]["required"] is False
+    assert fs["verification_token"]["required"] is False
+    # Non-credential fields (defaults / lists / literals) are optional too.
+    assert fs["allow_from"]["required"] is False
+    assert channel_field_specs("telegram")["token"]["required"] is True
+    # Channels with no hard-required field carry no required marker.
+    assert all(not s["required"] for s in channel_field_specs("whatsapp").values())
+
+
 def test_field_specs_unknown_channel_raises() -> None:
     with pytest.raises(KeyError, match="Unknown channel 'foobar'"):
         channel_field_specs("foobar")
