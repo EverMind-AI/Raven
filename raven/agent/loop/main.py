@@ -260,6 +260,7 @@ class AgentLoop:
         max_subagent_spawns_per_hour: int = 30,
         media_config: Any = None,
         disabled_tools: list[str] | None = None,
+        tool_search_config: Any = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
         # the after-turn pipeline gains a third peer step ``backend.store``
         # (alongside the existing ``maybe_consolidate`` and the implicit
@@ -362,6 +363,7 @@ class AgentLoop:
         # registration and after MCP connect so it can blacklist either group.
         # Used by eval harnesses (e.g. BCP) that need a strict tool subset.
         self._disabled_tools = set(disabled_tools or [])
+        self._tool_search_config = tool_search_config
         self.tools = ToolRegistry()
 
         # Context engine — the single ContextAssembler.
@@ -636,6 +638,41 @@ class AgentLoop:
                         registry=skill_registry,
                     ),
                 )
+
+        # Progressive tool disclosure. Registered last so the catalog it
+        # searches covers every built-in/plugin tool above; MCP tools join
+        # later (registered in ``_connect_mcp``) and the strategy picks them up
+        # since it re-reads the registry each turn.
+        cfg = self._tool_search_config
+        if cfg is not None and cfg.enabled:
+            from raven.agent.tools.tool_search import (
+                DEFAULT_ALWAYS_VISIBLE,
+                ToolCallTool,
+                ToolDescribeTool,
+                ToolSearchController,
+                ToolSearchStrategy,
+                ToolSearchTool,
+            )
+
+            always = set(DEFAULT_ALWAYS_VISIBLE) | set(cfg.always_visible)
+            self.tool_search_controller = ToolSearchController(
+                self.tools,
+                always_visible=always,
+                search_result_limit=cfg.search_result_limit,
+            )
+            self.tools.register(ToolSearchTool(self.tool_search_controller))
+            self.tools.register(ToolDescribeTool(self.tool_search_controller))
+            self.tools.register(ToolCallTool(self.tool_search_controller))
+            # ``first=True``: filter the tool list before CacheOptimizer marks
+            # the final tool with ``cache_control`` (else the marked tool may be
+            # filtered out and the breakpoint lost).
+            self.strategies.register(
+                ToolSearchStrategy(
+                    self.tool_search_controller,
+                    compaction_threshold=cfg.compaction_threshold,
+                ),
+                first=True,
+            )
 
     @staticmethod
     def _build_skill_hub_client(

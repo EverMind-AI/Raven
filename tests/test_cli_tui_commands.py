@@ -86,6 +86,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     captured["fake_registry"] = fake_registry
     captured["fake_backend"] = fake_backend
     captured["fake_tools"] = fake_tools
+    captured["config"] = config
     return captured
 
 
@@ -122,6 +123,25 @@ def test_tui_agent_loop_receives_plugin_tools(patched_tui_loop_deps) -> None:
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert "plugin_tools" in kwargs, "AgentLoop must receive plugin_tools kwarg"
     assert kwargs["plugin_tools"] is patched_tui_loop_deps["fake_tools"]
+
+
+# ---------------------------------------------------------------------------
+# tool_search config wired into AgentLoop
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> None:
+    """``_build_tui_agent_loop`` must forward ``tool_search_config=`` so the
+    interactive TUI honors ``tools.tool_search`` (progressive disclosure) at
+    parity with the ``agent`` / ``gateway`` entrypoints; else the feature is
+    silently unavailable in the primary interactive surface."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert "tool_search_config" in kwargs, "AgentLoop must receive tool_search_config kwarg"
+    assert kwargs["tool_search_config"] is patched_tui_loop_deps["config"].tools.tool_search
 
 
 # ---------------------------------------------------------------------------

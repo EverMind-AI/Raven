@@ -391,6 +391,7 @@ def _build_tui_agent_loop():
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
+            tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
