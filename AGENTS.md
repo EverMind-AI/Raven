@@ -151,7 +151,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 |---|---|
 | subject | English, lowercase start, ≤ 72 chars, no period |
 | body | **All English**; when citing a non-English plan / discussion, **translate** it, don't paste |
-| punctuation | No full-width punctuation (`：`,`，`,`。`,`「」`,`""` …), no `§`-numbering, no non-English path names; the latin part of a §N.M anchor is fine |
+| punctuation | **ASCII-only** — not just no full-width punctuation (`：`,`，`,`。`,`「」`,`""` …) but also no em-dash `—`, curly quotes, or ellipsis `…` (all non-ASCII, all rejected by CI); no `§`-numbering, no non-English path names; the latin part of a §N.M anchor is fine |
 | trailer | `Co-authored-by: ...` is ASCII by format |
 
 **Why:** Conventional-Commits tooling (commitlint / semantic-release / changelog generators) parses ASCII grammar and mis-lints on non-English text; cross-language reviewers and a public commit history both need English.
@@ -285,10 +285,11 @@ Filling rules:
 - internal branch names / commit-hash references (no reviewer context).
 
 **Preview-verification (required):**
-1. After drafting, **grep for full-width / non-English chars first**:
+1. After drafting, **grep for any non-ASCII char first** (the CI lints the whole message as ASCII-only via `commit_lint._is_ascii`, and the squash commit body is this PR description — so it must be ASCII too):
    ```bash
-   grep -cP "[\x{4E00}-\x{9FFF}]|[\x{3000}-\x{303F}]|[\x{FF00}-\x{FFEF}]" /tmp/pr_description.md
-   # must be 0
+   grep -nP "[^\x00-\x7F]" /tmp/pr_description.md
+   # must print nothing (0 matches). Catches em-dash/curly-quotes/ellipsis,
+   # not just CJK + full-width — a CJK-only pattern gives a false pass.
    ```
 2. show the full text for preview;
 3. only after the user edits/confirms, run `gh pr create --title "..." --body "$(cat /tmp/pr_description.md)"`;

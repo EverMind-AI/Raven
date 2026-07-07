@@ -42,6 +42,18 @@ def check_pr_title(title: str, config: CommitLintConfig | None = None) -> LintRe
     return _check_message(title, subject_limit=(config or CommitLintConfig()).pr_title_subject_limit)
 
 
+def check_pr_body(body: str) -> LintResult:
+    """The PR body becomes the squash commit body, so it must be ASCII-only.
+
+    Only the ASCII rule applies (the body is free-form Markdown, not a
+    Conventional-Commits header), so the header/subject checks are skipped.
+    """
+    errors: list[str] = []
+    if not _is_ascii(body):
+        errors.append("must be ASCII-only English")
+    return LintResult(errors)
+
+
 def _check_message(message: str, *, subject_limit: int) -> LintResult:
     errors: list[str] = []
     text = message.strip()

@@ -7,6 +7,7 @@ from scripts import check_commit_file
 from scripts.commit_lint import (
     CommitLintConfig,
     check_commit_message,
+    check_pr_body,
     check_pr_title,
 )
 
@@ -71,6 +72,25 @@ def test_pr_title_rejects_subject_over_pr_limit() -> None:
 
     assert not result.ok
     assert "subject must be 90 characters or fewer" in result.errors
+
+
+def test_pr_body_accepts_ascii_markdown() -> None:
+    result = check_pr_body("## Summary\n\nPlain ASCII body - fine.\n")
+
+    assert result.ok
+
+
+def test_pr_body_rejects_em_dash() -> None:
+    # The em-dash (U+2014) is the char that slipped past the CJK-only grep and
+    # failed the post-merge commit lint once the PR body became the squash body.
+    result = check_pr_body("drops the hint only — empty submits still ignored")
+
+    assert not result.ok
+    assert "must be ASCII-only English" in result.errors
+
+
+def test_pr_body_allows_empty() -> None:
+    assert check_pr_body("").ok
 
 
 def test_commit_msg_hook_runs_commitlint_before_python_checker(monkeypatch, tmp_path: Path) -> None:
