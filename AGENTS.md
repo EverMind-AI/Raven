@@ -184,7 +184,7 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
   - `<model-id>` = the **actual current-session model ID** (e.g. `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5`), not a placeholder. The model version keeps per-model contribution distinguishable.
   - Format follows the aider convention; GitHub renders `Co-authored-by` as a co-author on the commit / PR.
 - Multiple co-authors → one per line, standard git trailer format (`Name <email>`).
-- The repo uses **rebase merge** (not squash): every commit's body/trailer enters `main` history as-is, so each commit must stand on its own — don't rely on the PR description.
+- The repo **squash-merges** PRs (rebase only freshens the branch before push; the merge collapses the branch to one commit on `main`). The squash commit's subject is the PR title and its body is the **PR description** (`squash_merge_commit_message=PR_BODY`) — individual commit bodies are dropped. GitHub still auto-collects each commit's `Co-authored-by` into the squash commit, so keep the trailer in your commit and put `Closes #NNN` + reviewer context in the PR description (that is what lands on `main`).
 
 **❌ Don't add:**
 - `Refs: ...` pointing at locally-visible-only / git-ignored paths (invisible to others);
@@ -211,7 +211,7 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 | 4. Re-run tests | `uv run pytest <relevant tests> -x` | Confirm the rebase didn't break anything |
 | 5. Push | `git push -u origin <branch>` (first) or `git push --force-with-lease` (after rebase) | — |
 
-**Why:** CI runs "your commits on top of the latest remote" (catches runtime conflicts before merge); the PR diff stays clean; and with rebase-merge each commit lands on `main` verbatim, so a local rebase keeps history linear.
+**Why:** CI runs "your commits on top of the latest remote" (catches runtime conflicts before merge) and the PR diff stays clean. Rebase here only freshens the branch base before push; the merge itself is a squash, which collapses the branch to a single commit on `main`.
 
 **Force-push boundary:**
 - ✅ `--force-with-lease` (checks the remote wasn't changed by others) on **your own feature branch** after a rebase;
@@ -276,8 +276,8 @@ Filling rules:
 - anything the template doesn't cover but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Change description`.
 
 **Trailer** (with §3.3):
-- rebase-merge → each commit already carries the `Co-authored-by` trailer into `main` → **don't repeat it in the PR description**;
-- if the repo ever switches to squash-merge (single commit) → the PR description **must** end with `Co-authored-by: Claude (<model-id>) <noreply@anthropic.com>`, else the squash commit loses the trailer.
+- squash-merge → GitHub auto-collects each commit's `Co-authored-by` into the squash commit, so keep the trailer in your commit and **don't add it to the PR description** (that duplicates it);
+- `Closes #NNN` and reviewer context, by contrast, **must** live in the PR description — the squash commit body is taken from it (`squash_merge_commit_message=PR_BODY`), and individual commit bodies are dropped.
 
 **Description must NOT contain** (same as §3.3):
 - `🤖 Generated with [Claude Code](https://...)` marketing banners;
