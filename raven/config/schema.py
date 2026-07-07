@@ -499,6 +499,28 @@ class MCPServerConfig(Base):
     tool_timeout: int = 30  # seconds before a tool call is cancelled
 
 
+class ToolSearchConfig(Base):
+    """Progressive tool disclosure.
+
+    When the live tool catalog (built-ins + plugins + MCP) grows past
+    ``compaction_threshold``, most tool schemas are withheld from each request and reached
+    on demand through the ``tool_search`` / ``tool_describe`` / ``tool_call``
+    meta-tools, so context cost stops scaling with tool count and the per-turn
+    tool list (and thus the prompt cache) stays stable. At or below the
+    threshold every tool is exposed directly (unchanged behavior) and the
+    meta-tools are omitted.
+    """
+
+    enabled: bool = False
+    compaction_threshold: int = 50
+    """Tool-catalog size that triggers compaction: at or below this many tools
+    everything is exposed directly; above it, schemas are withheld."""
+    search_result_limit: int = 10
+    """Default number of hits ``tool_search`` returns per query."""
+    always_visible: list[str] = Field(default_factory=list)
+    """Extra tool names kept exposed every turn, on top of the core set."""
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -508,6 +530,7 @@ class ToolsConfig(Base):
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
     disabled_tools: list[str] = Field(default_factory=list)
     """Tool names to unregister after default-tool registration and MCP connect.
     Used by eval harnesses (e.g. BrowseComp-Plus) that need to constrain the

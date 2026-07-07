@@ -48,9 +48,17 @@ class StrategyRegistry:
                 return s
         return None
 
-    def register(self, strategy: TokenStrategy) -> None:
-        """Append a strategy. Order matters — see class docstring."""
-        self._strategies.append(strategy)
+    def register(self, strategy: TokenStrategy, *, first: bool = False) -> None:
+        """Add a strategy. Order matters — see class docstring.
+
+        ``first=True`` inserts at the front so it runs before the others (e.g.
+        a tool-list filter must run before CacheOptimizer marks the final tool
+        with ``cache_control``); default appends to the end.
+        """
+        if first:
+            self._strategies.insert(0, strategy)
+        else:
+            self._strategies.append(strategy)
 
     # ---- Hooks ----
 

@@ -343,6 +343,7 @@ def register(app: typer.Typer) -> None:
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
             disabled_tools=config.tools.disabled_tools,
+            tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
