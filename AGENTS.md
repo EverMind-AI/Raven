@@ -184,7 +184,7 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
   - `<model-id>` = the **actual current-session model ID** (e.g. `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5`), not a placeholder. The model version keeps per-model contribution distinguishable.
   - Format follows the aider convention; GitHub renders `Co-authored-by` as a co-author on the commit / PR.
 - Multiple co-authors → one per line, standard git trailer format (`Name <email>`).
-- The repo uses **rebase merge** (not squash): every commit's body/trailer enters `main` history as-is, so each commit must stand on its own — don't rely on the PR description.
+- The repo uses **squash merge** (rebase / merge-commit are disabled): a PR's commits are squashed into a **single** commit on `main`, so per-commit bodies/trailers are lost — the `Co-authored-by` trailer must live in the **PR description** (see §3.7), not only in a commit body.
 
 **❌ Don't add:**
 - `Refs: ...` pointing at locally-visible-only / git-ignored paths (invisible to others);
@@ -207,11 +207,11 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 |---|---|---|
 | 1. Sync remote | `git fetch origin <target>` | Doesn't touch the working tree |
 | 2. Dry-run conflicts | `git merge-tree --write-tree HEAD origin/<target>` | exit 0 = clean; non-zero prints conflicts |
-| 3. Rebase (if remote ahead) | `git rebase origin/<target>` | Re-applies your branch onto the target tip |
+| 3. Sync if remote ahead | `git rebase origin/<target>` (or `git merge origin/<target>`) | Bring your branch up to the target tip; either works since main squash-merges |
 | 4. Re-run tests | `uv run pytest <relevant tests> -x` | Confirm the rebase didn't break anything |
 | 5. Push | `git push -u origin <branch>` (first) or `git push --force-with-lease` (after rebase) | — |
 
-**Why:** CI runs "your commits on top of the latest remote" (catches runtime conflicts before merge); the PR diff stays clean; and with rebase-merge each commit lands on `main` verbatim, so a local rebase keeps history linear.
+**Why:** CI runs "your commits on top of the latest remote" (catches runtime conflicts before merge) and the PR diff stays clean. Because the repo squash-merges, individual commits don't land on `main` verbatim, so rebasing is **not** required for a linear history — syncing is still recommended to avoid stale-base conflicts and merge-commit noise (`check_commit_messages.py` now runs with `--no-merges`, so a merge commit on your branch won't fail lint), but a plain `git merge origin/<target>` is an acceptable alternative to rebase.
 
 **Force-push boundary:**
 - ✅ `--force-with-lease` (checks the remote wasn't changed by others) on **your own feature branch** after a rebase;
@@ -221,7 +221,7 @@ refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
 ### §3.6 Hard rule: Claude push
 
 - Always `git fetch` first to check ahead/behind;
-- if the remote target has commits not on your branch, **rebase before pushing** (the §3.5 flow);
+- if the remote target has commits not on your branch, **sync before pushing** (rebase or merge — the §3.5 flow);
 - **re-run tests after the rebase**;
 - **don't push unprompted** — like §3.4, only when the user says "push";
 - use `--force-with-lease`, never `--force`.
@@ -276,8 +276,7 @@ Filling rules:
 - anything the template doesn't cover but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Change description`.
 
 **Trailer** (with §3.3):
-- rebase-merge → each commit already carries the `Co-authored-by` trailer into `main` → **don't repeat it in the PR description**;
-- if the repo ever switches to squash-merge (single commit) → the PR description **must** end with `Co-authored-by: Claude (<model-id>) <noreply@anthropic.com>`, else the squash commit loses the trailer.
+- the repo squash-merges (the PR collapses to a single commit on `main`), so per-commit trailers are lost → the PR description **must** end with `Co-authored-by: Claude (<model-id>) <noreply@anthropic.com>`, else the squash commit loses the trailer.
 
 **Description must NOT contain** (same as §3.3):
 - `🤖 Generated with [Claude Code](https://...)` marketing banners;
