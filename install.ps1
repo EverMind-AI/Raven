@@ -225,11 +225,28 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
                 Write-Warn "Found node but not npm; skipping TUI bundle build"
             }
         }
-        & $UvPath tool install --force -e $scriptDir
+        # Install all channel adapters by default; fall back to base raven if
+        # the umbrella extra fails to build on this platform, so one broken
+        # channel SDK cannot block the whole install.
+        try {
+            & $UvPath tool install --force -e "$scriptDir[channels]"
+            if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
+        } catch {
+            Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
+            & $UvPath tool install --force -e "$scriptDir"
+            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+        }
     } else {
         $wheelUrl = Resolve-RavenWheel
         Write-Info "  installing $wheelUrl"
-        & $UvPath tool install --force $wheelUrl
+        try {
+            & $UvPath tool install --force "raven[channels] @ $wheelUrl"
+            if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
+        } catch {
+            Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
+            & $UvPath tool install --force $wheelUrl
+            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
+        }
     }
     & $UvPath tool update-shell | Out-Null
     Write-Ok "Raven installed"
