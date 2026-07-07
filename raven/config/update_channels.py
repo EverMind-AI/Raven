@@ -129,6 +129,16 @@ def _is_secret_field(field_name: str, field_info: Any) -> bool:
     return any(field_name.endswith(suf) for suf in _SECRET_SUFFIXES)
 
 
+def _is_required_field(field_info: Any) -> bool:
+    """A field is required when explicitly marked ``json_schema_extra={'required': True}``.
+
+    Every channel field carries a Pydantic default (so partial/disabled configs load),
+    so pydantic's own required flag is always False; requiredness is an explicit UX marker.
+    """
+    extra = getattr(field_info, "json_schema_extra", None)
+    return isinstance(extra, dict) and extra.get("required") is True
+
+
 def _walk_nested_path(model_cls: type[BaseModel], dotted_key: str) -> tuple[type[BaseModel], str]:
     """Walk ``a.b.c`` into nested ``BaseModel`` classes.
 
@@ -243,6 +253,7 @@ def _flatten_fields(cls: type[BaseModel], prefix: str = "") -> dict[str, dict[st
             "type": _annotation_str(ann),
             "default": _field_default(finfo),
             "is_secret": _is_secret_field(fname, finfo),
+            "required": _is_required_field(finfo),
             "description": description,
         }
     return out
@@ -284,7 +295,7 @@ def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
 def channel_field_specs(name: str) -> dict[str, dict[str, Any]]:
     """Reflect a channel schema into a flat ``dotted-path -> spec`` map.
 
-    Each entry has keys: ``type``, ``default``, ``is_secret``, ``description``.
+    Each entry has keys: ``type``, ``default``, ``is_secret``, ``required``, ``description``.
     Used by CLI parsers, the ``channels help`` command, and ``get_channel_config``
     to know which fields exist and which to redact.
     """
