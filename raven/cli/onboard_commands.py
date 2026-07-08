@@ -1821,6 +1821,13 @@ def _scancode_login(channel: str) -> None:
                 )
             )
             ok = False
+        except BaseException:
+            # Ctrl+C / cancellation mid-scan is not an ``Exception`` subclass, so
+            # it would skip the revert below and leave the channel enabled but
+            # unauthenticated. Disable it (the docstring's "any path that doesn't
+            # complete login") before letting it propagate.
+            disable_channel(channel)
+            raise
         finally:
             _wiz_logger.disable(_login_log_scope)
         if ok:

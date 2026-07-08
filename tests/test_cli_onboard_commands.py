@@ -1326,6 +1326,36 @@ def test_switch_clears_newly_added_failed_provider(tmp_env: Path, monkeypatch: p
     assert "openai" not in onboard_commands._configured_providers()  # failed new provider cleared
 
 
+def test_scancode_login_reverts_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+C mid-scan (KeyboardInterrupt, not an Exception subclass) still
+    disables the channel so a cancelled login is not left as "connected"."""
+    import types
+
+    class _Adapter:
+        async def login(self, force=False):
+            raise KeyboardInterrupt
+
+    class _Spec:
+        display_name = "WhatsApp"
+
+        def factory(self, cfg):
+            return _Adapter()
+
+    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: False)
+    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
+    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config",
+        lambda: types.SimpleNamespace(channels=types.SimpleNamespace(whatsapp=object())),
+    )
+    disabled: list[str] = []
+    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
+
+    with pytest.raises(KeyboardInterrupt):
+        onboard_commands._scancode_login("whatsapp")
+    assert disabled == ["whatsapp"]
+
+
 def test_channel_required_field_reprompts_on_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     """A required channel field's empty submit re-prompts instead of enabling a
     half-configured channel (the write layer treats required as a UX marker)."""
