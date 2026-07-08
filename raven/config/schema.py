@@ -504,11 +504,10 @@ class ToolSearchConfig(Base):
 
     When the live tool catalog (built-ins + plugins + MCP) grows past
     ``compaction_threshold``, most tool schemas are withheld from each request and reached
-    on demand through the ``tool_search`` / ``tool_describe`` / ``tool_call``
-    meta-tools, so context cost stops scaling with tool count and the per-turn
-    tool list (and thus the prompt cache) stays stable. At or below the
-    threshold every tool is exposed directly (unchanged behavior) and the
-    meta-tools are omitted.
+    on demand through the ``tool_search`` / ``tool_call`` meta-tools, so context
+    cost stops scaling with tool count and the per-turn tool list (and thus the
+    prompt cache) stays stable. At or below the threshold every tool is exposed
+    directly (unchanged behavior) and the meta-tools are omitted.
     """
 
     enabled: bool = False

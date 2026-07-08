@@ -7,23 +7,29 @@ import pytest
 
 from raven.agent.tools.base import Tool
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.tool_index import ToolIndex
+from raven.agent.tools.tool_index import ToolIndex, _schema_text
 from raven.agent.tools.tool_search import (
     DEFAULT_ALWAYS_VISIBLE,
     META_TOOL_NAMES,
     TOOL_CALL_NAME,
     ToolCallTool,
-    ToolDescribeTool,
     ToolSearchController,
     ToolSearchStrategy,
     ToolSearchTool,
 )
+from raven.config.schema import ToolSearchConfig
 
 
 class _FakeTool(Tool):
-    def __init__(self, name: str, description: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
         self._name = name
         self._description = description
+        self._parameters = parameters or {"type": "object", "properties": {}}
 
     @property
     def name(self) -> str:
@@ -35,7 +41,7 @@ class _FakeTool(Tool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {}}
+        return self._parameters
 
     async def execute(self, **kwargs: Any) -> str:
         return f"ran {self._name}"
@@ -80,6 +86,82 @@ def test_index_rebuilds_on_name_or_description_change() -> None:
     assert idx._bm25 is not first, "should rebuild when the name set changes"
 
 
+def test_index_matches_parameter_schema_keywords() -> None:
+    # A discriminating keyword living only in the parameter schema (not the
+    # one-line description) should still make the tool findable.
+    idx = ToolIndex()
+    tools = [
+        _FakeTool(
+            "create_issue",
+            "open a ticket",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "repository": {"type": "string", "description": "target github repository"},
+                },
+            },
+        ),
+        _FakeTool("send_message", "post to a channel"),
+    ]
+    idx.ensure(tools)
+    assert idx.search("github repository", limit=5)[0] == "create_issue"
+
+
+def test_schema_text_extracts_names_descriptions_enums_and_nesting() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "channel": {"type": "string", "description": "slack channel id"},
+            "mode": {"type": "string", "enum": ["fast", "thorough"]},
+            "opts": {
+                "type": "object",
+                "properties": {"retries": {"type": "integer", "description": "retry count"}},
+            },
+            "tags": {"type": "array", "items": {"type": "string", "description": "a label"}},
+        },
+    }
+    text = _schema_text(schema)
+    for token in (
+        "channel",
+        "slack channel id",
+        "mode",
+        "fast",
+        "thorough",
+        "opts",
+        "retries",
+        "retry count",
+        "tags",
+        "a label",
+    ):
+        assert token in text, f"{token!r} missing from schema text"
+
+
+def test_schema_text_handles_non_dict_and_empty() -> None:
+    assert _schema_text(None) == ""
+    assert _schema_text([1, 2]) == ""  # type: ignore[arg-type]
+    assert _schema_text({"type": "object"}) == ""  # no properties/desc/enum
+
+
+def test_schema_text_respects_depth_cap() -> None:
+    # Build nesting deeper than the cap; the deepest description must be dropped.
+    node: dict[str, Any] = {"type": "string", "description": "TOODEEP"}
+    for _ in range(10):
+        node = {"type": "object", "properties": {"n": node}}
+    assert "TOODEEP" not in _schema_text(node)
+
+
+def test_index_rebuilds_on_parameters_change() -> None:
+    base = {"type": "object", "properties": {"a": {"type": "string", "description": "alpha"}}}
+    idx = ToolIndex()
+    idx.ensure([_FakeTool("t", "desc", parameters=base)])
+    first = idx._bm25
+    idx.ensure([_FakeTool("t", "desc", parameters=dict(base))])  # same schema content
+    assert idx._bm25 is first, "should not rebuild when parameters are unchanged"
+    changed = {"type": "object", "properties": {"a": {"type": "string", "description": "beta"}}}
+    idx.ensure([_FakeTool("t", "desc", parameters=changed)])  # param description changed
+    assert idx._bm25 is not first, "should rebuild when a parameter description changes"
+
+
 def test_index_reused_across_instances_for_same_catalog() -> None:
     tools = [_FakeTool("x", "xray"), _FakeTool("y", "yankee")]
     first = ToolIndex()
@@ -100,35 +182,34 @@ def _controller(registry: ToolRegistry) -> ToolSearchController:
     )
 
 
-def test_controller_search_compact_has_no_parameters() -> None:
+def test_controller_search_includes_parameters() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"repo": {"type": "string", "description": "target repository"}},
+        "required": ["repo"],
+    }
     reg = ToolRegistry()
-    reg.register(_FakeTool("create_issue", "open a github issue"))
+    reg.register(_FakeTool("create_issue", "open a github issue", parameters=schema))
     ctrl = _controller(reg)
     ctrl.refresh()
     hits = ctrl.search("github issue")
     assert hits[0]["name"] == "create_issue"
-    assert "parameters" not in hits[0]
-
-
-def test_controller_describe_returns_full_schema() -> None:
-    reg = ToolRegistry()
-    reg.register(_FakeTool("create_issue", "open a github issue"))
-    ctrl = _controller(reg)
-    fn = ctrl.describe("create_issue")
-    assert fn is not None and fn["name"] == "create_issue" and "parameters" in fn
-
-
-def test_controller_describe_unknown_returns_none() -> None:
-    ctrl = _controller(ToolRegistry())
-    assert ctrl.describe("nope") is None
-
-
-def test_controller_describe_rejects_meta() -> None:
-    assert _controller(ToolRegistry()).describe("tool_search") is None
+    assert hits[0]["parameters"] == schema
 
 
 def test_meta_includes_tool_call() -> None:
     assert TOOL_CALL_NAME in META_TOOL_NAMES
+
+
+def test_meta_no_longer_includes_describe() -> None:
+    assert "tool_describe" not in META_TOOL_NAMES
+    assert META_TOOL_NAMES == {"tool_search", TOOL_CALL_NAME}
+
+
+def test_default_search_result_limit_is_ten() -> None:
+    assert ToolSearchConfig().search_result_limit == 10
+    ctrl = ToolSearchController(ToolRegistry(), always_visible=set())
+    assert ctrl.search_result_limit == 10
 
 
 def test_default_always_visible_covers_core_and_interaction_primitives() -> None:
@@ -159,7 +240,6 @@ def test_meta_tools_not_self_searchable() -> None:
     reg = ToolRegistry()
     ctrl = _controller(reg)
     reg.register(ToolSearchTool(ctrl))
-    reg.register(ToolDescribeTool(ctrl))
     reg.register(ToolCallTool(ctrl))
     reg.register(_FakeTool("create_issue", "open a github issue"))
     ctrl.refresh()
@@ -171,13 +251,16 @@ def test_meta_tools_not_self_searchable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_search_tool_returns_json_hits() -> None:
+async def test_tool_search_tool_returns_json_hits_with_parameters() -> None:
+    schema = {"type": "object", "properties": {"repo": {"type": "string"}}}
     reg = ToolRegistry()
-    reg.register(_FakeTool("create_issue", "open a github issue"))
+    reg.register(_FakeTool("create_issue", "open a github issue", parameters=schema))
     ctrl = _controller(reg)
     ctrl.refresh()
     out = await ToolSearchTool(ctrl).execute(query="github issue")
-    assert json.loads(out)[0]["name"] == "create_issue"
+    hit = json.loads(out)[0]
+    assert hit["name"] == "create_issue"
+    assert hit["parameters"] == schema
 
 
 @pytest.mark.asyncio
@@ -188,15 +271,6 @@ async def test_tool_search_tool_no_match_message() -> None:
     ctrl.refresh()
     out = await ToolSearchTool(ctrl).execute(query="zzzznomatch")
     assert "No tools matched" in out
-
-
-@pytest.mark.asyncio
-async def test_tool_describe_tool_returns_schema() -> None:
-    reg = ToolRegistry()
-    reg.register(_FakeTool("create_issue", "open a github issue"))
-    ctrl = _controller(reg)
-    out = await ToolDescribeTool(ctrl).execute(name="create_issue")
-    assert json.loads(out)["name"] == "create_issue"
 
 
 @pytest.mark.asyncio
@@ -244,7 +318,6 @@ def _registry_with_n(n: int) -> tuple[ToolRegistry, ToolSearchController]:
         search_result_limit=10,
     )
     reg.register(ToolSearchTool(ctrl))
-    reg.register(ToolDescribeTool(ctrl))
     reg.register(ToolCallTool(ctrl))
     return reg, ctrl
 
@@ -311,7 +384,6 @@ async def test_strategy_passthrough_when_meta_tools_absent() -> None:
     # expose everything rather than strand cataloged tools.
     reg, ctrl = _registry_with_n(40)
     reg.unregister("tool_search")
-    reg.unregister("tool_describe")
     reg.unregister(TOOL_CALL_NAME)
     strat = ToolSearchStrategy(ctrl, compaction_threshold=25)
     tools = reg.get_definitions()
