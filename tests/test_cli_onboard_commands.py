@@ -1276,6 +1276,60 @@ def test_memory_embedding_step_shows_capability_hint(
     assert "DashScope" in blob
 
 
+def test_channel_required_field_reprompts_on_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A required channel field's empty submit re-prompts instead of enabling a
+    half-configured channel (the write layer treats required as a UX marker)."""
+    import questionary
+
+    specs = {
+        "enabled": {"type": "bool", "default": False, "is_secret": False, "required": False, "description": ""},
+        "token": {"type": "str", "default": "", "is_secret": True, "required": False, "description": ""},
+        "secret": {"type": "str", "default": "", "is_secret": True, "required": True, "description": ""},
+    }
+    monkeypatch.setattr("raven.config.update_channels.channel_field_specs", lambda name: specs)
+    answers = iter(["tok", "", "sec"])  # token; secret empty (re-prompt) then filled
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ())
+    printed: list[str] = []
+    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
+    out = onboard_commands._prompt_channel_fields("feishu")
+    assert out == {"token": "tok", "secret": "sec"}
+    assert any("required" in p for p in printed)
+
+
+def test_step1_done_gated_without_default_model(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing Done in the multi-provider menu with no default model set does
+    not advance (Step 1 is required); Ctrl+C then exits."""
+    import typer
+
+    from raven.config.update_providers import set_provider_fields
+
+    # A configured provider (so the menu shows) but no default model on disk.
+    set_provider_fields("openai", {"api_key": "sk-x", "api_base": "https://api.openai.com/v1"})
+    monkeypatch.setattr(onboard_commands, "_load_current_default_model", lambda: None)
+
+    import questionary
+
+    answers = iter(["done", None])  # done -> gated (warn + loop); then Ctrl+C -> Exit
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    printed: list[str] = []
+    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
+    with pytest.raises(typer.Exit):
+        onboard_commands._step1_provider(
+            provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+        )
+    assert any("required" in p for p in printed)
+
+
 def test_custom_provider_sends_test_probe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A custom provider now sends the real test message (was previously trusted
     without one) — a wrong base_url/model surfaces here, not at first chat."""

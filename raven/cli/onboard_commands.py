@@ -19,8 +19,10 @@ not config-schema knowledge.
 
 Navigation: questionary 2.1.1 has no first-class cross-screen "back", so the
 wizard is a screen state machine and back is expressed as a ``0) back``
-sentinel choice. Ctrl+C exits at any point, keeping whatever was already
-written.
+sentinel choice on the screens that support it (Step 1 <-> language pick,
+Step 2 -> Step 1); Steps 3 and 4 are optional and forward-only (re-run
+``onboard`` to change them). Ctrl+C exits at any point, keeping whatever was
+already written.
 """
 
 from __future__ import annotations
@@ -1279,13 +1281,16 @@ def _step1_provider(
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "done"):
-            # Re-pick a default model if the prior one was removed.
-            if not _load_current_default_model() and _configured_providers():
+        if action is None:
+            raise typer.Exit(1)  # Ctrl+C exits; never treat it as "done"
+        if action == "done":
+            # Step 1 is required: never advance without at least one provider AND
+            # a default model, so deleting every provider can't slip through.
+            if not (_configured_providers() and _load_current_default_model()):
                 console.print(
                     _t(
-                        "  [yellow]No default model set — add or re-pick a provider.[/yellow]",
-                        "  [yellow]尚未设置默认模型 — 请新增或重新选择一个服务商。[/yellow]",
+                        "  [yellow]At least one provider with a default model is required — add or re-pick one.[/yellow]",
+                        "  [yellow]至少需要一个带默认模型的服务商 — 请新增或重新选择一个。[/yellow]",
                     )
                 )
                 continue
@@ -1608,32 +1613,31 @@ def _prompt_channel_fields(channel: str) -> Any:
         description = spec.get("description", "")
         opt_tag = "" if required else _t(" (optional)", " (可选)")
         prompt_label = f"{path}{opt_tag}" + (f" — {description}" if description else "") + ":"
-        # First field's empty submit rewinds to the channel picker; later
-        # optional fields' empty submit skips them. Required later fields get
-        # no skip hint so we don't invite dropping a value the channel needs.
+        # First field's empty submit rewinds to the channel picker; a later
+        # optional field's empty submit skips it; a later required field re-prompts
+        # (empty was previously accepted silently, enabling a half-configured
+        # channel — the write layer treats "required" as a UX marker only).
         allow_back = idx == 0
         placeholder = _field_placeholder(allow_back, required)
-        if spec.get("is_secret"):
-            value = questionary.password(
-                prompt_label,
-                placeholder=placeholder,
-                style=RAVEN_STYLE,
-                qmark=_QMARK,
-            ).ask()
-        else:
-            value = questionary.text(
-                prompt_label,
-                placeholder=placeholder,
-                style=RAVEN_STYLE,
-                qmark=_QMARK,
-            ).ask()
-        if value is None:
-            raise typer.Exit(1)
-        value = value.strip()
-        if allow_back and value == "":
-            return _BACK
-        if value:
-            fields[path] = value
+        while True:
+            if spec.get("is_secret"):
+                value = questionary.password(
+                    prompt_label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK
+                ).ask()
+            else:
+                value = questionary.text(prompt_label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK).ask()
+            if value is None:
+                raise typer.Exit(1)
+            value = value.strip()
+            if value:
+                fields[path] = value
+                break
+            if allow_back:
+                return _BACK  # first field empty → back to the channel picker
+            if required:
+                console.print(_t(f"  [yellow]{path} is required.[/yellow]", f"  [yellow]{path} 为必填项。[/yellow]"))
+                continue  # re-prompt instead of enabling a channel missing a credential
+            break  # optional field: empty submit skips it
     return fields
 
 
@@ -1980,7 +1984,9 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
-            if action in (None, "skip"):
+            if action is None:
+                raise typer.Exit(1)
+            if action == "skip":
                 console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
                 return None
             _add_one_channel()
@@ -1999,7 +2005,9 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "done"):
+        if action is None:
+            raise typer.Exit(1)
+        if action == "done":
             return None
         if action == "add":
             _add_one_channel()
@@ -2685,7 +2693,9 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
-            if action in (None, "skip"):
+            if action is None:
+                raise typer.Exit(1)
+            if action == "skip":
                 note_en, note_zh = role.get("skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。"))
                 console.print(_t(f"  [dim]{note_en}[/dim]", f"  [dim]{note_zh}[/dim]"))
                 return
@@ -2827,7 +2837,9 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "off"):
+        if action is None:
+            raise typer.Exit(1)
+        if action == "off":
             _set_memory_backend(None)
             console.print(
                 _t(
