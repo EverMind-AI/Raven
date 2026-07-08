@@ -2362,12 +2362,14 @@ _EVEROS_PROVIDERS: list[dict[str, str]] = [
 _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     "llm": {
         "label": ("Memory LLM", "记忆 LLM"),
-        "example": "gpt-4o-mini",
+        "example": "gpt-4.1-mini",
         "optional": False,
         "verify": True,
         "purpose": (
-            "reads each conversation to judge what matters and extract the key points",
-            "从对话中判断信息边界、抽取要点",
+            "reads each conversation to judge what matters and extract the key points\n"
+            " ([bold]gpt-4.1-mini[/bold] or stronger recommended; weaker models may degrade quality)",
+            "从对话中判断信息边界、抽取要点\n"
+            " （推荐 [bold]gpt-4.1-mini[/bold] 或更强的模型，更弱的模型可能导致提取质量下降）",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
@@ -2532,17 +2534,14 @@ def _everos_pick_creds_and_model(
 
     llm = _everos_section("llm")
     reuse_llm_ok = section != "llm" and bool(llm.get("api_key") and llm.get("base_url"))
-    reuse_main_ok = section == "llm" and _model_is_openai_compatible(main_model)
+
+    # Pre-select the same provider the main chat model uses so the user
+    # keeps the same endpoint/key but can pick a different (e.g. cheaper)
+    # model for memory extraction.
+    main_provider = _resolve_model_provider(main_model or "") if section == "llm" else None
 
     while True:  # source picker — a field-level back rewinds here
         choices: list[Any] = []
-        if reuse_main_ok:
-            choices.append(
-                questionary.Choice(
-                    _t(f"↺ Reuse main chat model ({main_model})", f"↺ 复用主对话模型({main_model})"),
-                    value=("reuse_main",),
-                )
-            )
         if reuse_llm_ok:
             choices.append(
                 questionary.Choice(
@@ -2553,8 +2552,20 @@ def _everos_pick_creds_and_model(
                     value=("reuse_llm",),
                 )
             )
+        default_choice = None
         for prov in _EVEROS_PROVIDERS:
-            choices.append(questionary.Choice(_t(prov["label"], prov["label_zh"]), value=("provider", prov)))
+            is_main = main_provider is not None and prov["name"] == main_provider
+            if is_main:
+                label = _t(
+                    f"{prov['label']} (main model provider, reuse Key)",
+                    f"{prov['label_zh']}（主模型服务商，复用 Key）",
+                )
+            else:
+                label = _t(prov["label"], prov["label_zh"])
+            choice = questionary.Choice(label, value=("provider", prov))
+            choices.append(choice)
+            if is_main:
+                default_choice = choice.value
         choices.append(
             questionary.Choice(
                 _t("Other (custom OpenAI-compatible endpoint)", "其他(自定义 OpenAI 兼容端点)"),
@@ -2567,6 +2578,7 @@ def _everos_pick_creds_and_model(
         src = questionary.select(
             _t("Pick a provider (or reuse / custom):", "选择服务商(或复用 / 自定义):"),
             choices=choices,
+            default=default_choice,
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
@@ -2576,32 +2588,28 @@ def _everos_pick_creds_and_model(
             return _BACK
         kind = src[0]
 
-        # Reuse main chat model: model id + credentials all come along — done.
-        if kind == "reuse_main":
-            creds = _resolve_reuse_llm_creds(main_model or "")
-            if creds.get("model") and creds.get("api_key") and creds.get("base_url"):
-                return {
-                    "model": creds["model"],
-                    "api_key": creds["api_key"],
-                    "base_url": creds["base_url"],
-                }
-            console.print(
-                _t(
-                    "  [yellow]✗ Couldn't resolve the main model's key / endpoint — pick a source below.[/yellow]",
-                    "  [yellow]✗ 无法解析主模型的 Key / 端点 — 请在下面另选来源。[/yellow]",
-                )
-            )
-            continue
-
         # Resolve (api_key, base_url) from the chosen source.
         if kind == "reuse_llm":
             api_key = llm.get("api_key")
             base_url = llm.get("base_url")
         elif kind == "provider":
             base_url = src[1]["base_url"]
-            api_key = _prompt_api_key(src[1]["name"], allow_back=True)
-            if api_key is _BACK:
-                continue
+            # When the user picks the same provider as their main chat
+            # model, reuse the API key so they don't have to type it again.
+            main_creds = _resolve_reuse_llm_creds(main_model or "") if main_provider == src[1]["name"] else {}
+            prefilled_key = main_creds.get("api_key")
+            if prefilled_key:
+                console.print(
+                    _t(
+                        "  [dim]API key reused from main chat model.[/dim]",
+                        "  [dim]已复用主对话模型的 API Key。[/dim]",
+                    )
+                )
+                api_key = prefilled_key
+            else:
+                api_key = _prompt_api_key(src[1]["name"], allow_back=True)
+                if api_key is _BACK:
+                    continue
         else:  # custom
             base_url = _prompt_text(_t("Base URL (must include /v1):", "Base URL(需包含 /v1):"), allow_back=True)
             if base_url is _BACK:
@@ -2904,6 +2912,15 @@ def _step4_memory(
                 )
             )
             return None
+
+    # Ensure the EverOS home directory has its config templates (everos.toml
+    # + ome.toml) BEFORE writing model sections — set_everos_section merges
+    # into the template so default sections (memory/sqlite/lancedb/api) are
+    # preserved. Also creates ome.toml which the runtime requires.
+    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+
+    configure_everos_env()
+    ensure_everos_home()
 
     # Configure required models FIRST, then flip the backend on — so a Ctrl+C
     # mid-configuration leaves backend at its prior (disabled) value rather
