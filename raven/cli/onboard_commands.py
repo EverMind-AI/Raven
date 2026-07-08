@@ -47,6 +47,10 @@ _TOTAL_STEPS = 4
 # screen; ``None`` from a picker means Ctrl+C (exit).
 _BACK = object()
 
+# Sentinel a required EverOS role returns when the user chooses to give up EverOS
+# rather than configure it; ``_step4_memory`` then falls back to Markdown memory.
+_ABORT_EVEROS = object()
+
 # Unified prompt chrome (display-only): no leading question glyph (drops
 # questionary's default "?"). A single-space qmark is rendered as one blank,
 # which — with questionary's own leading space — puts every prompt line on the
@@ -311,8 +315,8 @@ def _bootstrap_empty_config() -> None:
     warning, never a crash), so an enabled-but-modelless install is safe. The
     wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
     back to ``None`` when the user opts out or never configures the required
-    models (``_memory_enabled`` gates on the llm model being present, not just
-    the backend name).
+    models (``_memory_enabled`` gates on both required models (llm + embedding)
+    being present, not just the backend name).
 
     Seeding runs on EVERY onboard, not just a brand-new config: the writer is
     ``setdefault``-based (non-clobbering), so it backfills these blocks into a
@@ -471,6 +475,7 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False) -> Any:
     ).ask()
     if key is None:
         raise typer.Exit(1)
+    key = key.strip()
     if allow_back and key == "":
         return _BACK
     if not key:
@@ -507,6 +512,7 @@ def _prompt_base_url(default: str = "https://", *, allow_back: bool = False) -> 
     ).ask()
     if url is None:
         raise typer.Exit(1)
+    url = url.strip()
     if allow_back and url == "":
         return _BACK
     if not url:
@@ -767,9 +773,17 @@ def _pick_model(
                 qmark=_QMARK,
             ).ask()
 
+    if chosen is None:
+        raise typer.Exit(1)  # Ctrl+C
+    chosen = chosen.strip()
     if not chosen:
+        # Empty submit (e.g. the prefilled default was cleared) falls back to the
+        # default rather than tearing down the wizard. The no-default branch
+        # validates non-empty, so an empty value only reaches here with a default.
+        if default_value:
+            return default_value
         raise typer.Exit(1)
-    return chosen.strip()
+    return chosen
 
 
 def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
@@ -1586,6 +1600,7 @@ def _prompt_channel_fields(channel: str) -> Any:
             ).ask()
         if value is None:
             raise typer.Exit(1)
+        value = value.strip()
         if allow_back and value == "":
             return _BACK
         if value:
@@ -1992,16 +2007,17 @@ def _everos_section(section: str) -> dict[str, Any]:
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires an llm model in the EverOS toml: the seed/schema default
-    sets ``memory.backend="everos"`` before any models exist, so a bare backend
-    check would mis-report a fresh, modelless install as "enabled" and make
-    Step 4 offer "keep current" over a non-functional setup. Gating on the llm
-    model keeps the wizard's enabled-detection aligned with "actually works".
+    "Usable" requires both required models (llm and embedding) in the EverOS
+    toml: the seed/schema default sets ``memory.backend="everos"`` before any
+    models exist, so a bare backend check would mis-report a fresh, modelless
+    install as "enabled". Both roles are ``optional: False``; gating on either
+    alone would treat a half-configured setup (e.g. llm written but embedding
+    skipped) as enabled and offer "keep current" over a non-functional memory.
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    return bool(_everos_section("llm").get("model"))
+    return bool(_everos_section("llm").get("model") and _everos_section("embedding").get("model"))
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -2122,32 +2138,64 @@ def _prompt_text(label: str, *, secret: bool = False, default: str = "", allow_b
     return value
 
 
-def _probe_everos_endpoint(
-    label: str, *, model: Optional[str], api_key: Optional[str], base_url: Optional[str]
-) -> tuple[bool, str]:
-    """Lightweight ``GET {base_url}/models`` connectivity check for an EverOS
-    model endpoint. Returns ``(ok, detail)``; never raises."""
+def _probe_everos_chat(model: Optional[str], *, api_key: Optional[str], base_url: Optional[str]) -> tuple[bool, str]:
+    """Real capability probe for a memory-LLM endpoint: ``POST
+    {base_url}/chat/completions`` once and confirm a choice comes back. Unlike a
+    bare ``GET /models`` connectivity check, this exercises the picked model, so
+    an endpoint that lists models but doesn't serve the chosen id fails here
+    instead of reporting a false green. Provider-agnostic; never raises."""
     import httpx
 
     if not base_url:
         return False, "no base_url configured"
-    url = base_url.rstrip("/") + "/models"
-    if "/v1" not in base_url:
-        url = base_url.rstrip("/") + "/v1/models"
+    url = base_url.rstrip("/") + ("/chat/completions" if "/v1" in base_url else "/v1/chat/completions")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(url, headers=headers, json=body)
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return False, f"probe failed: {exc}"
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return True, "ok"
+    return False, "endpoint returned no completion"
+
+
+def _probe_everos_embedding(
+    model: Optional[str], *, api_key: Optional[str], base_url: Optional[str]
+) -> tuple[bool, str]:
+    """Real capability probe for an embedding endpoint: ``POST
+    {base_url}/embeddings`` once and confirm a vector comes back. Catches
+    endpoints that answer ``GET /models`` but can't actually embed (e.g. a
+    chat-only provider). Provider-agnostic; never raises."""
+    import httpx
+
+    if not base_url:
+        return False, "no base_url configured"
+    url = base_url.rstrip("/") + ("/embeddings" if "/v1" in base_url else "/v1/embeddings")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.get(url, headers=headers)
-    except httpx.HTTPError as exc:
-        return False, f"network error: {exc}"
-    if resp.status_code == 200:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(url, headers=headers, json={"model": model, "input": "ping"})
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return False, f"probe failed: {exc}"
+    items = data.get("data") if isinstance(data, dict) else None
+    if isinstance(items, list) and items and isinstance(items[0], dict) and "embedding" in items[0]:
         return True, "ok"
-    return False, f"HTTP {resp.status_code}"
+    return False, "endpoint returned no embedding vector"
 
 
 def _verify_everos_model(
     label: str,
     *,
+    section: str,
     model: Optional[str],
     api_key: Optional[str],
     base_url: Optional[str],
@@ -2163,14 +2211,17 @@ def _verify_everos_model(
     ``continue_hint`` (en, zh) spells out the consequence of continuing anyway.
     """
     console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
-    ok, detail = _probe_everos_endpoint(label, model=model, api_key=api_key, base_url=base_url)
+    if section == "embedding":
+        ok, detail = _probe_everos_embedding(model, api_key=api_key, base_url=base_url)
+    else:
+        ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
     if ok:
         console.print(_t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]"))
         return True
     console.print(
         _t(
-            f"  [yellow]✗ Couldn't reach {label}: {detail}[/yellow]",
-            f"  [yellow]✗ 连不上 {label}:{detail}[/yellow]",
+            f"  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]",
+            f"  [yellow]✗ 验证失败 {label}:{detail}[/yellow]",
         )
     )
     if continue_hint:
@@ -2252,6 +2303,13 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "把文字转成向量,存入记忆库并在检索时按「意思」匹配,而不只是关键词",
         ),
         "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
+        "hint": (
+            "Needs an embedding-capable provider — can differ from your memory LLM. "
+            "Known-good: OpenAI (text-embedding-3-small), SiliconFlow, DashScope. "
+            "A chat-only endpoint (e.g. DeepSeek) won't serve embeddings.",
+            "需要支持 embedding 的服务商 —— 可与记忆 LLM 不同。已知可用:OpenAI"
+            "(text-embedding-3-small)、SiliconFlow、DashScope。纯对话端点(如 DeepSeek)不提供 embedding。",
+        ),
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
@@ -2301,7 +2359,7 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
         if resp.status_code != 200:
             return None
         data = resp.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
@@ -2310,14 +2368,42 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
     return sorted(ids) or None
 
 
-def _everos_pick_model(*, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool) -> Any:
-    """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
-    fuzzy-searchable list, else fall back to free text. Empty submit = back."""
+def _print_embedding_switch_hint() -> None:
+    """Nudge shown whenever the embedding step bounces back to the source picker
+    (empty model submit or a failed ``/embeddings`` verify): the current endpoint
+    likely can't embed, so switch provider or give up EverOS via Back."""
+    console.print(
+        _t(
+            "  [dim]No embedding model here? This endpoint likely doesn't serve embeddings — "
+            "pick an embedding-capable provider (OpenAI / SiliconFlow / DashScope), "
+            "or choose Back to give up EverOS.[/dim]",
+            "  [dim]这里没有可用的 embedding 模型?该端点很可能不提供 embedding —— "
+            "请改选支持 embedding 的服务商(OpenAI / SiliconFlow / DashScope),"
+            "或选「返回」放弃 EverOS。[/dim]",
+        ),
+        highlight=False,
+    )
+
+
+def _everos_pick_model(
+    *, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool, fetch_list: bool = True
+) -> Any:
+    """Pick a model id for an EverOS endpoint. With ``fetch_list`` (the default),
+    fetch ``/models`` for a fuzzy-searchable list, else free text. Empty submit =
+    back.
+
+    ``fetch_list=False`` is used for embedding: ``/models`` lists the endpoint's
+    chat models (on a reused chat endpoint they're all chat), which is misleading
+    as embedding candidates — so the caller enters the embedding id directly,
+    guided by the example and the role's capability hint, and the real
+    ``/embeddings`` verify is the arbiter."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
-    models = _fetch_everos_models(base_url, api_key)
+    models = None
+    if fetch_list:
+        console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
+        models = _fetch_everos_models(base_url, api_key)
     if models:
         chosen = questionary.autocomplete(
             _t(
@@ -2332,12 +2418,13 @@ def _everos_pick_model(*, base_url: Optional[str], api_key: Optional[str], examp
             qmark=_QMARK,
         ).ask()
     else:
-        console.print(
-            _t(
-                "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
-                "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
+        if fetch_list:
+            console.print(
+                _t(
+                    "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
+                    "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
+                )
             )
-        )
         chosen = questionary.text(
             _t(f"Model id (e.g. {example}):", f"模型 id(如 {example}):"),
             placeholder=_back_placeholder(allow_back),
@@ -2475,8 +2562,19 @@ def _everos_pick_creds_and_model(
             if rerank_provider is _BACK:
                 continue
 
-        model = _everos_pick_model(base_url=base_url, api_key=api_key, example=example, allow_back=True)
+        model = _everos_pick_model(
+            base_url=base_url,
+            api_key=api_key,
+            example=example,
+            allow_back=True,
+            fetch_list=section != "embedding",
+        )
         if model is _BACK:
+            # Back-out lands on the source picker again; for embedding, nudge the
+            # user to switch provider (Back gives up EverOS) so re-picking the same
+            # chat-only reuse endpoint isn't a silent dead end.
+            if section == "embedding":
+                _print_embedding_switch_hint()
             continue
 
         result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
@@ -2485,9 +2583,12 @@ def _everos_pick_creds_and_model(
         return result
 
 
-def _config_everos_role(*, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]) -> None:
+def _config_everos_role(*, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]) -> Any:
     """Configure one EverOS memory role (llm / embedding / rerank / multimodal)
-    with the unified provider→key→model flow, reuse shortcuts, and a back loop."""
+    with the unified provider→key→model flow, reuse shortcuts, and a back loop.
+
+    Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
+    required role (the caller then disables EverOS and keeps Markdown memory)."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
     from raven.config.update_everos import clear_everos_section, set_everos_section
@@ -2502,16 +2603,24 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
     # Header sits on the 2-space info column (bold accent); the purpose nests
     # one line under it (dim), matching the layout system used everywhere else.
     tag = _t("optional", "可选")
+    hint = role.get("hint")
+    hint_en = f"\n  [dim]{hint[0]}[/dim]" if hint else ""
+    hint_zh = f"\n  [dim]{hint[1]}[/dim]" if hint else ""
     console.print()
+    # highlight=False so Rich's default highlighter doesn't tint the dim prose
+    # (parens/numbers/words) and make an informational hint read like an error.
     console.print(
         _t(
             f"  [bold #fbe23f]{label_en}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_en}[/dim]",
+            + f"\n  [dim]{purpose_en}[/dim]"
+            + hint_en,
             f"  [bold #fbe23f]{label_zh}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_zh}[/dim]",
-        )
+            + f"\n  [dim]{purpose_zh}[/dim]"
+            + hint_zh,
+        ),
+        highlight=False,
     )
 
     while True:  # role-menu loop — a back-out of the source picker returns here
@@ -2560,11 +2669,36 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
             non_interactive=non_interactive,
         )
         if result is _BACK:
-            continue  # back to the role menu
+            if optional:
+                continue  # optional role: re-show the role menu (it offers Skip)
+            # A required role has no Skip, so backing out of the picker would loop
+            # forever. Offer a bounded exit: keep trying, or give up EverOS and
+            # fall back to Markdown memory.
+            action = questionary.select(
+                _t(
+                    f"{label_en} is required for EverOS memory. What would you like to do?",
+                    f"{label_zh} 是 EverOS 记忆必需的。想做什么?",
+                ),
+                choices=[
+                    questionary.Choice(_t("Pick a provider / model", "选择服务商 / 模型"), value="retry"),
+                    questionary.Choice(
+                        _t("Give up EverOS (use native Markdown memory)", "放弃 EverOS(改用原生 Markdown 记忆)"),
+                        value="abort",
+                    ),
+                ],
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if action is None:
+                raise typer.Exit(1)
+            if action == "retry":
+                continue
+            return _ABORT_EVEROS
 
         if role["verify"]:
             ok = _verify_everos_model(
                 verify_label,
+                section=section,
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
@@ -2575,7 +2709,12 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
         else:
             ok = True
         if not ok:
-            continue  # "Re-enter" on a failed probe → back to the role menu
+            # "Re-enter" on a failed probe → back to the role menu. For embedding,
+            # a failed /embeddings verify usually means the endpoint can't embed;
+            # reprint the switch-provider nudge so the retry isn't a blind loop.
+            if section == "embedding":
+                _print_embedding_switch_hint()
+            continue
 
         set_everos_section(section, result)
         console.print(
@@ -2593,8 +2732,8 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
     The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
     step's job is to either confirm it by configuring the required models or
     resolve it back to ``None`` (native Markdown) on skip / non-interactive /
-    decline. ``_memory_enabled`` gates on the llm model being present, so a
-    fresh modelless seed is treated as "not yet enabled" (the user still sees
+    decline. ``_memory_enabled`` gates on both required models (llm + embedding)
+    being present, so a fresh modelless seed is treated as "not yet enabled" (the user still sees
     the enable prompt) and the "keep current" path only triggers once models
     are actually on disk.
     """
@@ -2603,7 +2742,7 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
     if skip or non_interactive:
         # Never configured the required models here → disable backend-driven
         # memory so runtime doesn't activate EverOS without an llm/embedding.
-        # (``_memory_enabled`` already gates on the llm model, so an
+        # (``_memory_enabled`` already gates on both required models, so an
         # already-enabled+configured setup is preserved.)
         if not _memory_enabled():
             _set_memory_backend(None)
@@ -2675,12 +2814,21 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
     for _role in ("llm", "embedding", "rerank", "multimodal"):
         # Each role prints one leading blank before its own header, so no extra
         # separator here — avoids the double blank line between roles.
-        _config_everos_role(
+        outcome = _config_everos_role(
             section=_role,
             main_model=main_model,
             non_interactive=non_interactive,
             warnings=warnings,
         )
+        if outcome is _ABORT_EVEROS:
+            _set_memory_backend(None)
+            console.print(
+                _t(
+                    "  [dim]Gave up EverOS; keeping native Markdown memory.[/dim]",
+                    "  [dim]已放弃 EverOS,改用原生 Markdown 记忆。[/dim]",
+                )
+            )
+            return None
     _set_memory_backend("everos")
     return None
 
