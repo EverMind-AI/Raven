@@ -1366,7 +1366,7 @@ def test_switch_restores_reconfigured_provider_key(tmp_env: Path, monkeypatch: p
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
 
     def _collect(provider, **kw):
-        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad"})
+        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad", "api_base": "https://bad/v1"})
         return None
 
     monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
@@ -1376,8 +1376,9 @@ def test_switch_restores_reconfigured_provider_key(tmp_env: Path, monkeypatch: p
         provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
     )
     assert out is None
-    stored = ((onboard_commands._load_raw_config().get("providers") or {}).get("openai") or {}).get("apiKey")
-    assert stored == "sk-good"  # restored, not left as sk-bad
+    stored = (onboard_commands._load_raw_config().get("providers") or {}).get("openai") or {}
+    assert stored.get("apiKey") == "sk-good"  # key restored, not left as sk-bad
+    assert stored.get("apiBase") == "https://api.openai.com/v1"  # base_url restored too
 
 
 def test_config_everos_role_skip_test_skips_probe(

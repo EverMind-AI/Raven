@@ -955,7 +955,9 @@ def _configure_one_provider(
         # Snapshot the stored key before _collect_credentials overwrites it, so a
         # failed re-configuration of an existing provider can be rolled back to
         # its prior working key (rather than left holding the just-typed bad one).
-        old_key = ((_load_raw_config().get("providers") or {}).get(provider) or {}).get("apiKey")
+        _prev = (_load_raw_config().get("providers") or {}).get(provider) or {}
+        old_key = _prev.get("apiKey")
+        old_base = _prev.get("apiBase")
 
         custom_model = _collect_credentials(
             provider,
@@ -990,7 +992,7 @@ def _configure_one_provider(
             if provider not in configured_before:
                 _write_provider_fields(provider, {"api_key": ""})
             elif old_key:
-                _write_provider_fields(provider, {"api_key": old_key})
+                _write_provider_fields(provider, {"api_key": old_key, "api_base": old_base})
             flag_provider = None
             continue
         _persist_default_model(chosen_model)
