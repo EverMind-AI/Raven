@@ -611,7 +611,7 @@ def _run_oauth_login(provider: str) -> bool:
     return True
 
 
-def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
+def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, str, Optional[list[str]]]:
     """Hit ``GET /v1/models`` to verify the credentials we just stored.
 
     Returns ``(ok, status, model_ids)``. ``status`` is one of the ops-library
@@ -636,12 +636,20 @@ def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
     # check (the test message sent later exercises real connectivity via
     # litellm) instead of dumping the user into the failure submenu.
     if status == "not_configured" and "api_base" in (result.get("error") or ""):
-        console.print(
-            _t(
-                "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]",
-                "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);稍后的测试消息会验证连通。[/dim]",
+        if skip_test:
+            console.print(
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); connectivity is not tested (--skip-test).[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);未做连通测试(--skip-test)。[/dim]",
+                )
             )
-        )
+        else:
+            console.print(
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);稍后的测试消息会验证连通。[/dim]",
+                )
+            )
         return True, "skipped", None
     hint_map = {
         "invalid_key": _t(
@@ -1099,7 +1107,7 @@ def _resolve_model_with_test(
     provider" (the caller rewinds to the picker).
     """
     while True:
-        ok, status, model_ids = _verify_provider(spec.name)
+        ok, status, model_ids = _verify_provider(spec.name, skip_test=skip_test)
         if not ok:
             options = (
                 [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
@@ -1711,7 +1719,7 @@ def _node_runtime_missing(channel: str) -> bool:
     return shutil.which("npm") is None
 
 
-def _handle_missing_node(channel: str) -> str:
+def _handle_missing_node(channel: str, *, non_interactive: bool) -> str:
     """Show the Node-missing submenu (install-then-retry / skip).
 
     Returns ``"retry"`` (re-check after install) or ``"skip"`` (leave the
@@ -1730,12 +1738,12 @@ def _handle_missing_node(channel: str) -> str:
             (_t("Retry after install", "安装后重试"), "retry"),
             (_t("Skip", "跳过"), "skip"),
         ],
-        non_interactive=False,
+        non_interactive=non_interactive,
     )
     return choice
 
 
-def _scancode_login(channel: str) -> None:
+def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
     """Run a scancode channel's real QR login (reuses ``channel.login``).
 
     Mirrors ``raven channels login``: enable the channel so its config section
@@ -1773,7 +1781,7 @@ def _scancode_login(channel: str) -> None:
             # Node-bridge channels: gate on the runtime up front so a missing
             # Node/npm shows a useful install menu, not a "re-show QR" no-op.
             if _node_runtime_missing(channel):
-                if _handle_missing_node(channel) == "retry":
+                if _handle_missing_node(channel, non_interactive=non_interactive) == "retry":
                     continue
                 console.print(
                     _t(
@@ -1852,7 +1860,7 @@ def _scancode_login(channel: str) -> None:
                     (_t("Retry", "重试"), "retry"),
                     (_t("Skip this channel", "跳过此渠道"), "skip"),
                 ],
-                non_interactive=False,
+                non_interactive=non_interactive,
             )
             if choice == "retry":
                 continue
@@ -1871,14 +1879,14 @@ def _scancode_login(channel: str) -> None:
             disable_channel(channel)
 
 
-def _add_one_channel() -> None:
+def _add_one_channel(*, non_interactive: bool = False) -> None:
     """Pick + (scancode login | reflect-prompt) + enable one channel."""
     while True:
         channel = _select_channel()
         if channel is None or channel is _BACK:
             return
         if _channel_uses_interactive_login(channel):
-            _scancode_login(channel)
+            _scancode_login(channel, non_interactive=non_interactive)
             return
         fields = _prompt_channel_fields(channel)
         if fields is _BACK:
@@ -1984,7 +1992,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
 
     if channel:
         if _channel_uses_interactive_login(channel):
-            _scancode_login(channel)
+            _scancode_login(channel, non_interactive=non_interactive)
         else:
             fields = _prompt_channel_fields(channel)
             if fields is _BACK:
@@ -2022,7 +2030,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
             if action == "skip":
                 console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
                 return None
-            _add_one_channel()
+            _add_one_channel(non_interactive=non_interactive)
             continue
 
         action = questionary.select(
@@ -2043,7 +2051,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
         if action == "done":
             return None
         if action == "add":
-            _add_one_channel()
+            _add_one_channel(non_interactive=non_interactive)
         elif action == "edit":
             _manage_existing_channels()
 

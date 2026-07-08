@@ -1335,7 +1335,7 @@ def test_test_probe_rekey_completes_write_and_retry(tmp_env: Path, monkeypatch: 
 
     spec = find_by_name("custom")
     set_provider_fields("custom", {"api_key": "k-old", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
     outcomes = iter([RuntimeError("bad key"), ("hi", 1, 0.1)])
 
     def _probe():
@@ -1575,7 +1575,7 @@ def test_custom_provider_sends_test_probe(tmp_env: Path, monkeypatch: pytest.Mon
 
     spec = find_by_name("custom")
     set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
     calls: list[bool] = []
 
     def _probe():
@@ -1598,7 +1598,7 @@ def test_custom_provider_probe_failure_switch_rewinds(tmp_env: Path, monkeypatch
 
     spec = find_by_name("custom")
     set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
 
     def _boom():
         raise RuntimeError("model not found")
@@ -2045,12 +2045,48 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
     assert data["channels"]["weixin"]["enabled"] is False
 
 
+def test_verify_provider_skip_test_omits_test_message_promise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under --skip-test, the pre-check skip note must not promise a test message
+    (none runs); without it, the promise stays."""
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda p: {"ok": False, "status": "not_configured", "error": "api_base is empty"},
+    )
+    printed: list[str] = []
+    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
+    onboard_commands._verify_provider("deepseek", skip_test=True)
+    blob = "\n".join(printed)
+    assert "not tested" in blob and "test message below" not in blob
+    printed.clear()
+    onboard_commands._verify_provider("deepseek", skip_test=False)
+    assert "test message below" in "\n".join(printed)
+
+
+def test_scancode_login_non_interactive_node_missing_auto_skips(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With non_interactive threaded in, a missing Node auto-skips (no prompt)
+    and still reverts the enable."""
+
+    class _Spec:
+        display_name = "WhatsApp"
+
+        def factory(self, cfg):
+            return object()
+
+    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: True)
+    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
+    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
+    disabled: list[str] = []
+    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
+    onboard_commands._scancode_login("whatsapp", non_interactive=True)
+    assert disabled == ["whatsapp"]
+
+
 def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_add_one_channel` sends a scancode channel to login, NOT schema prompts."""
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "weixin")
     monkeypatch.setattr(onboard_commands, "_select_channel", lambda: "weixin")
     routed: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c: routed.append(c))
+    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c, **kw: routed.append(c))
     monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
     onboard_commands._add_one_channel()
     assert routed == ["weixin"]
