@@ -1326,6 +1326,162 @@ def test_switch_clears_newly_added_failed_provider(tmp_env: Path, monkeypatch: p
     assert "openai" not in onboard_commands._configured_providers()  # failed new provider cleared
 
 
+def test_test_probe_rekey_completes_write_and_retry(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Choosing Re-enter key on a test-message failure writes the new key and
+    retries; a passing retry then completes (the rekey outcome is exercised end
+    to end, not just offered)."""
+    from raven.config.update_providers import set_provider_fields
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("custom")
+    set_provider_fields("custom", {"api_key": "k-old", "api_base": "https://x/v1"})
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+    outcomes = iter([RuntimeError("bad key"), ("hi", 1, 0.1)])
+
+    def _probe():
+        r = next(outcomes)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr(onboard_commands, "send_probe", _probe)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda opts, **kw: "rekey")
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda p, **kw: "k-new")
+
+    out = onboard_commands._resolve_model_with_test(
+        spec, is_custom=True, custom_model="m", user_model_flag=None, non_interactive=False, warnings=[]
+    )
+    assert out == "m"
+    stored = ((onboard_commands._load_raw_config().get("providers") or {}).get("custom") or {}).get("apiKey")
+    assert stored == "k-new"
+
+
+def test_switch_restores_reconfigured_provider_key(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reconfiguring an existing provider that then fails and is switched away
+    from restores its prior key (a failed edit must not clobber a working one)."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openai", {"api_key": "sk-good", "api_base": "https://api.openai.com/v1"})
+    picks = iter(["openai", onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+
+    def _collect(provider, **kw):
+        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad"})
+        return None
+
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **kw: None)  # switch
+
+    out = onboard_commands._configure_one_provider(
+        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+    )
+    assert out is None
+    stored = ((onboard_commands._load_raw_config().get("providers") or {}).get("openai") or {}).get("apiKey")
+    assert stored == "sk-good"  # restored, not left as sk-bad
+
+
+def test_config_everos_role_skip_test_skips_probe(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--skip-test (threaded into Step 4) skips the billed EverOS probe while
+    still persisting the model."""
+    import tomllib
+
+    from raven.config.update_everos import set_everos_section
+
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_llm",)))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("text-embedding-3-small"))
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (calls.append(True), (True, "ok"))[1]
+    )
+    onboard_commands._config_everos_role(
+        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[], skip_test=True
+    )
+    assert calls == []  # billed probe skipped
+    with everos_isolated.open("rb") as f:
+        everos = tomllib.load(f)
+    assert everos["embedding"]["model"] == "text-embedding-3-small"
+
+
+def test_reconfig_existing_required_role_backout_keeps_current(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backing out of the picker while reconfiguring an already-configured
+    required role returns to the keep/reconfigure menu (not the give-up exit)."""
+    from raven.config.update_everos import set_everos_section
+
+    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
+    set_everos_section("embedding", {"model": "existing-embed", "api_key": "k", "base_url": "https://llm/v1"})
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    # role menu -> Reconfigure; source picker -> Back; role menu -> Keep current.
+    select_answers = iter(["redo", onboard_commands._BACK, "keep"])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    out = onboard_commands._config_everos_role(
+        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
+    )
+    assert out is None  # kept current, not _ABORT_EVEROS
+
+
+def test_scancode_login_reverts_on_menu_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+C in the post-login retry/skip menu (typer.Exit, not an Exception)
+    still disables the channel — the revert covers submenu exits, not just the
+    login call."""
+    import types
+
+    import typer
+
+    class _Adapter:
+        async def login(self, force=False):
+            return False  # login fails -> drops into the retry/skip menu
+
+    class _Spec:
+        display_name = "WhatsApp"
+
+        def factory(self, cfg):
+            return _Adapter()
+
+    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: False)
+    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
+    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config",
+        lambda: types.SimpleNamespace(channels=types.SimpleNamespace(whatsapp=object())),
+    )
+
+    def _ctrl_c(opts, **kw):
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(onboard_commands, "_failure_choice", _ctrl_c)
+    disabled: list[str] = []
+    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
+
+    with pytest.raises(typer.Exit):
+        onboard_commands._scancode_login("whatsapp")
+    assert disabled == ["whatsapp"]
+
+
 def test_scancode_login_reverts_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ctrl+C mid-scan (KeyboardInterrupt, not an Exception subclass) still
     disables the channel so a cancelled login is not left as "connected"."""

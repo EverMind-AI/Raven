@@ -952,6 +952,11 @@ def _configure_one_provider(
                 )
             )
 
+        # Snapshot the stored key before _collect_credentials overwrites it, so a
+        # failed re-configuration of an existing provider can be rolled back to
+        # its prior working key (rather than left holding the just-typed bad one).
+        old_key = ((_load_raw_config().get("providers") or {}).get(provider) or {}).get("apiKey")
+
         custom_model = _collect_credentials(
             provider,
             is_oauth=is_oauth,
@@ -978,11 +983,14 @@ def _configure_one_provider(
         )
         if chosen_model is None:
             # "Switch provider" — re-run the picker (drop the flag so the second
-            # pass prompts rather than reusing the failed flag value). If this
-            # provider was newly written this pass (not pre-existing), clear its
-            # key so a failed provider isn't left listed as configured.
+            # pass prompts rather than reusing the failed flag value). Roll back
+            # the just-written key: clear it if this provider was newly added this
+            # pass, or restore the prior key if we were reconfiguring an existing
+            # one (so a failed edit doesn't clobber a working provider).
             if provider not in configured_before:
                 _write_provider_fields(provider, {"api_key": ""})
+            elif old_key:
+                _write_provider_fields(provider, {"api_key": old_key})
             flag_provider = None
             continue
         _persist_default_model(chosen_model)
@@ -1752,112 +1760,113 @@ def _scancode_login(channel: str) -> None:
         console.print(_t(f"  [red]✗ Unknown channel: {channel}[/red]", f"  [red]✗ 未知渠道:{channel}[/red]"))
         return
 
-    while True:
-        # Node-bridge channels: gate on the runtime up front so a missing
-        # Node/npm shows a useful install menu, not a "re-show QR" no-op.
-        if _node_runtime_missing(channel):
-            if _handle_missing_node(channel) == "retry":
+    # Enabled above so the factory can read the config section during login. ANY
+    # path that doesn't finish login must revert the enable — including Ctrl+C in
+    # a submenu (raises typer.Exit) or mid-scan (KeyboardInterrupt), neither an
+    # ``Exception`` subclass — so wrap the whole flow and disable in ``finally``
+    # unless we actually logged in.
+    logged_in = False
+    try:
+        while True:
+            # Node-bridge channels: gate on the runtime up front so a missing
+            # Node/npm shows a useful install menu, not a "re-show QR" no-op.
+            if _node_runtime_missing(channel):
+                if _handle_missing_node(channel) == "retry":
+                    continue
+                console.print(
+                    _t(
+                        f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
+                        f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
+                    )
+                )
+                return
+
+            from raven.config.loader import load_config
+
+            channel_cfg = getattr(load_config().channels, channel, None)
+            if channel_cfg is None:
+                console.print(
+                    _t(
+                        f"  [red]✗ No config section for channel: {channel}[/red]",
+                        f"  [red]✗ 渠道 {channel} 没有配置段。[/red]",
+                    )
+                )
+                return
+            adapter = spec.factory(channel_cfg)
+            if channel == "whatsapp":
+                console.print(
+                    _t(
+                        "  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]",
+                        "  [dim]正在构建 WhatsApp 桥接,首次约需 30–120 秒…[/dim]",
+                    )
+                )
+            console.print(
+                _t(
+                    f"  [dim]Starting {spec.display_name} QR login…[/dim]",
+                    f"  [dim]正在启动 {spec.display_name} 扫码登录…[/dim]",
+                )
+            )
+            console.print(
+                _t(
+                    f"  [dim]A login link / QR code will appear below — scan it with "
+                    f"{spec.display_name} (or open the link on a phone signed in to "
+                    f"{spec.display_name}) to connect. This waits until you finish.[/dim]",
+                    f"  [dim]下方会出现登录链接 / 二维码 — 用 {spec.display_name} 扫码"
+                    f"(或在已登录 {spec.display_name} 的手机上打开该链接)即可接入;"
+                    f"这里会一直等到你完成。[/dim]",
+                )
+            )
+            from loguru import logger as _wiz_logger
+
+            # The wizard silences raven logs for a clean UI, but a scancode login
+            # emits its QR / link / progress / failure reason through loguru. Re-
+            # enable ONLY this channel's adapter subtree for the login attempt (not
+            # all of raven, which would dump unrelated noise), then restore quiet.
+            _login_log_scope = f"raven.channels.adapters.{channel}"
+            try:
+                _wiz_logger.enable(_login_log_scope)
+                ok = asyncio.run(adapter.login(force=True))
+            except Exception as exc:
+                console.print(
+                    _t(
+                        f"  [yellow]✗ Login failed: {exc}[/yellow]",
+                        f"  [yellow]✗ 登录失败:{exc}[/yellow]",
+                    )
+                )
+                ok = False
+            finally:
+                _wiz_logger.disable(_login_log_scope)
+            if ok:
+                console.print(
+                    _t(
+                        f"  [green]✓ Logged in; {channel} connected.[/green]",
+                        f"  [green]✓ 已登录;{channel} 已接入。[/green]",
+                    )
+                )
+                logged_in = True
+                return
+            choice = _failure_choice(
+                [
+                    (_t("Retry", "重试"), "retry"),
+                    (_t("Skip this channel", "跳过此渠道"), "skip"),
+                ],
+                non_interactive=False,
+            )
+            if choice == "retry":
                 continue
-            disable_channel(channel)  # not logged in → don't leave it "connected"
             console.print(
                 _t(
-                    f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
-                    f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
+                    f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
+                    f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
                 )
             )
             return
-
-        from raven.config.loader import load_config
-
-        channel_cfg = getattr(load_config().channels, channel, None)
-        if channel_cfg is None:
+    finally:
+        if not logged_in:
+            # Any non-login exit (skip, no-config, submenu Ctrl+C, mid-scan
+            # interrupt) reverts the enable so a cancelled scan never persists as
+            # "connected". The config section is kept for `raven channels login`.
             disable_channel(channel)
-            console.print(
-                _t(
-                    f"  [red]✗ No config section for channel: {channel}[/red]",
-                    f"  [red]✗ 渠道 {channel} 没有配置段。[/red]",
-                )
-            )
-            return
-        adapter = spec.factory(channel_cfg)
-        if channel == "whatsapp":
-            console.print(
-                _t(
-                    "  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]",
-                    "  [dim]正在构建 WhatsApp 桥接,首次约需 30–120 秒…[/dim]",
-                )
-            )
-        console.print(
-            _t(
-                f"  [dim]Starting {spec.display_name} QR login…[/dim]",
-                f"  [dim]正在启动 {spec.display_name} 扫码登录…[/dim]",
-            )
-        )
-        console.print(
-            _t(
-                f"  [dim]A login link / QR code will appear below — scan it with "
-                f"{spec.display_name} (or open the link on a phone signed in to "
-                f"{spec.display_name}) to connect. This waits until you finish.[/dim]",
-                f"  [dim]下方会出现登录链接 / 二维码 — 用 {spec.display_name} 扫码"
-                f"(或在已登录 {spec.display_name} 的手机上打开该链接)即可接入;"
-                f"这里会一直等到你完成。[/dim]",
-            )
-        )
-        from loguru import logger as _wiz_logger
-
-        # The wizard silences raven logs for a clean UI, but a scancode login
-        # emits its QR / link / progress / failure reason through loguru. Re-
-        # enable ONLY this channel's adapter subtree for the login attempt (not
-        # all of raven, which would dump unrelated noise), then restore quiet.
-        _login_log_scope = f"raven.channels.adapters.{channel}"
-        try:
-            _wiz_logger.enable(_login_log_scope)
-            ok = asyncio.run(adapter.login(force=True))
-        except Exception as exc:
-            console.print(
-                _t(
-                    f"  [yellow]✗ Login failed: {exc}[/yellow]",
-                    f"  [yellow]✗ 登录失败:{exc}[/yellow]",
-                )
-            )
-            ok = False
-        except BaseException:
-            # Ctrl+C / cancellation mid-scan is not an ``Exception`` subclass, so
-            # it would skip the revert below and leave the channel enabled but
-            # unauthenticated. Disable it (the docstring's "any path that doesn't
-            # complete login") before letting it propagate.
-            disable_channel(channel)
-            raise
-        finally:
-            _wiz_logger.disable(_login_log_scope)
-        if ok:
-            console.print(
-                _t(
-                    f"  [green]✓ Logged in; {channel} connected.[/green]",
-                    f"  [green]✓ 已登录;{channel} 已接入。[/green]",
-                )
-            )
-            return
-        choice = _failure_choice(
-            [
-                (_t("Retry", "重试"), "retry"),
-                (_t("Skip this channel", "跳过此渠道"), "skip"),
-            ],
-            non_interactive=False,
-        )
-        if choice == "retry":
-            continue
-        # Not completed (skip) → revert the enable so the channel isn't shown as
-        # connected. The config section is kept, so the user can finish
-        # out-of-band with `raven channels login <name>`.
-        disable_channel(channel)
-        console.print(
-            _t(
-                f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
-                f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
-            )
-        )
-        return
 
 
 def _add_one_channel() -> None:
@@ -2642,7 +2651,9 @@ def _everos_pick_creds_and_model(
         return result
 
 
-def _config_everos_role(*, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]) -> Any:
+def _config_everos_role(
+    *, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str], skip_test: bool = False
+) -> Any:
     """Configure one EverOS memory role (llm / embedding / rerank / multimodal)
     with the unified provider→key→model flow, reuse shortcuts, and a back loop.
 
@@ -2730,11 +2741,14 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
             non_interactive=non_interactive,
         )
         if result is _BACK:
-            if optional:
-                continue  # optional role: re-show the role menu (it offers Skip)
-            # A required role has no Skip, so backing out of the picker would loop
-            # forever. Offer a bounded exit: keep trying, or give up EverOS and
-            # fall back to Markdown memory.
+            if optional or _everos_section(section).get("model"):
+                # Optional roles offer Skip; a required role that already has a
+                # value on disk falls back to its keep/reconfigure menu. Either
+                # way, re-show the role menu rather than forcing the give-up exit.
+                continue
+            # A required role with nothing configured has no Skip, so backing out
+            # of the picker would loop forever. Offer a bounded exit: keep trying,
+            # or give up EverOS and fall back to Markdown memory.
             action = questionary.select(
                 _t(
                     f"{label_en} is required for EverOS memory. What would you like to do?",
@@ -2756,7 +2770,15 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
                 continue
             return _ABORT_EVEROS
 
-        if role["verify"]:
+        if role["verify"] and skip_test:
+            console.print(
+                _t(
+                    f"  [dim]Skipping the {verify_label} test call (--skip-test).[/dim]",
+                    f"  [dim]已跳过 {verify_label} 的测试调用(--skip-test)。[/dim]",
+                )
+            )
+            ok = True
+        elif role["verify"]:
             ok = _verify_everos_model(
                 verify_label,
                 section=section,
@@ -2787,7 +2809,9 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
         return
 
 
-def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str]) -> object:
+def _step4_memory(
+    *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
+) -> object:
     """Step 4 — EverOS long-term memory (enable + model sub-screens).
 
     The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
@@ -2882,6 +2906,7 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
             main_model=main_model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
         if outcome is _ABORT_EVEROS:
             _set_memory_backend(None)
@@ -3106,6 +3131,7 @@ def _run_wizard_body(
             non_interactive=non_interactive,
             main_model=_load_current_default_model(),
             warnings=warnings,
+            skip_test=skip_test,
         ),
     ]
 
