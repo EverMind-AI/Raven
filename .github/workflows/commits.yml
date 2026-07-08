@@ -25,6 +25,11 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: PYTHONPATH=. python3 scripts/check_pr_title.py
 
+      - name: Validate PR body
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: PYTHONPATH=. python3 scripts/check_pr_body.py
+
   commit-messages:
     name: commit messages
     runs-on: ubuntu-latest

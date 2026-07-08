@@ -170,7 +170,13 @@ install_raven() {
         warn "No usable node found; skipping TUI build; raven tui may not work"
       fi
     fi
-    uv tool install --force -e "$script_dir"
+    # Install all channel adapters by default. If the umbrella extra fails to
+    # resolve/build on this platform, fall back to base raven so one broken
+    # channel SDK cannot block the whole install.
+    if ! uv tool install --force -e "$script_dir[channels]"; then
+      warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
+      uv tool install --force -e "$script_dir"
+    fi
   else
     # Remote mode: install the latest published release wheel, which bundles
     # the prebuilt ui-tui/dist/entry.js (built by CI). We deliberately do NOT
@@ -185,7 +191,10 @@ install_raven() {
     fi
     [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
     info "  installing $wheel_url"
-    uv tool install --force "$wheel_url"
+    if ! uv tool install --force "raven[channels] @ $wheel_url"; then
+      warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
+      uv tool install --force "$wheel_url"
+    fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.
   uv tool update-shell || true

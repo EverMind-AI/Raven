@@ -8,12 +8,40 @@ gateway); inbound is each channel's Intake -> scheduler.submit.
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
+from importlib.metadata import PackageNotFoundError, distribution
 from typing import Any
 
 from loguru import logger
 
 from raven.channels.contract import Channel
 from raven.config.schema import Config
+
+
+def _missing_dep_hint(modname: str) -> str:
+    """How to install a channel's missing SDK, tailored to the install mode.
+
+    An editable (dev) checkout uses ``uv sync``; a wheel/tool install has no
+    source tree, so it must re-run the installer instead. PEP 610
+    ``direct_url.json`` distinguishes them -- a wheel install records
+    ``archive_info`` (no ``dir_info`` key), so ``.get`` chaining avoids a
+    KeyError when it is absent. This runs while a channel is already failing,
+    so a missing/corrupt file must degrade to the installer hint, never raise.
+    """
+    editable = False
+    try:
+        raw = distribution("raven").read_text("direct_url.json")
+        if raw:
+            editable = bool(json.loads(raw).get("dir_info", {}).get("editable", False))
+    except (PackageNotFoundError, ValueError):
+        pass
+
+    if editable:
+        return f"Run: uv sync --extra channel-{modname}"
+    if sys.platform == "win32":
+        return "Re-run the installer to add channels: irm https://raven.evermind.ai/install.ps1 | iex"
+    return "Re-run the installer to add channels: curl -fsSL https://raven.evermind.ai/install.sh | bash"
 
 
 class ChannelManager:
@@ -47,10 +75,10 @@ class ChannelManager:
                 logger.info("{} channel enabled", spec.display_name)
             except ImportError as e:
                 logger.warning(
-                    "{} channel disabled: missing dependency ({}). Run: uv sync --extra channel-{}",
+                    "{} channel disabled: missing dependency ({}). {}",
                     modname,
                     e,
-                    modname,
+                    _missing_dep_hint(modname),
                 )
 
         self._validate_allow_from()

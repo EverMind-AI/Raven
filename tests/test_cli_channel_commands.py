@@ -120,6 +120,14 @@ def test_show_lists_all_flags(tmp_config: Path) -> None:
     assert "--group-policy" in out
 
 
+def test_show_has_required_column(tmp_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Widen the render so the extra column's header is not truncated.
+    monkeypatch.setenv("COLUMNS", "200")
+    r = runner.invoke(app, ["channels", "show", "feishu"])
+    assert r.exit_code == 0, r.stdout
+    assert "Required?" in r.stdout
+
+
 def test_help_alias_no_longer_exists(tmp_config: Path) -> None:
     """`channels help <name>` was renamed to `channels show <name>` — verify the
     old verb is gone (no hidden alias).

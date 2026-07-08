@@ -30,7 +30,7 @@ class TelegramConfig(Base):
     """Telegram channel configuration."""
 
     enabled: bool = False
-    token: str = ""  # Bot token from @BotFather
+    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from @BotFather
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs or usernames; ['*'] = anyone
     proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     reply_to_message: bool = False  # If true, bot replies quote the original message
@@ -43,10 +43,10 @@ class FeishuConfig(Base):
     """Feishu/Lark channel configuration using WebSocket long connection."""
 
     enabled: bool = False
-    app_id: str = ""  # App ID from Feishu Open Platform
-    app_secret: str = ""  # App Secret from Feishu Open Platform
-    encrypt_key: str = ""  # Encrypt Key for event subscription (optional)
-    verification_token: str = ""  # Verification Token for event subscription (optional)
+    app_id: str = Field(default="", json_schema_extra={"required": True})  # App ID from Feishu Open Platform
+    app_secret: str = Field(default="", json_schema_extra={"required": True})  # App Secret from Feishu Open Platform
+    encrypt_key: str = ""  # Encrypt Key for event subscription
+    verification_token: str = ""  # Verification Token for event subscription
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user open_ids; ['*'] = anyone
     react_emoji: str = "THUMBSUP"  # Emoji type for message reactions (e.g. THUMBSUP, OK, DONE, SMILE)
     group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
@@ -56,8 +56,8 @@ class DingTalkConfig(Base):
     """DingTalk channel configuration using Stream mode."""
 
     enabled: bool = False
-    client_id: str = ""  # AppKey
-    client_secret: str = ""  # AppSecret
+    client_id: str = Field(default="", json_schema_extra={"required": True})  # AppKey
+    client_secret: str = Field(default="", json_schema_extra={"required": True})  # AppSecret
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
 
 
@@ -65,7 +65,7 @@ class DiscordConfig(Base):
     """Discord channel configuration."""
 
     enabled: bool = False
-    token: str = ""  # Bot token from Discord Developer Portal
+    token: str = Field(default="", json_schema_extra={"required": True})  # Bot token from Discord Developer Portal
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
     gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
     intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
@@ -77,8 +77,8 @@ class MatrixConfig(Base):
 
     enabled: bool = False
     homeserver: str = "https://matrix.org"
-    access_token: str = ""
-    user_id: str = ""  # @bot:matrix.org
+    access_token: str = Field(default="", json_schema_extra={"required": True})
+    user_id: str = Field(default="", json_schema_extra={"required": True})  # @bot:matrix.org
     device_id: str = ""
     e2ee_enabled: bool = True  # Enable Matrix E2EE support (encryption + encrypted room handling).
     sync_stop_grace_seconds: int = (
@@ -100,18 +100,18 @@ class EmailConfig(Base):
     consent_granted: bool = False  # Explicit owner permission to access mailbox data
 
     # IMAP (receive)
-    imap_host: str = ""
+    imap_host: str = Field(default="", json_schema_extra={"required": True})
     imap_port: int = 993
-    imap_username: str = ""
-    imap_password: str = ""
+    imap_username: str = Field(default="", json_schema_extra={"required": True})
+    imap_password: str = Field(default="", json_schema_extra={"required": True})
     imap_mailbox: str = "INBOX"
     imap_use_ssl: bool = True
 
     # SMTP (send)
-    smtp_host: str = ""
+    smtp_host: str = Field(default="", json_schema_extra={"required": True})
     smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: str = ""
+    smtp_username: str = Field(default="", json_schema_extra={"required": True})
+    smtp_password: str = Field(default="", json_schema_extra={"required": True})
     smtp_use_tls: bool = True
     smtp_use_ssl: bool = False
     from_address: str = ""
@@ -153,7 +153,7 @@ class MochatConfig(Base):
     watch_limit: int = 100
     retry_delay_ms: int = 500
     max_retry_attempts: int = 0  # 0 means unlimited retries
-    claw_token: str = ""
+    claw_token: str = Field(default="", json_schema_extra={"required": True})
     agent_user_id: str = ""
     sessions: list[str] = Field(default_factory=list)
     panels: list[str] = Field(default_factory=list)
@@ -178,8 +178,8 @@ class SlackConfig(Base):
     enabled: bool = False
     mode: str = "socket"  # "socket" supported
     webhook_path: str = "/slack/events"
-    bot_token: str = ""  # xoxb-...
-    app_token: str = ""  # xapp-...
+    bot_token: str = Field(default="", json_schema_extra={"required": True})  # xoxb-...
+    app_token: str = Field(default="", json_schema_extra={"required": True})  # xapp-...
     user_token_read_only: bool = True
     reply_in_thread: bool = True
     react_emoji: str = "eyes"
@@ -195,8 +195,8 @@ class QQConfig(Base):
     """QQ channel configuration using botpy SDK."""
 
     enabled: bool = False
-    app_id: str = ""  # bot AppID from q.qq.com
-    secret: str = ""  # bot AppSecret from q.qq.com
+    app_id: str = Field(default="", json_schema_extra={"required": True})  # bot AppID from q.qq.com
+    secret: str = Field(default="", json_schema_extra={"required": True})  # bot AppSecret from q.qq.com
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
 
 
@@ -204,8 +204,8 @@ class WecomConfig(Base):
     """WeCom (Enterprise WeChat) AI Bot channel configuration."""
 
     enabled: bool = False
-    bot_id: str = ""  # Bot ID from WeCom AI Bot platform
-    secret: str = ""  # Bot Secret from WeCom AI Bot platform
+    bot_id: str = Field(default="", json_schema_extra={"required": True})  # Bot ID from WeCom AI Bot platform
+    secret: str = Field(default="", json_schema_extra={"required": True})  # Bot Secret from WeCom AI Bot platform
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user IDs; ['*'] = anyone
     welcome_message: str = ""  # Welcome message for enter_chat event
 
