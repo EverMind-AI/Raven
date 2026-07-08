@@ -911,6 +911,7 @@ def _configure_one_provider(
     model: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Drive one provider through pick → credentials → verify → model → test.
 
@@ -973,6 +974,7 @@ def _configure_one_provider(
             user_model_flag=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
         if chosen_model is None:
             # "Switch provider" — re-run the picker (drop the flag so the second
@@ -1076,6 +1078,7 @@ def _resolve_model_with_test(
     user_model_flag: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> Optional[str]:
     """Verify connectivity → pick the default model → send a test probe.
 
@@ -1115,6 +1118,8 @@ def _resolve_model_with_test(
         # highest-typo-risk case. Send the real probe (it builds from the stored
         # config, so a wrong base_url / model id fails here, not at first chat).
         _persist_default_model(custom_model)
+        if skip_test:
+            return custom_model
         while True:
             result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings, allow_repick=False)
             if result == "switch":
@@ -1134,6 +1139,8 @@ def _resolve_model_with_test(
             non_interactive=non_interactive,
         )
         _persist_default_model(chosen)
+        if skip_test:
+            return chosen
         result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
         if result == "switch":
             return None
@@ -1243,6 +1250,7 @@ def _step1_provider(
     model: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> object:
     """Step 1 screen. Returns ``_BACK`` only when the user backs out of the
     first-run picker on the welcome screen (handled by the runner)."""
@@ -1263,6 +1271,7 @@ def _step1_provider(
             model=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
         if result is None:
             return _BACK
@@ -1308,6 +1317,7 @@ def _step1_provider(
                 model=None,
                 non_interactive=False,
                 warnings=warnings,
+                skip_test=skip_test,
             )
         elif action == "edit":
             _manage_existing_providers(non_interactive=non_interactive)
@@ -2986,6 +2996,7 @@ def run_wizard(
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
+    skip_test: bool = False,
 ) -> None:
     """Run the 4-step onboarding wizard end-to-end.
 
@@ -3013,6 +3024,7 @@ def run_wizard(
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
+            skip_test=skip_test,
         )
     finally:
         _logger.enable("raven")
@@ -3031,6 +3043,7 @@ def _run_wizard_body(
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
+    skip_test: bool = False,
 ) -> None:
     global _LANG
     _check_tty_or_die(non_interactive)
@@ -3077,6 +3090,7 @@ def _run_wizard_body(
             model=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         ),
         lambda: _step2_sandbox(skip=skip_sandbox, non_interactive=non_interactive),
         lambda: _step3_channel(channel=channel, skip=skip_channel, non_interactive=non_interactive),
@@ -3160,6 +3174,11 @@ def register(app: typer.Typer) -> None:
             "--reset",
             help="Re-run the wizard over an existing config (does not erase it; each step keeps current values as defaults)",
         ),
+        skip_test: bool = typer.Option(
+            False,
+            "--skip-test",
+            help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
+        ),
     ) -> None:
         """Four-step setup wizard: LLM provider → sandbox → channel → memory."""
         run_wizard(
@@ -3174,6 +3193,7 @@ def register(app: typer.Typer) -> None:
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
+            skip_test=skip_test,
         )
 
 

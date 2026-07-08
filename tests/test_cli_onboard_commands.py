@@ -158,6 +158,7 @@ def test_onboard_help_lists_all_flags() -> None:
         "--non-interactive",
         "--yes",
         "--reset",
+        "--skip-test",
     ):
         assert flag in out, f"missing flag in help: {flag}"
 
@@ -410,6 +411,34 @@ def test_onboard_provider_test_failure_warns_but_continues(
     assert "Auth failed" in r.stdout
     # The unmet connectivity check is summarized in the footer warning.
     assert "didn't pass a connectivity test" in r.stdout
+
+
+def test_onboard_skip_test_avoids_billed_probe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify) -> None:
+    """--skip-test skips the one-shot chat probe (no billed call) while still
+    completing setup; connectivity (test_provider) still runs."""
+    calls: list[bool] = []
+    monkeypatch.setattr(onboard_commands, "send_probe", lambda: (calls.append(True), ("hi", 1, 0.1))[1])
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-x",
+            "--model",
+            "openai/gpt-4o-mini",
+            "--skip-sandbox",
+            "--skip-channel",
+            "--skip-memory",
+            "--yes",
+            "--skip-test",
+        ],
+    )
+    assert r.exit_code == 0, r.stdout
+    assert calls == []  # the billed chat probe was never sent
+    assert "Setup complete" in r.stdout
 
 
 def test_onboard_test_probe_failure_shows_warning_footer(
