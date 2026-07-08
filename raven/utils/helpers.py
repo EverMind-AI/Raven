@@ -117,6 +117,11 @@ def estimate_prompt_tokens(
                 parts.append(value)
         if msg.get("tool_calls"):
             parts.append(json.dumps(msg["tool_calls"], ensure_ascii=False))
+        reasoning = msg.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            parts.append(reasoning)
+        if msg.get("thinking_blocks"):
+            parts.append(json.dumps(msg["thinking_blocks"], ensure_ascii=False))
 
     if tools:
         parts.append(json.dumps(tools, ensure_ascii=False))
@@ -154,6 +159,11 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
             parts.append(value)
     if message.get("tool_calls"):
         parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        parts.append(reasoning)
+    if message.get("thinking_blocks"):
+        parts.append(json.dumps(message["thinking_blocks"], ensure_ascii=False))
 
     payload = "\n".join(parts)
     if not payload:

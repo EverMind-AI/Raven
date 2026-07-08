@@ -45,6 +45,27 @@ def test_estimate_prompt_tokens_counts_assistant_tool_calls(
     assert prompt_tokens > 10_000
 
 
+def test_estimate_counts_reasoning_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        helpers.tiktoken,
+        "get_encoding",
+        lambda _name: _FakeEncoding(),
+    )
+    base = {"role": "assistant", "content": "answer"}
+    with_reasoning = {
+        "role": "assistant",
+        "content": "answer",
+        "reasoning_content": "r" * 5_000,
+        "thinking_blocks": [{"thinking": "t" * 5_000}],
+    }
+
+    assert helpers.estimate_message_tokens(with_reasoning) > helpers.estimate_message_tokens(base)
+    assert helpers.estimate_prompt_tokens([with_reasoning]) > helpers.estimate_prompt_tokens([base])
+    assert helpers.estimate_message_tokens(with_reasoning) > 10_000
+
+
 def test_estimate_prompt_tokens_fallback_counts_tool_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

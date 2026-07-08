@@ -8,6 +8,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.config import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
+from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.memory_engine.base import TokenBudget
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -195,3 +196,20 @@ async def test_process_message_records_main_and_curator_trajectories(tmp_path: P
     trace_text = traces[0].read_text(encoding="utf-8")
     assert "curator_llm_request" in trace_text
     assert "main_agent_result" in trace_text
+
+
+def test_history_from_messages_preserves_reasoning_fields():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "answer",
+            "reasoning_content": "chain of thought",
+            "thinking_blocks": [{"thinking": "block"}],
+        },
+    ]
+
+    history = CuratorSegmentBuilder._history_from_messages(messages)
+
+    assert history[1]["reasoning_content"] == "chain of thought"
+    assert history[1]["thinking_blocks"] == [{"thinking": "block"}]
