@@ -112,9 +112,25 @@ async def everos_env(
     isn't configured (in toml, .env, or env).
     """
     pytest.importorskip("everos")
-    from everos.config.settings import load_settings
+    # Snapshot the real root BEFORE redirecting, so we can copy config
+    # files that carry LLM / embedding credentials into the isolated dir.
+    import shutil
 
+    from everos.config.settings import load_settings, resolve_root
+
+    load_settings.cache_clear()
+    real_root = resolve_root()
+
+    # Redirect data root to an isolated tmp dir so each test gets a
+    # fresh sqlite + lancedb.
+    monkeypatch.setenv("EVEROS_ROOT", str(tmp_path))
     monkeypatch.setenv("EVEROS_MEMORY__ROOT", str(tmp_path))
+
+    for name in ("everos.toml", "ome.toml"):
+        src = real_root / name
+        if src.is_file():
+            shutil.copy2(src, tmp_path / name)
+
     # mode=agent runs both user-memory and agent-memory pipelines.
     monkeypatch.setenv("EVEROS_MEMORIZE__MODE", "agent")
     # Tighten the boundary so the backend's accumulate-only store() path
@@ -133,6 +149,16 @@ async def everos_env(
         )
 
     _reset_everos_singletons(monkeypatch)
+
+    # Force a fresh lifespan entry by clearing the refcounted singleton
+    # in Raven's backend module. Without this, a previous test's
+    # _embedded_lifespan_cm survives and _acquire skips re-entry — but
+    # the everos singletons above were already nulled, so the old
+    # lifespan's OME engine is gone.
+    import raven.plugin.memory.everos.backend as _be_mod
+
+    monkeypatch.setattr(_be_mod, "_embedded_lifespan_cm", None)
+    monkeypatch.setattr(_be_mod, "_embedded_lifespan_refs", 0)
 
     # Bring up the in-process everos runtime via the production path:
     # EverosBackend.start() drives the (refcounted, process-shared) everos
