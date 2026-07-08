@@ -924,6 +924,7 @@ def _configure_one_provider(
     # A provider passed by flag is used once; switching then requires the
     # interactive picker (or, in non-interactive mode, is impossible).
     flag_provider = provider
+    configured_before = set(_configured_providers())
     while True:
         if flag_provider:
             provider = _validate_provider_name(flag_provider)
@@ -974,8 +975,12 @@ def _configure_one_provider(
             warnings=warnings,
         )
         if chosen_model is None:
-            # "Switch provider" — re-run the picker (drop the flag so the
-            # second pass prompts rather than reusing the failed flag value).
+            # "Switch provider" — re-run the picker (drop the flag so the second
+            # pass prompts rather than reusing the failed flag value). If this
+            # provider was newly written this pass (not pre-existing), clear its
+            # key so a failed provider isn't left listed as configured.
+            if provider not in configured_before:
+                _write_provider_fields(provider, {"api_key": ""})
             flag_provider = None
             continue
         _persist_default_model(chosen_model)
@@ -2898,8 +2903,8 @@ def _print_next_steps(*, warnings: list[str]) -> None:
                 + f"{', '.join(warnings)}\n"
                 + _t(
                     "[dim]Fix them before relying on the related features "
-                    "(run [/dim][#fbe23f]raven doctor[/#fbe23f][dim] to re-check).[/dim]",
-                    "[dim]在依赖相关功能前请先修复(运行 [/dim][#fbe23f]raven doctor[/#fbe23f][dim] 复查)。[/dim]",
+                    "(re-run [/dim][#fbe23f]raven onboard[/#fbe23f][dim] to reconfigure).[/dim]",
+                    "[dim]在依赖相关功能前请先修复(重新运行 [/dim][#fbe23f]raven onboard[/#fbe23f][dim] 重新配置)。[/dim]",
                 ),
                 border_style="yellow",
                 padding=(1, 2),
@@ -3150,7 +3155,11 @@ def register(app: typer.Typer) -> None:
             help="Run without prompts (requires flags for any missing field)",
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Skip all confirm prompts"),
-        reset: bool = typer.Option(False, "--reset", help="Force re-run even if a config already exists"),
+        reset: bool = typer.Option(
+            False,
+            "--reset",
+            help="Re-run the wizard over an existing config (does not erase it; each step keeps current values as defaults)",
+        ),
     ) -> None:
         """Four-step setup wizard: LLM provider → sandbox → channel → memory."""
         run_wizard(

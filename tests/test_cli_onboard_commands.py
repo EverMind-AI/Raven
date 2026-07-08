@@ -1276,6 +1276,27 @@ def test_memory_embedding_step_shows_capability_hint(
     assert "DashScope" in blob
 
 
+def test_switch_clears_newly_added_failed_provider(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A brand-new provider that fails and is switched away from has its key
+    cleared, so a failed provider is not left listed as configured."""
+
+    picks = iter(["openai", onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+
+    def _collect(provider, **kw):
+        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad"})
+        return None  # not a custom provider
+
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **kw: None)  # switch
+
+    out = onboard_commands._configure_one_provider(
+        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+    )
+    assert out is None  # user backed out of the picker
+    assert "openai" not in onboard_commands._configured_providers()  # failed new provider cleared
+
+
 def test_channel_required_field_reprompts_on_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     """A required channel field's empty submit re-prompts instead of enabling a
     half-configured channel (the write layer treats required as a UX marker)."""
