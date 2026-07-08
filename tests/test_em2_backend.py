@@ -601,3 +601,85 @@ class TestRerankDegrade:
             agent_id=None,
         )
         assert method == SearchMethod.HYBRID
+
+
+# ---------------------------------------------------------------------------
+# LanceDB schema migration
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateLancedbSchemas:
+    """``_migrate_lancedb_schemas`` adds missing columns to existing
+    LanceDB tables so upgrading users don't need to manually clear
+    their index."""
+
+    @staticmethod
+    def _stub_schema(table_name: str, fields: set[str]):
+        class _S:
+            TABLE_NAME = table_name
+            model_fields = {f: None for f in fields}
+
+        return _S
+
+    @staticmethod
+    def _stub_table(columns: set[str]):
+        import pyarrow as pa
+
+        arrow = pa.schema([pa.field(c, pa.utf8()) for c in sorted(columns)])
+        added: list = []
+
+        class _T:
+            async def schema(self):
+                return arrow
+
+            def add_columns(self, new_schema):
+                added.append(new_schema)
+
+        return _T(), added
+
+    async def test_adds_missing_columns(self) -> None:
+        import logging
+
+        from raven.plugin.memory.everos.backend import _migrate_lancedb_schemas
+
+        table, added = self._stub_table({"id", "text"})
+        schema_cls = self._stub_schema("tbl", {"id", "text", "new_col"})
+
+        async def _noop():
+            return None
+
+        async def _get_table(_name, _schema):
+            return table
+
+        result = await _migrate_lancedb_schemas(
+            logging.getLogger("test"),
+            _schemas=[schema_cls],
+            _get_connection=_noop,
+            _get_table=_get_table,
+        )
+        assert result is True
+        assert len(added) == 1
+        assert "new_col" in added[0].names
+
+    async def test_no_missing_returns_false(self) -> None:
+        import logging
+
+        from raven.plugin.memory.everos.backend import _migrate_lancedb_schemas
+
+        table, added = self._stub_table({"id", "text"})
+        schema_cls = self._stub_schema("tbl", {"id", "text"})
+
+        async def _noop():
+            return None
+
+        async def _get_table(_name, _schema):
+            return table
+
+        result = await _migrate_lancedb_schemas(
+            logging.getLogger("test"),
+            _schemas=[schema_cls],
+            _get_connection=_noop,
+            _get_table=_get_table,
+        )
+        assert result is False
+        assert len(added) == 0

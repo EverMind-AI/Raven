@@ -82,7 +82,7 @@ def test_channel_e2e_writes_memory_markdown(tmp_path: Path) -> None:
     if not _RAVEN.exists():
         pytest.skip(f"raven CLI not found at {_RAVEN}")
     if not _runtime_ready():
-        pytest.skip("everos runtime not configured (see ~/.everos/config.toml)")
+        pytest.skip("everos runtime not configured (see ~/.everos/everos.toml)")
 
     root = tmp_path / "everos_root"
     root.mkdir()

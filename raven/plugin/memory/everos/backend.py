@@ -229,24 +229,39 @@ _embedded_lifespan_cm: Any = None
 _embedded_lifespan_refs: int = 0
 
 
-async def _migrate_lancedb_schemas(log: logging.Logger) -> bool:
+async def _migrate_lancedb_schemas(
+    log: logging.Logger,
+    *,
+    _schemas: Any = None,
+    _get_connection: Any = None,
+    _get_table: Any = None,
+) -> bool:
     """Add missing columns to existing LanceDB tables for forward compatibility.
 
     Returns True if at least one column was added (caller should retry
     the lifespan), False when nothing needed migration.
+
+    The underscore-prefixed kwargs exist solely for test injection;
+    production callers never pass them.
     """
     # Deferred: optional dependency — everos may not be installed.
     import pyarrow as pa
-    from everos.infra.persistence.lancedb import (
-        _BUSINESS_SCHEMAS,
-        get_connection,
-        get_table,
-    )
+
+    if _schemas is None:
+        from everos.infra.persistence.lancedb import (
+            _BUSINESS_SCHEMAS,
+            get_connection,
+            get_table,
+        )
+
+        _schemas = _BUSINESS_SCHEMAS
+        _get_connection = get_connection
+        _get_table = get_table
 
     migrated = False
-    await get_connection()
-    for schema in _BUSINESS_SCHEMAS:
-        table = await get_table(schema.TABLE_NAME, schema)
+    await _get_connection()
+    for schema in _schemas:
+        table = await _get_table(schema.TABLE_NAME, schema)
         arrow_schema = await table.schema()
         actual = set(arrow_schema.names)
         expected = set(schema.model_fields.keys())

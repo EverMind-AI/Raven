@@ -2,7 +2,7 @@
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
-``~/.everos/raven/config.toml``.
+``~/.everos/raven/everos.toml``.
 
 Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   0. Welcome

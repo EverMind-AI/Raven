@@ -197,7 +197,7 @@ def test_onboard_non_interactive_skips_optional_steps(
     """Non-interactive mode auto-skips sandbox / channel / memory steps.
 
     ``everos_isolated`` keeps ``_memory_enabled`` from reading the dev
-    machine's real ``~/.everos/config.toml``: the seeded backend="everos" is
+    machine's real ``~/.everos/everos.toml``: the seeded backend="everos" is
     only kept when both required models (llm + embedding) are configured, so an
     empty (isolated) EverOS config makes the skip-guard resolve it back to None.
     """
@@ -722,7 +722,7 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect EverOS writes to a throwaway toml (never touches ~/.everos)."""
     import raven.config.update_everos as ue
 
-    cfg = tmp_path / ".everos" / "config.toml"
+    cfg = tmp_path / ".everos" / "everos.toml"
     monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
     return cfg
 

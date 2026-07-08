@@ -2,7 +2,7 @@
 
 These tests drive a **real** everos runtime (real LLM + embedding +
 sqlite/lancedb), gated behind the ``real_llm`` marker; they skip when the
-runtime isn't configured. Configure via ``~/.everos/config.toml``, a
+runtime isn't configured. Configure via ``~/.everos/everos.toml``, a
 repo-root ``.env``, or ``EVEROS_*`` env vars, then::
 
     uv run pytest tests/integration -m real_llm
@@ -85,7 +85,7 @@ def _reset_everos_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _missing_runtime_config(settings: Any) -> list[str]:
     """Which everos LLM/embedding fields are unset across *all* config
-    sources (``~/.everos/config.toml`` + ``.env`` + ``EVEROS_*`` env).
+    sources (``~/.everos/everos.toml`` + ``.env`` + ``EVEROS_*`` env).
 
     Checking everos's resolved ``Settings`` rather than raw env vars
     means a user who configures models/keys in ``config.toml`` (not env)
@@ -144,7 +144,7 @@ async def everos_env(
         pytest.skip(
             "everos runtime not configured (missing: "
             + ", ".join(missing)
-            + "); set them in ~/.everos/config.toml, a repo-root .env, "
+            + "); set them in ~/.everos/everos.toml, a repo-root .env, "
             "or EVEROS_* env vars",
         )
 
