@@ -18,14 +18,20 @@ on:
       - "v*"
   workflow_dispatch: {}
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-wheel:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 1) Node toolchain to build the TUI bundle.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -44,7 +50,7 @@ jobs:
       #    an sdist and then builds the wheel from that sdist, which drops this
       #    gitignored bundle before the wheel hook can include it.
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.2.0
 
       - name: Build wheel + sdist
         run: |
@@ -73,7 +79,55 @@ jobs:
           name: dist
           path: dist/*
 
-      # 5) (Optional, wire up when ready) publish to PyPI on tag:
+      # 5) On a version tag, publish a DRAFT GitHub Release with the built
+      #    wheel + sdist attached. install.sh resolves the wheel from the
+      #    latest Release asset, so a human reviews the draft and clicks
+      #    Publish to make it live. Manual dispatch (no tag) stops after the
+      #    artifact upload above.
+      - name: Check tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${{ github.ref_name }}"
+          v=$(grep -m1 '^version = ' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          base="${tag#v}"; base="${base%%-*}"   # v0.1.3-rc1 -> 0.1.3
+          [ "$base" = "$v" ] || { echo "tag $tag does not match pyproject version $v"; exit 1; }
+
+      - name: Create draft GitHub Release with assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          repo="${{ github.repository }}"
+          ver="${tag#v}"
+          today="$(date -u +%Y-%m-%d)"
+          # prerelease tags (contain a hyphen, e.g. v0.1.3-rc1) must never become
+          # /releases/latest, which install.sh serves to curl|sh users.
+          pre=""
+          case "$tag" in *-*) pre="--prerelease" ;; esac
+          # Prefill notes from the template; the summary and Highlights stay TODO
+          # for a human to fill in the draft before publishing.
+          sed "s/__VERSION__/$ver/g; s/__TAG__/$tag/g" \
+            .github/release-notes-template.md > "$RUNNER_TEMP/notes.md"
+          # Detect an existing release via the LIST endpoint: the tag endpoint is
+          # published-only and the Actions token cannot see a draft through it
+          # (cli/cli #3037), so a re-run would 422 on create. Delete a stale draft
+          # (this keeps the git tag) and recreate; leave a published release alone.
+          rel=$(gh api "repos/$repo/releases?per_page=100" --jq "map(select(.tag_name==\"$tag\"))[0] // {}")
+          id=$(printf '%s' "$rel" | jq -r '.id // empty')
+          isdraft=$(printf '%s' "$rel" | jq -r '.draft // false')
+          if [ -n "$id" ] && [ "$isdraft" = "true" ]; then
+            gh api -X DELETE "repos/$repo/releases/$id"
+            id=""
+          fi
+          if [ -z "$id" ]; then
+            gh release create "$tag" dist/*.whl dist/*.tar.gz \
+              --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre
+          else
+            echo "Release $tag already published (id=$id); leaving as-is."
+          fi
+
+      # (Optional, wire up when ready) publish to PyPI on tag:
       # - name: Publish to PyPI
       #   if: startsWith(github.ref, 'refs/tags/v')
       #   run: uv publish
