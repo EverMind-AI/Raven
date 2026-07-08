@@ -842,11 +842,15 @@ def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) ->
     return chosen
 
 
-def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]) -> str:
-    """Send a one-shot test message; on failure offer retry/repick/continue.
+def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str], allow_repick: bool = True) -> str:
+    """Send a one-shot test message; on failure offer recovery options.
 
-    Returns one of ``"ok"`` / ``"continue"`` / ``"repick"``. ``"repick"`` asks
-    the caller to re-run the model picker.
+    Returns one of ``"ok"`` / ``"continue"`` / ``"repick"`` / ``"rekey"`` /
+    ``"switch"``. A test-message failure can be a wrong model, a bad key, or an
+    account/balance issue, so the menu offers all the matching exits (aligning
+    with the connectivity-failure menu in ``_resolve_model_with_test``);
+    ``allow_repick=False`` drops the model option for custom providers whose
+    model was fixed with the base_url upfront (Switch re-enters both).
     """
     console.print(
         _t(
@@ -865,18 +869,21 @@ def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]
             )
         )
         print_probe_troubleshooting(provider)
-        choice = _failure_choice(
-            [
-                (_t("Retry", "重试"), "retry"),
-                (_t("Re-pick model", "重新选模型"), "repick"),
-                (_t("Continue anyway", "仍然继续"), "continue"),
-            ],
-            non_interactive=non_interactive,
-        )
+        options = [(_t("Retry", "重试"), "retry")]
+        if allow_repick:
+            options.append((_t("Re-pick model", "重新选模型"), "repick"))
+        options += [
+            (_t("Re-enter key", "重新填 Key"), "rekey"),
+            (_t("Switch provider", "更换服务商"), "switch"),
+            (_t("Continue anyway", "仍然继续"), "continue"),
+        ]
+        choice = _failure_choice(options, non_interactive=non_interactive)
         if choice == "retry":
-            return _run_test_probe(provider, non_interactive=non_interactive, warnings=warnings)
-        if choice == "repick":
-            return "repick"
+            return _run_test_probe(
+                provider, non_interactive=non_interactive, warnings=warnings, allow_repick=allow_repick
+            )
+        if choice in ("repick", "rekey", "switch"):
+            return choice
         warnings.append("provider test message")
         return "continue"
 
@@ -1065,9 +1072,11 @@ def _resolve_model_with_test(
 ) -> Optional[str]:
     """Verify connectivity → pick the default model → send a test probe.
 
-    On a verify failure, offers a numbered submenu (retry / switch / continue).
-    Only failures stop; success auto-advances. Returns the chosen model, or
-    ``None`` to signal "switch provider" (the caller rewinds to the picker).
+    On a verify or test-message failure, offers a recovery submenu (retry /
+    re-pick model / re-enter key / switch / continue). Custom providers are
+    probed too (model was fixed upfront). Only failures stop; success
+    auto-advances. Returns the chosen model, or ``None`` to signal "switch
+    provider" (the caller rewinds to the picker).
     """
     while True:
         ok, status, model_ids = _verify_provider(spec.name)
@@ -1095,7 +1104,18 @@ def _resolve_model_with_test(
 
     if is_custom:
         assert custom_model is not None, "custom provider must have model set earlier"
-        return custom_model
+        # Custom endpoints were previously trusted without a test message — the
+        # highest-typo-risk case. Send the real probe (it builds from the stored
+        # config, so a wrong base_url / model id fails here, not at first chat).
+        _persist_default_model(custom_model)
+        while True:
+            result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings, allow_repick=False)
+            if result == "switch":
+                return None
+            if result == "rekey":
+                _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+                continue
+            return custom_model  # ok / continue
 
     current = _load_current_default_model()
     while True:
@@ -1108,10 +1128,19 @@ def _resolve_model_with_test(
         )
         _persist_default_model(chosen)
         result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
-        if result != "repick":
-            return chosen
-        current = chosen
-        user_model_flag = None
+        if result == "switch":
+            return None
+        if result == "rekey":
+            _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+            # Re-test the same model with the new key (picker defaults to it).
+            current = chosen
+            user_model_flag = None
+            continue
+        if result == "repick":
+            current = chosen
+            user_model_flag = None
+            continue
+        return chosen  # ok / continue
 
 
 # ---------------------------------------------------------------------------

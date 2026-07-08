@@ -1276,6 +1276,69 @@ def test_memory_embedding_step_shows_capability_hint(
     assert "DashScope" in blob
 
 
+def test_custom_provider_sends_test_probe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A custom provider now sends the real test message (was previously trusted
+    without one) — a wrong base_url/model surfaces here, not at first chat."""
+    from raven.config.update_providers import set_provider_fields
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("custom")
+    set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+    calls: list[bool] = []
+
+    def _probe():
+        calls.append(True)
+        return ("hi", 1, 0.1)
+
+    monkeypatch.setattr(onboard_commands, "send_probe", _probe)
+    out = onboard_commands._resolve_model_with_test(
+        spec, is_custom=True, custom_model="my/model", user_model_flag=None, non_interactive=False, warnings=[]
+    )
+    assert calls == [True]  # the probe ran for the custom provider
+    assert out == "my/model"
+
+
+def test_custom_provider_probe_failure_switch_rewinds(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a custom-provider probe failure, choosing Switch returns None so the
+    caller rewinds to the provider picker."""
+    from raven.config.update_providers import set_provider_fields
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("custom")
+    set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p: (True, "ok", None))
+
+    def _boom():
+        raise RuntimeError("model not found")
+
+    monkeypatch.setattr(onboard_commands, "send_probe", _boom)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda opts, **kw: "switch")
+    out = onboard_commands._resolve_model_with_test(
+        spec, is_custom=True, custom_model="m", user_model_flag=None, non_interactive=False, warnings=[]
+    )
+    assert out is None
+
+
+def test_test_probe_failure_menu_offers_rekey_and_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test-message failure now offers re-enter-key and switch-provider (not
+    just retry/repick/continue), matching the connectivity-failure menu."""
+    captured: dict[str, list[str]] = {}
+
+    def _cap(opts, **kw):
+        captured["vals"] = [v for _, v in opts]
+        return "continue"
+
+    monkeypatch.setattr(onboard_commands, "_failure_choice", _cap)
+
+    def _boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(onboard_commands, "send_probe", _boom)
+    onboard_commands._run_test_probe("openai", non_interactive=False, warnings=[])
+    assert {"retry", "repick", "rekey", "switch", "continue"} <= set(captured["vals"])
+
+
 def test_pick_model_empty_submit_uses_default_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clearing the prefilled default and submitting empty falls back to the
     default model rather than killing the whole wizard."""
