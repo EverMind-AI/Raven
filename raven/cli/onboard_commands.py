@@ -19,8 +19,10 @@ not config-schema knowledge.
 
 Navigation: questionary 2.1.1 has no first-class cross-screen "back", so the
 wizard is a screen state machine and back is expressed as a ``0) back``
-sentinel choice. Ctrl+C exits at any point, keeping whatever was already
-written.
+sentinel choice on the screens that support it (Step 1 <-> language pick,
+Step 2 -> Step 1); Steps 3 and 4 are optional and forward-only (re-run
+``onboard`` to change them). Ctrl+C exits at any point, keeping whatever was
+already written.
 """
 
 from __future__ import annotations
@@ -46,6 +48,10 @@ _TOTAL_STEPS = 4
 # Sentinel returned by a screen function to ask the runner to go back one
 # screen; ``None`` from a picker means Ctrl+C (exit).
 _BACK = object()
+
+# Sentinel a required EverOS role returns when the user chooses to give up EverOS
+# rather than configure it; ``_step4_memory`` then falls back to Markdown memory.
+_ABORT_EVEROS = object()
 
 # Unified prompt chrome (display-only): no leading question glyph (drops
 # questionary's default "?"). A single-space qmark is rendered as one blank,
@@ -311,8 +317,8 @@ def _bootstrap_empty_config() -> None:
     warning, never a crash), so an enabled-but-modelless install is safe. The
     wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
     back to ``None`` when the user opts out or never configures the required
-    models (``_memory_enabled`` gates on the llm model being present, not just
-    the backend name).
+    models (``_memory_enabled`` gates on both required models (llm + embedding)
+    being present, not just the backend name).
 
     Seeding runs on EVERY onboard, not just a brand-new config: the writer is
     ``setdefault``-based (non-clobbering), so it backfills these blocks into a
@@ -471,6 +477,7 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False) -> Any:
     ).ask()
     if key is None:
         raise typer.Exit(1)
+    key = key.strip()
     if allow_back and key == "":
         return _BACK
     if not key:
@@ -507,6 +514,7 @@ def _prompt_base_url(default: str = "https://", *, allow_back: bool = False) -> 
     ).ask()
     if url is None:
         raise typer.Exit(1)
+    url = url.strip()
     if allow_back and url == "":
         return _BACK
     if not url:
@@ -603,7 +611,7 @@ def _run_oauth_login(provider: str) -> bool:
     return True
 
 
-def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
+def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, str, Optional[list[str]]]:
     """Hit ``GET /v1/models`` to verify the credentials we just stored.
 
     Returns ``(ok, status, model_ids)``. ``status`` is one of the ops-library
@@ -628,12 +636,20 @@ def _verify_provider(provider: str) -> tuple[bool, str, Optional[list[str]]]:
     # check (the test message sent later exercises real connectivity via
     # litellm) instead of dumping the user into the failure submenu.
     if status == "not_configured" and "api_base" in (result.get("error") or ""):
-        console.print(
-            _t(
-                "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]",
-                "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);稍后的测试消息会验证连通。[/dim]",
+        if skip_test:
+            console.print(
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); connectivity is not tested (--skip-test).[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);未做连通测试(--skip-test)。[/dim]",
+                )
             )
-        )
+        else:
+            console.print(
+                _t(
+                    "  [dim]Skipping the model-list pre-check (this provider has no public /models endpoint); the test message below will confirm connectivity.[/dim]",
+                    "  [dim]跳过模型列表预检(该服务商无公开 /models 端点);稍后的测试消息会验证连通。[/dim]",
+                )
+            )
         return True, "skipped", None
     hint_map = {
         "invalid_key": _t(
@@ -767,9 +783,17 @@ def _pick_model(
                 qmark=_QMARK,
             ).ask()
 
+    if chosen is None:
+        raise typer.Exit(1)  # Ctrl+C
+    chosen = chosen.strip()
     if not chosen:
+        # Empty submit (e.g. the prefilled default was cleared) falls back to the
+        # default rather than tearing down the wizard. The no-default branch
+        # validates non-empty, so an empty value only reaches here with a default.
+        if default_value:
+            return default_value
         raise typer.Exit(1)
-    return chosen.strip()
+    return chosen
 
 
 def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
@@ -828,11 +852,15 @@ def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) ->
     return chosen
 
 
-def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]) -> str:
-    """Send a one-shot test message; on failure offer retry/repick/continue.
+def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str], allow_repick: bool = True) -> str:
+    """Send a one-shot test message; on failure offer recovery options.
 
-    Returns one of ``"ok"`` / ``"continue"`` / ``"repick"``. ``"repick"`` asks
-    the caller to re-run the model picker.
+    Returns one of ``"ok"`` / ``"continue"`` / ``"repick"`` / ``"rekey"`` /
+    ``"switch"``. A test-message failure can be a wrong model, a bad key, or an
+    account/balance issue, so the menu offers all the matching exits (aligning
+    with the connectivity-failure menu in ``_resolve_model_with_test``);
+    ``allow_repick=False`` drops the model option for custom providers whose
+    model was fixed with the base_url upfront (Switch re-enters both).
     """
     console.print(
         _t(
@@ -851,18 +879,21 @@ def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]
             )
         )
         print_probe_troubleshooting(provider)
-        choice = _failure_choice(
-            [
-                (_t("Retry", "重试"), "retry"),
-                (_t("Re-pick model", "重新选模型"), "repick"),
-                (_t("Continue anyway", "仍然继续"), "continue"),
-            ],
-            non_interactive=non_interactive,
-        )
+        options = [(_t("Retry", "重试"), "retry")]
+        if allow_repick:
+            options.append((_t("Re-pick model", "重新选模型"), "repick"))
+        options += [
+            (_t("Re-enter key", "重新填 Key"), "rekey"),
+            (_t("Switch provider", "更换服务商"), "switch"),
+            (_t("Continue anyway", "仍然继续"), "continue"),
+        ]
+        choice = _failure_choice(options, non_interactive=non_interactive)
         if choice == "retry":
-            return _run_test_probe(provider, non_interactive=non_interactive, warnings=warnings)
-        if choice == "repick":
-            return "repick"
+            return _run_test_probe(
+                provider, non_interactive=non_interactive, warnings=warnings, allow_repick=allow_repick
+            )
+        if choice in ("repick", "rekey", "switch"):
+            return choice
         warnings.append("provider test message")
         return "continue"
 
@@ -888,6 +919,7 @@ def _configure_one_provider(
     model: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Drive one provider through pick → credentials → verify → model → test.
 
@@ -901,6 +933,7 @@ def _configure_one_provider(
     # A provider passed by flag is used once; switching then requires the
     # interactive picker (or, in non-interactive mode, is impossible).
     flag_provider = provider
+    configured_before = set(_configured_providers())
     while True:
         if flag_provider:
             provider = _validate_provider_name(flag_provider)
@@ -927,6 +960,13 @@ def _configure_one_provider(
                 )
             )
 
+        # Snapshot the stored key before _collect_credentials overwrites it, so a
+        # failed re-configuration of an existing provider can be rolled back to
+        # its prior working key (rather than left holding the just-typed bad one).
+        _prev = (_load_raw_config().get("providers") or {}).get(provider) or {}
+        old_key = _prev.get("apiKey")
+        old_base = _prev.get("apiBase")
+
         custom_model = _collect_credentials(
             provider,
             is_oauth=is_oauth,
@@ -949,10 +989,18 @@ def _configure_one_provider(
             user_model_flag=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
         if chosen_model is None:
-            # "Switch provider" — re-run the picker (drop the flag so the
-            # second pass prompts rather than reusing the failed flag value).
+            # "Switch provider" — re-run the picker (drop the flag so the second
+            # pass prompts rather than reusing the failed flag value). Roll back
+            # the just-written key: clear it if this provider was newly added this
+            # pass, or restore the prior key if we were reconfiguring an existing
+            # one (so a failed edit doesn't clobber a working provider).
+            if provider not in configured_before:
+                _write_provider_fields(provider, {"api_key": ""})
+            elif old_key:
+                _write_provider_fields(provider, {"api_key": old_key, "api_base": old_base})
             flag_provider = None
             continue
         _persist_default_model(chosen_model)
@@ -1048,15 +1096,18 @@ def _resolve_model_with_test(
     user_model_flag: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> Optional[str]:
     """Verify connectivity → pick the default model → send a test probe.
 
-    On a verify failure, offers a numbered submenu (retry / switch / continue).
-    Only failures stop; success auto-advances. Returns the chosen model, or
-    ``None`` to signal "switch provider" (the caller rewinds to the picker).
+    On a verify or test-message failure, offers a recovery submenu (retry /
+    re-pick model / re-enter key / switch / continue). Custom providers are
+    probed too (model was fixed upfront). Only failures stop; success
+    auto-advances. Returns the chosen model, or ``None`` to signal "switch
+    provider" (the caller rewinds to the picker).
     """
     while True:
-        ok, status, model_ids = _verify_provider(spec.name)
+        ok, status, model_ids = _verify_provider(spec.name, skip_test=skip_test)
         if not ok:
             options = (
                 [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
@@ -1081,7 +1132,20 @@ def _resolve_model_with_test(
 
     if is_custom:
         assert custom_model is not None, "custom provider must have model set earlier"
-        return custom_model
+        # Custom endpoints were previously trusted without a test message — the
+        # highest-typo-risk case. Send the real probe (it builds from the stored
+        # config, so a wrong base_url / model id fails here, not at first chat).
+        _persist_default_model(custom_model)
+        if skip_test:
+            return custom_model
+        while True:
+            result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings, allow_repick=False)
+            if result == "switch":
+                return None
+            if result == "rekey":
+                _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+                continue
+            return custom_model  # ok / continue
 
     current = _load_current_default_model()
     while True:
@@ -1093,11 +1157,22 @@ def _resolve_model_with_test(
             non_interactive=non_interactive,
         )
         _persist_default_model(chosen)
-        result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
-        if result != "repick":
+        if skip_test:
             return chosen
-        current = chosen
-        user_model_flag = None
+        result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
+        if result == "switch":
+            return None
+        if result == "rekey":
+            _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+            # Re-test the same model with the new key (picker defaults to it).
+            current = chosen
+            user_model_flag = None
+            continue
+        if result == "repick":
+            current = chosen
+            user_model_flag = None
+            continue
+        return chosen  # ok / continue
 
 
 # ---------------------------------------------------------------------------
@@ -1193,6 +1268,7 @@ def _step1_provider(
     model: Optional[str],
     non_interactive: bool,
     warnings: list[str],
+    skip_test: bool = False,
 ) -> object:
     """Step 1 screen. Returns ``_BACK`` only when the user backs out of the
     first-run picker on the welcome screen (handled by the runner)."""
@@ -1213,6 +1289,7 @@ def _step1_provider(
             model=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
         if result is None:
             return _BACK
@@ -1236,13 +1313,16 @@ def _step1_provider(
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "done"):
-            # Re-pick a default model if the prior one was removed.
-            if not _load_current_default_model() and _configured_providers():
+        if action is None:
+            raise typer.Exit(1)  # Ctrl+C exits; never treat it as "done"
+        if action == "done":
+            # Step 1 is required: never advance without at least one provider AND
+            # a default model, so deleting every provider can't slip through.
+            if not (_configured_providers() and _load_current_default_model()):
                 console.print(
                     _t(
-                        "  [yellow]No default model set — add or re-pick a provider.[/yellow]",
-                        "  [yellow]尚未设置默认模型 — 请新增或重新选择一个服务商。[/yellow]",
+                        "  [yellow]At least one provider with a default model is required — add or re-pick one.[/yellow]",
+                        "  [yellow]至少需要一个带默认模型的服务商 — 请新增或重新选择一个。[/yellow]",
                     )
                 )
                 continue
@@ -1255,6 +1335,7 @@ def _step1_provider(
                 model=None,
                 non_interactive=False,
                 warnings=warnings,
+                skip_test=skip_test,
             )
         elif action == "edit":
             _manage_existing_providers(non_interactive=non_interactive)
@@ -1565,31 +1646,31 @@ def _prompt_channel_fields(channel: str) -> Any:
         description = spec.get("description", "")
         opt_tag = "" if required else _t(" (optional)", " (可选)")
         prompt_label = f"{path}{opt_tag}" + (f" — {description}" if description else "") + ":"
-        # First field's empty submit rewinds to the channel picker; later
-        # optional fields' empty submit skips them. Required later fields get
-        # no skip hint so we don't invite dropping a value the channel needs.
+        # First field's empty submit rewinds to the channel picker; a later
+        # optional field's empty submit skips it; a later required field re-prompts
+        # (empty was previously accepted silently, enabling a half-configured
+        # channel — the write layer treats "required" as a UX marker only).
         allow_back = idx == 0
         placeholder = _field_placeholder(allow_back, required)
-        if spec.get("is_secret"):
-            value = questionary.password(
-                prompt_label,
-                placeholder=placeholder,
-                style=RAVEN_STYLE,
-                qmark=_QMARK,
-            ).ask()
-        else:
-            value = questionary.text(
-                prompt_label,
-                placeholder=placeholder,
-                style=RAVEN_STYLE,
-                qmark=_QMARK,
-            ).ask()
-        if value is None:
-            raise typer.Exit(1)
-        if allow_back and value == "":
-            return _BACK
-        if value:
-            fields[path] = value
+        while True:
+            if spec.get("is_secret"):
+                value = questionary.password(
+                    prompt_label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK
+                ).ask()
+            else:
+                value = questionary.text(prompt_label, placeholder=placeholder, style=RAVEN_STYLE, qmark=_QMARK).ask()
+            if value is None:
+                raise typer.Exit(1)
+            value = value.strip()
+            if value:
+                fields[path] = value
+                break
+            if allow_back:
+                return _BACK  # first field empty → back to the channel picker
+            if required:
+                console.print(_t(f"  [yellow]{path} is required.[/yellow]", f"  [yellow]{path} 为必填项。[/yellow]"))
+                continue  # re-prompt instead of enabling a channel missing a credential
+            break  # optional field: empty submit skips it
     return fields
 
 
@@ -1638,7 +1719,7 @@ def _node_runtime_missing(channel: str) -> bool:
     return shutil.which("npm") is None
 
 
-def _handle_missing_node(channel: str) -> str:
+def _handle_missing_node(channel: str, *, non_interactive: bool) -> str:
     """Show the Node-missing submenu (install-then-retry / skip).
 
     Returns ``"retry"`` (re-check after install) or ``"skip"`` (leave the
@@ -1657,12 +1738,12 @@ def _handle_missing_node(channel: str) -> str:
             (_t("Retry after install", "安装后重试"), "retry"),
             (_t("Skip", "跳过"), "skip"),
         ],
-        non_interactive=False,
+        non_interactive=non_interactive,
     )
     return choice
 
 
-def _scancode_login(channel: str) -> None:
+def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
     """Run a scancode channel's real QR login (reuses ``channel.login``).
 
     Mirrors ``raven channels login``: enable the channel so its config section
@@ -1689,115 +1770,123 @@ def _scancode_login(channel: str) -> None:
         console.print(_t(f"  [red]✗ Unknown channel: {channel}[/red]", f"  [red]✗ 未知渠道:{channel}[/red]"))
         return
 
-    while True:
-        # Node-bridge channels: gate on the runtime up front so a missing
-        # Node/npm shows a useful install menu, not a "re-show QR" no-op.
-        if _node_runtime_missing(channel):
-            if _handle_missing_node(channel) == "retry":
+    # Enabled above so the factory can read the config section during login. ANY
+    # path that doesn't finish login must revert the enable — including Ctrl+C in
+    # a submenu (raises typer.Exit) or mid-scan (KeyboardInterrupt), neither an
+    # ``Exception`` subclass — so wrap the whole flow and disable in ``finally``
+    # unless we actually logged in.
+    logged_in = False
+    try:
+        while True:
+            # Node-bridge channels: gate on the runtime up front so a missing
+            # Node/npm shows a useful install menu, not a "re-show QR" no-op.
+            if _node_runtime_missing(channel):
+                if _handle_missing_node(channel, non_interactive=non_interactive) == "retry":
+                    continue
+                console.print(
+                    _t(
+                        f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
+                        f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
+                    )
+                )
+                return
+
+            from raven.config.loader import load_config
+
+            channel_cfg = getattr(load_config().channels, channel, None)
+            if channel_cfg is None:
+                console.print(
+                    _t(
+                        f"  [red]✗ No config section for channel: {channel}[/red]",
+                        f"  [red]✗ 渠道 {channel} 没有配置段。[/red]",
+                    )
+                )
+                return
+            adapter = spec.factory(channel_cfg)
+            if channel == "whatsapp":
+                console.print(
+                    _t(
+                        "  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]",
+                        "  [dim]正在构建 WhatsApp 桥接,首次约需 30–120 秒…[/dim]",
+                    )
+                )
+            console.print(
+                _t(
+                    f"  [dim]Starting {spec.display_name} QR login…[/dim]",
+                    f"  [dim]正在启动 {spec.display_name} 扫码登录…[/dim]",
+                )
+            )
+            console.print(
+                _t(
+                    f"  [dim]A login link / QR code will appear below — scan it with "
+                    f"{spec.display_name} (or open the link on a phone signed in to "
+                    f"{spec.display_name}) to connect. This waits until you finish.[/dim]",
+                    f"  [dim]下方会出现登录链接 / 二维码 — 用 {spec.display_name} 扫码"
+                    f"(或在已登录 {spec.display_name} 的手机上打开该链接)即可接入;"
+                    f"这里会一直等到你完成。[/dim]",
+                )
+            )
+            from loguru import logger as _wiz_logger
+
+            # The wizard silences raven logs for a clean UI, but a scancode login
+            # emits its QR / link / progress / failure reason through loguru. Re-
+            # enable ONLY this channel's adapter subtree for the login attempt (not
+            # all of raven, which would dump unrelated noise), then restore quiet.
+            _login_log_scope = f"raven.channels.adapters.{channel}"
+            try:
+                _wiz_logger.enable(_login_log_scope)
+                ok = asyncio.run(adapter.login(force=True))
+            except Exception as exc:
+                console.print(
+                    _t(
+                        f"  [yellow]✗ Login failed: {exc}[/yellow]",
+                        f"  [yellow]✗ 登录失败:{exc}[/yellow]",
+                    )
+                )
+                ok = False
+            finally:
+                _wiz_logger.disable(_login_log_scope)
+            if ok:
+                console.print(
+                    _t(
+                        f"  [green]✓ Logged in; {channel} connected.[/green]",
+                        f"  [green]✓ 已登录;{channel} 已接入。[/green]",
+                    )
+                )
+                logged_in = True
+                return
+            choice = _failure_choice(
+                [
+                    (_t("Retry", "重试"), "retry"),
+                    (_t("Skip this channel", "跳过此渠道"), "skip"),
+                ],
+                non_interactive=non_interactive,
+            )
+            if choice == "retry":
                 continue
-            disable_channel(channel)  # not logged in → don't leave it "connected"
             console.print(
                 _t(
-                    f"  [dim]Skipped {channel}; install Node.js then run raven channels login {channel}.[/dim]",
-                    f"  [dim]已跳过 {channel};装好 Node.js 后运行 raven channels login {channel}。[/dim]",
+                    f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
+                    f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
                 )
             )
             return
-
-        from raven.config.loader import load_config
-
-        channel_cfg = getattr(load_config().channels, channel, None)
-        if channel_cfg is None:
+    finally:
+        if not logged_in:
+            # Any non-login exit (skip, no-config, submenu Ctrl+C, mid-scan
+            # interrupt) reverts the enable so a cancelled scan never persists as
+            # "connected". The config section is kept for `raven channels login`.
             disable_channel(channel)
-            console.print(
-                _t(
-                    f"  [red]✗ No config section for channel: {channel}[/red]",
-                    f"  [red]✗ 渠道 {channel} 没有配置段。[/red]",
-                )
-            )
-            return
-        adapter = spec.factory(channel_cfg)
-        if channel == "whatsapp":
-            console.print(
-                _t(
-                    "  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]",
-                    "  [dim]正在构建 WhatsApp 桥接,首次约需 30–120 秒…[/dim]",
-                )
-            )
-        console.print(
-            _t(
-                f"  [dim]Starting {spec.display_name} QR login…[/dim]",
-                f"  [dim]正在启动 {spec.display_name} 扫码登录…[/dim]",
-            )
-        )
-        console.print(
-            _t(
-                f"  [dim]A login link / QR code will appear below — scan it with "
-                f"{spec.display_name} (or open the link on a phone signed in to "
-                f"{spec.display_name}) to connect. This waits until you finish.[/dim]",
-                f"  [dim]下方会出现登录链接 / 二维码 — 用 {spec.display_name} 扫码"
-                f"(或在已登录 {spec.display_name} 的手机上打开该链接)即可接入;"
-                f"这里会一直等到你完成。[/dim]",
-            )
-        )
-        from loguru import logger as _wiz_logger
-
-        # The wizard silences raven logs for a clean UI, but a scancode login
-        # emits its QR / link / progress / failure reason through loguru. Re-
-        # enable ONLY this channel's adapter subtree for the login attempt (not
-        # all of raven, which would dump unrelated noise), then restore quiet.
-        _login_log_scope = f"raven.channels.adapters.{channel}"
-        try:
-            _wiz_logger.enable(_login_log_scope)
-            ok = asyncio.run(adapter.login(force=True))
-        except Exception as exc:
-            console.print(
-                _t(
-                    f"  [yellow]✗ Login failed: {exc}[/yellow]",
-                    f"  [yellow]✗ 登录失败:{exc}[/yellow]",
-                )
-            )
-            ok = False
-        finally:
-            _wiz_logger.disable(_login_log_scope)
-        if ok:
-            console.print(
-                _t(
-                    f"  [green]✓ Logged in; {channel} connected.[/green]",
-                    f"  [green]✓ 已登录;{channel} 已接入。[/green]",
-                )
-            )
-            return
-        choice = _failure_choice(
-            [
-                (_t("Retry", "重试"), "retry"),
-                (_t("Skip this channel", "跳过此渠道"), "skip"),
-            ],
-            non_interactive=False,
-        )
-        if choice == "retry":
-            continue
-        # Not completed (skip) → revert the enable so the channel isn't shown as
-        # connected. The config section is kept, so the user can finish
-        # out-of-band with `raven channels login <name>`.
-        disable_channel(channel)
-        console.print(
-            _t(
-                f"  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]",
-                f"  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
-            )
-        )
-        return
 
 
-def _add_one_channel() -> None:
+def _add_one_channel(*, non_interactive: bool = False) -> None:
     """Pick + (scancode login | reflect-prompt) + enable one channel."""
     while True:
         channel = _select_channel()
         if channel is None or channel is _BACK:
             return
         if _channel_uses_interactive_login(channel):
-            _scancode_login(channel)
+            _scancode_login(channel, non_interactive=non_interactive)
             return
         fields = _prompt_channel_fields(channel)
         if fields is _BACK:
@@ -1903,7 +1992,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
 
     if channel:
         if _channel_uses_interactive_login(channel):
-            _scancode_login(channel)
+            _scancode_login(channel, non_interactive=non_interactive)
         else:
             fields = _prompt_channel_fields(channel)
             if fields is _BACK:
@@ -1936,10 +2025,12 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
-            if action in (None, "skip"):
+            if action is None:
+                raise typer.Exit(1)
+            if action == "skip":
                 console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
                 return None
-            _add_one_channel()
+            _add_one_channel(non_interactive=non_interactive)
             continue
 
         action = questionary.select(
@@ -1955,10 +2046,12 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "done"):
+        if action is None:
+            raise typer.Exit(1)
+        if action == "done":
             return None
         if action == "add":
-            _add_one_channel()
+            _add_one_channel(non_interactive=non_interactive)
         elif action == "edit":
             _manage_existing_channels()
 
@@ -1992,16 +2085,17 @@ def _everos_section(section: str) -> dict[str, Any]:
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires an llm model in the EverOS toml: the seed/schema default
-    sets ``memory.backend="everos"`` before any models exist, so a bare backend
-    check would mis-report a fresh, modelless install as "enabled" and make
-    Step 4 offer "keep current" over a non-functional setup. Gating on the llm
-    model keeps the wizard's enabled-detection aligned with "actually works".
+    "Usable" requires both required models (llm and embedding) in the EverOS
+    toml: the seed/schema default sets ``memory.backend="everos"`` before any
+    models exist, so a bare backend check would mis-report a fresh, modelless
+    install as "enabled". Both roles are ``optional: False``; gating on either
+    alone would treat a half-configured setup (e.g. llm written but embedding
+    skipped) as enabled and offer "keep current" over a non-functional memory.
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    return bool(_everos_section("llm").get("model"))
+    return bool(_everos_section("llm").get("model") and _everos_section("embedding").get("model"))
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -2122,32 +2216,64 @@ def _prompt_text(label: str, *, secret: bool = False, default: str = "", allow_b
     return value
 
 
-def _probe_everos_endpoint(
-    label: str, *, model: Optional[str], api_key: Optional[str], base_url: Optional[str]
-) -> tuple[bool, str]:
-    """Lightweight ``GET {base_url}/models`` connectivity check for an EverOS
-    model endpoint. Returns ``(ok, detail)``; never raises."""
+def _probe_everos_chat(model: Optional[str], *, api_key: Optional[str], base_url: Optional[str]) -> tuple[bool, str]:
+    """Real capability probe for a memory-LLM endpoint: ``POST
+    {base_url}/chat/completions`` once and confirm a choice comes back. Unlike a
+    bare ``GET /models`` connectivity check, this exercises the picked model, so
+    an endpoint that lists models but doesn't serve the chosen id fails here
+    instead of reporting a false green. Provider-agnostic; never raises."""
     import httpx
 
     if not base_url:
         return False, "no base_url configured"
-    url = base_url.rstrip("/") + "/models"
-    if "/v1" not in base_url:
-        url = base_url.rstrip("/") + "/v1/models"
+    url = base_url.rstrip("/") + ("/chat/completions" if "/v1" in base_url else "/v1/chat/completions")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    body = {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1}
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(url, headers=headers, json=body)
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return False, f"probe failed: {exc}"
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        return True, "ok"
+    return False, "endpoint returned no completion"
+
+
+def _probe_everos_embedding(
+    model: Optional[str], *, api_key: Optional[str], base_url: Optional[str]
+) -> tuple[bool, str]:
+    """Real capability probe for an embedding endpoint: ``POST
+    {base_url}/embeddings`` once and confirm a vector comes back. Catches
+    endpoints that answer ``GET /models`` but can't actually embed (e.g. a
+    chat-only provider). Provider-agnostic; never raises."""
+    import httpx
+
+    if not base_url:
+        return False, "no base_url configured"
+    url = base_url.rstrip("/") + ("/embeddings" if "/v1" in base_url else "/v1/embeddings")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.get(url, headers=headers)
-    except httpx.HTTPError as exc:
-        return False, f"network error: {exc}"
-    if resp.status_code == 200:
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(url, headers=headers, json={"model": model, "input": "ping"})
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return False, f"probe failed: {exc}"
+    items = data.get("data") if isinstance(data, dict) else None
+    if isinstance(items, list) and items and isinstance(items[0], dict) and "embedding" in items[0]:
         return True, "ok"
-    return False, f"HTTP {resp.status_code}"
+    return False, "endpoint returned no embedding vector"
 
 
 def _verify_everos_model(
     label: str,
     *,
+    section: str,
     model: Optional[str],
     api_key: Optional[str],
     base_url: Optional[str],
@@ -2163,14 +2289,17 @@ def _verify_everos_model(
     ``continue_hint`` (en, zh) spells out the consequence of continuing anyway.
     """
     console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
-    ok, detail = _probe_everos_endpoint(label, model=model, api_key=api_key, base_url=base_url)
+    if section == "embedding":
+        ok, detail = _probe_everos_embedding(model, api_key=api_key, base_url=base_url)
+    else:
+        ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
     if ok:
         console.print(_t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]"))
         return True
     console.print(
         _t(
-            f"  [yellow]✗ Couldn't reach {label}: {detail}[/yellow]",
-            f"  [yellow]✗ 连不上 {label}:{detail}[/yellow]",
+            f"  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]",
+            f"  [yellow]✗ 验证失败 {label}:{detail}[/yellow]",
         )
     )
     if continue_hint:
@@ -2252,6 +2381,13 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "把文字转成向量,存入记忆库并在检索时按「意思」匹配,而不只是关键词",
         ),
         "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
+        "hint": (
+            "Needs an embedding-capable provider — can differ from your memory LLM. "
+            "Known-good: OpenAI (text-embedding-3-small), SiliconFlow, DashScope. "
+            "A chat-only endpoint (e.g. DeepSeek) won't serve embeddings.",
+            "需要支持 embedding 的服务商 —— 可与记忆 LLM 不同。已知可用:OpenAI"
+            "(text-embedding-3-small)、SiliconFlow、DashScope。纯对话端点(如 DeepSeek)不提供 embedding。",
+        ),
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
@@ -2301,7 +2437,7 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
         if resp.status_code != 200:
             return None
         data = resp.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
@@ -2310,14 +2446,42 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
     return sorted(ids) or None
 
 
-def _everos_pick_model(*, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool) -> Any:
-    """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
-    fuzzy-searchable list, else fall back to free text. Empty submit = back."""
+def _print_embedding_switch_hint() -> None:
+    """Nudge shown whenever the embedding step bounces back to the source picker
+    (empty model submit or a failed ``/embeddings`` verify): the current endpoint
+    likely can't embed, so switch provider or give up EverOS via Back."""
+    console.print(
+        _t(
+            "  [dim]No embedding model here? This endpoint likely doesn't serve embeddings — "
+            "pick an embedding-capable provider (OpenAI / SiliconFlow / DashScope), "
+            "or choose Back to give up EverOS.[/dim]",
+            "  [dim]这里没有可用的 embedding 模型?该端点很可能不提供 embedding —— "
+            "请改选支持 embedding 的服务商(OpenAI / SiliconFlow / DashScope),"
+            "或选「返回」放弃 EverOS。[/dim]",
+        ),
+        highlight=False,
+    )
+
+
+def _everos_pick_model(
+    *, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool, fetch_list: bool = True
+) -> Any:
+    """Pick a model id for an EverOS endpoint. With ``fetch_list`` (the default),
+    fetch ``/models`` for a fuzzy-searchable list, else free text. Empty submit =
+    back.
+
+    ``fetch_list=False`` is used for embedding: ``/models`` lists the endpoint's
+    chat models (on a reused chat endpoint they're all chat), which is misleading
+    as embedding candidates — so the caller enters the embedding id directly,
+    guided by the example and the role's capability hint, and the real
+    ``/embeddings`` verify is the arbiter."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
-    models = _fetch_everos_models(base_url, api_key)
+    models = None
+    if fetch_list:
+        console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
+        models = _fetch_everos_models(base_url, api_key)
     if models:
         chosen = questionary.autocomplete(
             _t(
@@ -2332,12 +2496,13 @@ def _everos_pick_model(*, base_url: Optional[str], api_key: Optional[str], examp
             qmark=_QMARK,
         ).ask()
     else:
-        console.print(
-            _t(
-                "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
-                "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
+        if fetch_list:
+            console.print(
+                _t(
+                    "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
+                    "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
+                )
             )
-        )
         chosen = questionary.text(
             _t(f"Model id (e.g. {example}):", f"模型 id(如 {example}):"),
             placeholder=_back_placeholder(allow_back),
@@ -2475,8 +2640,19 @@ def _everos_pick_creds_and_model(
             if rerank_provider is _BACK:
                 continue
 
-        model = _everos_pick_model(base_url=base_url, api_key=api_key, example=example, allow_back=True)
+        model = _everos_pick_model(
+            base_url=base_url,
+            api_key=api_key,
+            example=example,
+            allow_back=True,
+            fetch_list=section != "embedding",
+        )
         if model is _BACK:
+            # Back-out lands on the source picker again; for embedding, nudge the
+            # user to switch provider (Back gives up EverOS) so re-picking the same
+            # chat-only reuse endpoint isn't a silent dead end.
+            if section == "embedding":
+                _print_embedding_switch_hint()
             continue
 
         result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
@@ -2485,9 +2661,14 @@ def _everos_pick_creds_and_model(
         return result
 
 
-def _config_everos_role(*, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str]) -> None:
+def _config_everos_role(
+    *, section: str, main_model: Optional[str], non_interactive: bool, warnings: list[str], skip_test: bool = False
+) -> Any:
     """Configure one EverOS memory role (llm / embedding / rerank / multimodal)
-    with the unified provider→key→model flow, reuse shortcuts, and a back loop."""
+    with the unified provider→key→model flow, reuse shortcuts, and a back loop.
+
+    Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
+    required role (the caller then disables EverOS and keeps Markdown memory)."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
     from raven.config.update_everos import clear_everos_section, set_everos_section
@@ -2502,16 +2683,24 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
     # Header sits on the 2-space info column (bold accent); the purpose nests
     # one line under it (dim), matching the layout system used everywhere else.
     tag = _t("optional", "可选")
+    hint = role.get("hint")
+    hint_en = f"\n  [dim]{hint[0]}[/dim]" if hint else ""
+    hint_zh = f"\n  [dim]{hint[1]}[/dim]" if hint else ""
     console.print()
+    # highlight=False so Rich's default highlighter doesn't tint the dim prose
+    # (parens/numbers/words) and make an informational hint read like an error.
     console.print(
         _t(
             f"  [bold #fbe23f]{label_en}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_en}[/dim]",
+            + f"\n  [dim]{purpose_en}[/dim]"
+            + hint_en,
             f"  [bold #fbe23f]{label_zh}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_zh}[/dim]",
-        )
+            + f"\n  [dim]{purpose_zh}[/dim]"
+            + hint_zh,
+        ),
+        highlight=False,
     )
 
     while True:  # role-menu loop — a back-out of the source picker returns here
@@ -2547,7 +2736,9 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
             ).ask()
-            if action in (None, "skip"):
+            if action is None:
+                raise typer.Exit(1)
+            if action == "skip":
                 note_en, note_zh = role.get("skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。"))
                 console.print(_t(f"  [dim]{note_en}[/dim]", f"  [dim]{note_zh}[/dim]"))
                 return
@@ -2560,11 +2751,47 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
             non_interactive=non_interactive,
         )
         if result is _BACK:
-            continue  # back to the role menu
+            if optional or _everos_section(section).get("model"):
+                # Optional roles offer Skip; a required role that already has a
+                # value on disk falls back to its keep/reconfigure menu. Either
+                # way, re-show the role menu rather than forcing the give-up exit.
+                continue
+            # A required role with nothing configured has no Skip, so backing out
+            # of the picker would loop forever. Offer a bounded exit: keep trying,
+            # or give up EverOS and fall back to Markdown memory.
+            action = questionary.select(
+                _t(
+                    f"{label_en} is required for EverOS memory. What would you like to do?",
+                    f"{label_zh} 是 EverOS 记忆必需的。想做什么?",
+                ),
+                choices=[
+                    questionary.Choice(_t("Pick a provider / model", "选择服务商 / 模型"), value="retry"),
+                    questionary.Choice(
+                        _t("Give up EverOS (use native Markdown memory)", "放弃 EverOS(改用原生 Markdown 记忆)"),
+                        value="abort",
+                    ),
+                ],
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if action is None:
+                raise typer.Exit(1)
+            if action == "retry":
+                continue
+            return _ABORT_EVEROS
 
-        if role["verify"]:
+        if role["verify"] and skip_test:
+            console.print(
+                _t(
+                    f"  [dim]Skipping the {verify_label} test call (--skip-test).[/dim]",
+                    f"  [dim]已跳过 {verify_label} 的测试调用(--skip-test)。[/dim]",
+                )
+            )
+            ok = True
+        elif role["verify"]:
             ok = _verify_everos_model(
                 verify_label,
+                section=section,
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
@@ -2575,7 +2802,12 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
         else:
             ok = True
         if not ok:
-            continue  # "Re-enter" on a failed probe → back to the role menu
+            # "Re-enter" on a failed probe → back to the role menu. For embedding,
+            # a failed /embeddings verify usually means the endpoint can't embed;
+            # reprint the switch-provider nudge so the retry isn't a blind loop.
+            if section == "embedding":
+                _print_embedding_switch_hint()
+            continue
 
         set_everos_section(section, result)
         console.print(
@@ -2587,14 +2819,16 @@ def _config_everos_role(*, section: str, main_model: Optional[str], non_interact
         return
 
 
-def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str]) -> object:
+def _step4_memory(
+    *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
+) -> object:
     """Step 4 — EverOS long-term memory (enable + model sub-screens).
 
     The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
     step's job is to either confirm it by configuring the required models or
     resolve it back to ``None`` (native Markdown) on skip / non-interactive /
-    decline. ``_memory_enabled`` gates on the llm model being present, so a
-    fresh modelless seed is treated as "not yet enabled" (the user still sees
+    decline. ``_memory_enabled`` gates on both required models (llm + embedding)
+    being present, so a fresh modelless seed is treated as "not yet enabled" (the user still sees
     the enable prompt) and the "keep current" path only triggers once models
     are actually on disk.
     """
@@ -2603,7 +2837,7 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
     if skip or non_interactive:
         # Never configured the required models here → disable backend-driven
         # memory so runtime doesn't activate EverOS without an llm/embedding.
-        # (``_memory_enabled`` already gates on the llm model, so an
+        # (``_memory_enabled`` already gates on both required models, so an
         # already-enabled+configured setup is preserved.)
         if not _memory_enabled():
             _set_memory_backend(None)
@@ -2659,7 +2893,9 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
             style=RAVEN_STYLE,
             qmark=_QMARK,
         ).ask()
-        if action in (None, "off"):
+        if action is None:
+            raise typer.Exit(1)
+        if action == "off":
             _set_memory_backend(None)
             console.print(
                 _t(
@@ -2675,12 +2911,22 @@ def _step4_memory(*, skip: bool, non_interactive: bool, main_model: Optional[str
     for _role in ("llm", "embedding", "rerank", "multimodal"):
         # Each role prints one leading blank before its own header, so no extra
         # separator here — avoids the double blank line between roles.
-        _config_everos_role(
+        outcome = _config_everos_role(
             section=_role,
             main_model=main_model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         )
+        if outcome is _ABORT_EVEROS:
+            _set_memory_backend(None)
+            console.print(
+                _t(
+                    "  [dim]Gave up EverOS; keeping native Markdown memory.[/dim]",
+                    "  [dim]已放弃 EverOS,改用原生 Markdown 记忆。[/dim]",
+                )
+            )
+            return None
     _set_memory_backend("everos")
     return None
 
@@ -2709,8 +2955,8 @@ def _print_next_steps(*, warnings: list[str]) -> None:
                 + f"{', '.join(warnings)}\n"
                 + _t(
                     "[dim]Fix them before relying on the related features "
-                    "(run [/dim][#fbe23f]raven doctor[/#fbe23f][dim] to re-check).[/dim]",
-                    "[dim]在依赖相关功能前请先修复(运行 [/dim][#fbe23f]raven doctor[/#fbe23f][dim] 复查)。[/dim]",
+                    "(re-run [/dim][#fbe23f]raven onboard[/#fbe23f][dim] to reconfigure).[/dim]",
+                    "[dim]在依赖相关功能前请先修复(重新运行 [/dim][#fbe23f]raven onboard[/#fbe23f][dim] 重新配置)。[/dim]",
                 ),
                 border_style="yellow",
                 padding=(1, 2),
@@ -2792,6 +3038,7 @@ def run_wizard(
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
+    skip_test: bool = False,
 ) -> None:
     """Run the 4-step onboarding wizard end-to-end.
 
@@ -2819,6 +3066,7 @@ def run_wizard(
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
+            skip_test=skip_test,
         )
     finally:
         _logger.enable("raven")
@@ -2837,6 +3085,7 @@ def _run_wizard_body(
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
+    skip_test: bool = False,
 ) -> None:
     global _LANG
     _check_tty_or_die(non_interactive)
@@ -2883,6 +3132,7 @@ def _run_wizard_body(
             model=model,
             non_interactive=non_interactive,
             warnings=warnings,
+            skip_test=skip_test,
         ),
         lambda: _step2_sandbox(skip=skip_sandbox, non_interactive=non_interactive),
         lambda: _step3_channel(channel=channel, skip=skip_channel, non_interactive=non_interactive),
@@ -2891,6 +3141,7 @@ def _run_wizard_body(
             non_interactive=non_interactive,
             main_model=_load_current_default_model(),
             warnings=warnings,
+            skip_test=skip_test,
         ),
     ]
 
@@ -2961,7 +3212,16 @@ def register(app: typer.Typer) -> None:
             help="Run without prompts (requires flags for any missing field)",
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Skip all confirm prompts"),
-        reset: bool = typer.Option(False, "--reset", help="Force re-run even if a config already exists"),
+        reset: bool = typer.Option(
+            False,
+            "--reset",
+            help="Re-run the wizard over an existing config (does not erase it; each step keeps current values as defaults)",
+        ),
+        skip_test: bool = typer.Option(
+            False,
+            "--skip-test",
+            help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
+        ),
     ) -> None:
         """Four-step setup wizard: LLM provider → sandbox → channel → memory."""
         run_wizard(
@@ -2976,6 +3236,7 @@ def register(app: typer.Typer) -> None:
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
+            skip_test=skip_test,
         )
 
 
