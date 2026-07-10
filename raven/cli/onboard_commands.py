@@ -2390,10 +2390,9 @@ def _probe_embedding_dim(url: str, headers: dict, model: str) -> int | str:
     """
     import httpx
 
-    def _try_embed(body: dict) -> int | str:
+    def _try_embed(client: httpx.Client, body: dict) -> int | str:
         try:
-            with httpx.Client(timeout=15) as client:
-                resp = client.post(url, json=body, headers=headers)
+            resp = client.post(url, json=body, headers=headers)
             if resp.status_code != 200:
                 return f"HTTP {resp.status_code}"
             items = resp.json().get("data", [])
@@ -2406,11 +2405,13 @@ def _probe_embedding_dim(url: str, headers: dict, model: str) -> int | str:
         except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
             return str(exc)
 
-    result = _try_embed({"model": model, "input": ["dimension check"], "dimensions": _REQUIRED_EMBEDDING_DIM})
-    if result == _REQUIRED_EMBEDDING_DIM:
-        return result
-
-    return _try_embed({"model": model, "input": ["dimension check"]})
+    with httpx.Client(timeout=15) as client:
+        result = _try_embed(
+            client, {"model": model, "input": ["dimension check"], "dimensions": _REQUIRED_EMBEDDING_DIM}
+        )
+        if result == _REQUIRED_EMBEDDING_DIM:
+            return result
+        return _try_embed(client, {"model": model, "input": ["dimension check"]})
 
 
 def _verify_embedding_dim(
@@ -2680,14 +2681,42 @@ def _fetch_openai_models(
     return sorted(ids) or None
 
 
+def _fetch_deepinfra_models(
+    api_key: Optional[str],
+    reported_type: str,
+    *,
+    name_contains: Optional[str] = None,
+) -> Optional[list[str]]:
+    """Fetch DeepInfra models filtered by ``reported_type`` and optional name substring."""
+    import httpx
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get("https://api.deepinfra.com/models/list", headers=headers)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    items = data if isinstance(data, list) else []
+    ids = [
+        m.get("model_name")
+        for m in items
+        if isinstance(m, dict)
+        and m.get("reported_type") == reported_type
+        and m.get("model_name")
+        and (name_contains is None or name_contains in m.get("model_name", ""))
+    ]
+    return sorted(ids) or None
+
+
 def _fetch_embedding_models(
     base_url: str,
     api_key: Optional[str],
     provider_name: Optional[str],
 ) -> Optional[list[str]]:
     """Provider-specific embedding model listing."""
-    import httpx
-
     if provider_name == "openrouter":
         return _fetch_openai_models(base_url.rstrip("/") + "/embeddings", api_key)
 
@@ -2695,22 +2724,7 @@ def _fetch_embedding_models(
         return _fetch_openai_models(base_url, api_key, params={"type": "text", "sub_type": "embedding"})
 
     if provider_name == "deepinfra":
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.get("https://api.deepinfra.com/models/list", headers=headers)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-        except (httpx.HTTPError, ValueError):
-            return None
-        items = data if isinstance(data, list) else []
-        ids = [
-            m.get("model_name")
-            for m in items
-            if isinstance(m, dict) and m.get("reported_type") == "embeddings" and m.get("model_name")
-        ]
-        return sorted(ids) or None
+        return _fetch_deepinfra_models(api_key, "embeddings")
 
     # OpenAI, DashScope, custom — GET /models + name-based filter.
     ids = _fetch_openai_models(base_url, api_key)
@@ -2726,30 +2740,10 @@ def _fetch_rerank_models(
     provider_name: Optional[str],
 ) -> Optional[list[str]]:
     """Provider-specific rerank model listing."""
-    import httpx
-
     if provider_name == "deepinfra":
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.get("https://api.deepinfra.com/models/list", headers=headers)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-        except (httpx.HTTPError, ValueError):
-            return None
-        items = data if isinstance(data, list) else []
         # The deepinfra provider hardcodes a Qwen3-Reranker chat template,
         # so only Qwen3-Reranker models are compatible.
-        ids = [
-            m.get("model_name")
-            for m in items
-            if isinstance(m, dict)
-            and m.get("reported_type") == "reranker"
-            and m.get("model_name")
-            and "Qwen3-Reranker" in m.get("model_name", "")
-        ]
-        return sorted(ids) or None
+        return _fetch_deepinfra_models(api_key, "reranker", name_contains="Qwen3-Reranker")
 
     if provider_name == "siliconflow":
         return _fetch_openai_models(base_url, api_key, params={"sub_type": "reranker"})
@@ -2781,9 +2775,9 @@ def _everos_pick_model(
 
     console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
     models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
+    if recommendation:
+        console.print(f"  [dim]{_t(*recommendation)}[/dim]")
     if models:
-        if recommendation:
-            console.print(f"  [dim]{_t(*recommendation)}[/dim]")
         question = questionary.autocomplete(
             _t(
                 f"Model ({len(models)} available — type to filter):",
@@ -2807,8 +2801,6 @@ def _everos_pick_model(
         app.pre_run_callables.append(_show_completions)
         chosen = question.ask()
     else:
-        if recommendation:
-            console.print(f"  [dim]{_t(*recommendation)}[/dim]")
         console.print(
             _t(
                 "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
