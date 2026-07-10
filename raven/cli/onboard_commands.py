@@ -2614,14 +2614,18 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     },
     "multimodal": {
         "label": ("Memory multimodal", "记忆多模态"),
-        "example": "gpt-4o",
+        "example": "google/gemini-3-flash-preview",
         "optional": True,
-        "verify": False,
+        "verify": True,
         "purpose": (
             "lets Raven store and recall images / PDFs / audio as memory\n"
             "  only needed if you want multimodal content remembered, not merely because such files exist",
             "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索\n"
             "  仅当你确有把多模态内容纳入记忆的需求时才配,有这类文件并不等于需要",
+        ),
+        "recommendation": (
+            "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
+            "推荐 [bold]google/gemini-3-flash-preview[/bold]",
         ),
         "skip_note": (
             "Skipped; everything else is unaffected — configure it later if you come to need multimodal memory.",
@@ -2632,6 +2636,7 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
 
 
 _EMBEDDING_MODEL_PATTERNS = ("embed", "bge", "e5-", "gte-")
+_MULTIMODAL_MODEL_PATTERNS = ("vision", "4o", "gemini", "pixtral", "qwen-vl", "qwen2-vl", "qwen2.5-vl")
 
 
 def _fetch_everos_models(
@@ -2652,6 +2657,8 @@ def _fetch_everos_models(
         return _fetch_embedding_models(base_url, api_key, provider_name)
     if section == "rerank":
         return _fetch_rerank_models(base_url, api_key, provider_name)
+    if section == "multimodal":
+        return _fetch_multimodal_models(base_url, api_key, provider_name)
     return _fetch_openai_models(base_url, api_key)
 
 
@@ -2756,6 +2763,23 @@ def _fetch_rerank_models(
 
     # vllm / custom — no standard rerank listing.
     return None
+
+
+def _fetch_multimodal_models(
+    base_url: str,
+    api_key: Optional[str],
+    provider_name: Optional[str],
+) -> Optional[list[str]]:
+    """Provider-specific multimodal (vision) model listing."""
+    if provider_name == "openrouter":
+        return _fetch_openai_models(base_url, api_key, params={"input_modalities": "image"})
+
+    # OpenAI, custom — GET /models + name-based filter.
+    ids = _fetch_openai_models(base_url, api_key)
+    if ids is None:
+        return None
+    filtered = [i for i in ids if any(p in i.lower() for p in _MULTIMODAL_MODEL_PATTERNS)]
+    return filtered or None
 
 
 def _everos_pick_model(
@@ -3139,6 +3163,16 @@ def _config_everos_role(
                 api_key=result["api_key"],
                 base_url=result["base_url"],
                 rerank_provider=result.get("provider"),
+                non_interactive=non_interactive,
+                warnings=warnings,
+                continue_hint=role.get("continue_hint"),
+            )
+        elif section == "multimodal":
+            ok = _verify_everos_llm(
+                verify_label,
+                model=result["model"],
+                api_key=result["api_key"],
+                base_url=result["base_url"],
                 non_interactive=non_interactive,
                 warnings=warnings,
                 continue_hint=role.get("continue_hint"),
