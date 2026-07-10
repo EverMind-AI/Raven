@@ -64,8 +64,9 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     result = await model_options({})
     entry = _entry(result, "anthropic")
     assert entry["authenticated"] is True
-    assert entry["models"] == ["claude-opus-4-8", "claude-sonnet-4-5"]
-    assert entry["total_models"] == 2
+    # Configured models rank first; the curated shortlist follows (deduped).
+    assert entry["models"][:2] == ["claude-opus-4-8", "claude-sonnet-4-5"]
+    assert entry["total_models"] == 2 + len(common_models_for("anthropic"))
     assert entry["auth_type"] == "api_key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
 
@@ -75,8 +76,10 @@ async def test_options_unauthed_provider_marked(fake_home: Path) -> None:
     result = await model_options({})
     entry = _entry(result, "openai")
     assert entry["authenticated"] is False
-    assert entry["models"] == []
-    assert entry["total_models"] == 0
+    # Curated shortlist is shown regardless of auth (as openrouter always has),
+    # so the picker is never empty; the unauthed state is conveyed separately.
+    assert entry["models"] == common_models_for("openai")
+    assert entry["total_models"] == len(common_models_for("openai"))
 
 
 async def test_options_current_provider_marked(fake_home: Path) -> None:
@@ -287,3 +290,41 @@ async def test_options_config_models_rank_before_common_and_dedup(fake_home: Pat
     assert models[:2] == ["my/custom-model", dup]
     assert models.count(dup) == 1
     assert set(common_models_for("openrouter")).issubset(set(models))
+
+
+# Direct providers seeded for issue #100 (keyed provider, empty config models,
+# used to show an empty picker). ``prefix`` is the litellm-routing form each id
+# must carry so a picked id drops straight into ``agents.defaults.model``.
+_SEEDED_DIRECT_PROVIDERS = [
+    ("deepseek", "deepseek/"),
+    ("openai", "openai/"),
+    ("anthropic", "anthropic/"),
+    ("gemini", "gemini/"),
+    ("zhipu", "zai/"),
+    ("groq", "groq/"),
+    ("dashscope", "dashscope/"),
+]
+
+
+@pytest.mark.parametrize("slug, prefix", _SEEDED_DIRECT_PROVIDERS)
+def test_common_models_seeded_for_direct_providers(slug: str, prefix: str) -> None:
+    models = common_models_for(slug)
+    assert models, f"{slug} common-model shortlist is empty"
+    assert all(m.startswith(prefix) for m in models), models
+    assert len(models) == len(set(models)), "duplicate ids in shortlist"
+
+
+@pytest.mark.parametrize("slug, prefix", _SEEDED_DIRECT_PROVIDERS)
+async def test_options_direct_provider_lists_common_models_when_unconfigured(
+    fake_home: Path, slug: str, prefix: str
+) -> None:
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "openrouter/anthropic/claude-opus-4.8"}},
+            "providers": {slug: {"apiKey": "sk-test-xxxxxxx", "models": []}},
+        },
+    )
+    entry = _entry(await model_options({}), slug)
+    assert entry["total_models"] > 0
+    assert entry["models"] == common_models_for(slug)
