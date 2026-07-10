@@ -2,7 +2,7 @@
 
 These tests drive a **real** everos runtime (real LLM + embedding +
 sqlite/lancedb), gated behind the ``real_llm`` marker; they skip when the
-runtime isn't configured. Configure via ``~/.everos/config.toml``, a
+runtime isn't configured. Configure via ``~/.everos/everos.toml``, a
 repo-root ``.env``, or ``EVEROS_*`` env vars, then::
 
     uv run pytest tests/integration -m real_llm
@@ -85,7 +85,7 @@ def _reset_everos_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _missing_runtime_config(settings: Any) -> list[str]:
     """Which everos LLM/embedding fields are unset across *all* config
-    sources (``~/.everos/config.toml`` + ``.env`` + ``EVEROS_*`` env).
+    sources (``~/.everos/everos.toml`` + ``.env`` + ``EVEROS_*`` env).
 
     Checking everos's resolved ``Settings`` rather than raw env vars
     means a user who configures models/keys in ``config.toml`` (not env)
@@ -112,9 +112,25 @@ async def everos_env(
     isn't configured (in toml, .env, or env).
     """
     pytest.importorskip("everos")
-    from everos.config.settings import load_settings
+    # Snapshot the real root BEFORE redirecting, so we can copy config
+    # files that carry LLM / embedding credentials into the isolated dir.
+    import shutil
 
+    from everos.config.settings import load_settings, resolve_root
+
+    load_settings.cache_clear()
+    real_root = resolve_root()
+
+    # Redirect data root to an isolated tmp dir so each test gets a
+    # fresh sqlite + lancedb.
+    monkeypatch.setenv("EVEROS_ROOT", str(tmp_path))
     monkeypatch.setenv("EVEROS_MEMORY__ROOT", str(tmp_path))
+
+    for name in ("everos.toml", "ome.toml"):
+        src = real_root / name
+        if src.is_file():
+            shutil.copy2(src, tmp_path / name)
+
     # mode=agent runs both user-memory and agent-memory pipelines.
     monkeypatch.setenv("EVEROS_MEMORIZE__MODE", "agent")
     # Tighten the boundary so the backend's accumulate-only store() path
@@ -128,11 +144,21 @@ async def everos_env(
         pytest.skip(
             "everos runtime not configured (missing: "
             + ", ".join(missing)
-            + "); set them in ~/.everos/config.toml, a repo-root .env, "
+            + "); set them in ~/.everos/everos.toml, a repo-root .env, "
             "or EVEROS_* env vars",
         )
 
     _reset_everos_singletons(monkeypatch)
+
+    # Force a fresh lifespan entry by clearing the refcounted singleton
+    # in Raven's backend module. Without this, a previous test's
+    # _embedded_lifespan_cm survives and _acquire skips re-entry — but
+    # the everos singletons above were already nulled, so the old
+    # lifespan's OME engine is gone.
+    import raven.plugin.memory.everos.backend as _be_mod
+
+    monkeypatch.setattr(_be_mod, "_embedded_lifespan_cm", None)
+    monkeypatch.setattr(_be_mod, "_embedded_lifespan_refs", 0)
 
     # Bring up the in-process everos runtime via the production path:
     # EverosBackend.start() drives the (refcounted, process-shared) everos

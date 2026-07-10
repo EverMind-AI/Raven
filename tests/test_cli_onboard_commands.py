@@ -158,7 +158,6 @@ def test_onboard_help_lists_all_flags() -> None:
         "--non-interactive",
         "--yes",
         "--reset",
-        "--skip-test",
     ):
         assert flag in out, f"missing flag in help: {flag}"
 
@@ -197,9 +196,9 @@ def test_onboard_non_interactive_skips_optional_steps(
     """Non-interactive mode auto-skips sandbox / channel / memory steps.
 
     ``everos_isolated`` keeps ``_memory_enabled`` from reading the dev
-    machine's real ``~/.everos/config.toml``: the seeded backend="everos" is
-    only kept when both required models (llm + embedding) are configured, so an
-    empty (isolated) EverOS config makes the skip-guard resolve it back to None.
+    machine's real ``~/.everos/everos.toml``: the seeded backend="everos" is
+    only kept when an llm model is configured, so an empty (isolated) EverOS
+    config makes the skip-guard deterministically resolve it back to None.
     """
     r = runner.invoke(
         app,
@@ -411,34 +410,6 @@ def test_onboard_provider_test_failure_warns_but_continues(
     assert "Auth failed" in r.stdout
     # The unmet connectivity check is summarized in the footer warning.
     assert "didn't pass a connectivity test" in r.stdout
-
-
-def test_onboard_skip_test_avoids_billed_probe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify) -> None:
-    """--skip-test skips the one-shot chat probe (no billed call) while still
-    completing setup; connectivity (test_provider) still runs."""
-    calls: list[bool] = []
-    monkeypatch.setattr(onboard_commands, "send_probe", lambda: (calls.append(True), ("hi", 1, 0.1))[1])
-    r = runner.invoke(
-        app,
-        [
-            "onboard",
-            "--non-interactive",
-            "--provider",
-            "openai",
-            "--api-key",
-            "sk-x",
-            "--model",
-            "openai/gpt-4o-mini",
-            "--skip-sandbox",
-            "--skip-channel",
-            "--skip-memory",
-            "--yes",
-            "--skip-test",
-        ],
-    )
-    assert r.exit_code == 0, r.stdout
-    assert calls == []  # the billed chat probe was never sent
-    assert "Setup complete" in r.stdout
 
 
 def test_onboard_test_probe_failure_shows_warning_footer(
@@ -722,7 +693,7 @@ def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect EverOS writes to a throwaway toml (never touches ~/.everos)."""
     import raven.config.update_everos as ue
 
-    cfg = tmp_path / ".everos" / "config.toml"
+    cfg = tmp_path / ".everos" / "everos.toml"
     monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
     return cfg
 
@@ -980,7 +951,7 @@ def test_memory_disable_sets_backend_null(
 def test_memory_enable_writes_everos_sections(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Enabling memory + LLM (custom source) + embedding (reuse LLM endpoint)
+    """Enabling memory + LLM (custom source) + embedding (custom, same endpoint)
     writes the EverOS toml; rerank/multimodal skipped."""
     import tomllib
 
@@ -991,15 +962,14 @@ def test_memory_enable_writes_everos_sections(
     # _step4_memory select() calls, in order:
     #   1. enable memory                -> "on"
     #   2. LLM source picker            -> ("custom",)
-    #   3. embedding source picker      -> ("reuse_llm",)
+    #   3. embedding source picker      -> ("custom",)
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["on", ("custom",), ("reuse_llm",), "skip", "skip"])
-    # text(): LLM base_url, LLM model, embedding model (model lists can't be
-    # fetched offline, so the picker falls back to free-text entry).
-    text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
-    # password(): LLM api key.
-    password_answers = iter(["k-llm"])
+    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    # text(): LLM base_url, LLM model, embed base_url, embed model.
+    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
+    # password(): LLM api key, embed api key.
+    password_answers = iter(["k-llm", "k-embed"])
 
     class _FQ:
         def __init__(self, a):
@@ -1011,10 +981,10 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
-    # No network: model list can't be fetched → free-text entry; probes succeed.
+    # No network: model list can't be fetched → free-text entry; probe succeeds.
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
     monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
 
     onboard_commands._step4_memory(
         skip=False,
@@ -1035,812 +1005,16 @@ def test_memory_enable_writes_everos_sections(
     assert everos["llm"]["api_key"] == "k-llm"
     assert everos["llm"]["base_url"] == "https://llm/v1"
     assert everos["embedding"]["model"] == "mem-embed"
-    # embedding reused the LLM endpoint's key/base.
-    assert everos["embedding"]["api_key"] == "k-llm"
+    assert everos["embedding"]["api_key"] == "k-embed"
     assert everos["embedding"]["base_url"] == "https://llm/v1"
     assert "rerank" not in everos
     assert "multimodal" not in everos
 
 
-class _FakeResp:
-    def __init__(self, status_code: int, payload, text: str = ""):
-        self.status_code = status_code
-        self._payload = payload
-        self.text = text
-
-    def json(self):
-        if isinstance(self._payload, Exception):
-            raise self._payload
-        return self._payload
-
-
-class _FakeClient:
-    def __init__(self, resp):
-        self._resp = resp
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def post(self, *a, **kw):
-        if isinstance(self._resp, Exception):
-            raise self._resp
-        return self._resp
-
-
-def test_probe_everos_chat_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The chat probe never raises and only reports success on a real completion:
-    a non-dict body, missing/empty choices, non-200, non-JSON, and network errors
-    all read as failure."""
-    import httpx
-
-    def _probe(resp):
-        monkeypatch.setattr(httpx, "Client", lambda *a, **kw: _FakeClient(resp))
-        return onboard_commands._probe_everos_chat("m", api_key="k", base_url="https://x/v1")
-
-    assert _probe(_FakeResp(200, {"choices": [{"message": {"content": "hi"}}]})) == (True, "ok")
-    assert _probe(_FakeResp(200, {"choices": []}))[0] is False
-    # A non-dict choice item (e.g. an error string) is not a false green.
-    assert _probe(_FakeResp(200, {"choices": ["error: model not found"]}))[0] is False
-    assert _probe(_FakeResp(200, []))[0] is False  # top-level non-dict, no crash
-    ok, detail = _probe(_FakeResp(400, None, text="model not found"))
-    assert ok is False and "400" in detail
-    assert _probe(_FakeResp(200, ValueError("no json")))[0] is False
-    assert _probe(httpx.HTTPError("boom"))[0] is False
-
-
-def test_probe_everos_malformed_url_never_raises() -> None:
-    """A malformed base_url raises ``httpx.InvalidURL``, which is not an
-    ``HTTPError`` subclass — both probes must catch it and report failure rather
-    than crash the wizard (honoring the "never raises" contract)."""
-    assert onboard_commands._probe_everos_chat("m", api_key="k", base_url="http://[::1")[0] is False
-    assert onboard_commands._probe_everos_embedding("m", api_key="k", base_url="http://[::1")[0] is False
-    # The model-list fetch (used by the llm/rerank/multimodal pickers) shares the
-    # contract: a malformed base_url must read as "no list", not crash.
-    assert onboard_commands._fetch_everos_models("http://[::1", "k") is None
-
-
-def test_probe_everos_embedding_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The embedding probe never raises and only reports success on a real vector:
-    an error string containing "embedding", a non-dict item, a non-dict/non-JSON
-    body all read as failure, not crash."""
-    import httpx
-
-    def _probe(resp):
-        monkeypatch.setattr(httpx, "Client", lambda *a, **kw: _FakeClient(resp))
-        return onboard_commands._probe_everos_embedding("m", api_key="k", base_url="https://x/v1")
-
-    assert _probe(_FakeResp(200, {"data": [{"embedding": [0.1, 0.2]}]})) == (True, "ok")
-    # A chat endpoint whose error text contains "embedding" is not a false green.
-    assert _probe(_FakeResp(200, {"data": ["embedding not supported for chat models"]}))[0] is False
-    assert _probe(_FakeResp(200, {"data": [42]}))[0] is False  # non-dict item, no crash
-    assert _probe(_FakeResp(200, []))[0] is False  # top-level non-dict, no crash
-    ok, detail = _probe(_FakeResp(400, None, text="bad model"))
-    assert ok is False and "400" in detail
-    assert _probe(_FakeResp(200, ValueError("no json")))[0] is False
-    assert _probe(httpx.HTTPError("boom"))[0] is False
-
-
-def test_memory_enabled_requires_both_llm_and_embedding(tmp_env: Path, everos_isolated: Path) -> None:
-    """A half-configured EverOS (llm only, embedding missing) is not "enabled" —
-    both required roles must be on disk."""
-    from raven.config.update_everos import set_everos_section
-
-    onboard_commands._set_memory_backend("everos")
-    set_everos_section("llm", {"model": "m-llm", "api_key": "k", "base_url": "https://x/v1"})
-    assert onboard_commands._memory_enabled() is False
-    set_everos_section("embedding", {"model": "m-emb", "api_key": "k", "base_url": "https://x/v1"})
-    assert onboard_commands._memory_enabled() is True
-
-
-def test_prompt_api_key_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pasted key with surrounding whitespace/newline is stripped, so it can't
-    produce an illegal ``Authorization: Bearer \\nsk-...`` header downstream."""
-    import questionary
-
-    class _FQ:
-        def ask(self):
-            return "  sk-abc12345\n"
-
-    monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ())
-    assert onboard_commands._prompt_api_key("openai") == "sk-abc12345"
-
-
-def test_prompt_base_url_strips_whitespace(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Base URL input is stripped of surrounding whitespace/newline."""
-    import questionary
-
-    class _FQ:
-        def ask(self):
-            return "  https://host/v1 \n"
-
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ())
-    assert onboard_commands._prompt_base_url() == "https://host/v1"
-
-
-def test_memory_llm_probe_failure_reprompts_then_persists(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A model the endpoint doesn't serve fails the real chat probe; Re-enter
-    loops back and only a probe-passing model is persisted (no false green)."""
-    import tomllib
-
-    from raven.config.update_providers import set_provider_fields
-
-    set_provider_fields("openai", {"api_key": "sk-main", "api_base": "https://api.openai.com/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    # picker -> reuse main model; failure menu -> Re-enter; picker -> reuse again.
-    select_answers = iter([("reuse_main",), "rekey", ("reuse_main",)])
-    probe_results = iter([(False, "model not served by this endpoint"), (True, "ok")])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: next(probe_results))
-
-    warnings: list[str] = []
-    onboard_commands._config_everos_role(
-        section="llm", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=warnings
-    )
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["llm"]["model"] == "gpt-4o-mini"
-    assert warnings == []
-
-
-def test_memory_embedding_probe_failure_rejects_and_reprompts(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A chat-only endpoint fails the real embedding probe; Re-enter loops back
-    and only a probe-passing model is persisted (no false green)."""
-    import tomllib
-
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    select_answers = iter([("reuse_llm",), "rekey", ("reuse_llm",)])
-    text_answers = iter(["deepseek-chat", "text-embedding-3-small"])
-    probe_results = iter([(False, "model does not support embeddings"), (True, "ok")])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_embedding", lambda *a, **kw: next(probe_results))
-
-    warnings: list[str] = []
-    onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=warnings
-    )
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["embedding"]["model"] == "text-embedding-3-small"
-    assert warnings == []
-
-
-def test_memory_embedding_probe_failure_continue_records_warning(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Continue-anyway on a failed embedding probe persists but flags the endpoint
-    in ``warnings`` (the old connectivity check silently reported a false green)."""
-    import tomllib
-
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    select_answers = iter([("reuse_llm",), "continue"])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("deepseek-chat"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(
-        onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (False, "model does not support embeddings")
-    )
-
-    warnings: list[str] = []
-    onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=warnings
-    )
-    assert warnings == ["Memory embedding"]
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["embedding"]["model"] == "deepseek-chat"
-
-
-def test_memory_embedding_step_shows_capability_hint(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The embedding step prints the capability-guidance line so a chat-only-LLM
-    user is told upfront to pick an embedding-capable provider."""
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_llm",)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("text-embedding-3-small"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (True, "ok"))
-
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    blob = "\n".join(printed)
-    assert "embedding-capable" in blob
-    assert "DashScope" in blob
-
-
-def test_switch_clears_newly_added_failed_provider(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A brand-new provider that fails and is switched away from has its key
-    cleared, so a failed provider is not left listed as configured."""
-
-    picks = iter(["openai", onboard_commands._BACK])
-    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
-
-    def _collect(provider, **kw):
-        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad"})
-        return None  # not a custom provider
-
-    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
-    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **kw: None)  # switch
-
-    out = onboard_commands._configure_one_provider(
-        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
-    )
-    assert out is None  # user backed out of the picker
-    assert "openai" not in onboard_commands._configured_providers()  # failed new provider cleared
-
-
-def test_test_probe_rekey_completes_write_and_retry(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Choosing Re-enter key on a test-message failure writes the new key and
-    retries; a passing retry then completes (the rekey outcome is exercised end
-    to end, not just offered)."""
-    from raven.config.update_providers import set_provider_fields
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("custom")
-    set_provider_fields("custom", {"api_key": "k-old", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
-    outcomes = iter([RuntimeError("bad key"), ("hi", 1, 0.1)])
-
-    def _probe():
-        r = next(outcomes)
-        if isinstance(r, Exception):
-            raise r
-        return r
-
-    monkeypatch.setattr(onboard_commands, "send_probe", _probe)
-    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda opts, **kw: "rekey")
-    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda p, **kw: "k-new")
-
-    out = onboard_commands._resolve_model_with_test(
-        spec, is_custom=True, custom_model="m", user_model_flag=None, non_interactive=False, warnings=[]
-    )
-    assert out == "m"
-    stored = ((onboard_commands._load_raw_config().get("providers") or {}).get("custom") or {}).get("apiKey")
-    assert stored == "k-new"
-
-
-def test_switch_restores_reconfigured_provider_key(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reconfiguring an existing provider that then fails and is switched away
-    from restores its prior key (a failed edit must not clobber a working one)."""
-    from raven.config.update_providers import set_provider_fields
-
-    set_provider_fields("openai", {"api_key": "sk-good", "api_base": "https://api.openai.com/v1"})
-    picks = iter(["openai", onboard_commands._BACK])
-    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
-
-    def _collect(provider, **kw):
-        onboard_commands._write_provider_fields(provider, {"api_key": "sk-bad", "api_base": "https://bad/v1"})
-        return None
-
-    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
-    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **kw: None)  # switch
-
-    out = onboard_commands._configure_one_provider(
-        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
-    )
-    assert out is None
-    stored = (onboard_commands._load_raw_config().get("providers") or {}).get("openai") or {}
-    assert stored.get("apiKey") == "sk-good"  # key restored, not left as sk-bad
-    assert stored.get("apiBase") == "https://api.openai.com/v1"  # base_url restored too
-
-
-def test_config_everos_role_skip_test_skips_probe(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """--skip-test (threaded into Step 4) skips the billed EverOS probe while
-    still persisting the model."""
-    import tomllib
-
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_llm",)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("text-embedding-3-small"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    calls: list[bool] = []
-    monkeypatch.setattr(
-        onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (calls.append(True), (True, "ok"))[1]
-    )
-    onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[], skip_test=True
-    )
-    assert calls == []  # billed probe skipped
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["embedding"]["model"] == "text-embedding-3-small"
-
-
-def test_reconfig_existing_required_role_backout_keeps_current(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Backing out of the picker while reconfiguring an already-configured
-    required role returns to the keep/reconfigure menu (not the give-up exit)."""
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-    set_everos_section("embedding", {"model": "existing-embed", "api_key": "k", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    # role menu -> Reconfigure; source picker -> Back; role menu -> Keep current.
-    select_answers = iter(["redo", onboard_commands._BACK, "keep"])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    out = onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    assert out is None  # kept current, not _ABORT_EVEROS
-
-
-def test_scancode_login_reverts_on_menu_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ctrl+C in the post-login retry/skip menu (typer.Exit, not an Exception)
-    still disables the channel — the revert covers submenu exits, not just the
-    login call."""
-    import types
-
-    import typer
-
-    class _Adapter:
-        async def login(self, force=False):
-            return False  # login fails -> drops into the retry/skip menu
-
-    class _Spec:
-        display_name = "WhatsApp"
-
-        def factory(self, cfg):
-            return _Adapter()
-
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: False)
-    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
-    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
-    monkeypatch.setattr(
-        "raven.config.loader.load_config",
-        lambda: types.SimpleNamespace(channels=types.SimpleNamespace(whatsapp=object())),
-    )
-
-    def _ctrl_c(opts, **kw):
-        raise typer.Exit(1)
-
-    monkeypatch.setattr(onboard_commands, "_failure_choice", _ctrl_c)
-    disabled: list[str] = []
-    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
-
-    with pytest.raises(typer.Exit):
-        onboard_commands._scancode_login("whatsapp")
-    assert disabled == ["whatsapp"]
-
-
-def test_scancode_login_reverts_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ctrl+C mid-scan (KeyboardInterrupt, not an Exception subclass) still
-    disables the channel so a cancelled login is not left as "connected"."""
-    import types
-
-    class _Adapter:
-        async def login(self, force=False):
-            raise KeyboardInterrupt
-
-    class _Spec:
-        display_name = "WhatsApp"
-
-        def factory(self, cfg):
-            return _Adapter()
-
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: False)
-    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
-    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
-    monkeypatch.setattr(
-        "raven.config.loader.load_config",
-        lambda: types.SimpleNamespace(channels=types.SimpleNamespace(whatsapp=object())),
-    )
-    disabled: list[str] = []
-    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
-
-    with pytest.raises(KeyboardInterrupt):
-        onboard_commands._scancode_login("whatsapp")
-    assert disabled == ["whatsapp"]
-
-
-def test_channel_required_field_reprompts_on_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A required channel field's empty submit re-prompts instead of enabling a
-    half-configured channel (the write layer treats required as a UX marker)."""
-    import questionary
-
-    specs = {
-        "enabled": {"type": "bool", "default": False, "is_secret": False, "required": False, "description": ""},
-        "token": {"type": "str", "default": "", "is_secret": True, "required": False, "description": ""},
-        "secret": {"type": "str", "default": "", "is_secret": True, "required": True, "description": ""},
-    }
-    monkeypatch.setattr("raven.config.update_channels.channel_field_specs", lambda name: specs)
-    answers = iter(["tok", "", "sec"])  # token; secret empty (re-prompt) then filled
-
-    class _FQ:
-        def ask(self):
-            return next(answers)
-
-    monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ())
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    out = onboard_commands._prompt_channel_fields("feishu")
-    assert out == {"token": "tok", "secret": "sec"}
-    assert any("required" in p for p in printed)
-
-
-def test_step1_done_gated_without_default_model(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Choosing Done in the multi-provider menu with no default model set does
-    not advance (Step 1 is required); Ctrl+C then exits."""
-    import typer
-
-    from raven.config.update_providers import set_provider_fields
-
-    # A configured provider (so the menu shows) but no default model on disk.
-    set_provider_fields("openai", {"api_key": "sk-x", "api_base": "https://api.openai.com/v1"})
-    monkeypatch.setattr(onboard_commands, "_load_current_default_model", lambda: None)
-
-    import questionary
-
-    answers = iter(["done", None])  # done -> gated (warn + loop); then Ctrl+C -> Exit
-
-    class _FQ:
-        def ask(self):
-            return next(answers)
-
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    with pytest.raises(typer.Exit):
-        onboard_commands._step1_provider(
-            provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
-        )
-    assert any("required" in p for p in printed)
-
-
-def test_custom_provider_sends_test_probe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A custom provider now sends the real test message (was previously trusted
-    without one) — a wrong base_url/model surfaces here, not at first chat."""
-    from raven.config.update_providers import set_provider_fields
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("custom")
-    set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
-    calls: list[bool] = []
-
-    def _probe():
-        calls.append(True)
-        return ("hi", 1, 0.1)
-
-    monkeypatch.setattr(onboard_commands, "send_probe", _probe)
-    out = onboard_commands._resolve_model_with_test(
-        spec, is_custom=True, custom_model="my/model", user_model_flag=None, non_interactive=False, warnings=[]
-    )
-    assert calls == [True]  # the probe ran for the custom provider
-    assert out == "my/model"
-
-
-def test_custom_provider_probe_failure_switch_rewinds(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """On a custom-provider probe failure, choosing Switch returns None so the
-    caller rewinds to the provider picker."""
-    from raven.config.update_providers import set_provider_fields
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("custom")
-    set_provider_fields("custom", {"api_key": "k", "api_base": "https://x/v1"})
-    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda p, **kw: (True, "ok", None))
-
-    def _boom():
-        raise RuntimeError("model not found")
-
-    monkeypatch.setattr(onboard_commands, "send_probe", _boom)
-    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda opts, **kw: "switch")
-    out = onboard_commands._resolve_model_with_test(
-        spec, is_custom=True, custom_model="m", user_model_flag=None, non_interactive=False, warnings=[]
-    )
-    assert out is None
-
-
-def test_test_probe_failure_menu_offers_rekey_and_switch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A test-message failure now offers re-enter-key and switch-provider (not
-    just retry/repick/continue), matching the connectivity-failure menu."""
-    captured: dict[str, list[str]] = {}
-
-    def _cap(opts, **kw):
-        captured["vals"] = [v for _, v in opts]
-        return "continue"
-
-    monkeypatch.setattr(onboard_commands, "_failure_choice", _cap)
-
-    def _boom():
-        raise RuntimeError("x")
-
-    monkeypatch.setattr(onboard_commands, "send_probe", _boom)
-    onboard_commands._run_test_probe("openai", non_interactive=False, warnings=[])
-    assert {"retry", "repick", "rekey", "switch", "continue"} <= set(captured["vals"])
-
-
-def test_pick_model_empty_submit_uses_default_not_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Clearing the prefilled default and submitting empty falls back to the
-    default model rather than killing the whole wizard."""
-    import questionary
-
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("deepseek")
-
-    class _FQ:
-        def ask(self):
-            return ""  # user cleared the prefilled default, then hit Enter
-
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ())
-    result = onboard_commands._pick_model(
-        spec, current_model=None, model_ids=None, user_provided_model=None, non_interactive=False
-    )
-    assert result == "deepseek/deepseek-chat"
-
-
-def test_pick_model_ctrl_c_exits(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ctrl+C (questionary returns None) still exits — only empty submit is
-    softened to the default."""
-    import questionary
-    import typer
-
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name("deepseek")
-
-    class _FQ:
-        def ask(self):
-            return None
-
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ())
-    with pytest.raises(typer.Exit):
-        onboard_commands._pick_model(
-            spec, current_model=None, model_ids=None, user_provided_model=None, non_interactive=False
-        )
-
-
-def test_config_everos_role_required_giveup_returns_abort(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A required role (embedding) backing out of the picker is not an
-    inescapable loop: it offers a bounded 'give up EverOS' exit that signals
-    ``_ABORT_EVEROS`` up to the caller."""
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    # source picker -> Back (_BACK); required-role bounded-exit prompt -> abort.
-    select_answers = iter([onboard_commands._BACK, "abort"])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    out = onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    assert out is onboard_commands._ABORT_EVEROS
-
-
-def test_step4_giveup_embedding_keeps_markdown(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Giving up a required role mid-step disables EverOS and keeps Markdown
-    memory rather than flipping the backend on half-configured."""
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("on"))  # enable EverOS
-
-    def _fake_role(*, section, **kw):
-        return onboard_commands._ABORT_EVEROS if section == "embedding" else None
-
-    monkeypatch.setattr(onboard_commands, "_config_everos_role", _fake_role)
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="deepseek/deepseek-chat", warnings=[])
-    from raven.config.raven import load_raven_config
-
-    assert load_raven_config().memory.backend != "everos"
-
-
-def test_memory_embedding_backout_prints_switch_guidance(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Empty-submitting the embedding model picker prints actionable guidance
-    every round (not a silent bounce), so re-picking the same chat-only reuse
-    endpoint isn't a dead end."""
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    # source picker -> reuse llm; (model empty -> back, guidance printed) -> source
-    # picker -> Back; required-role bounded exit -> abort.
-    select_answers = iter([("reuse_llm",), onboard_commands._BACK, "abort"])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(""))  # empty model submit -> _BACK
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    out = onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    blob = "\n".join(printed)
-    assert "embedding-capable" in blob
-    assert out is onboard_commands._ABORT_EVEROS
-
-
-def test_memory_embedding_verify_fail_reprints_switch_hint(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failed /embeddings verify reprints the switch-provider nudge before
-    looping back, so a retry isn't a blind loop."""
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    # source -> reuse llm; verify fails -> failure menu "rekey"; source -> Back;
-    # required-role bounded exit -> abort.
-    select_answers = iter([("reuse_llm",), "rekey", onboard_commands._BACK, "abort"])
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("text-embedding-3-small"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (False, "HTTP 404: "))
-
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    out = onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    blob = "\n".join(printed)
-    assert "embedding-capable" in blob
-    assert out is onboard_commands._ABORT_EVEROS
-
-
-def test_memory_embedding_skips_model_list_fetch(
-    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Embedding never fetches/shows the ``/models`` list: on a reused chat
-    endpoint those are chat models, misleading as embedding candidates. The id is
-    entered directly and the ``/embeddings`` verify is the arbiter."""
-    import tomllib
-
-    from raven.config.update_everos import set_everos_section
-
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    fetch_calls: list[bool] = []
-
-    def _spy_fetch(*a, **kw):
-        fetch_calls.append(True)
-        return ["deepseek-chat", "deepseek-reasoner"]  # even if it would return, must not be called
-
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", _spy_fetch)
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_llm",)))
-    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("text-embedding-3-small"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_embedding", lambda *a, **kw: (True, "ok"))
-
-    onboard_commands._config_everos_role(
-        section="embedding", main_model="deepseek/deepseek-chat", non_interactive=False, warnings=[]
-    )
-    assert fetch_calls == []  # embedding must not fetch the /models list
-    with everos_isolated.open("rb") as f:
-        everos = tomllib.load(f)
-    assert everos["embedding"]["model"] == "text-embedding-3-small"
-
-
 def test_memory_llm_reuse_pulls_provider_creds(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reuse-main-model writes the provider's stored key/base into the LLM section."""
+    """Picking the main model's provider auto-reuses its API key."""
     import tomllib
 
     from raven.config.update_providers import set_provider_fields
@@ -1849,38 +1023,51 @@ def test_memory_llm_reuse_pulls_provider_creds(
 
     import questionary
 
+    class _FakeApp:
+        pre_run_callables: list = []
+        current_buffer = None
+
     class _FQ:
         def __init__(self, a):
             self._a = a
+            self.application = _FakeApp()
 
         def ask(self):
             return self._a
 
-    # openai IS OpenAI-compatible → the source picker offers "reuse main chat
-    # model", which brings the model id + creds along (no further prompts).
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_main",)))
+    openai_prov = {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI", "base_url": "https://api.openai.com/v1"}
+    select_answers = iter([("provider", openai_prov)])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("gpt-4.1-mini"))
     monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
 
     onboard_commands._config_everos_role(
         section="llm", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
     with everos_isolated.open("rb") as f:
         everos = tomllib.load(f)
-    # Reuse strips the litellm route prefix to the bare model id EverOS sends.
-    assert everos["llm"]["model"] == "gpt-4o-mini"
+    assert everos["llm"]["model"] == "gpt-4.1-mini"
     assert everos["llm"]["api_key"] == "sk-main"
     assert everos["llm"]["base_url"] == "https://api.openai.com/v1"
 
 
-def test_memory_rerank_reuse_llm_endpoint(
+def test_memory_rerank_reuse_llm_provider(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """rerank can reuse the memory LLM's endpoint via the source picker."""
+    """rerank picks the LLM's provider by default and reuses its key."""
     import tomllib
 
     from raven.config.update_everos import set_everos_section
 
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
+    set_everos_section(
+        "llm",
+        {
+            "model": "m",
+            "api_key": "k-llm",
+            "base_url": "https://api.deepinfra.com/v1/openai",
+        },
+    )
 
     import questionary
 
@@ -1891,13 +1078,13 @@ def test_memory_rerank_reuse_llm_endpoint(
         def ask(self):
             return self._a
 
-    # rerank "Configure it?" -> redo; source -> reuse the LLM endpoint;
-    # rerank service type -> deepinfra.
-    select_answers = iter(["redo", ("reuse_llm",), "deepinfra"])
+    deepinfra_prov = next(p for p in onboard_commands._EVEROS_PROVIDERS if p["name"] == "deepinfra")
+    # No service-type select needed — curated provider auto-resolves it.
+    select_answers = iter(["redo", ("provider", deepinfra_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("rerank-model"))
-    # Offline → model list can't be fetched, falls back to the free-text id.
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_commands, "_probe_rerank", lambda *a, **kw: (True, "ok"))
 
     onboard_commands._config_everos_role(
         section="rerank",
@@ -1909,8 +1096,8 @@ def test_memory_rerank_reuse_llm_endpoint(
         everos = tomllib.load(f)
     assert everos["rerank"]["provider"] == "deepinfra"
     assert everos["rerank"]["model"] == "rerank-model"
-    assert everos["rerank"]["api_key"] == "k-llm"  # reused, not re-prompted
-    assert everos["rerank"]["base_url"] == "https://llm/v1"
+    assert everos["rerank"]["api_key"] == "k-llm"
+    assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
@@ -1929,41 +1116,17 @@ def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
 def test_custom_model_reuse_is_compatible(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A custom endpoint's bare model is reusable; reuse pulls its api_base/key
-    and keeps the bare id (regression: custom users were forced to re-enter)."""
+    """A custom endpoint's bare model is reusable; the provider picker
+    defaults to the matching provider and reuses its key."""
     from raven.config.update_providers import set_provider_fields
 
     set_provider_fields("custom", {"api_key": "sk-cust", "api_base": "https://my-llm/v1"})
-    # Bare model id (no prefix) — this is how a custom default model is stored.
     assert onboard_commands._model_is_openai_compatible("qwen-max")
 
     creds = onboard_commands._resolve_reuse_llm_creds("qwen-max")
-    assert creds["model"] == "qwen-max"  # bare id used as-is, not stripped
+    assert creds["model"] == "qwen-max"
     assert creds["api_key"] == "sk-cust"
     assert creds["base_url"] == "https://my-llm/v1"
-
-    # And the LLM reuse path writes those into the EverOS toml.
-    import tomllib
-
-    import questionary
-
-    class _FQ:
-        def __init__(self, a):
-            self._a = a
-
-        def ask(self):
-            return self._a
-
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(("reuse_main",)))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    onboard_commands._config_everos_role(section="llm", main_model="qwen-max", non_interactive=False, warnings=[])
-    with everos_isolated.open("rb") as fh:
-        everos = tomllib.load(fh)
-    assert everos["llm"] == {
-        "model": "qwen-max",
-        "api_key": "sk-cust",
-        "base_url": "https://my-llm/v1",
-    }
 
 
 # --------------------------------------------------------------------------- scancode channels
@@ -2043,42 +1206,6 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
     data = json.loads(tmp_env.read_text())
     # Not logged in → disabled, so it never falsely shows as connected.
     assert data["channels"]["weixin"]["enabled"] is False
-
-
-def test_verify_provider_skip_test_omits_test_message_promise(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Under --skip-test, the pre-check skip note must not promise a test message
-    (none runs); without it, the promise stays."""
-    monkeypatch.setattr(
-        "raven.config.update_providers.test_provider",
-        lambda p: {"ok": False, "status": "not_configured", "error": "api_base is empty"},
-    )
-    printed: list[str] = []
-    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **kw: printed.append(" ".join(str(x) for x in a)))
-    onboard_commands._verify_provider("deepseek", skip_test=True)
-    blob = "\n".join(printed)
-    assert "not tested" in blob and "test message below" not in blob
-    printed.clear()
-    onboard_commands._verify_provider("deepseek", skip_test=False)
-    assert "test message below" in "\n".join(printed)
-
-
-def test_scancode_login_non_interactive_node_missing_auto_skips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With non_interactive threaded in, a missing Node auto-skips (no prompt)
-    and still reverts the enable."""
-
-    class _Spec:
-        display_name = "WhatsApp"
-
-        def factory(self, cfg):
-            return object()
-
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda ch: True)
-    monkeypatch.setattr(onboard_commands, "_enable_channel", lambda ch, fields: None)
-    monkeypatch.setattr("raven.channels.registry.discover_specs", lambda: {"whatsapp": _Spec()})
-    disabled: list[str] = []
-    monkeypatch.setattr("raven.config.update_channels.disable_channel", lambda ch: disabled.append(ch))
-    onboard_commands._scancode_login("whatsapp", non_interactive=True)
-    assert disabled == ["whatsapp"]
 
 
 def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:

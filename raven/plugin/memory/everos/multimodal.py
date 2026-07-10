@@ -124,7 +124,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             LLMNotConfiguredError,
             get_multimodal_llm_client,
         )
-        from everos.core.errors import MultimodalError
+        from everos.core.errors import MultimodalNotEnabledError, UnsupportedModalityError
         from everos.memory.extract.parser import (
             enrich_content_items,
             require_multimodal,
@@ -137,7 +137,7 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
     try:
         require_multimodal()
         llm = get_multimodal_llm_client()
-    except (MultimodalError, LLMNotConfiguredError) as e:
+    except (MultimodalNotEnabledError, LLMNotConfiguredError) as e:
         raise MultimodalUnavailableError(str(e)) from e
 
     out: list[dict[str, Any]] = []
@@ -158,14 +158,14 @@ async def understand_files(paths: list[str]) -> list[dict[str, Any]]:
             continue
         name = item.get("name") or p
         try:
-            # Parse one at a time so any failure — a deterministic
-            # MultimodalError (unsupported modality / missing system dep),
-            # a native-lib error (e.g. SVG needing libcairo), or anything
-            # unexpected — is isolated to this item and never aborts the
-            # rest of the batch. The broad catch is intentional: this is a
-            # best-effort per-item enrichment, not a place to surface bugs.
+            # Parse one at a time so any failure — an UnsupportedModalityError
+            # (unsupported modality / missing system dep), a native-lib error
+            # (e.g. SVG needing libcairo), or anything unexpected — is isolated
+            # to this item and never aborts the rest of the batch. The broad
+            # catch is intentional: this is a best-effort per-item enrichment,
+            # not a place to surface bugs.
             await enrich_content_items([item], llm=llm)
-        except MultimodalError as e:
+        except UnsupportedModalityError as e:
             out.append({"path": p, "name": name, "error": str(e)})
             continue
         except Exception as e:  # noqa: BLE001 — per-item isolation is the contract

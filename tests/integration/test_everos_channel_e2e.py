@@ -67,7 +67,7 @@ def _runtime_ready() -> bool:
 
 def _run_agent(message: str, session: str, root: Path) -> str:
     """Send one message through the real agent CLI (mock channel)."""
-    env = {**os.environ, "EVEROS_MEMORY__ROOT": str(root)}
+    env = {**os.environ, "EVEROS_ROOT": str(root)}
     proc = subprocess.run(
         [str(_RAVEN), "agent", "-m", message, "-s", session, "--wait-skill-extract", "--no-markdown", "--logs"],
         env=env,
@@ -82,7 +82,7 @@ def test_channel_e2e_writes_memory_markdown(tmp_path: Path) -> None:
     if not _RAVEN.exists():
         pytest.skip(f"raven CLI not found at {_RAVEN}")
     if not _runtime_ready():
-        pytest.skip("everos runtime not configured (see ~/.everos/config.toml)")
+        pytest.skip("everos runtime not configured (see ~/.everos/everos.toml)")
 
     root = tmp_path / "everos_root"
     root.mkdir()
