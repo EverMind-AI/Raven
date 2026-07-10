@@ -31,8 +31,18 @@ from raven.utils.helpers import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
 # (timestamps, internal ids, manifest annotations) is dropped before
-# the dict reaches the LLM.
-_ALLOWED_KEYS = {"role", "content", "tool_calls", "tool_call_id", "name"}
+# the dict reaches the LLM. reasoning_content / thinking_blocks must survive
+# so multi-turn reasoning contracts (e.g. DeepSeek thinking mode) hold; the
+# provider gate strips thinking_blocks for non-Anthropic targets downstream.
+_ALLOWED_KEYS = {
+    "role",
+    "content",
+    "tool_calls",
+    "tool_call_id",
+    "name",
+    "reasoning_content",
+    "thinking_blocks",
+}
 
 
 @dataclass

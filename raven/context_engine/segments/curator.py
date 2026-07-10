@@ -293,7 +293,7 @@ Rules:
 
     @staticmethod
     def _history_from_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        allowed = {"role", "content", "tool_calls", "tool_call_id", "name"}
+        allowed = {"role", "content", "tool_calls", "tool_call_id", "name", "reasoning_content", "thinking_blocks"}
         out: list[dict[str, Any]] = []
         for message in messages:
             entry = {k: v for k, v in message.items() if k in allowed}
