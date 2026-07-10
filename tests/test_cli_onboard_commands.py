@@ -187,7 +187,7 @@ def test_onboard_non_interactive_minimum_flags(tmp_env: Path, stub_verify, stub_
 
     data = json.loads(tmp_env.read_text())
     assert data["providers"]["openai"]["apiKey"] == "sk-fake-test-key"
-    assert data["agents"]["defaults"]["model"] == "openai/gpt-4o-mini"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
 
 
 def test_onboard_non_interactive_skips_optional_steps(
@@ -473,7 +473,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
 
     data = json.loads(tmp_env.read_text())
     assert data["providers"]["anthropic"]["apiKey"] == "sk-int-test"
-    assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
+    assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-5"
 
 
 # --------------------------------------------------------------------------- unit-level
@@ -559,7 +559,7 @@ def test_step1_falls_back_to_spec_default_in_non_interactive(tmp_env: Path, stub
     )
     assert r.exit_code == 0, r.stdout
     data = json.loads(tmp_env.read_text())
-    assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
+    assert data["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-5"
 
 
 def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_step3) -> None:
@@ -1376,7 +1376,7 @@ def test_first_screen_back_does_not_skip_step1(
     # so the gate would NOT re-trigger (no infinite loop).
     data = json.loads(tmp_env.read_text())
     assert data["providers"]["openai"]["apiKey"] == "sk-back-test"
-    assert data["agents"]["defaults"]["model"] == "openai/gpt-4o-mini"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
     assert onboard_commands._is_config_populated() is True
 
 
@@ -1420,7 +1420,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     data = json.loads(tmp_env.read_text())
     # Switched to openai; its key written, default model is openai's.
     assert data["providers"]["openai"]["apiKey"] == "sk-openai"
-    assert data["agents"]["defaults"]["model"] == "openai/gpt-4o-mini"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
 
 
 def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3) -> None:
