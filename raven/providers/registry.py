@@ -189,7 +189,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         supports_prompt_caching=True,
-        default_model="anthropic/claude-sonnet-4-5",
+        default_model="anthropic/claude-sonnet-5",
     ),
     # OpenAI: LiteLLM recognizes "gpt-*" natively, no prefix needed.
     ProviderSpec(
@@ -207,7 +207,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        default_model="openai/gpt-4o-mini",
+        default_model="openai/gpt-5.5",
     ),
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(
@@ -263,7 +263,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        default_model="deepseek/deepseek-chat",
+        default_model="deepseek/deepseek-v4-flash",
     ),
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
@@ -301,6 +301,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        default_model="zai/glm-4.6",
     ),
     # DashScope: Qwen models, needs "dashscope/" prefix.
     ProviderSpec(
@@ -318,6 +319,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        default_model="dashscope/qwen-plus",
     ),
     # Moonshot: Kimi models, needs "moonshot/" prefix.
     # LiteLLM requires MOONSHOT_API_BASE env var to find the endpoint.
@@ -410,6 +412,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        default_model="groq/openai/gpt-oss-120b",
     ),
 )
 

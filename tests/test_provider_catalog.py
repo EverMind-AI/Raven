@@ -6,8 +6,11 @@ concrete backend class trips a test instead of silently drifting.
 
 from __future__ import annotations
 
+import pytest
+
 from raven.providers.base import LLMProvider
-from raven.providers.registry import PROVIDERS
+from raven.providers.common_models import common_models_for
+from raven.providers.registry import PROVIDERS, find_by_name
 
 # The Confluence "Providers" page claims 19 providers. This pins the current
 # registry so any drift (add/remove a ProviderSpec) is caught here.
@@ -46,6 +49,27 @@ def test_registry_provider_name_set_is_pinned() -> None:
 def test_provider_names_are_unique() -> None:
     names = [spec.name for spec in PROVIDERS]
     assert len(names) == len(set(names))
+
+
+# Direct providers seeded in the model picker (issue #100). Each must expose a
+# non-empty default_model drawn from its curated shortlist, so the onboarding
+# fallback and the picker stay in sync and no provider defaults to empty.
+_SEEDED_DIRECT_PROVIDERS = [
+    "deepseek",
+    "openai",
+    "anthropic",
+    "gemini",
+    "zhipu",
+    "dashscope",
+    "groq",
+]
+
+
+@pytest.mark.parametrize("slug", _SEEDED_DIRECT_PROVIDERS)
+def test_seeded_provider_default_model_in_shortlist(slug: str) -> None:
+    default = find_by_name(slug).default_model
+    assert default, f"{slug} has no default_model"
+    assert default in common_models_for(slug)
 
 
 def _concrete_provider_subclasses() -> set[type]:
