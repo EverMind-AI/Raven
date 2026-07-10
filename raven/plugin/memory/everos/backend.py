@@ -269,7 +269,7 @@ async def _migrate_lancedb_schemas(
         if not missing:
             continue
         fields = [pa.field(col, pa.utf8(), nullable=True) for col in sorted(missing)]
-        table.add_columns(pa.schema(fields))
+        await table.add_columns(pa.schema(fields))
         log.info(
             "EverosBackend: migrated LanceDB table %r — added columns %s",
             schema.TABLE_NAME,

@@ -632,7 +632,7 @@ class TestMigrateLancedbSchemas:
             async def schema(self):
                 return arrow
 
-            def add_columns(self, new_schema):
+            async def add_columns(self, new_schema):
                 added.append(new_schema)
 
         return _T(), added

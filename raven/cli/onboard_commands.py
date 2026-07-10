@@ -2399,18 +2399,18 @@ def _probe_embedding_dim(url: str, headers: dict, model: str) -> int | str:
             items = resp.json().get("data", [])
             if not items:
                 return "empty response"
-            return len(items[0].get("embedding", []))
-        except (httpx.HTTPError, ValueError) as exc:
+            first = items[0]
+            if not isinstance(first, dict):
+                return "unexpected response format"
+            return len(first.get("embedding", []))
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
             return str(exc)
 
     result = _try_embed({"model": model, "input": ["dimension check"], "dimensions": _REQUIRED_EMBEDDING_DIM})
     if result == _REQUIRED_EMBEDDING_DIM:
         return result
 
-    native = _try_embed({"model": model, "input": ["dimension check"]})
-    if isinstance(native, int):
-        return native
-    return native
+    return _try_embed({"model": model, "input": ["dimension check"]})
 
 
 def _verify_embedding_dim(
@@ -2671,7 +2671,7 @@ def _fetch_openai_models(
         if resp.status_code != 200:
             return None
         data = resp.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
