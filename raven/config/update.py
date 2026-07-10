@@ -330,7 +330,7 @@ def set_memory_backend(
 
     ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
     memory (falls back to the native Markdown store). The onboarding wizard's
-    memory step writes the model sections to ``~/.everos/raven/config.toml``
+    memory step writes the model sections to ``~/.everos/raven/everos.toml``
     and flips this flag here.
     """
     path = config_path or get_config_path()

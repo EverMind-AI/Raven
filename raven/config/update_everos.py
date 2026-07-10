@@ -1,4 +1,4 @@
-"""Atomic operations for EverOS memory settings (``~/.everos/raven/config.toml``).
+"""Atomic operations for EverOS memory settings (``~/.everos/raven/everos.toml``).
 
 This module is the ONLY write path for the EverOS memory-model sections
 (llm / embedding / rerank / multimodal). The onboard wizard's memory step
@@ -11,24 +11,33 @@ Only the four model sections are writable; other sections EverOS ships
 
 EverOS home: raven scopes EverOS under ``~/.everos/raven`` (not the bare
 ``~/.everos`` EverOS defaults to) so raven's instance keeps its config + data
-in one place, isolated from any other EverOS consumer. :func:`configure_everos_env`
-points EverOS there via ``EVEROS_CONFIG_FILE`` + ``EVEROS_MEMORY__ROOT``.
+in one place, isolated from any other EverOS consumer.
+
+Boot sequence (called by ``make_backend`` / ``make_understand_media_tool``):
+
+1. :func:`configure_everos_env` — ``EVEROS_ROOT`` → ``~/.everos/raven``
+2. :func:`ensure_everos_home` — create ``everos.toml`` + ``ome.toml`` from
+   shipped templates (skip if exists) + migrate legacy ``config.toml``
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import tomli_w
 
+logger = logging.getLogger(__name__)
+
 # raven's EverOS home. Both the user-level config toml and the data root
 # (sqlite / lancedb / .index / ome.db) live under here. EverOS itself defaults
 # to a bare ``~/.everos``; ``configure_everos_env`` redirects it.
 _EVEROS_BASE = Path("~/.everos/raven")
-_EVEROS_CONFIG = _EVEROS_BASE / "config.toml"
+_EVEROS_CONFIG = _EVEROS_BASE / "everos.toml"
 
 WRITABLE_SECTIONS = ("llm", "embedding", "rerank", "multimodal")
 
@@ -41,19 +50,63 @@ def get_everos_config_path() -> Path:
 def configure_everos_env() -> None:
     """Point embedded EverOS at raven's ``~/.everos/raven`` home.
 
-    Sets two env vars EverOS reads at settings-load time:
-      - ``EVEROS_CONFIG_FILE`` → the user-level toml raven manages;
-      - ``EVEROS_MEMORY__ROOT`` → the data root (overrides ``[memory].root``;
-        EverOS derives sqlite / lancedb / .index / ome.db paths from it).
+    Sets ``EVEROS_ROOT`` so EverOS resolves both its config file
+    (``<root>/everos.toml``) and data directories (sqlite / lancedb /
+    .index / ome.toml) under raven's scoped home.
 
-    Uses ``setdefault`` so an explicit operator override (a pre-set ``EVEROS_*``
-    env) still wins. Must run BEFORE EverOS's ``load_settings()`` — which is
-    ``@cache``-d — first executes; the everos backend factory / tool factory
-    call this as the earliest raven-controlled EverOS entry points.
+    Uses ``setdefault`` so an explicit operator override (a pre-set
+    ``EVEROS_ROOT``) still wins. Must run BEFORE EverOS's
+    ``load_settings()`` — which is ``@cache``-d — first executes.
     """
     base = _EVEROS_BASE.expanduser()
-    os.environ.setdefault("EVEROS_CONFIG_FILE", str(base / "config.toml"))
-    os.environ.setdefault("EVEROS_MEMORY__ROOT", str(base))
+    os.environ.setdefault("EVEROS_ROOT", str(base))
+
+
+def ensure_everos_home() -> None:
+    """Ensure the EverOS home directory has the required config files.
+
+    Three steps, all idempotent:
+
+    1. **Migrate** legacy ``config.toml`` → ``everos.toml`` (everos >=1.1
+       renamed the config file). Existing content is preserved.
+    2. **Create** ``everos.toml`` from the shipped template if absent.
+       Users who already ran ``raven onboard`` have this file; new
+       installs get the template with empty API keys (onboard fills
+       them later).
+    3. **Create** ``ome.toml`` from the shipped template if absent.
+       Without this file the OME engine's ``ConfigReloader`` raises
+       ``FileNotFoundError`` and the memory backend silently degrades.
+    """
+    base = _EVEROS_BASE.expanduser()
+    base.mkdir(parents=True, exist_ok=True)
+
+    everos_toml = base / "everos.toml"
+    ome_toml = base / "ome.toml"
+
+    # Step 1: migrate legacy config.toml → everos.toml (preserves content).
+    old_cfg = base / "config.toml"
+    if old_cfg.is_file() and not everos_toml.exists():
+        old_cfg.rename(everos_toml)
+        logger.info("migrated %s → %s", old_cfg, everos_toml)
+
+    # Steps 2-3: copy shipped templates for any missing config file.
+    try:
+        # Deferred: everos may not be installed.
+        from everos.entrypoints.cli.commands.init_cmd import (
+            _EVEROS_TEMPLATE,
+            _OME_TEMPLATE,
+        )
+    except ImportError:
+        return
+
+    for target, template in [
+        (everos_toml, _EVEROS_TEMPLATE),
+        (ome_toml, _OME_TEMPLATE),
+    ]:
+        if target.exists():
+            continue
+        shutil.copy2(template, target)
+        logger.info("created %s from template", target)
 
 
 def load_everos_config() -> dict[str, Any]:

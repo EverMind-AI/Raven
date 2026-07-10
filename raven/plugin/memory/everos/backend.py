@@ -229,6 +229,56 @@ _embedded_lifespan_cm: Any = None
 _embedded_lifespan_refs: int = 0
 
 
+async def _migrate_lancedb_schemas(
+    log: logging.Logger,
+    *,
+    _schemas: Any = None,
+    _get_connection: Any = None,
+    _get_table: Any = None,
+) -> bool:
+    """Add missing columns to existing LanceDB tables for forward compatibility.
+
+    Returns True if at least one column was added (caller should retry
+    the lifespan), False when nothing needed migration.
+
+    The underscore-prefixed kwargs exist solely for test injection;
+    production callers never pass them.
+    """
+    # Deferred: optional dependency — everos may not be installed.
+    import pyarrow as pa
+
+    if _schemas is None:
+        from everos.infra.persistence.lancedb import (
+            _BUSINESS_SCHEMAS,
+            get_connection,
+            get_table,
+        )
+
+        _schemas = _BUSINESS_SCHEMAS
+        _get_connection = get_connection
+        _get_table = get_table
+
+    migrated = False
+    await _get_connection()
+    for schema in _schemas:
+        table = await _get_table(schema.TABLE_NAME, schema)
+        arrow_schema = await table.schema()
+        actual = set(arrow_schema.names)
+        expected = set(schema.model_fields.keys())
+        missing = expected - actual
+        if not missing:
+            continue
+        fields = [pa.field(col, pa.utf8(), nullable=True) for col in sorted(missing)]
+        await table.add_columns(pa.schema(fields))
+        log.info(
+            "EverosBackend: migrated LanceDB table %r — added columns %s",
+            schema.TABLE_NAME,
+            sorted(missing),
+        )
+        migrated = True
+    return migrated
+
+
 async def _acquire_embedded_everos(log: logging.Logger) -> None:
     """Enter the shared everos app lifespan (idempotent + refcounted)."""
     global _embedded_lifespan_cm, _embedded_lifespan_refs
@@ -244,6 +294,29 @@ async def _acquire_embedded_everos(log: logging.Logger) -> None:
         _embedded_lifespan_cm = cm
         log.info("EverosBackend: embedded everos runtime started")
     except Exception as e:
+        # Deferred: optional dependency — everos may not be installed.
+        schema_mismatch_cls: type | None = None
+        try:
+            from everos.infra.persistence.lancedb import LanceDBSchemaMismatchError
+
+            schema_mismatch_cls = LanceDBSchemaMismatchError
+        except ImportError:
+            pass
+        if schema_mismatch_cls is not None and isinstance(e, schema_mismatch_cls):
+            log.warning("EverosBackend: LanceDB schema drift detected, attempting auto-migration …")
+            try:
+                if await _migrate_lancedb_schemas(log):
+                    app = create_app()
+                    cm = app.router.lifespan_context(app)
+                    await cm.__aenter__()
+                    _embedded_lifespan_cm = cm
+                    log.info("EverosBackend: embedded everos runtime started (after schema migration)")
+                    return
+            except Exception as retry_err:
+                log.warning(
+                    "EverosBackend: auto-migration failed (%s); falling back to degraded mode.",
+                    retry_err,
+                )
         log.warning(
             "EverosBackend: embedded everos init failed (%s); store / recall will degrade until it is available.",
             e,
@@ -754,11 +827,10 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
     after manifest activation. Sync construction only — async setup
     happens in ``EverosBackend.start()``."""
-    # Redirect EverOS to raven's ~/.everos/raven home BEFORE EverosBackend's
-    # constructor lazy-imports everos and calls its @cache-d load_settings().
-    from raven.config.update_everos import configure_everos_env
+    from raven.config.update_everos import configure_everos_env, ensure_everos_home
 
     configure_everos_env()
+    ensure_everos_home()
     return EverosBackend(ctx)
 
 
