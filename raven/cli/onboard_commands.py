@@ -2243,54 +2243,26 @@ def _probe_everos_chat(model: Optional[str], *, api_key: Optional[str], base_url
     return False, "endpoint returned no completion"
 
 
-def _probe_everos_embedding(
-    model: Optional[str], *, api_key: Optional[str], base_url: Optional[str]
-) -> tuple[bool, str]:
-    """Real capability probe for an embedding endpoint: ``POST
-    {base_url}/embeddings`` once and confirm a vector comes back. Catches
-    endpoints that answer ``GET /models`` but can't actually embed (e.g. a
-    chat-only provider). Provider-agnostic; never raises."""
-    import httpx
-
-    if not base_url:
-        return False, "no base_url configured"
-    url = base_url.rstrip("/") + ("/embeddings" if "/v1" in base_url else "/v1/embeddings")
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    try:
-        with httpx.Client(timeout=15) as client:
-            resp = client.post(url, headers=headers, json={"model": model, "input": "ping"})
-        if resp.status_code != 200:
-            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
-        data = resp.json()
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
-        return False, f"probe failed: {exc}"
-    items = data.get("data") if isinstance(data, dict) else None
-    if isinstance(items, list) and items and isinstance(items[0], dict) and "embedding" in items[0]:
-        return True, "ok"
-    return False, "endpoint returned no embedding vector"
-
-
 def _verify_everos_model(
     label: str,
     *,
-    section: str,
+    section: str = "llm",
     model: Optional[str],
     api_key: Optional[str],
     base_url: Optional[str],
     non_interactive: bool,
     warnings: list[str],
     continue_hint: Optional[tuple[str, str]] = None,
+    rerank_provider: Optional[str] = None,
 ) -> bool:
-    """Probe one EverOS model endpoint, offering retry/continue on failure.
+    """Probe an EverOS model endpoint, offering retry/continue on failure.
 
-    Returns ``True`` if the caller should keep the just-written config, or
-    ``False`` to re-prompt (the "Re-enter" branch). Failures that the user
-    chooses to ignore are recorded in ``warnings`` for the screen-5 summary.
-    ``continue_hint`` (en, zh) spells out the consequence of continuing anyway.
+    LLM: real POST /chat/completions. Rerank: provider-specific probe.
+    Embedding is verified separately via _verify_embedding_dim.
     """
     console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
-    if section == "embedding":
-        ok, detail = _probe_everos_embedding(model, api_key=api_key, base_url=base_url)
+    if section == "rerank":
+        ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_provider=rerank_provider)
     else:
         ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
     if ok:
@@ -2319,42 +2291,240 @@ def _verify_everos_model(
     return True
 
 
+def _probe_rerank(
+    model: Optional[str],
+    *,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    rerank_provider: Optional[str],
+) -> tuple[bool, str]:
+    """Real capability probe for a rerank endpoint. Dispatches by provider
+    protocol (vllm / deepinfra / dashscope). Never raises."""
+    import httpx
+
+    if not base_url or not model:
+        return False, "no base_url or model configured"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers["Content-Type"] = "application/json"
+
+    try:
+        if rerank_provider == "deepinfra":
+            url = f"{base_url.rstrip('/')}/{model}"
+            body: dict = {"queries": ["ping"], "documents": ["pong"]}
+        elif rerank_provider == "dashscope":
+            url = f"{base_url.rstrip('/')}/api/v1/services/rerank/text-rerank/text-rerank"
+            body = {
+                "model": model,
+                "input": {"query": "ping", "documents": ["pong"]},
+                "parameters": {"return_documents": False, "top_n": 1},
+            }
+        else:  # vllm / OpenAI-compat
+            url = f"{base_url.rstrip('/')}/rerank"
+            body = {"model": model, "query": "ping", "documents": ["pong"]}
+
+        with httpx.Client(timeout=15) as client:
+            resp = client.post(url, json=body, headers=headers)
+        if resp.status_code != 200:
+            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+        data = resp.json()
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        return False, f"probe failed: {exc}"
+
+    if rerank_provider == "deepinfra":
+        scores = data.get("scores")
+        if isinstance(scores, list) and scores:
+            return True, "ok"
+        return False, "endpoint returned no scores"
+    if rerank_provider == "dashscope":
+        output = data.get("output")
+        results = output.get("results") if isinstance(output, dict) else None
+        if isinstance(results, list) and results:
+            return True, "ok"
+        return False, "endpoint returned no results"
+    # vllm
+    results = data.get("results")
+    if isinstance(results, list) and results:
+        return True, "ok"
+    return False, "endpoint returned no results"
+
+
+_REQUIRED_EMBEDDING_DIM = 1024
+
+
+def _probe_embedding_dim(url: str, headers: dict, model: str) -> int | str:
+    """Try embedding with ``dimensions=1024``; fall back to native dim.
+
+    Returns the effective dimension (int) on success, or an error
+    description (str) on failure.
+    """
+    import httpx
+
+    def _try_embed(body: dict) -> int | str:
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.post(url, json=body, headers=headers)
+            if resp.status_code != 200:
+                return f"HTTP {resp.status_code}"
+            items = resp.json().get("data", [])
+            if not items:
+                return "empty response"
+            return len(items[0].get("embedding", []))
+        except (httpx.HTTPError, ValueError) as exc:
+            return str(exc)
+
+    result = _try_embed({"model": model, "input": ["dimension check"], "dimensions": _REQUIRED_EMBEDDING_DIM})
+    if result == _REQUIRED_EMBEDDING_DIM:
+        return result
+
+    native = _try_embed({"model": model, "input": ["dimension check"]})
+    if isinstance(native, int):
+        return native
+    return native
+
+
+def _verify_embedding_dim(
+    *,
+    model: Optional[str],
+    api_key: Optional[str],
+    base_url: Optional[str],
+    non_interactive: bool,
+) -> bool:
+    """Send a test embedding request and verify the vector dimension is 1024.
+
+    Returns True to proceed, False to re-prompt.
+    """
+    if not base_url or not model:
+        return True
+
+    url = base_url.rstrip("/") + "/embeddings"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    while True:
+        console.print(
+            _t(
+                "  [dim]⏳ Checking embedding dimension…[/dim]",
+                "  [dim]⏳ 正在检测 embedding 维度…[/dim]",
+            )
+        )
+        result = _probe_embedding_dim(url, headers, model)
+
+        if result == _REQUIRED_EMBEDDING_DIM:
+            console.print(
+                _t(
+                    f"  [green]✓ Supports {result}-dim.[/green]",
+                    f"  [green]✓ 支持 {result} 维。[/green]",
+                )
+            )
+            return True
+
+        if isinstance(result, int) and result < _REQUIRED_EMBEDDING_DIM:
+            console.print(
+                _t(
+                    f"  [red]✗ Dimension too small: model outputs {result}-dim, "
+                    f"EverOS requires >= {_REQUIRED_EMBEDDING_DIM}. Please pick another model.[/red]",
+                    f"  [red]✗ 维度不足：模型输出 {result} 维，"
+                    f"EverOS 要求 >= {_REQUIRED_EMBEDDING_DIM} 维，请重新选择。[/red]",
+                )
+            )
+            return False
+
+        if isinstance(result, int) and result > _REQUIRED_EMBEDDING_DIM:
+            console.print(
+                _t(
+                    f"  [red]✗ Model outputs {result}-dim and does not support the "
+                    f"dimensions parameter to truncate to {_REQUIRED_EMBEDDING_DIM}. "
+                    "Please pick another model.[/red]",
+                    f"  [red]✗ 模型输出 {result} 维，且不支持 dimensions 参数"
+                    f"截断到 {_REQUIRED_EMBEDDING_DIM} 维，请重新选择。[/red]",
+                )
+            )
+            return False
+
+        console.print(
+            _t(
+                f"  [yellow]✗ Couldn't verify dimension: {result}[/yellow]",
+                f"  [yellow]✗ 无法验证维度：{result}[/yellow]",
+            )
+        )
+        if non_interactive:
+            return False
+        choice = _failure_choice(
+            [
+                (_t("Retry", "重试"), "retry"),
+                (_t("Re-enter", "重新选择"), "rekey"),
+            ],
+            non_interactive=False,
+        )
+        if choice == "rekey":
+            return False
+
+
 # Curated OpenAI-compatible endpoints for EverOS memory models. Picking one
 # pre-fills its base_url (mirrors the main provider step); everything else is
 # reachable via "reuse an existing endpoint" or "custom" (type a base_url).
 # These are the providers' documented OpenAI-compatible /v1 endpoints.
-_EVEROS_PROVIDERS: list[dict[str, str]] = [
+_EVEROS_PROVIDERS: list[dict[str, Any]] = [
     {
         "name": "openai",
         "label": "OpenAI",
         "label_zh": "OpenAI",
         "base_url": "https://api.openai.com/v1",
+        "supports": {"llm", "embedding", "multimodal"},
     },
     {
         "name": "openrouter",
         "label": "OpenRouter",
         "label_zh": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
+        "supports": {"llm", "embedding", "rerank", "multimodal"},
+        "rerank_provider": "vllm",
     },
     {
         "name": "deepseek",
         "label": "DeepSeek",
         "label_zh": "DeepSeek",
         "base_url": "https://api.deepseek.com/v1",
+        "supports": {"llm"},
+    },
+    {
+        "name": "deepinfra",
+        "label": "DeepInfra",
+        "label_zh": "DeepInfra",
+        "base_url": "https://api.deepinfra.com/v1/openai",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "deepinfra",
+        "rerank_base_url": "https://api.deepinfra.com/v1/inference",
     },
     {
         "name": "siliconflow",
         "label": "SiliconFlow",
         "label_zh": "硅基流动 SiliconFlow",
         "base_url": "https://api.siliconflow.cn/v1",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "vllm",
     },
     {
         "name": "dashscope",
         "label": "DashScope (Alibaba)",
         "label_zh": "阿里百炼 DashScope",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "supports": {"llm", "embedding", "rerank"},
+        "rerank_provider": "dashscope",
+        "rerank_base_url": "https://dashscope.aliyuncs.com",
     },
 ]
+
+
+def _match_provider_by_url(base_url: Optional[str]) -> Optional[str]:
+    """Reverse-lookup a curated provider name from its base_url."""
+    if not base_url:
+        return None
+    normalized = base_url.rstrip("/")
+    for prov in _EVEROS_PROVIDERS:
+        if prov["base_url"].rstrip("/") == normalized:
+            return prov["name"]
+    return None
+
 
 # Per-role config: menu/verify label, model-id example, whether optional, and
 # whether to run a connectivity probe after configuring (rerank/multimodal use
@@ -2366,41 +2536,45 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": False,
         "verify": True,
         "purpose": (
-            "reads each conversation to judge what matters and extract the key points\n"
-            " ([bold]gpt-4.1-mini[/bold] or stronger recommended; weaker models may degrade quality)",
-            "从对话中判断信息边界、抽取要点\n"
-            " （推荐 [bold]gpt-4.1-mini[/bold] 或更强的模型，更弱的模型可能导致提取质量下降）",
+            "reads each conversation to judge what matters and extract the key points",
+            "从对话中判断信息边界、抽取要点",
+        ),
+        "recommendation": (
+            "Recommended: [bold]gpt-4.1-mini[/bold] or stronger; weaker models may degrade quality",
+            "推荐 [bold]gpt-4.1-mini[/bold] 或更强的模型，更弱的模型可能导致提取质量下降",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
     "embedding": {
         "label": ("Memory embedding", "记忆 embedding"),
-        "example": "text-embedding-3-small",
+        "example": "Qwen/Qwen3-Embedding-4B",
         "optional": False,
         "verify": True,
         "purpose": (
             "turns text into vectors so memories are stored and retrieved by meaning, not just keywords",
             "把文字转成向量,存入记忆库并在检索时按「意思」匹配,而不只是关键词",
         ),
-        "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
-        "hint": (
-            "Needs an embedding-capable provider — can differ from your memory LLM. "
-            "Known-good: OpenAI (text-embedding-3-small), SiliconFlow, DashScope. "
-            "A chat-only endpoint (e.g. DeepSeek) won't serve embeddings.",
-            "需要支持 embedding 的服务商 —— 可与记忆 LLM 不同。已知可用:OpenAI"
-            "(text-embedding-3-small)、SiliconFlow、DashScope。纯对话端点(如 DeepSeek)不提供 embedding。",
+        "recommendation": (
+            "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold]; must be [bold yellow]1024-dim[/bold yellow] and support Chinese + English",
+            "推荐 [bold]Qwen/Qwen3-Embedding-4B[/bold]，需 [bold yellow]1024 维[/bold yellow]且支持中英文的模型",
         ),
+        "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
-        "example": "BAAI/bge-reranker-v2-m3",
+        "example": "Qwen/Qwen3-Reranker-4B",
         "optional": True,
-        "verify": False,
+        "verify": True,
         "purpose": (
             "re-ranks the candidates from semantic search so the best match comes first (slightly slower); "
             "memory works fine without it, just with slightly weaker ordering",
             "在语义召回一批候选后再精排一遍,让结果更准,会略增延迟;不配也能正常用记忆,只是排序略逊",
         ),
+        "recommendation": (
+            "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+            "推荐 [bold]Qwen/Qwen3-Reranker-4B[/bold]",
+        ),
+        "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
             "Skipped reranking; memory retrieval still works.",
             "已跳过 rerank,记忆检索仍可用。",
@@ -2412,9 +2586,10 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": False,
         "purpose": (
-            "lets Raven store and recall images / PDFs / audio as memory — only needed if you actually want "
-            "multimodal content remembered, not merely because such files exist",
-            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索;仅当你确有把多模态内容纳入记忆的需求时才配,有这类文件并不等于需要",
+            "lets Raven store and recall images / PDFs / audio as memory\n"
+            "  only needed if you want multimodal content remembered, not merely because such files exist",
+            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索\n"
+            "  仅当你确有把多模态内容纳入记忆的需求时才配,有这类文件并不等于需要",
         ),
         "skip_note": (
             "Skipped; everything else is unaffected — configure it later if you come to need multimodal memory.",
@@ -2424,22 +2599,48 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
 }
 
 
-def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Optional[list[str]]:
-    """GET ``{base_url}/models`` → sorted model-id list, or ``None`` when the
-    endpoint is unreachable / unauthorized / returns nothing. Never raises."""
-    import httpx
+_EMBEDDING_MODEL_PATTERNS = ("embed", "bge", "e5-", "gte-")
 
+
+def _fetch_everos_models(
+    base_url: Optional[str],
+    api_key: Optional[str],
+    *,
+    section: str = "llm",
+    provider_name: Optional[str] = None,
+) -> Optional[list[str]]:
+    """Fetch available model ids from a provider endpoint. Never raises.
+
+    For ``section="embedding"``, delegates to per-provider logic because
+    each provider exposes embedding models differently.
+    """
     if not base_url:
         return None
-    url = base_url.rstrip("/") + ("/models" if "/v1" in base_url else "/v1/models")
+    if section == "embedding":
+        return _fetch_embedding_models(base_url, api_key, provider_name)
+    if section == "rerank":
+        return _fetch_rerank_models(base_url, api_key, provider_name)
+    return _fetch_openai_models(base_url, api_key)
+
+
+def _fetch_openai_models(
+    base_url: str,
+    api_key: Optional[str],
+    *,
+    params: Optional[dict[str, str]] = None,
+) -> Optional[list[str]]:
+    """``GET {base_url}/models`` with OpenAI-style response parsing."""
+    import httpx
+
+    url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         with httpx.Client(timeout=10) as client:
-            resp = client.get(url, headers=headers)
+            resp = client.get(url, headers=headers, params=params)
         if resp.status_code != 200:
             return None
         data = resp.json()
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+    except (httpx.HTTPError, ValueError):
         return None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
@@ -2448,47 +2649,114 @@ def _fetch_everos_models(base_url: Optional[str], api_key: Optional[str]) -> Opt
     return sorted(ids) or None
 
 
-def _print_embedding_switch_hint() -> None:
-    """Nudge shown whenever the embedding step bounces back to the source picker
-    (empty model submit or a failed ``/embeddings`` verify): the current endpoint
-    likely can't embed, so switch provider or give up EverOS via Back."""
-    console.print(
-        _t(
-            "  [dim]No embedding model here? This endpoint likely doesn't serve embeddings — "
-            "pick an embedding-capable provider (OpenAI / SiliconFlow / DashScope), "
-            "or choose Back to give up EverOS.[/dim]",
-            "  [dim]这里没有可用的 embedding 模型?该端点很可能不提供 embedding —— "
-            "请改选支持 embedding 的服务商(OpenAI / SiliconFlow / DashScope),"
-            "或选「返回」放弃 EverOS。[/dim]",
-        ),
-        highlight=False,
-    )
+def _fetch_embedding_models(
+    base_url: str,
+    api_key: Optional[str],
+    provider_name: Optional[str],
+) -> Optional[list[str]]:
+    """Provider-specific embedding model listing."""
+    import httpx
+
+    if provider_name == "openrouter":
+        return _fetch_openai_models(base_url.rstrip("/") + "/embeddings", api_key)
+
+    if provider_name == "siliconflow":
+        return _fetch_openai_models(base_url, api_key, params={"type": "text", "sub_type": "embedding"})
+
+    if provider_name == "deepinfra":
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.get("https://api.deepinfra.com/models/list", headers=headers)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        items = data if isinstance(data, list) else []
+        ids = [
+            m.get("model_name")
+            for m in items
+            if isinstance(m, dict) and m.get("reported_type") == "embeddings" and m.get("model_name")
+        ]
+        return sorted(ids) or None
+
+    # OpenAI, DashScope, custom — GET /models + name-based filter.
+    ids = _fetch_openai_models(base_url, api_key)
+    if ids is None:
+        return None
+    filtered = [i for i in ids if any(p in i.lower() for p in _EMBEDDING_MODEL_PATTERNS)]
+    return filtered or None
+
+
+def _fetch_rerank_models(
+    base_url: str,
+    api_key: Optional[str],
+    provider_name: Optional[str],
+) -> Optional[list[str]]:
+    """Provider-specific rerank model listing."""
+    import httpx
+
+    if provider_name == "deepinfra":
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.get("https://api.deepinfra.com/models/list", headers=headers)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        items = data if isinstance(data, list) else []
+        # The deepinfra provider hardcodes a Qwen3-Reranker chat template,
+        # so only Qwen3-Reranker models are compatible.
+        ids = [
+            m.get("model_name")
+            for m in items
+            if isinstance(m, dict)
+            and m.get("reported_type") == "reranker"
+            and m.get("model_name")
+            and "Qwen3-Reranker" in m.get("model_name", "")
+        ]
+        return sorted(ids) or None
+
+    if provider_name == "siliconflow":
+        return _fetch_openai_models(base_url, api_key, params={"sub_type": "reranker"})
+
+    if provider_name == "dashscope":
+        return ["gte-rerank-v2"]
+
+    if provider_name == "openrouter":
+        return _fetch_openai_models(base_url, api_key, params={"output_modalities": "rerank"})
+
+    # vllm / custom — no standard rerank listing.
+    return None
 
 
 def _everos_pick_model(
-    *, base_url: Optional[str], api_key: Optional[str], example: str, allow_back: bool, fetch_list: bool = True
+    *,
+    base_url: Optional[str],
+    api_key: Optional[str],
+    example: str,
+    allow_back: bool,
+    section: str = "llm",
+    provider_name: Optional[str] = None,
+    recommendation: Optional[tuple[str, str]] = None,
 ) -> Any:
-    """Pick a model id for an EverOS endpoint. With ``fetch_list`` (the default),
-    fetch ``/models`` for a fuzzy-searchable list, else free text. Empty submit =
-    back.
-
-    ``fetch_list=False`` is used for embedding: ``/models`` lists the endpoint's
-    chat models (on a reused chat endpoint they're all chat), which is misleading
-    as embedding candidates — so the caller enters the embedding id directly,
-    guided by the example and the role's capability hint, and the real
-    ``/embeddings`` verify is the arbiter."""
+    """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
+    fuzzy-searchable list, else fall back to free text. Empty submit = back."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    models = None
-    if fetch_list:
-        console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
-        models = _fetch_everos_models(base_url, api_key)
+    console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
+    models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
     if models:
-        chosen = questionary.autocomplete(
+        if recommendation:
+            console.print(f"  [dim]{_t(*recommendation)}[/dim]")
+        question = questionary.autocomplete(
             _t(
-                f"Model ({len(models)} available — type to filter, e.g. {example}):",
-                f"模型(共 {len(models)} 个 — 输入可筛选,如 {example}):",
+                f"Model ({len(models)} available — type to filter):",
+                f"模型(共 {len(models)} 个 — 输入可筛选):",
             ),
             choices=models,
             ignore_case=True,
@@ -2496,15 +2764,26 @@ def _everos_pick_model(
             placeholder=_back_placeholder(allow_back),
             style=RAVEN_STYLE,
             qmark=_QMARK,
-        ).ask()
+        )
+        # Trigger the completion popup immediately so the user sees
+        # all available models without typing first.
+        app = question.application
+
+        def _show_completions() -> None:
+            buf = app.current_buffer
+            buf.start_completion()
+
+        app.pre_run_callables.append(_show_completions)
+        chosen = question.ask()
     else:
-        if fetch_list:
-            console.print(
-                _t(
-                    "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
-                    "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
-                )
+        if recommendation:
+            console.print(f"  [dim]{_t(*recommendation)}[/dim]")
+        console.print(
+            _t(
+                "  [dim]Couldn't list models from this endpoint — type the id manually.[/dim]",
+                "  [dim]该端点拉不到模型列表 — 请手动输入模型 id。[/dim]",
             )
+        )
         chosen = questionary.text(
             _t(f"Model id (e.g. {example}):", f"模型 id(如 {example}):"),
             placeholder=_back_placeholder(allow_back),
@@ -2522,49 +2801,57 @@ def _everos_pick_model(
 
 
 def _everos_pick_creds_and_model(
-    *, section: str, example: str, main_model: Optional[str], non_interactive: bool
+    *,
+    section: str,
+    example: str,
+    main_model: Optional[str],
+    non_interactive: bool,
+    recommendation: Optional[tuple[str, str]] = None,
 ) -> Any:
     """Mirror the main provider step for one EverOS model: pick a source
-    (reuse / curated provider / custom) → API key → model. Returns a dict with
+    (curated provider / custom) → API key → model. Returns a dict with
     ``model`` / ``api_key`` / ``base_url`` (plus ``provider`` for rerank), or
     ``_BACK`` when the user backs out of the source picker. Empty submit on any
     field rewinds one step."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    llm = _everos_section("llm")
-    reuse_llm_ok = section != "llm" and bool(llm.get("api_key") and llm.get("base_url"))
+    llm_section = _everos_section("llm")
 
-    # Pre-select the same provider the main chat model uses so the user
-    # keeps the same endpoint/key but can pick a different (e.g. cheaper)
-    # model for memory extraction.
-    main_provider = _resolve_model_provider(main_model or "") if section == "llm" else None
+    # For the LLM role, default to the main chat model's provider.
+    # For other roles (embedding/rerank/multimodal), default to whichever
+    # provider the LLM step just configured — the user likely has the
+    # same API key and only needs to pick a different model.
+    if section == "llm":
+        default_provider = _resolve_model_provider(main_model or "")
+        reuse_source = "main"
+    else:
+        default_provider = _match_provider_by_url(llm_section.get("base_url"))
+        reuse_source = "llm"
 
     while True:  # source picker — a field-level back rewinds here
         choices: list[Any] = []
-        if reuse_llm_ok:
-            choices.append(
-                questionary.Choice(
-                    _t(
-                        f"↺ Reuse memory LLM endpoint ({llm.get('base_url')})",
-                        f"↺ 复用记忆 LLM 端点({llm.get('base_url')})",
-                    ),
-                    value=("reuse_llm",),
-                )
-            )
         default_choice = None
         for prov in _EVEROS_PROVIDERS:
-            is_main = main_provider is not None and prov["name"] == main_provider
-            if is_main:
-                label = _t(
-                    f"{prov['label']} (main model provider, reuse Key)",
-                    f"{prov['label_zh']}（主模型服务商，复用 Key）",
-                )
+            if section not in prov.get("supports", set()):
+                continue
+            is_default = default_provider is not None and prov["name"] == default_provider
+            if is_default:
+                if reuse_source == "main":
+                    label = _t(
+                        f"{prov['label']} (main model provider, reuse Key)",
+                        f"{prov['label_zh']}（主模型服务商，复用 Key）",
+                    )
+                else:
+                    label = _t(
+                        f"{prov['label']} (memory LLM provider, reuse Key)",
+                        f"{prov['label_zh']}（记忆 LLM 服务商，复用 Key）",
+                    )
             else:
                 label = _t(prov["label"], prov["label_zh"])
             choice = questionary.Choice(label, value=("provider", prov))
             choices.append(choice)
-            if is_main:
+            if is_default:
                 default_choice = choice.value
         choices.append(
             questionary.Choice(
@@ -2589,22 +2876,31 @@ def _everos_pick_creds_and_model(
         kind = src[0]
 
         # Resolve (api_key, base_url) from the chosen source.
-        if kind == "reuse_llm":
-            api_key = llm.get("api_key")
-            base_url = llm.get("base_url")
-        elif kind == "provider":
+        chosen_provider: Optional[str] = None
+        if kind == "provider":
+            chosen_provider = src[1]["name"]
             base_url = src[1]["base_url"]
-            # When the user picks the same provider as their main chat
-            # model, reuse the API key so they don't have to type it again.
-            main_creds = _resolve_reuse_llm_creds(main_model or "") if main_provider == src[1]["name"] else {}
-            prefilled_key = main_creds.get("api_key")
+            prefilled_key: Optional[str] = None
+            if default_provider == src[1]["name"]:
+                if reuse_source == "main":
+                    prefilled_key = _resolve_reuse_llm_creds(main_model or "").get("api_key")
+                else:
+                    prefilled_key = llm_section.get("api_key")
             if prefilled_key:
-                console.print(
-                    _t(
-                        "  [dim]API key reused from main chat model.[/dim]",
-                        "  [dim]已复用主对话模型的 API Key。[/dim]",
+                if reuse_source == "main":
+                    console.print(
+                        _t(
+                            "  [dim]API key reused from main chat model.[/dim]",
+                            "  [dim]已复用主对话模型的 API Key。[/dim]",
+                        )
                     )
-                )
+                else:
+                    console.print(
+                        _t(
+                            "  [dim]API key reused from memory LLM.[/dim]",
+                            "  [dim]已复用记忆 LLM 的 API Key。[/dim]",
+                        )
+                    )
                 api_key = prefilled_key
             else:
                 api_key = _prompt_api_key(src[1]["name"], allow_back=True)
@@ -2630,37 +2926,41 @@ def _everos_pick_creds_and_model(
             )
             continue
 
-        # rerank carries a service-type field EverOS needs.
+        # rerank: resolve service type + override base_url when needed.
         rerank_provider: Optional[str] = None
         if section == "rerank":
-            rerank_provider = questionary.select(
-                _t("Rerank service type:", "rerank 服务类型:"),
-                choices=[
-                    questionary.Choice("deepinfra", value="deepinfra"),
-                    questionary.Choice("vllm", value="vllm"),
-                    questionary.Choice(_t("Back", "返回"), value=_BACK),
-                ],
-                style=RAVEN_STYLE,
-                qmark=_QMARK,
-            ).ask()
-            if rerank_provider is None:
-                raise typer.Exit(1)
-            if rerank_provider is _BACK:
-                continue
+            chosen_prov_dict = src[1] if kind == "provider" else None
+            if chosen_prov_dict and chosen_prov_dict.get("rerank_provider"):
+                rerank_provider = chosen_prov_dict["rerank_provider"]
+                if chosen_prov_dict.get("rerank_base_url"):
+                    base_url = chosen_prov_dict["rerank_base_url"]
+            else:
+                rerank_provider = questionary.select(
+                    _t("Rerank service type:", "rerank 服务类型:"),
+                    choices=[
+                        questionary.Choice("deepinfra", value="deepinfra"),
+                        questionary.Choice("vllm", value="vllm"),
+                        questionary.Choice("dashscope", value="dashscope"),
+                        questionary.Choice(_t("Back", "返回"), value=_BACK),
+                    ],
+                    style=RAVEN_STYLE,
+                    qmark=_QMARK,
+                ).ask()
+                if rerank_provider is None:
+                    raise typer.Exit(1)
+                if rerank_provider is _BACK:
+                    continue
 
         model = _everos_pick_model(
             base_url=base_url,
             api_key=api_key,
             example=example,
             allow_back=True,
-            fetch_list=section != "embedding",
+            section=section,
+            provider_name=chosen_provider,
+            recommendation=recommendation,
         )
         if model is _BACK:
-            # Back-out lands on the source picker again; for embedding, nudge the
-            # user to switch provider (Back gives up EverOS) so re-picking the same
-            # chat-only reuse endpoint isn't a silent dead end.
-            if section == "embedding":
-                _print_embedding_switch_hint()
             continue
 
         result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
@@ -2691,9 +2991,6 @@ def _config_everos_role(
     # Header sits on the 2-space info column (bold accent); the purpose nests
     # one line under it (dim), matching the layout system used everywhere else.
     tag = _t("optional", "可选")
-    hint = role.get("hint")
-    hint_en = f"\n  [dim]{hint[0]}[/dim]" if hint else ""
-    hint_zh = f"\n  [dim]{hint[1]}[/dim]" if hint else ""
     console.print()
     # highlight=False so Rich's default highlighter doesn't tint the dim prose
     # (parens/numbers/words) and make an informational hint read like an error.
@@ -2701,12 +2998,10 @@ def _config_everos_role(
         _t(
             f"  [bold #fbe23f]{label_en}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_en}[/dim]"
-            + hint_en,
+            + f"\n  [dim]{purpose_en}[/dim]",
             f"  [bold #fbe23f]{label_zh}[/bold #fbe23f]"
             + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_zh}[/dim]"
-            + hint_zh,
+            + f"\n  [dim]{purpose_zh}[/dim]",
         ),
         highlight=False,
     )
@@ -2719,7 +3014,7 @@ def _config_everos_role(
                 questionary.Choice(_t("Reconfigure", "重新配置"), value="redo"),
             ]
             if optional:
-                choices.append(questionary.Choice(_t("Disable", "停用"), value="off"))
+                choices.append(questionary.Choice(_t("Skip", "跳过"), value="off"))
             action = questionary.select(
                 _t("Already configured — what now?", "已配置,怎么处理?"),
                 choices=choices,
@@ -2732,7 +3027,7 @@ def _config_everos_role(
                 return
             if action == "off":
                 clear_everos_section(section)
-                console.print(_t(f"  [dim]{label_en} disabled.[/dim]", f"  [dim]已停用 {label_zh}。[/dim]"))
+                console.print(_t(f"  [dim]{label_en} skipped.[/dim]", f"  [dim]已跳过 {label_zh}。[/dim]"))
                 return
         elif optional:
             action = questionary.select(
@@ -2757,6 +3052,7 @@ def _config_everos_role(
             example=role["example"],
             main_model=main_model,
             non_interactive=non_interactive,
+            recommendation=role.get("recommendation"),
         )
         if result is _BACK:
             if optional or _everos_section(section).get("model"):
@@ -2806,16 +3102,23 @@ def _config_everos_role(
                 non_interactive=non_interactive,
                 warnings=warnings,
                 continue_hint=role.get("continue_hint"),
+                rerank_provider=result.get("provider"),
             )
         else:
             ok = True
         if not ok:
-            # "Re-enter" on a failed probe → back to the role menu. For embedding,
-            # a failed /embeddings verify usually means the endpoint can't embed;
-            # reprint the switch-provider nudge so the retry isn't a blind loop.
-            if section == "embedding":
-                _print_embedding_switch_hint()
+            # "Re-enter" on a failed probe → back to the role menu.
             continue
+
+        if section == "embedding" and ok and not skip_test:
+            dim_ok = _verify_embedding_dim(
+                model=result["model"],
+                api_key=result["api_key"],
+                base_url=result["base_url"],
+                non_interactive=non_interactive,
+            )
+            if not dim_ok:
+                continue
 
         set_everos_section(section, result)
         console.print(

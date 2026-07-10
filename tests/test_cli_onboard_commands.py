@@ -951,7 +951,7 @@ def test_memory_disable_sets_backend_null(
 def test_memory_enable_writes_everos_sections(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Enabling memory + LLM (custom source) + embedding (reuse LLM endpoint)
+    """Enabling memory + LLM (custom source) + embedding (custom, same endpoint)
     writes the EverOS toml; rerank/multimodal skipped."""
     import tomllib
 
@@ -962,15 +962,14 @@ def test_memory_enable_writes_everos_sections(
     # _step4_memory select() calls, in order:
     #   1. enable memory                -> "on"
     #   2. LLM source picker            -> ("custom",)
-    #   3. embedding source picker      -> ("reuse_llm",)
+    #   3. embedding source picker      -> ("custom",)
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["on", ("custom",), ("reuse_llm",), "skip", "skip"])
-    # text(): LLM base_url, LLM model, embedding model (model lists can't be
-    # fetched offline, so the picker falls back to free-text entry).
-    text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
-    # password(): LLM api key.
-    password_answers = iter(["k-llm"])
+    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    # text(): LLM base_url, LLM model, embed base_url, embed model.
+    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
+    # password(): LLM api key, embed api key.
+    password_answers = iter(["k-llm", "k-embed"])
 
     class _FQ:
         def __init__(self, a):
@@ -984,7 +983,8 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
     # No network: model list can't be fetched → free-text entry; probe succeeds.
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_endpoint", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
 
     onboard_commands._step4_memory(
         skip=False,
@@ -1005,8 +1005,7 @@ def test_memory_enable_writes_everos_sections(
     assert everos["llm"]["api_key"] == "k-llm"
     assert everos["llm"]["base_url"] == "https://llm/v1"
     assert everos["embedding"]["model"] == "mem-embed"
-    # embedding reused the LLM endpoint's key/base.
-    assert everos["embedding"]["api_key"] == "k-llm"
+    assert everos["embedding"]["api_key"] == "k-embed"
     assert everos["embedding"]["base_url"] == "https://llm/v1"
     assert "rerank" not in everos
     assert "multimodal" not in everos
@@ -1024,9 +1023,14 @@ def test_memory_llm_reuse_pulls_provider_creds(
 
     import questionary
 
+    class _FakeApp:
+        pre_run_callables: list = []
+        current_buffer = None
+
     class _FQ:
         def __init__(self, a):
             self._a = a
+            self.application = _FakeApp()
 
         def ask(self):
             return self._a
@@ -1035,7 +1039,7 @@ def test_memory_llm_reuse_pulls_provider_creds(
     select_answers = iter([("provider", openai_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("gpt-4.1-mini"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_endpoint", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
 
     onboard_commands._config_everos_role(
@@ -1048,15 +1052,22 @@ def test_memory_llm_reuse_pulls_provider_creds(
     assert everos["llm"]["base_url"] == "https://api.openai.com/v1"
 
 
-def test_memory_rerank_reuse_llm_endpoint(
+def test_memory_rerank_reuse_llm_provider(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """rerank can reuse the memory LLM's endpoint via the source picker."""
+    """rerank picks the LLM's provider by default and reuses its key."""
     import tomllib
 
     from raven.config.update_everos import set_everos_section
 
-    set_everos_section("llm", {"model": "m", "api_key": "k-llm", "base_url": "https://llm/v1"})
+    set_everos_section(
+        "llm",
+        {
+            "model": "m",
+            "api_key": "k-llm",
+            "base_url": "https://api.deepinfra.com/v1/openai",
+        },
+    )
 
     import questionary
 
@@ -1067,13 +1078,13 @@ def test_memory_rerank_reuse_llm_endpoint(
         def ask(self):
             return self._a
 
-    # rerank "Configure it?" -> redo; source -> reuse the LLM endpoint;
-    # rerank service type -> deepinfra.
-    select_answers = iter(["redo", ("reuse_llm",), "deepinfra"])
+    deepinfra_prov = next(p for p in onboard_commands._EVEROS_PROVIDERS if p["name"] == "deepinfra")
+    # No service-type select needed — curated provider auto-resolves it.
+    select_answers = iter(["redo", ("provider", deepinfra_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("rerank-model"))
-    # Offline → model list can't be fetched, falls back to the free-text id.
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_commands, "_probe_rerank", lambda *a, **kw: (True, "ok"))
 
     onboard_commands._config_everos_role(
         section="rerank",
@@ -1085,8 +1096,8 @@ def test_memory_rerank_reuse_llm_endpoint(
         everos = tomllib.load(f)
     assert everos["rerank"]["provider"] == "deepinfra"
     assert everos["rerank"]["model"] == "rerank-model"
-    assert everos["rerank"]["api_key"] == "k-llm"  # reused, not re-prompted
-    assert everos["rerank"]["base_url"] == "https://llm/v1"
+    assert everos["rerank"]["api_key"] == "k-llm"
+    assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
@@ -1202,7 +1213,7 @@ def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "weixin")
     monkeypatch.setattr(onboard_commands, "_select_channel", lambda: "weixin")
     routed: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c: routed.append(c))
+    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c, **kw: routed.append(c))
     monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
     onboard_commands._add_one_channel()
     assert routed == ["weixin"]
