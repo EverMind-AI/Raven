@@ -2243,28 +2243,59 @@ def _probe_everos_chat(model: Optional[str], *, api_key: Optional[str], base_url
     return False, "endpoint returned no completion"
 
 
-def _verify_everos_model(
+def _verify_everos_llm(
     label: str,
     *,
-    section: str = "llm",
     model: Optional[str],
     api_key: Optional[str],
     base_url: Optional[str],
     non_interactive: bool,
     warnings: list[str],
     continue_hint: Optional[tuple[str, str]] = None,
-    rerank_provider: Optional[str] = None,
 ) -> bool:
-    """Probe an EverOS model endpoint, offering retry/continue on failure.
-
-    LLM: real POST /chat/completions. Rerank: provider-specific probe.
-    Embedding is verified separately via _verify_embedding_dim.
-    """
+    """Probe the memory LLM with a real chat completion, offering retry/continue on failure."""
     console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
-    if section == "rerank":
-        ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_provider=rerank_provider)
+    ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
+    if ok:
+        console.print(_t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]"))
+        return True
+    console.print(
+        _t(
+            f"  [yellow]✗ Couldn't verify {label}: {detail}[/yellow]",
+            f"  [yellow]✗ 验证失败 {label}:{detail}[/yellow]",
+        )
+    )
+    if continue_hint:
+        cont_label = _t(f"Continue anyway ({continue_hint[0]})", f"仍然继续({continue_hint[1]})")
     else:
-        ok, detail = _probe_everos_chat(model, api_key=api_key, base_url=base_url)
+        cont_label = _t("Continue anyway", "仍然继续")
+    choice = _failure_choice(
+        [
+            (_t("Re-enter", "重新填写"), "rekey"),
+            (cont_label, "continue"),
+        ],
+        non_interactive=non_interactive,
+    )
+    if choice == "rekey":
+        return False
+    warnings.append(label)
+    return True
+
+
+def _verify_rerank(
+    label: str,
+    *,
+    model: Optional[str],
+    api_key: Optional[str],
+    base_url: Optional[str],
+    rerank_provider: Optional[str],
+    non_interactive: bool,
+    warnings: list[str],
+    continue_hint: Optional[tuple[str, str]] = None,
+) -> bool:
+    """Probe a rerank endpoint with a provider-specific request, offering retry/continue on failure."""
+    console.print(_t(f"  [dim]⏳ Verifying {label}…[/dim]", f"  [dim]⏳ 正在验证 {label}…[/dim]"))
+    ok, detail = _probe_rerank(model, api_key=api_key, base_url=base_url, rerank_provider=rerank_provider)
     if ok:
         console.print(_t(f"  [green]✓ {label} connected.[/green]", f"  [green]✓ {label} 连接成功。[/green]"))
         return True
@@ -3092,33 +3123,38 @@ def _config_everos_role(
                 )
             )
             ok = True
-        elif role["verify"]:
-            ok = _verify_everos_model(
+        elif section == "llm":
+            ok = _verify_everos_llm(
                 verify_label,
-                section=section,
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
                 non_interactive=non_interactive,
                 warnings=warnings,
                 continue_hint=role.get("continue_hint"),
-                rerank_provider=result.get("provider"),
             )
-        else:
-            ok = True
-        if not ok:
-            # "Re-enter" on a failed probe → back to the role menu.
-            continue
-
-        if section == "embedding" and ok and not skip_test:
-            dim_ok = _verify_embedding_dim(
+        elif section == "embedding":
+            ok = _verify_embedding_dim(
                 model=result["model"],
                 api_key=result["api_key"],
                 base_url=result["base_url"],
                 non_interactive=non_interactive,
             )
-            if not dim_ok:
-                continue
+        elif section == "rerank":
+            ok = _verify_rerank(
+                verify_label,
+                model=result["model"],
+                api_key=result["api_key"],
+                base_url=result["base_url"],
+                rerank_provider=result.get("provider"),
+                non_interactive=non_interactive,
+                warnings=warnings,
+                continue_hint=role.get("continue_hint"),
+            )
+        else:
+            ok = True
+        if not ok:
+            continue
 
         set_everos_section(section, result)
         console.print(
