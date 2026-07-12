@@ -52,19 +52,26 @@ def test_provider_login_unknown_provider_exits_1() -> None:
 
 
 def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: mocked oauth_cli_kit returns a token → exit 0."""
+    """Login starts an interactive flow even when a cached token exists."""
     from types import SimpleNamespace
 
     fake_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
+    login_calls = 0
+
+    def fake_login(**_):
+        nonlocal login_calls
+        login_calls += 1
+        return fake_token
 
     fake_module = SimpleNamespace(
         get_token=lambda: fake_token,
-        login_oauth_interactive=lambda **_: fake_token,
+        login_oauth_interactive=fake_login,
     )
     monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
     assert r.exit_code == 0
+    assert login_calls == 1
     assert "Authenticated with OpenAI Codex" in r.stdout
 
 
@@ -83,6 +90,34 @@ def test_provider_login_openai_codex_failure_exits_1(monkeypatch: pytest.MonkeyP
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
     assert r.exit_code == 1
     assert "Authentication failed" in r.stdout
+
+
+def test_provider_login_openai_codex_disables_browser_without_linux_display(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    empty_token = SimpleNamespace(access=None, account_id=None)
+    authenticated_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
+    login_kwargs: dict[str, object] = {}
+
+    def fake_login(**kwargs):
+        login_kwargs.update(kwargs)
+        return authenticated_token
+
+    fake_module = SimpleNamespace(
+        get_token=lambda: empty_token,
+        login_oauth_interactive=fake_login,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
+    assert r.exit_code == 0
+    assert login_kwargs["open_browser"] is False
 
 
 def test_provider_login_github_copilot_success(monkeypatch: pytest.MonkeyPatch) -> None:
