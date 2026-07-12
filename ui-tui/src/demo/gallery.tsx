@@ -100,7 +100,7 @@ const sessionInfo: SessionInfo = {
     search_tools: ['grep', 'glob']
   },
   update_behind: 2,
-  update_command: 'raven update',
+  update_command: 'raven upgrade',
   version: '0.0.1'
 }
 

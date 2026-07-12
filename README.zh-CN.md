@@ -99,6 +99,21 @@ OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoints。
 raven doctor
 ```
 
+### 升级现有安装
+
+检查最新发布的稳定版本：
+
+    raven upgrade --check
+
+升级 Raven，同时保留现有配置、sessions 和 memory：
+
+    raven upgrade
+
+Raven 升级需要由用户主动触发，不会自动进行。Raven 会拒绝覆盖 editable source
+installs；请更新源码 checkout，并重新运行对应的开发环境配置。
+在 POSIX 系统上，命令会同步等待 helper 输出最终结果。原生 Windows 会先调度外部
+helper，让当前运行的可执行文件退出；请等 helper 输出完成消息后再运行 Raven。
+
 ## 2 分钟能做什么
 
 - 用 `raven` 或 `raven tui` 启动 Raven 的终端原生 harness。
@@ -257,6 +272,8 @@ digital worker。
 | 查看 plugins 和 memory backend | `raven plugins` |
 | 调试 sandbox VMs | `raven sandbox list` |
 | 查看本地状态 | `raven status` |
+| 检查 Raven 更新 | `raven upgrade --check` |
+| 升级 Raven | `raven upgrade` |
 | 诊断配置 | `raven doctor` |
 
 ## 按目标阅读文档
