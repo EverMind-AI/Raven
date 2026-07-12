@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
-import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlparse
 
 import httpx
@@ -28,6 +29,59 @@ class UpgradeError(RuntimeError):
 class ReleaseInfo:
     version: str
     wheel_url: str
+
+
+@dataclass(frozen=True)
+class ToolInstallTarget:
+    tool_dir: Path
+    bin_dir: Path
+
+
+_UPGRADE_HELPER_SOURCE = r"""import subprocess
+import sys
+
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 4:
+        print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+        return 2
+
+    uv_path, wheel_url, current_version, latest_version = args
+
+    def install(requirement):
+        return subprocess.run(
+            [uv_path, "tool", "install", "--force", requirement],
+            check=False,
+        ).returncode
+
+    try:
+        channel_status = install(f"raven[channels] @ {wheel_url}")
+        if channel_status != 0:
+            base_status = install(wheel_url)
+            if base_status != 0:
+                print(
+                    f"Unable to upgrade Raven: uv exited with status {base_status}.",
+                    file=sys.stderr,
+                )
+                return base_status
+            print(
+                "Warning: Channel dependencies failed to install; installed base raven only. "
+                "Some channels stay unavailable (see: raven channels list).",
+                file=sys.stderr,
+            )
+    except OSError as exc:
+        print(f"Unable to upgrade Raven: could not run uv: {exc}.", file=sys.stderr)
+        return 1
+
+    print(f"Raven upgraded: {current_version} -> {latest_version}")
+    print("Restart any other running Raven process to use the new version.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
 
 
 def _version_key(value: str) -> tuple[int, int, int]:
@@ -54,7 +108,7 @@ def _parse_release_payload(payload: object) -> ReleaseInfo:
         raise UpgradeError("Latest Raven release is not stable")
 
     tag_name = payload.get("tag_name")
-    if not isinstance(tag_name, str):
+    if not isinstance(tag_name, str) or not tag_name.startswith("v"):
         raise UpgradeError("Malformed GitHub release payload")
     version = ".".join(str(part) for part in _version_key(tag_name))
 
@@ -102,62 +156,160 @@ def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
         return _parse_release_payload(response.json())
 
 
-def _direct_url_data() -> dict[str, object]:
+def _direct_url_data() -> dict[str, object] | None:
     raw = metadata.distribution("raven").read_text("direct_url.json")
     if raw is None:
-        return {}
+        return None
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise UpgradeError("Malformed Raven installation metadata") from exc
     if not isinstance(data, dict):
         raise UpgradeError("Malformed Raven installation metadata")
+
+    url = data.get("url")
+    origins = [key for key in ("archive_info", "dir_info", "vcs_info") if key in data]
+    if not isinstance(url, str) or not url.strip() or not urlparse(url).scheme or len(origins) != 1:
+        raise UpgradeError("Malformed Raven installation metadata")
+
+    origin_name = origins[0]
+    origin = data[origin_name]
+    if not isinstance(origin, dict):
+        raise UpgradeError("Malformed Raven installation metadata")
+
+    if origin_name == "archive_info":
+        archive_hash = origin.get("hash")
+        hashes = origin.get("hashes")
+        if archive_hash is not None and (not isinstance(archive_hash, str) or not archive_hash.strip()):
+            raise UpgradeError("Malformed Raven installation metadata")
+        if hashes is not None and (
+            not isinstance(hashes, dict)
+            or any(
+                not isinstance(algorithm, str)
+                or not algorithm.strip()
+                or not isinstance(digest, str)
+                or not digest.strip()
+                for algorithm, digest in hashes.items()
+            )
+        ):
+            raise UpgradeError("Malformed Raven installation metadata")
+    elif origin_name == "dir_info":
+        editable = origin.get("editable", False)
+        if not isinstance(editable, bool):
+            raise UpgradeError("Malformed Raven installation metadata")
+    elif origin_name == "vcs_info":
+        vcs = origin.get("vcs")
+        commit_id = origin.get("commit_id")
+        requested_revision = origin.get("requested_revision")
+        if (
+            not isinstance(vcs, str)
+            or not vcs.strip()
+            or not isinstance(commit_id, str)
+            or not commit_id.strip()
+            or (requested_revision is not None and not isinstance(requested_revision, str))
+        ):
+            raise UpgradeError("Malformed Raven installation metadata")
     return data
 
 
 def _is_editable_install() -> bool:
     data = _direct_url_data()
-    if "dir_info" not in data:
+    if data is None or "dir_info" not in data:
         return False
     directory = data["dir_info"]
-    if not isinstance(directory, dict):
-        raise UpgradeError("Malformed Raven installation metadata")
     editable = directory.get("editable", False)
-    if not isinstance(editable, bool):
-        raise UpgradeError("Malformed Raven installation metadata")
     return editable
 
 
-def _is_uv_tool_install() -> bool:
-    receipt_path = Path(sys.prefix) / "uv-receipt.toml"
+def _uv_tool_target() -> ToolInstallTarget | None:
+    prefix = Path(sys.prefix)
+    if not prefix.is_absolute():
+        raise UpgradeError("Malformed Raven uv tool receipt")
+
+    receipt_path = prefix / "uv-receipt.toml"
     if not receipt_path.is_file():
-        return False
-    receipt = tomllib.loads(receipt_path.read_text(encoding="utf-8"))
+        return None
+    try:
+        receipt = tomllib.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise UpgradeError("Malformed Raven uv tool receipt") from exc
+
     tool = receipt.get("tool")
     if not isinstance(tool, dict):
-        return False
+        raise UpgradeError("Malformed Raven uv tool receipt")
     requirements = tool.get("requirements")
     if not isinstance(requirements, list):
-        return False
-    return any(isinstance(item, dict) and item.get("name") == "raven" for item in requirements)
+        raise UpgradeError("Malformed Raven uv tool receipt")
+    if any(not isinstance(item, dict) for item in requirements):
+        raise UpgradeError("Malformed Raven uv tool receipt")
+    if not any(item.get("name") == "raven" for item in requirements):
+        return None
+
+    entrypoints = tool.get("entrypoints")
+    if not isinstance(entrypoints, list) or any(not isinstance(item, dict) for item in entrypoints):
+        raise UpgradeError("Malformed Raven uv tool receipt")
+    raven_entrypoints = [item for item in entrypoints if item.get("name") == "raven"]
+    if len(raven_entrypoints) != 1:
+        raise UpgradeError("Malformed Raven uv tool receipt")
+
+    install_path_value = raven_entrypoints[0].get("install-path")
+    if not isinstance(install_path_value, str) or not install_path_value.strip():
+        raise UpgradeError("Malformed Raven uv tool receipt")
+    install_path = Path(install_path_value)
+    if not install_path.is_absolute():
+        raise UpgradeError("Malformed Raven uv tool receipt")
+
+    return ToolInstallTarget(tool_dir=prefix.parent, bin_dir=install_path.parent)
 
 
-def _run_uv(uv_path: str, requirement: str) -> int:
-    completed = subprocess.run(
-        [uv_path, "tool", "install", "--force", requirement],
-        check=False,
-    )
-    return completed.returncode
+def _is_uv_tool_install() -> bool:
+    return _uv_tool_target() is not None
 
 
-def _install_release(release: ReleaseInfo) -> None:
-    uv_path = shutil.which("uv")
-    if uv_path is None:
+def _external_executable(value: object, *, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise UpgradeError(f"{label} was not found")
+    try:
+        executable = Path(value).resolve(strict=True)
+        prefix = Path(sys.prefix).resolve(strict=True)
+    except OSError as exc:
+        raise UpgradeError(f"{label} is unavailable") from exc
+    if not executable.is_file() or executable.is_relative_to(prefix):
+        raise UpgradeError(f"{label} must be outside the active Raven tool environment")
+    return executable
+
+
+def _handoff_upgrade(
+    release: ReleaseInfo,
+    current_version: str,
+    target: ToolInstallTarget,
+) -> NoReturn:
+    uv_value = shutil.which("uv")
+    if uv_value is None:
         raise UpgradeError("uv was not found on PATH")
-    if _run_uv(uv_path, f"raven[channels] @ {release.wheel_url}") == 0:
-        return
-    if _run_uv(uv_path, release.wheel_url) != 0:
-        raise UpgradeError("uv could not install the Raven release wheel")
+    uv_path = _external_executable(uv_value, label="uv")
+    base_python = _external_executable(getattr(sys, "_base_executable", None), label="Raven base Python")
+
+    env = os.environ.copy()
+    env["UV_TOOL_DIR"] = str(target.tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
+    argv = [
+        str(base_python),
+        "-I",
+        "-c",
+        _UPGRADE_HELPER_SOURCE,
+        str(uv_path),
+        release.wheel_url,
+        current_version,
+        release.version,
+    ]
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execve(str(base_python), argv, env)
+    except OSError as exc:
+        raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
+    raise UpgradeError("The Raven upgrade helper returned unexpectedly")
 
 
 def register(app: typer.Typer) -> None:
@@ -194,15 +346,14 @@ def register(app: typer.Typer) -> None:
                     "Editable Raven installations cannot be upgraded automatically. "
                     "Pull the source checkout and rebuild Raven."
                 )
-            if not _is_uv_tool_install():
+            target = _uv_tool_target()
+            if target is None:
                 raise UpgradeError(
                     "This Raven installation is not managed by uv. "
                     "Reinstall Raven with the official installer, then run raven upgrade."
                 )
 
-            _install_release(release)
-            console.print(f"[green]Raven upgraded: {current_version} -> {release.version}[/green]")
-            console.print("Restart any running Raven process to use the new version.")
+            _handoff_upgrade(release, current_version, target)
         except (
             UpgradeError,
             httpx.HTTPError,

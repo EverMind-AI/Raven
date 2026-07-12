@@ -70,6 +70,21 @@ jobs:
       - name: Focused Python tests
         run: make test-python
 
+  windows-upgrade:
+    name: Windows self-upgrade
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Test real uv self-upgrade
+        run: uvx --python 3.12 --from "pytest>=8,<10" pytest tests/integration/test_cli_upgrade_real_uv.py -q
+
   tui:
     name: TUI checks
     runs-on: ubuntu-latest

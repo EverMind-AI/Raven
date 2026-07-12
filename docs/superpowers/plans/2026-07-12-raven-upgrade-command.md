@@ -4,7 +4,7 @@
 
 **Goal:** Add a safe `raven upgrade` command that checks and installs the latest published stable Raven Release without requiring users to rerun the public installer.
 
-**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, protects editable and non-uv installations, and delegates replacement to the same `uv tool install --force` flow used by the public installers. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
+**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, and protects editable or malformed installations. For mutation, Raven replaces itself with an isolated, standard-library-only helper running on the external base Python; the helper restores the active uv tool/bin directories and performs the installer-compatible fallback only after the Raven executable is no longer active. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
 
 **Tech Stack:** Python 3.12, Typer, Rich, httpx, importlib.metadata, uv, pytest, React/Ink, TypeScript, Vitest.
 
@@ -24,7 +24,9 @@
 ## File map
 
 - Create `raven/cli/upgrade_commands.py`: release lookup, validation, install-mode guards, uv execution, and Typer registration.
-- Create `tests/test_cli_upgrade_commands.py`: focused unit and command tests with no real network or subprocess calls.
+- Create `tests/test_cli_upgrade_commands.py`: focused unit and command tests with no real network or tool mutation.
+- Create `tests/integration/test_cli_upgrade_real_uv.py`: bounded uv self-replacement test using temporary custom directories.
+- Modify `.github/workflows/ci.yml`: run the real self-replacement test on Windows.
 - Modify `raven/cli/commands.py`: register the new top-level command.
 - Modify `tests/test_cli_smoke.py`: pin `upgrade` in the root command surface.
 - Modify `raven/tui_rpc/methods/cli_dispatch.py`: reject upgrades from an active TUI RPC process.
@@ -190,7 +192,7 @@ git commit -m "feat(cli): resolve raven release upgrades"
 
 **Interfaces:**
 - Consumes: `ReleaseInfo`, `_version_key`, `_fetch_latest_release`, `_current_version` from Task 1.
-- Produces: `_is_editable_install() -> bool`, `_is_uv_tool_install() -> bool`, `_run_uv(uv_path: str, requirement: str) -> int`, `_install_release(release: ReleaseInfo) -> None`, `register(app: typer.Typer) -> None`.
+- Produces: `_is_editable_install() -> bool`, `_uv_tool_target() -> ToolInstallTarget | None`, `_handoff_upgrade(release, current_version, target) -> NoReturn`, an inline standard-library helper, and `register(app: typer.Typer) -> None`.
 
 - [ ] **Step 1: Write failing command and install-mode tests**
 
@@ -216,15 +218,15 @@ def test_upgrade_check_reports_available_without_install(monkeypatch: pytest.Mon
         "_fetch_latest_release",
         lambda: upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
     )
-    install = Mock()
-    monkeypatch.setattr(upgrade_commands, "_install_release", install)
+    handoff = Mock()
+    monkeypatch.setattr(upgrade_commands, "_handoff_upgrade", handoff)
 
     result = runner.invoke(app, ["upgrade", "--check"])
 
     assert result.exit_code == 0
     assert "0.1.3 -> 0.1.4" in result.stdout
     assert "raven upgrade" in result.stdout
-    install.assert_not_called()
+    handoff.assert_not_called()
 ```
 
 Cover equal versions, a newer local version with no downgrade, editable refusal, unsupported install refusal, missing uv, successful channel install, channel failure followed by base success, both attempts failing, and network/release errors returning exit code 1.
@@ -248,68 +250,34 @@ uv run pytest tests/test_cli_upgrade_commands.py tests/test_cli_smoke.py -q
 
 Expected: failures because `upgrade` is not registered and install helpers do not exist.
 
-- [ ] **Step 3: Implement PEP 610 and uv-receipt guards**
+- [ ] **Step 3: Implement strict PEP 610 and uv-receipt guards**
 
-Use standard-library metadata only:
+Distinguish an absent `direct_url.json` from a malformed present file. Require
+a nonempty URL and exactly one valid `archive_info`, `dir_info`, or `vcs_info`
+record. Treat `dir_info.editable` as optional with a false default, but require
+it to be boolean when present; require the PEP 610 VCS fields.
 
-```python
-import json
-import sys
-import tomllib
-from pathlib import Path
+Parse `sys.prefix/uv-receipt.toml` into an immutable `ToolInstallTarget`.
+Require a Raven requirement and exactly one Raven entrypoint with an absolute
+`install-path`. Derive `UV_TOOL_DIR` from `Path(sys.prefix).parent` and
+`UV_TOOL_BIN_DIR` from the entrypoint parent. Missing receipts remain an
+unsupported install; present malformed receipts fail closed.
 
+- [ ] **Step 4: Implement post-exit uv execution with the installer-compatible fallback**
 
-def _direct_url_data() -> dict[str, object]:
-    raw = metadata.distribution("raven").read_text("direct_url.json")
-    if not raw:
-        return {}
-    data = json.loads(raw)
-    return data if isinstance(data, dict) else {}
-
-
-def _is_editable_install() -> bool:
-    data = _direct_url_data()
-    directory = data.get("dir_info")
-    return isinstance(directory, dict) and directory.get("editable") is True
-
-
-def _is_uv_tool_install() -> bool:
-    receipt_path = Path(sys.prefix) / "uv-receipt.toml"
-    if not receipt_path.is_file():
-        return False
-    receipt = tomllib.loads(receipt_path.read_text(encoding="utf-8"))
-    requirements = receipt.get("tool", {}).get("requirements", [])
-    return any(isinstance(item, dict) and item.get("name") == "raven" for item in requirements)
-```
-
-Treat malformed metadata or receipts as unsupported installation errors instead of tracebacks.
-
-- [ ] **Step 4: Implement uv execution with the installer-compatible fallback**
-
-Use inherited output and argument arrays:
+Resolve uv and `sys._base_executable` to files outside the active Raven tool
+prefix. Override `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` in a copied environment,
+flush inherited output, and call `os.execve` with:
 
 ```python
-import shutil
-import subprocess
-
-
-def _run_uv(uv_path: str, requirement: str) -> int:
-    completed = subprocess.run(
-        [uv_path, "tool", "install", "--force", requirement],
-        check=False,
-    )
-    return completed.returncode
-
-
-def _install_release(release: ReleaseInfo) -> None:
-    uv_path = shutil.which("uv")
-    if uv_path is None:
-        raise UpgradeError("uv was not found on PATH")
-    if _run_uv(uv_path, f"raven[channels] @ {release.wheel_url}") == 0:
-        return
-    if _run_uv(uv_path, release.wheel_url) != 0:
-        raise UpgradeError("uv could not install the Raven release wheel")
+[base_python, "-I", "-c", helper_source, uv_path, wheel_url, current, latest]
 ```
+
+The inline helper must use only the standard library and trusted argument
+arrays. It runs the channels requirement first, falls back to the base wheel,
+warns only when that fallback succeeds, prints the final success itself, catches
+uv execution `OSError`, and returns the final uv status when both attempts fail.
+Because the helper is inline, no temporary artifact needs cleanup.
 
 - [ ] **Step 5: Register and orchestrate the top-level command**
 
@@ -319,11 +287,16 @@ Add `upgrade_commands` to the import and registration list in `raven/cli/command
 2. Compare current and latest version keys.
 3. Exit zero for equal or newer-local versions.
 4. Print `current -> latest` and exit zero for `--check`.
-5. Refuse editable and non-uv installs before invoking `_install_release`.
-6. Print success plus restart guidance after installation.
+5. Refuse editable, malformed, and non-uv installs before invoking `_handoff_upgrade`.
+6. Do not print success in the parent; the post-exit helper owns final status.
 7. Catch `UpgradeError`, `httpx.HTTPError`, JSON errors, and metadata errors, print one actionable red error, and raise `typer.Exit(1)`.
 
 Register `upgrade` in both `TOP_LEVEL_COMMANDS` and `REGISTERED_COMMAND_NAMES` in `tests/test_cli_smoke.py`.
+
+Add `tests/integration/test_cli_upgrade_real_uv.py` to install an old temporary
+uv tool in custom directories, invoke its own handoff, and verify the same
+entrypoint reports the new version. Run this bounded test in a dedicated
+Windows CI job to cover executable locking.
 
 - [ ] **Step 6: Run focused tests and commit the working CLI**
 
