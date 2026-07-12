@@ -104,11 +104,13 @@ marshalling cannot split the multiline program.
 On POSIX, replace the current process with the external base Python via
 `os.execve`, preserving synchronous completion and the helper's final status.
 Windows cannot provide the same exec semantics: the uv-generated `raven.exe`
-trampoline remains locked until it exits. Launch the external helper with a
-breakaway process flag, pass the trampoline PID, return only after the helper
-has been scheduled, and have the helper wait for that parent process to exit
-before invoking uv. The helper inherits the console so it can print its final
-result. There is no temporary helper file to clean up.
+trampoline remains locked until it exits. Launch the external helper with
+`subprocess.Popen`, pass the trampoline PID, return only after the helper has
+been scheduled, and have the helper wait for that parent process to exit before
+invoking uv. uv's trampoline job is configured for silent child breakaway, so
+an explicit Windows breakaway creation flag is unnecessary and could conflict
+with an enclosing job. The helper inherits the console so it can print its
+final result. There is no temporary helper file to clean up.
 
 Only after the active Raven entrypoint is no longer running does the helper
 mirror the supported installer flow:

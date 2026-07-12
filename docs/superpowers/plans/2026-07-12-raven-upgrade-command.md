@@ -4,7 +4,7 @@
 
 **Goal:** Add a safe `raven upgrade` command that checks and installs the latest published stable Raven Release without requiring users to rerun the public installer.
 
-**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, and protects editable or malformed installations. For mutation, a standard-library-only helper runs on the external base Python: POSIX replaces the current process synchronously, while Windows starts a breakaway helper that waits for the uv trampoline to exit before replacing the locked entrypoint. The helper restores the active uv tool/bin directories and performs the installer-compatible fallback only after the Raven executable is no longer active. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
+**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, and protects editable or malformed installations. For mutation, a standard-library-only helper runs on the external base Python: POSIX replaces the current process synchronously, while Windows starts an external helper that waits for the uv trampoline to exit before replacing the locked entrypoint. uv's trampoline job silently releases child processes, so no explicit breakaway flag is needed. The helper restores the active uv tool/bin directories and performs the installer-compatible fallback only after the Raven executable is no longer active. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
 
 **Tech Stack:** Python 3.12, Typer, Rich, httpx, importlib.metadata, uv, pytest, React/Ink, TypeScript, Vitest.
 
@@ -275,10 +275,12 @@ argv = [base_python, "-I", "-c", bootstrap, uv_path, wheel_url, current, latest]
 
 On POSIX, flush inherited output and call `os.execve(base_python, argv, env)`.
 On Windows, append `os.getppid()` to `argv`, start the helper with
-`subprocess.Popen(..., creationflags=CREATE_BREAKAWAY_FROM_JOB)`, and return
-after printing that the user must wait for the final completion message. The
-helper opens the trampoline process with `SYNCHRONIZE`, waits for it with a
-bounded `WaitForSingleObject`, and only then invokes uv.
+`subprocess.Popen(argv, env=env)`, and return after printing that the user must
+wait for the final completion message. uv configures its trampoline job with
+`JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`, so this child is not terminated when
+the trampoline exits. The helper opens the trampoline process with
+`SYNCHRONIZE`, waits for it with a bounded `WaitForSingleObject`, and only then
+invokes uv.
 
 The helper must use only the standard library and trusted argument arrays. It
 runs the channels requirement first, falls back to the base wheel, warns only
@@ -488,10 +490,10 @@ git commit -m "docs: explain raven upgrade workflow"
 - [ ] **Step 1: Add failing Windows transport and scheduling tests**
 
 Extend `tests/test_cli_upgrade_commands.py` so a simulated Windows handoff uses
-paths containing spaces, calls `subprocess.Popen` with the external base Python
-and the breakaway creation flag, appends a fixed `os.getppid()` value, and never
-calls `os.execve`. Assert that the `-c` bootstrap contains no whitespace and
-that a spawn `OSError` becomes `UpgradeError`.
+paths containing spaces, calls `subprocess.Popen` with the external base Python,
+appends a fixed `os.getppid()` value, and never calls `os.execve`. Assert that
+the `-c` bootstrap contains no whitespace and that a spawn `OSError` becomes
+`UpgradeError`.
 
 - [ ] **Step 2: Add failing helper parent-wait tests**
 
@@ -513,17 +515,16 @@ Expected: the new Windows tests fail because `_handoff_upgrade()` still calls
 
 - [ ] **Step 4: Implement the minimal cross-platform handoff**
 
-Add `base64` and `subprocess` imports, define a portable
-`CREATE_BREAKAWAY_FROM_JOB = 0x01000000` constant, and generate a one-line
-bootstrap equivalent to:
+Add `base64` and `subprocess` imports and generate a one-line bootstrap
+equivalent to:
 
 ```python
 exec(compile(__import__("base64").b64decode(encoded), "<raven-upgrade>", "exec"))
 ```
 
 Keep `os.execve` for POSIX. On Windows, append `str(os.getppid())`, call
-`subprocess.Popen(argv, env=env, creationflags=CREATE_BREAKAWAY_FROM_JOB)`, and
-print `Raven upgrade started. Wait for the completion message before running Raven again.`
+`subprocess.Popen(argv, env=env)`, and print
+`Raven upgrade started. Wait for the completion message before running Raven again.`
 
 Inside `_UPGRADE_HELPER_SOURCE`, accept the optional fifth PID argument. Open
 that process with Windows `SYNCHRONIZE`, wait at most 30 seconds with
