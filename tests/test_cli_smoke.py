@@ -46,6 +46,7 @@ TOP_LEVEL_COMMANDS = [
     "gateway",
     "agent",
     "status",
+    "upgrade",
     "doctor",
     "channels",
     "cron",
@@ -168,6 +169,7 @@ REGISTERED_COMMAND_NAMES = {
     "skill",
     "status",
     "tui",
+    "upgrade",
 }
 
 

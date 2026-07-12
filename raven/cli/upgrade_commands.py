@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+import sys
+import tomllib
 from dataclasses import dataclass
 from importlib import metadata
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+import typer
+from rich.console import Console
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
 _VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+console = Console()
 
 
 class UpgradeError(RuntimeError):
@@ -91,3 +100,106 @@ def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
         response = owned_client.get(LATEST_RELEASE_API, headers=headers)
         response.raise_for_status()
         return _parse_release_payload(response.json())
+
+
+def _direct_url_data() -> dict[str, object]:
+    raw = metadata.distribution("raven").read_text("direct_url.json")
+    if not raw:
+        return {}
+    data = json.loads(raw)
+    return data if isinstance(data, dict) else {}
+
+
+def _is_editable_install() -> bool:
+    data = _direct_url_data()
+    directory = data.get("dir_info")
+    return isinstance(directory, dict) and directory.get("editable") is True
+
+
+def _is_uv_tool_install() -> bool:
+    receipt_path = Path(sys.prefix) / "uv-receipt.toml"
+    if not receipt_path.is_file():
+        return False
+    receipt = tomllib.loads(receipt_path.read_text(encoding="utf-8"))
+    tool = receipt.get("tool")
+    if not isinstance(tool, dict):
+        return False
+    requirements = tool.get("requirements")
+    if not isinstance(requirements, list):
+        return False
+    return any(isinstance(item, dict) and item.get("name") == "raven" for item in requirements)
+
+
+def _run_uv(uv_path: str, requirement: str) -> int:
+    completed = subprocess.run(
+        [uv_path, "tool", "install", "--force", requirement],
+        check=False,
+    )
+    return completed.returncode
+
+
+def _install_release(release: ReleaseInfo) -> None:
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        raise UpgradeError("uv was not found on PATH")
+    if _run_uv(uv_path, f"raven[channels] @ {release.wheel_url}") == 0:
+        return
+    if _run_uv(uv_path, release.wheel_url) != 0:
+        raise UpgradeError("uv could not install the Raven release wheel")
+
+
+def register(app: typer.Typer) -> None:
+    @app.command()
+    def upgrade(
+        check: bool = typer.Option(
+            False,
+            "--check",
+            help="Check for a newer stable Raven release without installing it.",
+        ),
+    ) -> None:
+        """Check for and install the latest stable Raven release."""
+        try:
+            current_version = _current_version()
+            release = _fetch_latest_release()
+            current_key = _version_key(current_version)
+            latest_key = _version_key(release.version)
+
+            if current_key == latest_key:
+                console.print(f"Raven {current_version} is up to date.")
+                return
+            if current_key > latest_key:
+                console.print(
+                    f"Raven {current_version} is newer than the latest release "
+                    f"{release.version}; no downgrade was performed."
+                )
+                return
+            if check:
+                console.print(f"Raven upgrade available: {current_version} -> {release.version}")
+                console.print("Run [cyan]raven upgrade[/cyan] to install it.")
+                return
+            if _is_editable_install():
+                raise UpgradeError(
+                    "Editable Raven installations cannot be upgraded automatically. "
+                    "Pull the source checkout and rebuild Raven."
+                )
+            if not _is_uv_tool_install():
+                raise UpgradeError(
+                    "This Raven installation is not managed by uv. "
+                    "Reinstall Raven with the official installer, then run raven upgrade."
+                )
+
+            _install_release(release)
+            console.print(f"[green]Raven upgraded: {current_version} -> {release.version}[/green]")
+            console.print("Restart any running Raven process to use the new version.")
+        except (
+            UpgradeError,
+            httpx.HTTPError,
+            ValueError,
+            metadata.PackageNotFoundError,
+        ) as exc:
+            console.print(
+                f"[red]Unable to upgrade Raven:[/red] {exc}. "
+                "Check your network and try again; if the problem persists, "
+                "rerun the official installer."
+            )
+            raise typer.Exit(1) from exc
