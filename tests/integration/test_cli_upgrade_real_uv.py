@@ -130,3 +130,9 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
         timeout=30,
     )
     assert version.stdout.strip() == "2.0.0"
+
+
+def test_windows_workflow_isolates_upgrade_test_from_shared_conftests() -> None:
+    workflow = (Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q" in workflow
