@@ -104,16 +104,28 @@ def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
 
 def _direct_url_data() -> dict[str, object]:
     raw = metadata.distribution("raven").read_text("direct_url.json")
-    if not raw:
+    if raw is None:
         return {}
-    data = json.loads(raw)
-    return data if isinstance(data, dict) else {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise UpgradeError("Malformed Raven installation metadata") from exc
+    if not isinstance(data, dict):
+        raise UpgradeError("Malformed Raven installation metadata")
+    return data
 
 
 def _is_editable_install() -> bool:
     data = _direct_url_data()
-    directory = data.get("dir_info")
-    return isinstance(directory, dict) and directory.get("editable") is True
+    if "dir_info" not in data:
+        return False
+    directory = data["dir_info"]
+    if not isinstance(directory, dict):
+        raise UpgradeError("Malformed Raven installation metadata")
+    editable = directory.get("editable", False)
+    if not isinstance(editable, bool):
+        raise UpgradeError("Malformed Raven installation metadata")
+    return editable
 
 
 def _is_uv_tool_install() -> bool:

@@ -14,6 +14,12 @@ from raven.cli.commands import app
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
 WHEEL_URL = "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-0.1.4-py3-none-any.whl"
+MALFORMED_DIRECT_URL_METADATA = [
+    pytest.param("", id="empty-document"),
+    pytest.param("[]", id="top-level-list"),
+    pytest.param('{"dir_info": "editable"}', id="invalid-dir-info"),
+    pytest.param('{"dir_info": {"editable": "true"}}', id="invalid-editable-flag"),
+]
 runner = CliRunner()
 
 
@@ -217,11 +223,11 @@ def test_is_editable_install_reads_pep_610_metadata(monkeypatch: pytest.MonkeyPa
     [
         None,
         "{}",
+        '{"dir_info": {}}',
         '{"dir_info": {"editable": false}}',
-        '{"dir_info": "editable"}',
     ],
 )
-def test_is_editable_install_rejects_noneditable_metadata(
+def test_is_editable_install_returns_false_for_missing_or_noneditable_metadata(
     monkeypatch: pytest.MonkeyPatch,
     raw: str | None,
 ) -> None:
@@ -230,6 +236,19 @@ def test_is_editable_install_rejects_noneditable_metadata(
     monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
 
     assert upgrade_commands._is_editable_install() is False
+
+
+@pytest.mark.parametrize("raw", MALFORMED_DIRECT_URL_METADATA)
+def test_is_editable_install_rejects_malformed_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: str,
+) -> None:
+    distribution = Mock()
+    distribution.read_text.return_value = raw
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+
+    with pytest.raises(upgrade_commands.UpgradeError, match="Malformed Raven installation metadata"):
+        upgrade_commands._is_editable_install()
 
 
 def test_is_uv_tool_install_reads_raven_receipt(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -408,6 +427,35 @@ def test_upgrade_refuses_unsupported_install(monkeypatch: pytest.MonkeyPatch) ->
     assert result.exit_code == 1
     assert "not managed by uv" in result.stdout.lower()
     assert "official installer" in result.stdout.lower()
+    install.assert_not_called()
+
+
+@pytest.mark.parametrize("raw", MALFORMED_DIRECT_URL_METADATA)
+def test_upgrade_rejects_malformed_direct_url_before_install(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    raw: str,
+) -> None:
+    _patch_available_release(monkeypatch)
+    distribution = Mock()
+    distribution.read_text.return_value = raw
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+    (tmp_path / "uv-receipt.toml").write_text(
+        '[tool]\nrequirements = [{ name = "raven" }]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(upgrade_commands.sys, "prefix", str(tmp_path))
+    install = Mock()
+    monkeypatch.setattr(upgrade_commands, "_install_release", install)
+
+    assert upgrade_commands._is_uv_tool_install() is True
+
+    result = runner.invoke(app, ["upgrade"])
+
+    output = " ".join(result.stdout.lower().split())
+    assert result.exit_code == 1
+    assert "malformed raven installation metadata" in output
+    assert "official installer" in output
     install.assert_not_called()
 
 
