@@ -52,19 +52,26 @@ def test_provider_login_unknown_provider_exits_1() -> None:
 
 
 def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: mocked oauth_cli_kit returns a token → exit 0."""
+    """Login starts an interactive flow even when a cached token exists."""
     from types import SimpleNamespace
 
     fake_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
+    login_calls = 0
+
+    def fake_login(**_):
+        nonlocal login_calls
+        login_calls += 1
+        return fake_token
 
     fake_module = SimpleNamespace(
         get_token=lambda: fake_token,
-        login_oauth_interactive=lambda **_: fake_token,
+        login_oauth_interactive=fake_login,
     )
     monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
     assert r.exit_code == 0
+    assert login_calls == 1
     assert "Authenticated with OpenAI Codex" in r.stdout
 
 
