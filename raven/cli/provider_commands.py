@@ -25,6 +25,8 @@ Architecture: write operations go ONLY through
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any
 
 import typer
@@ -88,6 +90,11 @@ def _login_openai_codex() -> None:
             token = login_oauth_interactive(
                 print_fn=lambda s: console.print(s),
                 prompt_fn=lambda s: typer.prompt(s),
+                open_browser=(
+                    bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+                    if sys.platform.startswith("linux")
+                    else None
+                ),
             )
         if not (token and token.access):
             console.print("[red]✗ Authentication failed[/red]")
