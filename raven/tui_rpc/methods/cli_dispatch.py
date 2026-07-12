@@ -93,12 +93,13 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     ("channels", "login", "weixin"),  # QR long-poll loop — terminal-only
     ("channels", "login", "whatsapp"),  # npm subprocess owns the TTY — terminal-only
     ("sandbox", "shell"),  # interactive shell — hijacks stdin
-    # ---- harness-command-catalog-dynamic extensions (5 → 7) ----
-    # Both names were previously unreachable: not in the old _DISPATCH_WHITELIST,
-    # so dispatch never saw them. With Typer-reflection dispatch, both
-    # become reachable; the blacklist now hard-rejects to preserve safety.
+    # ---- harness-command-catalog-dynamic extensions (5 → 8) ----
+    # tui and onboard were unreachable under the old _DISPATCH_WHITELIST.
+    # Reflection makes them and the registered upgrade command reachable, so
+    # the blacklist hard-rejects all three to preserve safety.
     ("tui",),  # recursive Ink+Node spawn would deadlock + steal stdin
     ("onboard",),  # prompt_toolkit three-step wizard hijacks stdin
+    ("upgrade",),  # replacing the active Raven process is terminal-only
     # ``agent`` (no -m) — handled specially in _is_dispatch_compatible
 }
 

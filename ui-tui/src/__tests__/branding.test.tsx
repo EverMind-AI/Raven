@@ -6,8 +6,10 @@ import { render } from 'ink-testing-library'
 import React from 'react'
 import { describe, expect, it } from 'vitest'
 
+import type { SessionInfo } from '../types.js'
+
 import { ravenLogo, ravenLogoWord, RAVEN_WORD_WIDTH } from '../banner.js'
-import { Branding, formatProvider } from '../components/branding.js'
+import { Branding, formatProvider, SessionPanel } from '../components/branding.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 describe('Branding', () => {
@@ -20,6 +22,20 @@ describe('Branding', () => {
     // The chosen layout (full / stacked / compact) depends on terminal width;
     // all three must render cleanly.
     expect(() => render(<Branding />)).not.toThrow()
+  })
+})
+
+describe('SessionPanel', () => {
+  it('recommends the real raven upgrade command', () => {
+    const info: SessionInfo = {
+      model: 'anthropic/claude-sonnet-4-6',
+      skills: {},
+      tools: {},
+      update_behind: 1
+    }
+    const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="test" t={DEFAULT_THEME} />)
+    expect(lastFrame()).toContain('raven upgrade')
+    expect(lastFrame()).not.toContain('raven update')
   })
 })
 

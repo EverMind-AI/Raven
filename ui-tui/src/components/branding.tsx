@@ -426,7 +426,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                   - run{' '}
                 </Text>
                 <Text bold color={t.color.warn}>
-                  {info.update_command || 'raven update'}
+                  {info.update_command || 'raven upgrade'}
                 </Text>
                 <Text bold={false} color={t.color.warn} dimColor>
                   {' '}
