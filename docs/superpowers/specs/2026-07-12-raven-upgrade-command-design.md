@@ -94,27 +94,39 @@ official installer guidance instead of being overwritten.
 
 ### Upgrade execution
 
-When a newer release exists, locate `uv` on `PATH`, require both uv and
-`sys._base_executable` to be outside the active Raven tool environment, and
-replace the current process with that external Python via `os.execve`. The
-inline helper is passed through `python -I -c`, uses only the standard library,
-inherits the console, and receives explicit `UV_TOOL_DIR` and
-`UV_TOOL_BIN_DIR` values. There is no temporary helper file to clean up.
+When a newer release exists, locate `uv` on `PATH` and require both uv and
+`sys._base_executable` to be outside the active Raven tool environment. The
+standard-library-only helper receives explicit `UV_TOOL_DIR` and
+`UV_TOOL_BIN_DIR` values through a copied environment. Its source is encoded
+into a single whitespace-free `python -I -c` bootstrap, so Windows argument
+marshalling cannot split the multiline program.
 
-Only after Raven has been replaced does the helper mirror the supported
-installer flow:
+On POSIX, replace the current process with the external base Python via
+`os.execve`, preserving synchronous completion and the helper's final status.
+Windows cannot provide the same exec semantics: the uv-generated `raven.exe`
+trampoline remains locked until it exits. Launch the external helper with a
+breakaway process flag, pass the trampoline PID, return only after the helper
+has been scheduled, and have the helper wait for that parent process to exit
+before invoking uv. The helper inherits the console so it can print its final
+result. There is no temporary helper file to clean up.
+
+Only after the active Raven entrypoint is no longer running does the helper
+mirror the supported installer flow:
 
 1. Run `uv tool install --force "raven[channels] @ <wheel-url>"`.
 2. If optional channel dependencies fail, retry the base wheel.
 3. If the base fallback succeeds, warn that channel adapters may be
    unavailable.
-4. If both attempts fail, return the final uv failure status with recovery
-   guidance. Raven state under `~/.raven` remains untouched.
+4. If both attempts fail, print the final uv failure status with recovery
+   guidance. On POSIX that status is returned synchronously; on Windows the
+   original command reports only whether the detached handoff was scheduled.
+   Raven state under `~/.raven` remains untouched.
 
 All process calls receive trusted argument arrays without a shell. The command
 does not modify `~/.raven`, so configuration, sessions, memory, and runtime
 state remain intact. The helper prints the final success or failure after uv
-finishes and preserves the final uv exit status.
+finishes. Windows users must wait for that completion message before running
+Raven again.
 
 ### TUI boundary
 
@@ -148,17 +160,20 @@ and update the pinned CLI smoke surface. Cover:
 - command help and root registration;
 - up-to-date, newer-local, and update-available comparisons;
 - `--check` never invoking uv;
-- exact helper argument arrays, custom uv tool/bin targets, and process handoff;
+- exact helper argument arrays, custom uv tool/bin targets, and platform-specific
+  process handoff;
+- whitespace-safe helper transport and Windows trampoline waiting;
 - the channel-to-base fallback warning and final uv exit status;
 - missing uv and both installation attempts failing;
 - editable, malformed, and unsupported installation refusal;
 - HTTP, malformed metadata, invalid URL, and missing-wheel failures;
 - TUI dispatch blacklist and corrected fallback command text.
 
-The integration test installs a temporary old uv tool in custom directories,
-runs its own upgrade handoff, and verifies that the same entrypoint reports the
-new version. A dedicated Windows CI job runs this test to protect the executable
-locking scenario that motivated the external helper.
+The integration test installs a temporary old uv tool in custom directories
+whose paths contain spaces, runs its own upgrade handoff, and verifies that the
+same entrypoint reports the new version. A dedicated Windows CI job runs this
+test to protect the argument-marshalling and executable-locking scenarios that
+motivate the external helper.
 
 Run the focused Python suite, CLI/TUI RPC tests, TUI type/lint/tests, repository
 lint, commit-message lint, PR-title lint, and the large-file check before the PR.

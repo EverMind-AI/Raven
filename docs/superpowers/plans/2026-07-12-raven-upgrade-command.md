@@ -4,7 +4,7 @@
 
 **Goal:** Add a safe `raven upgrade` command that checks and installs the latest published stable Raven Release without requiring users to rerun the public installer.
 
-**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, and protects editable or malformed installations. For mutation, Raven replaces itself with an isolated, standard-library-only helper running on the external base Python; the helper restores the active uv tool/bin directories and performs the installer-compatible fallback only after the Raven executable is no longer active. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
+**Architecture:** A focused top-level CLI module resolves and validates GitHub Release metadata, compares strict Raven semantic versions, and protects editable or malformed installations. For mutation, a standard-library-only helper runs on the external base Python: POSIX replaces the current process synchronously, while Windows starts a breakaway helper that waits for the uv trampoline to exit before replacing the locked entrypoint. The helper restores the active uv tool/bin directories and performs the installer-compatible fallback only after the Raven executable is no longer active. TUI dispatch remains unable to run self-upgrade, while dormant update copy points to the real command.
 
 **Tech Stack:** Python 3.12, Typer, Rich, httpx, importlib.metadata, uv, pytest, React/Ink, TypeScript, Vitest.
 
@@ -263,21 +263,31 @@ Require a Raven requirement and exactly one Raven entrypoint with an absolute
 `UV_TOOL_BIN_DIR` from the entrypoint parent. Missing receipts remain an
 unsupported install; present malformed receipts fail closed.
 
-- [ ] **Step 4: Implement post-exit uv execution with the installer-compatible fallback**
+- [ ] **Step 4: Implement platform-specific post-exit uv execution**
 
 Resolve uv and `sys._base_executable` to files outside the active Raven tool
-prefix. Override `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` in a copied environment,
-flush inherited output, and call `os.execve` with:
+prefix. Encode the multiline helper source into a whitespace-free bootstrap,
+override `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` in a copied environment, and build:
 
 ```python
-[base_python, "-I", "-c", helper_source, uv_path, wheel_url, current, latest]
+argv = [base_python, "-I", "-c", bootstrap, uv_path, wheel_url, current, latest]
 ```
 
-The inline helper must use only the standard library and trusted argument
-arrays. It runs the channels requirement first, falls back to the base wheel,
-warns only when that fallback succeeds, prints the final success itself, catches
-uv execution `OSError`, and returns the final uv status when both attempts fail.
-Because the helper is inline, no temporary artifact needs cleanup.
+On POSIX, flush inherited output and call `os.execve(base_python, argv, env)`.
+On Windows, append `os.getppid()` to `argv`, start the helper with
+`subprocess.Popen(..., creationflags=CREATE_BREAKAWAY_FROM_JOB)`, and return
+after printing that the user must wait for the final completion message. The
+helper opens the trampoline process with `SYNCHRONIZE`, waits for it with a
+bounded `WaitForSingleObject`, and only then invokes uv.
+
+The helper must use only the standard library and trusted argument arrays. It
+runs the channels requirement first, falls back to the base wheel, warns only
+when that fallback succeeds, prints the final success itself, catches uv
+execution `OSError`, and returns the final uv status when both attempts fail.
+Because the helper is inline, no temporary artifact needs cleanup. Unit tests
+must cover bootstrap transport, Windows process scheduling, parent waiting, and
+spawn failures. The real integration test must use uv tool/bin paths containing
+spaces and verify the installed version after the helper finishes.
 
 - [ ] **Step 5: Register and orchestrate the top-level command**
 
@@ -462,7 +472,85 @@ git add README.md README.zh-CN.md
 git commit -m "docs: explain raven upgrade workflow"
 ```
 
-### Task 5: Full verification and pull request
+### Task 5: Correct Windows handoff semantics
+
+**Files:**
+- Modify: `raven/cli/upgrade_commands.py`
+- Modify: `tests/test_cli_upgrade_commands.py`
+- Modify: `tests/integration/test_cli_upgrade_real_uv.py`
+- Modify: `README.md`
+- Modify: `README.zh-CN.md`
+
+**Interfaces:**
+- Consumes: `_UPGRADE_HELPER_SOURCE`, `_handoff_upgrade()`, and `ToolInstallTarget` from Task 2.
+- Produces: `_upgrade_helper_bootstrap() -> str`; POSIX synchronous handoff; Windows breakaway handoff that waits for the uv trampoline before mutation.
+
+- [ ] **Step 1: Add failing Windows transport and scheduling tests**
+
+Extend `tests/test_cli_upgrade_commands.py` so a simulated Windows handoff uses
+paths containing spaces, calls `subprocess.Popen` with the external base Python
+and the breakaway creation flag, appends a fixed `os.getppid()` value, and never
+calls `os.execve`. Assert that the `-c` bootstrap contains no whitespace and
+that a spawn `OSError` becomes `UpgradeError`.
+
+- [ ] **Step 2: Add failing helper parent-wait tests**
+
+Load `_UPGRADE_HELPER_SOURCE`, replace its `wait_for_parent` global with a mock,
+and call `main()` with a fifth parent-PID argument. Assert that the parent wait
+completes before the first uv subprocess call and that a nonzero wait result
+prevents uv from running.
+
+- [ ] **Step 3: Run the new unit tests and verify RED**
+
+Run:
+
+```bash
+uv run pytest tests/test_cli_upgrade_commands.py -q
+```
+
+Expected: the new Windows tests fail because `_handoff_upgrade()` still calls
+`os.execve` with the multiline source and the helper has no parent wait.
+
+- [ ] **Step 4: Implement the minimal cross-platform handoff**
+
+Add `base64` and `subprocess` imports, define a portable
+`CREATE_BREAKAWAY_FROM_JOB = 0x01000000` constant, and generate a one-line
+bootstrap equivalent to:
+
+```python
+exec(compile(__import__("base64").b64decode(encoded), "<raven-upgrade>", "exec"))
+```
+
+Keep `os.execve` for POSIX. On Windows, append `str(os.getppid())`, call
+`subprocess.Popen(argv, env=env, creationflags=CREATE_BREAKAWAY_FROM_JOB)`, and
+print `Raven upgrade started. Wait for the completion message before running Raven again.`
+
+Inside `_UPGRADE_HELPER_SOURCE`, accept the optional fifth PID argument. Open
+that process with Windows `SYNCHRONIZE`, wait at most 30 seconds with
+`WaitForSingleObject`, close the handle, and refuse to invoke uv when opening or
+waiting fails.
+
+- [ ] **Step 5: Strengthen the real integration test and documentation**
+
+Copy the discovered uv executable into `external tools`, use `custom tools` and
+`custom bin` for the uv installation, and keep the success-output and final
+`--version == 2.0.0` assertions. Explain in both READMEs that POSIX completion
+is synchronous while Windows users must wait for the helper's completion
+message.
+
+- [ ] **Step 6: Run focused tests and verify GREEN**
+
+Run:
+
+```bash
+uv run pytest tests/test_cli_upgrade_commands.py tests/integration/test_cli_upgrade_real_uv.py -q
+uv run ruff check raven/cli/upgrade_commands.py tests/test_cli_upgrade_commands.py tests/integration/test_cli_upgrade_real_uv.py
+uv run ruff format --check raven/cli/upgrade_commands.py tests/test_cli_upgrade_commands.py tests/integration/test_cli_upgrade_real_uv.py
+```
+
+Expected: all focused tests and lint pass.
+
+### Task 6: Full verification and pull request
 
 **Files:**
 - Verify all files changed by Tasks 1-4.
