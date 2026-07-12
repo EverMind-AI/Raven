@@ -96,6 +96,19 @@ If setup fails or a provider is not ready, run:
 raven doctor
 ```
 
+### Upgrade an existing installation
+
+Check for the latest published stable release:
+
+    raven upgrade --check
+
+Upgrade Raven without resetting configuration, sessions, or memory:
+
+    raven upgrade
+
+Raven upgrades are user-triggered, not automatic. Editable source installs are
+not overwritten; update the checkout and rerun its development setup instead.
+
 ## What You Can Do in 2 Minutes
 
 - Start the Raven harness in a terminal-native TUI with `raven` or `raven tui`.
@@ -263,6 +276,8 @@ official endorsement unless explicitly approved by EverMind.
 | Show plugins and memory backend | `raven plugins` |
 | Debug sandbox VMs | `raven sandbox list` |
 | Show local status | `raven status` |
+| Check for Raven updates | `raven upgrade --check` |
+| Upgrade Raven | `raven upgrade` |
 | Diagnose setup | `raven doctor` |
 
 ## Docs by Goal
