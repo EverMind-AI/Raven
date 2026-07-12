@@ -111,6 +111,8 @@ raven doctor
 
 Raven 升级需要由用户主动触发，不会自动进行。Raven 会拒绝覆盖 editable source
 installs；请更新源码 checkout，并重新运行对应的开发环境配置。
+在 POSIX 系统上，命令会同步等待 helper 输出最终结果。原生 Windows 会先调度外部
+helper，让当前运行的可执行文件退出；请等 helper 输出完成消息后再运行 Raven。
 
 ## 2 分钟能做什么
 

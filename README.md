@@ -108,6 +108,10 @@ Upgrade Raven without resetting configuration, sessions, or memory:
 
 Raven upgrades are user-triggered, not automatic. Editable source installs are
 not overwritten; update the checkout and rerun its development setup instead.
+On POSIX systems, the command stays synchronous until the helper reports its
+final result. On native Windows, it schedules an external helper so the running
+executable can exit; wait for the helper's completion message before running
+Raven again.
 
 ## What You Can Do in 2 Minutes
 

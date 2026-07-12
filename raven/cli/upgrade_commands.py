@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import NoReturn
 from urllib.parse import urlparse
 
 import httpx
@@ -41,13 +42,73 @@ _UPGRADE_HELPER_SOURCE = r"""import subprocess
 import sys
 
 
+def wait_for_parent(parent_pid):
+    import ctypes
+    from ctypes import wintypes
+
+    synchronize = 0x00100000
+    wait_object_0 = 0x00000000
+    wait_timeout = 0x00000102
+    wait_failed = 0xFFFFFFFF
+    error_invalid_parameter = 87
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(synchronize, False, parent_pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == error_invalid_parameter:
+            return 0
+        print(
+            f"Unable to upgrade Raven: could not wait for Raven to exit "
+            f"(Windows error {error}).",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        wait_status = kernel32.WaitForSingleObject(handle, 30_000)
+        wait_error = ctypes.get_last_error()
+    finally:
+        kernel32.CloseHandle(handle)
+
+    if wait_status == wait_object_0:
+        return 0
+    if wait_status == wait_timeout:
+        detail = "timed out"
+    elif wait_status == wait_failed:
+        detail = f"failed with Windows error {wait_error}"
+    else:
+        detail = f"returned unexpected status {wait_status}"
+    print(f"Unable to upgrade Raven: waiting for Raven to exit {detail}.", file=sys.stderr)
+    return 1
+
+
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 4:
+    if len(args) not in (4, 5):
         print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
         return 2
 
-    uv_path, wheel_url, current_version, latest_version = args
+    uv_path, wheel_url, current_version, latest_version = args[:4]
+    if len(args) == 5:
+        try:
+            parent_pid = int(args[4])
+        except (TypeError, ValueError):
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+        if parent_pid <= 0:
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+        parent_status = wait_for_parent(parent_pid)
+        if parent_status != 0:
+            return parent_status
 
     def install(requirement):
         return subprocess.run(
@@ -82,6 +143,11 @@ def main(argv=None):
 if __name__ == "__main__":
     raise SystemExit(main())
 """
+
+
+def _upgrade_helper_bootstrap() -> str:
+    encoded = base64.b64encode(_UPGRADE_HELPER_SOURCE.encode("utf-8")).decode("ascii")
+    return f'exec(compile(__import__("base64").b64decode("{encoded}"),"<raven-upgrade>","exec"))'
 
 
 def _version_key(value: str) -> tuple[int, int, int]:
@@ -283,7 +349,7 @@ def _handoff_upgrade(
     release: ReleaseInfo,
     current_version: str,
     target: ToolInstallTarget,
-) -> NoReturn:
+) -> None:
     uv_value = shutil.which("uv")
     if uv_value is None:
         raise UpgradeError("uv was not found on PATH")
@@ -297,7 +363,7 @@ def _handoff_upgrade(
         str(base_python),
         "-I",
         "-c",
-        _UPGRADE_HELPER_SOURCE,
+        _upgrade_helper_bootstrap(),
         str(uv_path),
         release.wheel_url,
         current_version,
@@ -306,6 +372,11 @@ def _handoff_upgrade(
     sys.stdout.flush()
     sys.stderr.flush()
     try:
+        if sys.platform == "win32":
+            argv.append(str(os.getppid()))
+            subprocess.Popen(argv, env=env)
+            print("Raven upgrade started. Wait for the completion message before running Raven again.")
+            return
         os.execve(str(base_python), argv, env)
     except OSError as exc:
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc

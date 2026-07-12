@@ -12,7 +12,7 @@ import pytest
 UV_PATH = shutil.which("uv")
 
 
-def _build_fixture(source_root: Path, output_root: Path, version: str) -> Path:
+def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: Path) -> Path:
     package_root = source_root / "upgrade_fixture"
     package_root.mkdir(parents=True)
     (source_root / "pyproject.toml").write_text(
@@ -74,7 +74,7 @@ def _build_fixture(source_root: Path, output_root: Path, version: str) -> Path:
     )
     output_root.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [UV_PATH, "build", "--wheel", "--out-dir", str(output_root)],
+        [str(uv_path), "build", "--wheel", "--out-dir", str(output_root)],
         cwd=source_root,
         check=True,
         capture_output=True,
@@ -86,14 +86,19 @@ def _build_fixture(source_root: Path, output_root: Path, version: str) -> Path:
 
 @pytest.mark.skipif(UV_PATH is None, reason="uv is required for the real self-upgrade test")
 def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -> None:
+    external_tools = tmp_path / "external tools"
+    external_tools.mkdir()
+    external_uv = external_tools / Path(UV_PATH).name
+    shutil.copy2(UV_PATH, external_uv)
     wheels = tmp_path / "wheels"
-    old_wheel = _build_fixture(tmp_path / "old", wheels, "1.0.0")
-    new_wheel = _build_fixture(tmp_path / "new", wheels, "2.0.0")
-    tool_dir = tmp_path / "custom-tools"
-    bin_dir = tmp_path / "custom-bin"
+    old_wheel = _build_fixture(tmp_path / "old", wheels, "1.0.0", external_uv)
+    new_wheel = _build_fixture(tmp_path / "new", wheels, "2.0.0", external_uv)
+    tool_dir = tmp_path / "custom tools"
+    bin_dir = tmp_path / "custom bin"
     env = os.environ.copy()
     env.update(
         {
+            "PATH": str(external_tools) + os.pathsep + env["PATH"],
             "UV_TOOL_DIR": str(tool_dir),
             "UV_TOOL_BIN_DIR": str(bin_dir),
             "RAVEN_UPGRADE_SOURCE": str(Path(__file__).parents[2]),
@@ -101,7 +106,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
         }
     )
     subprocess.run(
-        [UV_PATH, "tool", "install", "--force", str(old_wheel)],
+        [str(external_uv), "tool", "install", "--force", str(old_wheel)],
         check=True,
         env=env,
         capture_output=True,

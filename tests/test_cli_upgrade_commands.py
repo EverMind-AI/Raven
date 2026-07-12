@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import subprocess
+import sys
 import tomllib
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -372,6 +374,22 @@ def _load_upgrade_helper() -> object:
     return namespace["main"]
 
 
+def test_upgrade_helper_bootstrap_runs_in_isolated_python() -> None:
+    bootstrap = upgrade_commands._upgrade_helper_bootstrap()
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", bootstrap],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert not any(character.isspace() for character in bootstrap)
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr == "Unable to upgrade Raven: invalid upgrade helper arguments.\n"
+
+
 def test_upgrade_helper_stops_after_channel_install_succeeds(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -438,6 +456,142 @@ def test_upgrade_helper_catches_uv_execution_errors(
     assert "access denied" in capsys.readouterr().err
 
 
+def test_upgrade_helper_waits_for_parent_before_running_uv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, object]] = []
+
+    def wait_for_parent(parent_pid: int) -> int:
+        events.append(("wait", parent_pid))
+        return 0
+
+    def run(argv: list[str], *, check: bool) -> Mock:
+        events.append(("run", argv))
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = wait_for_parent
+
+    status = helper_main(["/path with spaces/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321"])
+
+    assert status == 0
+    assert events[0] == ("wait", 4321)
+    assert events[1][0] == "run"
+
+
+def test_upgrade_helper_stops_when_parent_wait_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Mock()
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=19)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321"])
+
+    assert status == 19
+    run.assert_not_called()
+
+
+def _mock_windows_process_api(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    handle: int | None,
+    wait_status: int = 0,
+    error: int = 0,
+) -> tuple[Mock, Mock, Mock]:
+    open_process = Mock(return_value=handle)
+    wait_for_single_object = Mock(return_value=wait_status)
+    close_handle = Mock(return_value=True)
+    kernel32 = Mock(
+        OpenProcess=open_process,
+        WaitForSingleObject=wait_for_single_object,
+        CloseHandle=close_handle,
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", Mock(return_value=kernel32), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", Mock(return_value=error), raising=False)
+    return open_process, wait_for_single_object, close_handle
+
+
+def test_upgrade_helper_waits_on_parent_process_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    open_process, wait_for_single_object, close_handle = _mock_windows_process_api(
+        monkeypatch,
+        handle=1234,
+    )
+    helper_main = _load_upgrade_helper()
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+
+    status = wait_for_parent(4321)
+
+    assert status == 0
+    open_process.assert_called_once_with(0x00100000, False, 4321)
+    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    close_handle.assert_called_once_with(1234)
+    assert open_process.restype is ctypes.c_void_p
+    assert wait_for_single_object.argtypes[0] is ctypes.c_void_p
+    assert close_handle.argtypes == [ctypes.c_void_p]
+
+
+def test_upgrade_helper_treats_missing_parent_as_already_exited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    open_process, wait_for_single_object, close_handle = _mock_windows_process_api(
+        monkeypatch,
+        handle=None,
+        error=87,
+    )
+    helper_main = _load_upgrade_helper()
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+
+    status = wait_for_parent(4321)
+
+    assert status == 0
+    open_process.assert_called_once_with(0x00100000, False, 4321)
+    wait_for_single_object.assert_not_called()
+    close_handle.assert_not_called()
+
+
+@pytest.mark.parametrize("wait_status", [258, 0xFFFFFFFF], ids=["timeout", "failed"])
+def test_upgrade_helper_closes_parent_handle_when_wait_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    wait_status: int,
+) -> None:
+    _, wait_for_single_object, close_handle = _mock_windows_process_api(
+        monkeypatch,
+        handle=1234,
+        wait_status=wait_status,
+    )
+    helper_main = _load_upgrade_helper()
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+
+    status = wait_for_parent(4321)
+
+    assert status == 1
+    wait_for_single_object.assert_called_once_with(1234, 30_000)
+    close_handle.assert_called_once_with(1234)
+
+
+def test_upgrade_helper_rejects_parent_open_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, wait_for_single_object, close_handle = _mock_windows_process_api(
+        monkeypatch,
+        handle=None,
+        error=5,
+    )
+    helper_main = _load_upgrade_helper()
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
+
+    status = wait_for_parent(4321)
+
+    assert status == 1
+    wait_for_single_object.assert_not_called()
+    close_handle.assert_not_called()
+
+
 def test_handoff_replaces_process_with_isolated_base_python(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -451,6 +605,7 @@ def test_handoff_replaces_process_with_isolated_base_python(
     base_python.touch()
     uv_path.touch()
     target = upgrade_commands.ToolInstallTarget(tmp_path / "tools", tmp_path / "tool-bin")
+    monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
     monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
     monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
     monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
@@ -468,11 +623,91 @@ def test_handoff_replaces_process_with_isolated_base_python(
 
     executable, argv, env = execve.call_args.args
     assert executable == str(base_python)
-    assert argv[:4] == [str(base_python), "-I", "-c", upgrade_commands._UPGRADE_HELPER_SOURCE]
+    assert argv[:3] == [str(base_python), "-I", "-c"]
+    assert not any(character.isspace() for character in argv[3])
+    helper_namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
+    exec(argv[3], helper_namespace)
+    assert "main" in helper_namespace
     assert argv[4:] == [str(uv_path), WHEEL_URL, "0.1.3", "0.1.4"]
     assert env["UV_TOOL_DIR"] == str(target.tool_dir)
     assert env["UV_TOOL_BIN_DIR"] == str(target.bin_dir)
     assert env["PATH"] == os.environ["PATH"]
+
+
+def test_windows_handoff_starts_external_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    prefix = tmp_path / "custom tools" / "raven"
+    base_python = tmp_path / "external python" / "python.exe"
+    uv_path = tmp_path / "external tools" / "uv.exe"
+    prefix.mkdir(parents=True)
+    base_python.parent.mkdir(parents=True)
+    uv_path.parent.mkdir(parents=True)
+    base_python.touch()
+    uv_path.touch()
+    target = upgrade_commands.ToolInstallTarget(tmp_path / "custom tools", tmp_path / "custom bin")
+    monkeypatch.setattr(upgrade_commands.sys, "platform", "win32")
+    monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
+    monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
+    monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands.os, "getppid", lambda: 4321)
+    execve = Mock(side_effect=OSError("execve was called"))
+    monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+    popen = Mock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+
+    upgrade_commands._handoff_upgrade(
+        upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
+        "0.1.3",
+        target,
+    )
+
+    execve.assert_not_called()
+    popen.assert_called_once()
+    (argv,) = popen.call_args.args
+    env = popen.call_args.kwargs["env"]
+    assert popen.call_args.kwargs == {"env": env}
+    assert argv[:3] == [str(base_python), "-I", "-c"]
+    assert not any(character.isspace() for character in argv[3])
+    assert argv[4:] == [str(uv_path), WHEEL_URL, "0.1.3", "0.1.4", "4321"]
+    assert env["UV_TOOL_DIR"] == str(target.tool_dir)
+    assert env["UV_TOOL_BIN_DIR"] == str(target.bin_dir)
+    assert (
+        "Raven upgrade started. Wait for the completion message before running Raven again." in capsys.readouterr().out
+    )
+
+
+def test_windows_handoff_reports_spawn_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prefix = tmp_path / "custom tools" / "raven"
+    base_python = tmp_path / "external python" / "python.exe"
+    uv_path = tmp_path / "external tools" / "uv.exe"
+    prefix.mkdir(parents=True)
+    base_python.parent.mkdir(parents=True)
+    uv_path.parent.mkdir(parents=True)
+    base_python.touch()
+    uv_path.touch()
+    monkeypatch.setattr(upgrade_commands.sys, "platform", "win32")
+    monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
+    monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
+    monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands.os, "getppid", lambda: 4321)
+    execve = Mock(side_effect=OSError("execve was called"))
+    monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+    monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+
+    with pytest.raises(upgrade_commands.UpgradeError, match="spawn denied"):
+        upgrade_commands._handoff_upgrade(
+            upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
+            "0.1.3",
+            upgrade_commands.ToolInstallTarget(tmp_path / "custom tools", tmp_path / "custom bin"),
+        )
+
+    execve.assert_not_called()
 
 
 @pytest.mark.parametrize("inside_prefix", ["uv", "base-python"])
