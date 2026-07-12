@@ -230,11 +230,11 @@ def test_channels_login_normal_channels_dispatch():
 
 
 def test_blacklist_full_coverage():
-    """7-entry blacklist (5 original + tui + onboard).
+    """8-entry blacklist (5 original + tui + onboard + upgrade).
 
     `tui` blocks recursive Ink+Node spawn; `onboard` blocks prompt_toolkit
-    wizard stdin hijack. Both necessary because reflection will otherwise
-    let them through.
+    wizard stdin hijack; `upgrade` blocks replacing the active Raven process.
+    All are necessary because reflection will otherwise let them through.
     """
     from raven.tui_rpc.methods.cli_dispatch import _DISPATCH_BLACKLIST
 
@@ -246,15 +246,18 @@ def test_blacklist_full_coverage():
         ("sandbox", "shell"),
         ("tui",),
         ("onboard",),
+        ("upgrade",),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 7 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 8 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
     assert _is_dispatch_compatible(["tui", "--help"]) is False  # prefix
     assert _is_dispatch_compatible(["onboard"]) is False
     assert _is_dispatch_compatible(["onboard", "--reset"]) is False  # prefix
+    assert _is_dispatch_compatible(["upgrade"]) is False
+    assert _is_dispatch_compatible(["upgrade", "--check"]) is False  # prefix
 
 
 # ---------------------------------------------------------------------------

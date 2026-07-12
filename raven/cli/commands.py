@@ -9,6 +9,7 @@ group. The actual implementations live in per-feature modules:
     - ``gateway``  → ``raven/cli/gateway_commands.py``
     - ``onboard``  → ``raven/cli/onboard_commands.py``
     - ``status``   → ``raven/cli/status_commands.py``
+    - ``upgrade``  → ``raven/cli/upgrade_commands.py``
 
 - Subcommand groups (each exposes a typer ``*_app`` instance):
     - ``channels`` → ``raven/cli/channel_commands.py``
@@ -108,6 +109,7 @@ from raven.cli import (
     onboard_commands,
     plugin_commands,
     status_commands,
+    upgrade_commands,
 )
 
 onboard_commands.register(app)
@@ -116,6 +118,7 @@ agent_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)
+upgrade_commands.register(app)
 
 
 # ============================================================================
