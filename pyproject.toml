@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.3"
+version = "0.1.4"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
