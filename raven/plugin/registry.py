@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from raven.plugin.discover import DiscoveredPlugin
+from raven.plugin.discover import DiscoveredPlugin, Source
 from raven.plugin.manifest import PluginManifest
 
 logger = logging.getLogger(__name__)
@@ -108,15 +110,26 @@ class PluginRegistry:
                     mf.id,
                 )
                 continue
-            self._activate_one(mf)
+            self._activate_one(mf, source=d.source, location=d.location)
 
-    def _activate_one(self, mf: PluginManifest) -> None:
+    def _activate_one(
+        self,
+        mf: PluginManifest,
+        *,
+        source: Source,
+        location: Path | None,
+    ) -> None:
         if mf.id in self._manifests:
             # Discovery should have deduped this already; defensive.
             raise PluginConflictError(
                 f"plugin id {mf.id!r} activated twice",
             )
         self._manifests[mf.id] = mf
+
+        # Call-order sensitive: a file-based USER/PROJECT plugin ships its
+        # factory module inside the plugin directory, which nothing puts on
+        # sys.path — make it importable before _resolve_factory runs below.
+        self._ensure_importable(source, location)
 
         for contribution in mf.contributes.memory_backends:
             if contribution.name in self._memory_backends:
@@ -149,6 +162,29 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered tool %s from %s", tool.name, mf.id)
+
+    @staticmethod
+    def _ensure_importable(source: Source, location: Path | None) -> None:
+        """Put a file-based plugin's directory on ``sys.path`` so its
+        factory module imports.
+
+        Only USER / PROJECT plugins need this: their Python package lives
+        in the plugin directory (``<root>/<id>/``) that nothing else adds
+        to the path. BUNDLED code ships inside the raven package and
+        ENTRY_POINTS plugins are installed into site-packages, so both
+        already import without help.
+
+        Appended (not prepended) so an installed package of the same name
+        keeps priority, and guarded so repeated activations don't grow the
+        path. This widens the process-wide import surface for the lifetime
+        of the process: every module under that directory becomes
+        importable, not just the referenced factory.
+        """
+        if source not in (Source.USER, Source.PROJECT) or location is None:
+            return
+        plugin_dir = str(location.parent)
+        if plugin_dir not in sys.path:
+            sys.path.append(plugin_dir)
 
     @staticmethod
     def _resolve_factory(plugin_id: str, ref: str) -> MemoryBackendFactory:
