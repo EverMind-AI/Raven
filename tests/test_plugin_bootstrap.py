@@ -61,6 +61,66 @@ def _cleanup_modules():
         sys.modules.pop(k, None)
 
 
+@pytest.fixture(autouse=True)
+def _restore_syspath():
+    snapshot = list(sys.path)
+    yield
+    sys.path[:] = snapshot
+
+
+def _write_real_plugin(
+    root: Path,
+    plugin_id: str,
+    *,
+    pkg: str,
+    backend_name: str | None = None,
+    tool_name: str | None = None,
+) -> None:
+    """Write a genuine on-disk plugin: manifest + an importable package
+    whose factory module is *not* pre-seeded into ``sys.modules``.
+
+    Loading it therefore only succeeds if activation put ``<root>/<id>/``
+    on ``sys.path`` — the exact behaviour under test. Contrast with
+    ``_install_test_module``, which sidesteps import resolution entirely.
+    """
+    sub = root / plugin_id
+    (sub / pkg).mkdir(parents=True, exist_ok=True)
+    (sub / pkg / "__init__.py").write_text("", encoding="utf-8")
+    (sub / pkg / "factories.py").write_text(
+        textwrap.dedent("""
+        def make_backend(ctx):
+            return {"kind": "backend", **ctx.config}
+
+        def make_tool(ctx):
+            return {"kind": "tool"}
+        """),
+        encoding="utf-8",
+    )
+    blocks = ""
+    if backend_name is not None:
+        blocks += textwrap.dedent(f"""
+        [[plugin.contributes.memory_backends]]
+        name = "{backend_name}"
+        factory = "{pkg}.factories:make_backend"
+        """)
+    if tool_name is not None:
+        blocks += textwrap.dedent(f"""
+        [[plugin.contributes.tools]]
+        name = "{tool_name}"
+        factory = "{pkg}.factories:make_tool"
+        """)
+    (sub / "raven-plugin.toml").write_text(
+        textwrap.dedent(f"""
+        [plugin]
+        id = "{plugin_id}"
+        version = "0.1.0"
+        enabled_by_default = true
+        """)
+        + blocks,
+        encoding="utf-8",
+    )
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: discover → activate → build
 # ---------------------------------------------------------------------------
@@ -202,3 +262,69 @@ class TestEmpty:
         registry = assemble_plugin_registry(entry_points_group=None)
         assert isinstance(registry, PluginRegistry)
         assert registry.activated_ids() == []
+
+
+# ---------------------------------------------------------------------------
+# User/project-dir plugins ship their factory package in the plugin dir;
+# activation must put that dir on sys.path so the factory imports.
+# ---------------------------------------------------------------------------
+
+
+class TestUserDirImport:
+    def test_user_dir_backend_loads_from_ondisk_package(self, tmp_path: Path) -> None:
+        user = tmp_path / "user"
+        _write_real_plugin(
+            user,
+            "ud-backend",
+            pkg="udpkg_backend",
+            backend_name="ud_mem",
+        )
+        registry = assemble_plugin_registry(user_dir=user, entry_points_group=None)
+        assert registry.activated_ids() == ["ud-backend"]
+        backend = registry.build_memory_backend(
+            "ud_mem",
+            config={"mode": "embedded"},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+        assert backend == {"kind": "backend", "mode": "embedded"}
+
+    def test_project_dir_tool_loads_from_ondisk_package(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        _write_real_plugin(
+            project,
+            "pd-tool",
+            pkg="pdpkg_tool",
+            tool_name="pd_tool",
+        )
+        registry = assemble_plugin_registry(project_dir=project, entry_points_group=None)
+        assert registry.activated_ids() == ["pd-tool"]
+        tool = registry.build_tool(
+            "pd_tool",
+            config={},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+        assert tool == {"kind": "tool"}
+
+    def test_user_dir_mixed_backend_and_tool_load(self, tmp_path: Path) -> None:
+        user = tmp_path / "user"
+        _write_real_plugin(
+            user,
+            "ud-mixed",
+            pkg="udpkg_mixed",
+            backend_name="mixed_mem",
+            tool_name="mixed_tool",
+        )
+        registry = assemble_plugin_registry(user_dir=user, entry_points_group=None)
+        assert registry.activated_ids() == ["ud-mixed"]
+        backend = registry.build_memory_backend(
+            "mixed_mem",
+            config={},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+        tool = registry.build_tool(
+            "mixed_tool",
+            config={},
+            services=ServiceLocator(workspace=tmp_path),
+        )
+        assert backend == {"kind": "backend"}
+        assert tool == {"kind": "tool"}
