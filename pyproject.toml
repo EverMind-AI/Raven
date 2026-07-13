@@ -42,6 +42,7 @@ dependencies = [
     "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
+    "orjson>=3.11.6,<4.0",
 ]
 
 [project.optional-dependencies]
