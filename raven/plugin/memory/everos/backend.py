@@ -94,6 +94,8 @@ class _Adapter(Protocol):
         payload_messages: list[dict[str, Any]],
         *,
         is_final: bool = False,
+        app_id: str | None = None,
+        project_id: str | None = None,
     ) -> None: ...
 
 
@@ -174,11 +176,18 @@ class _RealEverosAdapter:
         payload_messages: list[dict[str, Any]],
         *,
         is_final: bool = False,
+        app_id: str | None = None,
+        project_id: str | None = None,
     ) -> None:
-        await self._memorize_fn(
-            {"session_id": session_id, "messages": payload_messages},
-            is_final=is_final,
-        )
+        payload: dict[str, Any] = {
+            "session_id": session_id,
+            "messages": payload_messages,
+        }
+        if app_id is not None:
+            payload["app_id"] = app_id
+        if project_id is not None:
+            payload["project_id"] = project_id
+        await self._memorize_fn(payload, is_final=is_final)
 
 
 def _try_make_real_adapter() -> _Adapter:
@@ -438,17 +447,30 @@ class _HttpEverosAdapter:
         payload_messages: list[dict[str, Any]],
         *,
         is_final: bool = False,
+        app_id: str | None = None,
+        project_id: str | None = None,
     ) -> None:
-        body = {"session_id": session_id, "messages": payload_messages}
+        body: dict[str, Any] = {
+            "session_id": session_id,
+            "messages": payload_messages,
+        }
+        if app_id is not None:
+            body["app_id"] = app_id
+        if project_id is not None:
+            body["project_id"] = project_id
         url = f"{self._base_url}/api/v1/memory/add"
         r = await self._client.post(url, json=body, headers=self._headers())
         r.raise_for_status()
         if is_final:
-            # Promote accumulated raw messages to episodes / cases / skills.
+            flush_body: dict[str, Any] = {"session_id": session_id}
+            if app_id is not None:
+                flush_body["app_id"] = app_id
+            if project_id is not None:
+                flush_body["project_id"] = project_id
             flush_url = f"{self._base_url}/api/v1/memory/flush"
             fr = await self._client.post(
                 flush_url,
-                json={"session_id": session_id},
+                json=flush_body,
                 headers=self._headers(),
             )
             fr.raise_for_status()
@@ -621,6 +643,8 @@ class EverosBackend:
         self,
         session_id: str,
         messages: list[dict[str, Any]],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Forward a turn's messages to EverOS for indexing.
 
@@ -645,12 +669,21 @@ class EverosBackend:
         if not payload:
             return
         if self._adapter is None:
-            return  # adapter still building (start() not finished); drop this turn's store
-        n = self._turn_counts.get(session_id, 0) + 1
-        self._turn_counts[session_id] = n
-        is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
+            return
+        if metadata and "is_final" in metadata:
+            is_final = bool(metadata["is_final"])
+        else:
+            n = self._turn_counts.get(session_id, 0) + 1
+            self._turn_counts[session_id] = n
+            is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
         try:
-            await self._adapter.memorize(session_id, payload, is_final=is_final)
+            await self._adapter.memorize(
+                session_id,
+                payload,
+                is_final=is_final,
+                app_id=metadata.get("app_id") if metadata else None,
+                project_id=metadata.get("project_id") if metadata else None,
+            )
         except Exception as e:
             self._logger.warning("EverosBackend.store failed (%s)", e)
 
