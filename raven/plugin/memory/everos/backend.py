@@ -676,16 +676,14 @@ class EverosBackend:
             n = self._turn_counts.get(session_id, 0) + 1
             self._turn_counts[session_id] = n
             is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0
-        try:
-            await self._adapter.memorize(
-                session_id,
-                payload,
-                is_final=is_final,
-                app_id=metadata.get("app_id") if metadata else None,
-                project_id=metadata.get("project_id") if metadata else None,
-            )
-        except Exception as e:
-            self._logger.warning("EverosBackend.store failed (%s)", e)
+
+        await self._adapter.memorize(
+            session_id,
+            payload,
+            is_final=is_final,
+            app_id=metadata.get("app_id") if metadata else None,
+            project_id=metadata.get("project_id") if metadata else None,
+        )
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Deliberate no-op pending an upstream everos feedback sink.

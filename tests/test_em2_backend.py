@@ -52,12 +52,22 @@ class _FakeAdapter:
             raise self.search_raises
         return self.search_response
 
-    async def memorize(self, session_id, payload_messages, *, is_final=False):
+    async def memorize(
+        self,
+        session_id,
+        payload_messages,
+        *,
+        is_final=False,
+        app_id=None,
+        project_id=None,
+    ):
         self.memorize_calls.append(
             {
                 "session_id": session_id,
                 "payload_messages": payload_messages,
                 "is_final": is_final,
+                "app_id": app_id,
+                "project_id": project_id,
             }
         )
         if self.memorize_raises is not None:
@@ -504,13 +514,12 @@ class TestStoreConversion:
         )
         assert adapter.memorize_calls[0]["payload_messages"][0]["sender_id"] == "alice-123"
 
-    async def test_memorize_exception_swallowed(self, tmp_path: Path) -> None:
+    async def test_memorize_exception_propagates(self, tmp_path: Path) -> None:
         adapter = _FakeAdapter()
         adapter.memorize_raises = RuntimeError("everos down")
         b = _backend(tmp_path, adapter=adapter)
-        # Backend.store does NOT raise; AgentLoop's after-turn step
-        # should never be derailed by a backend store failure.
-        await b.store("s", [{"role": "user", "content": "x"}])
+        with pytest.raises(RuntimeError, match="everos down"):
+            await b.store("s", [{"role": "user", "content": "x"}])
 
 
 # ---------------------------------------------------------------------------
