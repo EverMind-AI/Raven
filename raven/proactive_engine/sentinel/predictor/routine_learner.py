@@ -37,6 +37,7 @@ from typing import Callable, Iterable
 from loguru import logger
 
 from raven.proactive_engine.sentinel.types import Routine
+from raven.utils.text import CJK_RE
 
 # Default half-life for ``learn_with_decay``. 14d → entries 14 days old
 # count half, 28 days a quarter — fresh habits dominate without erasing
@@ -198,7 +199,7 @@ def _extract_keywords(content: str, max_keywords: int = 5) -> list[str]:
             continue
         if tok.isdigit():
             continue
-        if len(tok) < 2 and not re.search(r"[一-鿿]", tok):
+        if len(tok) < 2 and not CJK_RE.search(tok):
             continue  # drop single ASCII chars; keep single CJK
         kept.append(tok)
     if not kept:

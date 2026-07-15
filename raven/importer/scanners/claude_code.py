@@ -6,11 +6,9 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
 from loguru import logger
 
 from raven.importer.types import (
@@ -20,15 +18,14 @@ from raven.importer.types import (
     ScanResult,
     SourceKind,
 )
+from raven.utils.text import is_cjk, parse_frontmatter, parse_iso_ts_ms
 
 _ACTIVE_THRESHOLD_S = 300
 _MAX_MEMORY_FILE_BYTES = 1_048_576
 _CONTENT_TRUNCATE_LIMIT = 10_000
 _APP_ID = "claude_code"
 
-_CJK_RE = re.compile(r"[一-鿿]")
 _SKIP_CONTENT_TYPES = frozenset({"thinking", "redacted_thinking"})
-_FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
 
 _INTRO_TEMPLATES: dict[str | None, tuple[str, str]] = {
     "MEMORY.MD": (
@@ -77,20 +74,6 @@ _SESSION_EPILOGUE = (
 # ---------------------------------------------------------------------------
 # Helpers -- content extraction
 # ---------------------------------------------------------------------------
-
-
-def _parse_iso_ts(raw: Any) -> int | None:
-    if isinstance(raw, (int, float)):
-        return int(raw) if raw > 1e12 else int(raw * 1000)
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return int(dt.timestamp() * 1000)
-    except (ValueError, TypeError):
-        return None
 
 
 def _truncate(text: str) -> str:
@@ -168,25 +151,6 @@ def _tool_results_from_content(content: list[dict[str, Any]], ts: int, sender: s
 # ---------------------------------------------------------------------------
 # Helpers -- memory file parsing
 # ---------------------------------------------------------------------------
-
-
-def _is_cjk(text: str, sample: int = 200) -> bool:
-    return bool(_CJK_RE.search(text[:sample]))
-
-
-def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    if not text.startswith("---"):
-        return {}, text
-    m = _FM_CLOSE_RE.search(text, pos=4)
-    if m is None:
-        return {}, text
-    fm_str = text[3 : m.start()].strip()
-    body = text[m.end() :].lstrip("\n")
-    try:
-        fm = yaml.safe_load(fm_str)
-        return (fm if isinstance(fm, dict) else {}), body
-    except yaml.YAMLError:
-        return {}, text
 
 
 def _make_intro(filename: str, fm: dict[str, Any], cjk: bool) -> str:
@@ -425,7 +389,7 @@ class ClaudeCodeScanner:
         if content is None:
             return
 
-        ts = _parse_iso_ts(ev.get("timestamp"))
+        ts = parse_iso_ts_ms(ev.get("timestamp"))
         if ts is None:
             return
         sender = "user" if role == "user" else "assistant"
@@ -476,7 +440,7 @@ class ClaudeCodeScanner:
     def _read_global_md(self, result: ScanResult) -> ImportSession:
         path = result.file_paths[0]
         text = path.read_text(encoding="utf-8", errors="replace")
-        _, body = _parse_frontmatter(text)
+        _, body = parse_frontmatter(text)
 
         if not body.strip():
             return ImportSession(
@@ -486,7 +450,7 @@ class ClaudeCodeScanner:
             )
 
         mtime_ms = int(result.mtime * 1000)
-        cjk = _is_cjk(body)
+        cjk = is_cjk(body)
         intro = _GLOBAL_INTRO[0] if cjk else _GLOBAL_INTRO[1]
         file_end = _make_file_end("CLAUDE.md", cjk)
         file_msgs = _build_file_messages(intro, body, file_end, mtime_ms)
@@ -509,13 +473,13 @@ class ClaudeCodeScanner:
         for p in paths:
             try:
                 t = p.read_text(encoding="utf-8", errors="replace")
-                _, b = _parse_frontmatter(t)
+                _, b = parse_frontmatter(t)
                 if b.strip():
                     first_body = b
                     break
             except OSError:
                 continue
-        cjk = _is_cjk(first_body)
+        cjk = is_cjk(first_body)
 
         preamble_tpl = _SESSION_PREAMBLE[0] if cjk else _SESSION_PREAMBLE[1]
         epilogue_tpl = _SESSION_EPILOGUE[0] if cjk else _SESSION_EPILOGUE[1]
@@ -537,7 +501,7 @@ class ClaudeCodeScanner:
                 logger.warning("Cannot read memory file: {}", path)
                 continue
 
-            fm, body = _parse_frontmatter(text)
+            fm, body = parse_frontmatter(text)
             if not body.strip():
                 continue
 
@@ -546,7 +510,7 @@ class ClaudeCodeScanner:
             except OSError:
                 file_mtime_ms = base_mtime_ms
 
-            file_cjk = _is_cjk(body)
+            file_cjk = is_cjk(body)
             intro = _make_intro(path.name, fm, file_cjk)
             file_end = _make_file_end(path.name, file_cjk)
             file_msgs = _build_file_messages(intro, body, file_end, file_mtime_ms)

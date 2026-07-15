@@ -17,15 +17,13 @@ from raven.importer import (
 )
 from raven.importer.scanners.claude_code import (
     _build_file_messages,
-    _is_cjk,
     _make_file_end,
     _make_intro,
     _memory_files_sorted,
-    _parse_frontmatter,
-    _parse_iso_ts,
     _split_paragraphs,
     _truncate,
 )
+from raven.utils.text import is_cjk, parse_frontmatter, parse_iso_ts_ms
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -451,24 +449,24 @@ class TestReadMemory:
 
 
 class TestHelpers:
-    def test_parse_frontmatter(self) -> None:
-        fm, body = _parse_frontmatter("---\nname: test\nmetadata:\n  type: reference\n---\nBody")
+    def testparse_frontmatter(self) -> None:
+        fm, body = parse_frontmatter("---\nname: test\nmetadata:\n  type: reference\n---\nBody")
         assert fm["name"] == "test"
         assert body == "Body"
 
     def test_parse_frontmatter_none(self) -> None:
-        fm, body = _parse_frontmatter("# No frontmatter")
+        fm, body = parse_frontmatter("# No frontmatter")
         assert fm == {}
         assert body == "# No frontmatter"
 
     def test_parse_frontmatter_bad_yaml(self) -> None:
-        fm, _ = _parse_frontmatter("---\n: [invalid\n---\nBody")
+        fm, _ = parse_frontmatter("---\n: [invalid\n---\nBody")
         assert fm == {}
 
     def test_parse_frontmatter_inner_separator(self) -> None:
         """B4 fix: --- inside YAML literal block should not split."""
         text = "---\nname: test\ncontent: |\n  line1\n  ---\n  line2\n---\nReal body"
-        fm, body = _parse_frontmatter(text)
+        fm, body = parse_frontmatter(text)
         assert fm.get("name") == "test"
         assert "Real body" in body
 
@@ -486,23 +484,23 @@ class TestHelpers:
         assert len(result) == 10_003
         assert result.endswith("...")
 
-    def test_is_cjk(self) -> None:
-        assert _is_cjk("这是中文")
-        assert not _is_cjk("English only")
-        assert _is_cjk("Mixed 中文")
+    def testis_cjk(self) -> None:
+        assert is_cjk("这是中文")
+        assert not is_cjk("English only")
+        assert is_cjk("Mixed 中文")
 
     def test_parse_iso_ts_string(self) -> None:
-        assert _parse_iso_ts("2026-07-01T12:00:00Z") == 1782907200000
-        assert _parse_iso_ts("2026-07-01T12:00:00.500Z") == 1782907200500
+        assert parse_iso_ts_ms("2026-07-01T12:00:00Z") == 1782907200000
+        assert parse_iso_ts_ms("2026-07-01T12:00:00.500Z") == 1782907200500
 
     def test_parse_iso_ts_numeric(self) -> None:
-        assert _parse_iso_ts(1720000000000) == 1720000000000
-        assert _parse_iso_ts(1720000000.5) == 1720000000500
+        assert parse_iso_ts_ms(1720000000000) == 1720000000000
+        assert parse_iso_ts_ms(1720000000.5) == 1720000000500
 
     def test_parse_iso_ts_invalid(self) -> None:
-        assert _parse_iso_ts("invalid") is None
-        assert _parse_iso_ts("") is None
-        assert _parse_iso_ts(None) is None
+        assert parse_iso_ts_ms("invalid") is None
+        assert parse_iso_ts_ms("") is None
+        assert parse_iso_ts_ms(None) is None
 
     def test_make_intro_data_driven(self) -> None:
         fm = {"name": "arch", "metadata": {"type": "reference"}}
