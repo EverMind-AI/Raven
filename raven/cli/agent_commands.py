@@ -337,6 +337,7 @@ def register(app: typer.Typer) -> None:
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
+            deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -520,11 +521,15 @@ def register(app: typer.Typer) -> None:
                     console.print()
                     console.print("[bold magenta]🐦‍⬛ [主动][/bold magenta]")
 
+                _ch = agent_loop.channels_config
                 scheduler, hub, teardown = build_repl(
                     agent_loop,
                     cli_channel,
                     lambda t: _print_agent_response(t, render_markdown=markdown),
+                    render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
                     render_marker=_render_nudge_marker,
+                    send_progress=bool(_ch.send_progress) if _ch else False,
+                    send_tool_hints=bool(_ch.send_tool_hints) if _ch else False,
                 )
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent_loop.subagents.set_submit(scheduler.submit)

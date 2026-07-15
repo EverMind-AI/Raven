@@ -90,7 +90,9 @@ class TuiTurnRunner(AgentTurnRunner):
                 self._readback_texts[req.conversation] = text
             return outcome
         usage_sink: dict[str, Any] = {}
-        outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
+        outcome = await self._loop.run_turn(
+            req, emit, drain, stream=True, inline_tool_stream=True, usage_sink=usage_sink
+        )
 
         # A synthetic tool.complete when the message tool fired (the loop
         # skips it on the general tool path), so the UI records the agent acted —

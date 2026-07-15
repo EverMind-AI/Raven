@@ -30,6 +30,7 @@ from raven.agent.tools.media_gen import (
     SpeechGenerateTool,
     VideoGenerateTool,
 )
+from raven.agent.tools.deep_research import DeepResearchTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
@@ -260,6 +261,7 @@ class AgentLoop:
         max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
         media_config: Any = None,
+        deep_research_config: Any = None,
         disabled_tools: list[str] | None = None,
         tool_search_config: Any = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
@@ -319,9 +321,10 @@ class AgentLoop:
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        from raven.config.schema import MediaGenConfig
+        from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
         self.media_config = media_config or MediaGenConfig()
+        self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -595,6 +598,13 @@ class AgentLoop:
                         output_subdir=media.output_subdir,
                     )
                 )
+        # Deep research (MiroThinker) is opt-in: a paid, minute-scale HTTP engine
+        # registered only when a key is configured, so an unconfigured deploy
+        # never exposes a tool that errors on first call.
+        if DeepResearchTool.is_configured(self.deep_research_config):
+            self.tools.register(
+                DeepResearchTool(self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy)
+            )
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -2149,6 +2159,7 @@ class AgentLoop:
         drain: Drain,
         *,
         stream: bool = True,
+        inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
@@ -2277,6 +2288,27 @@ class AgentLoop:
                     await emit(Text(content=content))
 
             message_tool.set_send_callback(_route_to_stream)
+
+        # deep_research (streaming surfaces only): stream its progress live and
+        # deliver its finished answer inline, so the tool returns a compact
+        # receipt and the model relays instead of re-emitting/rewriting. Progress
+        # rides Reasoning (TUI thinking.delta / CLI progress line); the answer
+        # follows the same stream switch as the main reply.
+        if inline_tool_stream:
+            dr_tool = self.tools.get("deep_research")
+            if dr_tool is not None and hasattr(dr_tool, "set_stream_callback"):
+
+                async def _route_deep_research(kind: str, text: str) -> None:
+                    if not text:
+                        return
+                    if kind == "progress":
+                        await emit(Reasoning(content=text))
+                    elif stream:
+                        await on_token(text)
+                    else:
+                        await emit(Text(content=text))
+
+                dr_tool.set_stream_callback(_route_deep_research)
 
         # A CRON turn must not let the agent schedule new cron jobs mid-run. The
         # CronTool guards via a ContextVar; set it here, in the lane task that runs
