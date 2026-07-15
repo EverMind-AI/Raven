@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,10 +36,24 @@ class ImportSummary:
     errors: tuple[ImportFailure, ...]
 
 
+@dataclass(frozen=True)
+class ProgressEvent:
+    """Progress notification emitted once per ScanResult."""
+
+    platform: str
+    source_key: str
+    status: str
+    current: int
+    total: int
+    error: str | None = None
+
+
 async def run_import(
     items: Sequence[tuple[Scanner, ScanResult]],
     backend: MemoryBackend,
     state: ImportState,
+    *,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> ImportSummary:
     """Import pre-filtered scan results into the memory backend.
 
@@ -67,6 +81,16 @@ async def run_import(
                 platform,
                 key,
             )
+            if on_progress:
+                on_progress(
+                    ProgressEvent(
+                        platform=platform,
+                        source_key=key,
+                        status="skipped",
+                        current=i + 1,
+                        total=total,
+                    )
+                )
             continue
 
         logger.info("[{}/{}] importing {}/{}", i + 1, total, platform, key)
@@ -83,6 +107,16 @@ async def run_import(
                 key,
                 len(session.messages),
             )
+            if on_progress:
+                on_progress(
+                    ProgressEvent(
+                        platform=platform,
+                        source_key=key,
+                        status="submitted",
+                        current=i + 1,
+                        total=total,
+                    )
+                )
         except Exception as e:
             state.mark_failed(platform, key, str(e))
             failed += 1
@@ -95,6 +129,17 @@ async def run_import(
                 key,
                 e,
             )
+            if on_progress:
+                on_progress(
+                    ProgressEvent(
+                        platform=platform,
+                        source_key=key,
+                        status="failed",
+                        current=i + 1,
+                        total=total,
+                        error=str(e),
+                    )
+                )
 
     logger.info(
         "import finished: {} submitted, {} skipped, {} failed (of {} total)",
@@ -158,4 +203,4 @@ def _to_store_dict(msg: ImportMessage) -> dict[str, Any]:
     return d
 
 
-__all__ = ["ImportFailure", "ImportSummary", "run_import"]
+__all__ = ["ImportFailure", "ImportSummary", "ProgressEvent", "run_import"]

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from raven.importer.orchestrator import ImportSummary, run_import
+from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.state import ImportState
 from raven.importer.types import (
     ImportMessage,
@@ -333,3 +333,71 @@ class TestMetadata:
         assert meta["app_id"] == "claude_code"
         assert meta["project_id"] == "my-proj"
         assert meta["is_final"] is True
+
+
+class TestOnProgress:
+    @pytest.mark.asyncio
+    async def test_callback_called_per_item(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner(
+            {
+                "a": _session(n_msgs=1, session_id="sa"),
+                "b": _session(n_msgs=1, session_id="sb"),
+            }
+        )
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+        events: list[ProgressEvent] = []
+
+        await run_import(items, backend, state, on_progress=events.append)
+
+        assert len(events) == 2
+        assert events[0] == ProgressEvent(
+            platform="claude_code",
+            source_key="a",
+            status="submitted",
+            current=1,
+            total=2,
+            error=None,
+        )
+        assert events[1] == ProgressEvent(
+            platform="claude_code",
+            source_key="b",
+            status="submitted",
+            current=2,
+            total=2,
+            error=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_callback_reports_skipped_and_failed(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        state.mark_submitted("claude_code", "a")
+        backend = FakeBackend()
+        scanner = FakeScanner(
+            {"c": _session(n_msgs=1, session_id="sc")},
+            fail_on={"b"},
+        )
+        items = [
+            (scanner, _scan_result("a")),
+            (scanner, _scan_result("b")),
+            (scanner, _scan_result("c")),
+        ]
+        events: list[ProgressEvent] = []
+
+        await run_import(items, backend, state, on_progress=events.append)
+
+        assert events[0].status == "skipped"
+        assert events[1].status == "failed"
+        assert events[1].error is not None
+        assert events[2].status == "submitted"
+
+    @pytest.mark.asyncio
+    async def test_no_callback_does_not_error(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="sa")})
+
+        summary = await run_import([(scanner, _scan_result("a"))], backend, state)
+
+        assert summary.submitted == 1

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from raven.importer.orchestrator import ImportFailure, ImportSummary, run_import
+from raven.importer.orchestrator import ImportFailure, ImportSummary, ProgressEvent, run_import
 from raven.importer.scanners import ClaudeCodeScanner
 from raven.importer.state import ImportState
 from raven.importer.types import (
@@ -23,6 +23,7 @@ __all__ = [
     "ImportState",
     "ImportSummary",
     "Platform",
+    "ProgressEvent",
     "ScanResult",
     "Scanner",
     "SourceKind",
