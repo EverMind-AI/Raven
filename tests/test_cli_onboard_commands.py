@@ -1,4 +1,4 @@
-"""CLI tests for ``raven onboard`` — the three-step wizard.
+"""CLI tests for ``raven onboard`` — the five-step wizard.
 
 Most tests exercise ``--non-interactive`` so we can drive the wizard
 deterministically without a real TTY. Interactive paths are covered by
@@ -156,6 +156,7 @@ def test_onboard_help_lists_all_flags() -> None:
         "--skip-channel",
         "--skip-memory",
         "--skip-deep-research",
+        "--skip-import",
         "--non-interactive",
         "--yes",
         "--reset",
@@ -239,6 +240,46 @@ def test_onboard_skip_channel_default(tmp_env: Path, stub_verify, stub_step3) ->
     )
     assert r.exit_code == 0
     assert "Skipped via --skip-channel" in r.stdout
+
+
+def test_onboard_skip_import_default(tmp_env: Path, stub_verify, stub_step3) -> None:
+    """``--skip-import`` produces the dim skip line in Step 5."""
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--skip-import",
+            "--yes",
+        ],
+    )
+    assert r.exit_code == 0
+    assert "Skipped via --skip-import" in r.stdout
+
+
+def test_onboard_non_interactive_skips_import_step(tmp_env: Path, stub_verify, stub_step3) -> None:
+    """Non-interactive mode auto-skips Step 5 even without ``--skip-import``."""
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--yes",
+        ],
+    )
+    assert r.exit_code == 0, r.stdout
+    assert "Skipped (non-interactive)" in r.stdout
+    assert "Setup complete" in r.stdout
 
 
 # --------------------------------------------------------------------------- error paths
@@ -469,6 +510,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -604,6 +646,7 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -688,7 +731,7 @@ def test_registry_default_models_present() -> None:
         assert spec.default_model, f"{name} has empty default_model"
 
 
-# --------------------------------------------------------------------------- fixtures (4-step)
+# --------------------------------------------------------------------------- fixtures (5-step)
 
 
 @pytest.fixture
@@ -1346,6 +1389,7 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_step3_channel", _s3)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
     # s2 returns BACK once → s1 replays → s2 again → forward.
@@ -1374,6 +1418,7 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -1420,6 +1465,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
     # Should complete (not raise typer.Exit) — steps 2/3/4 ran.
     onboard_commands.run_wizard(non_interactive=False)

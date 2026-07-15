@@ -1,4 +1,4 @@
-"""Five-step onboarding wizard: LLM provider → sandbox → channel → memory → deep research.
+"""Six-step onboarding wizard: LLM provider → sandbox → channel → memory → deep research → import.
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
@@ -12,6 +12,7 @@ Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
   5. deep_research tool (optional; MiroThinker key + model)
+  6. Cold-start import from other AI tools (optional)
   6. Done
 
 All writes go through the ``update_providers`` / ``update_channels`` /
@@ -3405,6 +3406,76 @@ def _print_next_steps(*, warnings: list[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Step 5 — cold-start import
+# ---------------------------------------------------------------------------
+
+
+def _step5_import(*, skip: bool, non_interactive: bool) -> object:
+    """Step 5 — optionally import conversation history from other AI tools."""
+    _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+
+    if skip:
+        console.print(
+            _t(
+                "  [dim]Skipped via --skip-import.[/dim]",
+                "  [dim]已通过 --skip-import 跳过。[/dim]",
+            )
+        )
+        return None
+
+    if non_interactive:
+        console.print(
+            _t(
+                "  [dim]Skipped (non-interactive).[/dim]",
+                "  [dim]已跳过(非交互)。[/dim]",
+            )
+        )
+        return None
+
+    import asyncio
+
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.cli.import_commands import _run_async, _scan_all_platforms
+    from raven.importer.types import SourceKind
+
+    questionary = _require_questionary()
+    action = questionary.select(
+        _t(
+            "Would you like to import conversation history from other AI tools? (Claude Code, Codex, etc.)",
+            "是否要从其他 AI 工具(Claude Code、Codex 等)导入对话历史?",
+        ),
+        choices=[
+            questionary.Choice(_t("Yes", "是"), value="yes"),
+            questionary.Choice(_t("No", "否"), value="no"),
+        ],
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if action is None:
+        raise typer.Exit(1)
+    if action == "no":
+        console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
+        return None
+
+    results = asyncio.run(_scan_all_platforms())
+    if not results:
+        console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
+        return None
+
+    mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
+    conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+    console.print(
+        _t(
+            f"  Found {len(results)} importable items ({mem} memory files, {conv} conversations).",
+            f"  找到 {len(results)} 个可导入项({mem} 个记忆文件,{conv} 个对话)。",
+        )
+    )
+
+    asyncio.run(_run_async(platform=None, tier=None, yes=False))
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Wizard runner (screen state machine) + reusable entry point
 # ---------------------------------------------------------------------------
 
@@ -3420,12 +3491,13 @@ def run_wizard(
     skip_channel: bool = False,
     skip_memory: bool = False,
     skip_deep_research: bool = False,
+    skip_import: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
 ) -> None:
-    """Run the 5-step onboarding wizard end-to-end.
+    """Run the 6-step onboarding wizard end-to-end.
 
     The reusable entry point: the ``onboard`` CLI command and the startup gate
     both call this. Screens form a state machine so a ``0) Back`` choice can
@@ -3449,6 +3521,7 @@ def run_wizard(
             skip_channel=skip_channel,
             skip_memory=skip_memory,
             skip_deep_research=skip_deep_research,
+            skip_import=skip_import,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
@@ -3492,6 +3565,7 @@ def _run_wizard_body(
     skip_channel: bool = False,
     skip_memory: bool = False,
     skip_deep_research: bool = False,
+    skip_import: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -3517,13 +3591,13 @@ def _run_wizard_body(
                 "[dim]We'll configure, in order:[/dim]\n"
                 "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] Run location      "
                 "[#fbe23f]③[/#fbe23f] Chat channel      [#fbe23f]④[/#fbe23f] Long-term memory      "
-                "[#fbe23f]⑤[/#fbe23f] Deep research\n\n"
+                "[#fbe23f]⑤[/#fbe23f] Deep research      [#fbe23f]⑥[/#fbe23f] Import history\n\n"
                 "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
                 "[bold #fbe23f]✨ 欢迎使用 Raven 配置向导[/bold #fbe23f]\n\n"
                 "[dim]我们将依次配置:[/dim]\n"
                 "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] 运行位置      "
                 "[#fbe23f]③[/#fbe23f] 聊天渠道      [#fbe23f]④[/#fbe23f] 长期记忆      "
-                "[#fbe23f]⑤[/#fbe23f] 深度研究\n\n"
+                "[#fbe23f]⑤[/#fbe23f] 深度研究      [#fbe23f]⑥[/#fbe23f] 历史导入\n\n"
                 "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
             border_style="#c8a900",
@@ -3560,6 +3634,7 @@ def _run_wizard_body(
             non_interactive=non_interactive,
             warnings=warnings,
         ),
+        lambda: _step5_import(skip=skip_import, non_interactive=non_interactive),
     ]
 
     index = 0
@@ -3624,6 +3699,7 @@ def register(app: typer.Typer) -> None:
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
         skip_deep_research: bool = typer.Option(False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"),
+        skip_import: bool = typer.Option(False, "--skip-import", help="Skip Step 6 (history import)"),
         non_interactive: bool = typer.Option(
             False,
             "--non-interactive",
@@ -3641,7 +3717,7 @@ def register(app: typer.Typer) -> None:
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
         ),
     ) -> None:
-        """Five-step setup wizard: LLM provider → sandbox → channel → memory → deep research."""
+        """Six-step setup wizard: LLM provider → sandbox → channel → memory → deep research → import."""
         run_wizard(
             provider=provider,
             api_key=api_key,
@@ -3652,6 +3728,7 @@ def register(app: typer.Typer) -> None:
             skip_channel=skip_channel,
             skip_memory=skip_memory,
             skip_deep_research=skip_deep_research,
+            skip_import=skip_import,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
