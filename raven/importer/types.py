@@ -45,6 +45,7 @@ class ImportMessage:
     timestamp: int
     sender_id: str
     tool_calls: tuple[dict[str, Any], ...] | None = None
+    tool_call_id: str | None = None
 
 
 @dataclass(frozen=True)

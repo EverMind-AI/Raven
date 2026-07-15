@@ -86,6 +86,14 @@ class TestImportMessage:
         )
         assert msg.tool_calls == tc
 
+    def test_tool_call_id_default_none(self) -> None:
+        msg = ImportMessage(role="user", content="x", timestamp=0, sender_id="u")
+        assert msg.tool_call_id is None
+
+    def test_tool_call_id_on_tool_message(self) -> None:
+        msg = ImportMessage(role="tool", content="result", timestamp=0, sender_id="u", tool_call_id="t1")
+        assert msg.tool_call_id == "t1"
+
     def test_frozen(self) -> None:
         msg = ImportMessage(role="user", content="x", timestamp=0, sender_id="u")
         with pytest.raises(dataclasses.FrozenInstanceError):
