@@ -17,7 +17,7 @@ _BATCH_CHAR_LIMIT = 30_000
 
 
 @dataclass(frozen=True)
-class ImportError:
+class ImportFailure:
     """One failed import unit."""
 
     platform: str
@@ -33,7 +33,7 @@ class ImportSummary:
     submitted: int
     skipped: int
     failed: int
-    errors: tuple[ImportError, ...]
+    errors: tuple[ImportFailure, ...]
 
 
 async def run_import(
@@ -52,7 +52,7 @@ async def run_import(
     submitted = 0
     skipped = 0
     failed = 0
-    errors: list[ImportError] = []
+    errors: list[ImportFailure] = []
 
     for i, (scanner, result) in enumerate(items):
         platform = result.platform.value
@@ -86,7 +86,7 @@ async def run_import(
         except Exception as e:
             state.mark_failed(platform, key, str(e))
             failed += 1
-            errors.append(ImportError(platform, key, str(e)))
+            errors.append(ImportFailure(platform, key, str(e)))
             logger.warning(
                 "[{}/{}] failed to import {}/{}: {}",
                 i + 1,
@@ -158,4 +158,4 @@ def _to_store_dict(msg: ImportMessage) -> dict[str, Any]:
     return d
 
 
-__all__ = ["ImportError", "ImportSummary", "run_import"]
+__all__ = ["ImportFailure", "ImportSummary", "run_import"]
