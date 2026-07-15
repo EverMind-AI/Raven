@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
@@ -48,9 +47,6 @@ def _make_scan_results() -> list[ScanResult]:
 
 class TestScan:
     def test_scan_shows_results(self) -> None:
-        async def fake_scan(self_: Any) -> list[ScanResult]:
-            return _make_scan_results()
-
         with patch(
             "raven.cli.import_commands._scan_all_platforms",
             new=AsyncMock(return_value=_make_scan_results()),

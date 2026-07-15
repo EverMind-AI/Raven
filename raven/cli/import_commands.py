@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any, Optional
 
 import typer
@@ -83,7 +84,7 @@ async def _build_and_run(
     items: list[tuple[Scanner, ScanResult]],
     state: ImportState,
     *,
-    on_progress: Any = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> ImportSummary:
     from raven.config.raven import load_raven_config
 
