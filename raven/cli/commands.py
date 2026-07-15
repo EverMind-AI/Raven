@@ -141,6 +141,10 @@ from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
 
+from raven.cli.import_commands import import_app
+
+app.add_typer(import_app, name="import")
+
 
 def run() -> None:
     """Console-script entry point.

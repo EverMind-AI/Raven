@@ -161,6 +161,7 @@ REGISTERED_COMMAND_NAMES = {
     "deep-research",
     "doctor",
     "gateway",
+    "import",
     "onboard",
     "plugins",
     "provider",
