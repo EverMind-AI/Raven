@@ -297,7 +297,11 @@ def _dr_stream_provider():
                     content=None,
                     tool_call_delta={
                         "tool_calls": [
-                            {"index": 0, "id": "d1", "function": {"name": "deep_research", "arguments": '{"query": "q"}'}}
+                            {
+                                "index": 0,
+                                "id": "d1",
+                                "function": {"name": "deep_research", "arguments": '{"query": "q"}'},
+                            }
                         ]
                     },
                 )

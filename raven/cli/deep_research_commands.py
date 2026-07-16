@@ -77,9 +77,7 @@ def _pick_model(questionary: Any, style: Any, qmark: str, t: Any) -> str:
             value=_FLAGSHIP_MODEL,
         ),
     ]
-    picked = questionary.select(
-        t("Select a model:", "选择 model:"), choices=choices, style=style, qmark=qmark
-    ).ask()
+    picked = questionary.select(t("Select a model:", "选择 model:"), choices=choices, style=style, qmark=qmark).ask()
     if picked is None:
         raise typer.Exit(1)  # Ctrl+C
     return picked

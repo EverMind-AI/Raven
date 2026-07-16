@@ -57,7 +57,9 @@ class _RunTurnLoop:
         self.tools = tools if tools is not None else {}
         self.last_stream = None
 
-    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None) -> TurnOutcome:
+    async def run_turn(
+        self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None
+    ) -> TurnOutcome:
         self.last_stream = stream
         for ev in self._events:
             await emit(ev)

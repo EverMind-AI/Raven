@@ -23,6 +23,7 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -30,7 +31,6 @@ from raven.agent.tools.media_gen import (
     SpeechGenerateTool,
     VideoGenerateTool,
 )
-from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool

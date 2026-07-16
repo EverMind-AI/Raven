@@ -19,7 +19,9 @@ from raven.agent.tools import deep_research as dr_mod
 from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool, _extract_output_text
 from raven.config.schema import DeepResearchToolConfig
 
-ANSWER = "## Answer\n\nLangChain leads [1].\n\n### References\n[1] LangChain. <https://github.com/langchain-ai/langchain>\n"
+ANSWER = (
+    "## Answer\n\nLangChain leads [1].\n\n### References\n[1] LangChain. <https://github.com/langchain-ai/langchain>\n"
+)
 USAGE = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150}
 
 
@@ -107,10 +109,7 @@ async def test_timeout_reported_not_raised(tool: DeepResearchTool, monkeypatch):
 
 async def test_finish_none_is_error(tool: DeepResearchTool, monkeypatch):
     # Stream ends (via [DONE]) without ever sending a finish_reason chunk — abnormal.
-    body = (
-        b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n'
-        b"data: [DONE]\n\n"
-    )
+    body = b'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\ndata: [DONE]\n\n'
     _patch(monkeypatch, lambda req: httpx.Response(200, content=body))
     result = json.loads(await tool.execute(query="q"))
     assert result["status"] == "error"
@@ -141,6 +140,7 @@ async def test_stream_callback_delivers_answer_and_returns_receipt(tool: DeepRes
         events.append((kind, text))
 
     tool.set_stream_callback(cb)
+
     # Step churn: thinking is skipped; consecutive same-action collapses; only a
     # change to a new action type emits. Here -> search, fetch, search = 3 lines.
     def step(kind: str) -> bytes:

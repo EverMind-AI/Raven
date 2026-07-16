@@ -28,7 +28,9 @@ def cfg(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
     # CLI enable does a best-effort validation after writing; stub it so tests
     # never touch the network.
-    monkeypatch.setattr(drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None})
+    monkeypatch.setattr(
+        drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None}
+    )
     return p
 
 
@@ -115,11 +117,15 @@ class _FakeQuestionary:
 def test_configure_interactive_happy_path(tmp_path: Path, monkeypatch):
     p = tmp_path / "config.json"
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
-    monkeypatch.setattr(drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None})
+    monkeypatch.setattr(
+        drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None}
+    )
     # onboard helpers the flow lazy-imports:
     import raven.cli.onboard_commands as ob
 
-    monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(["configure", "mirothinker-1-7-deepresearch"]))
+    monkeypatch.setattr(
+        ob, "_require_questionary", lambda: _FakeQuestionary(["configure", "mirothinker-1-7-deepresearch"])
+    )
     monkeypatch.setattr(ob, "_prompt_api_key", lambda *a, **k: "sk-interactive")
 
     assert configure_deep_research(non_interactive=False, warnings=[]) is True
@@ -132,7 +138,9 @@ def _setup_interactive(monkeypatch, tmp_path: Path, answers: list, *, validate=N
     """Isolate config + stub the onboard helpers the flow lazy-imports."""
     p = tmp_path / "config.json"
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
-    monkeypatch.setattr(drc, "_validate_key", validate or (lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None}))
+    monkeypatch.setattr(
+        drc, "_validate_key", validate or (lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None})
+    )
     import raven.cli.onboard_commands as ob
 
     monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(answers))
@@ -162,7 +170,9 @@ def test_configure_skip_when_unconfigured_returns_false(tmp_path: Path, monkeypa
 
 def test_configure_validation_fail_then_save(tmp_path: Path, monkeypatch):
     fail = {"ok": False, "status": "http_401", "model_ids": None, "error": "bad"}
-    p = _setup_interactive(monkeypatch, tmp_path, ["configure", "save", "mirothinker-1-7-deepresearch"], validate=lambda *a, **k: fail)
+    p = _setup_interactive(
+        monkeypatch, tmp_path, ["configure", "save", "mirothinker-1-7-deepresearch"], validate=lambda *a, **k: fail
+    )
     assert configure_deep_research(non_interactive=False, warnings=[]) is True  # saved despite bad key
     assert json.loads(p.read_text())["tools"]["deepResearch"]["apiKey"] == "sk-typed"
 
@@ -190,7 +200,9 @@ def test_configure_validation_retry_then_ok(tmp_path: Path, monkeypatch):
 def test_enable_flag_bad_key_warns_but_writes(tmp_path: Path, monkeypatch):
     p = tmp_path / "config.json"
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
-    monkeypatch.setattr(drc, "_validate_key", lambda *a, **k: {"ok": False, "status": "http_401", "model_ids": None, "error": "x"})
+    monkeypatch.setattr(
+        drc, "_validate_key", lambda *a, **k: {"ok": False, "status": "http_401", "model_ids": None, "error": "x"}
+    )
     result = runner.invoke(deep_research_app, ["enable", "--key", "sk-bad"])
     assert result.exit_code == 0 and "key validation" in result.stdout
     assert json.loads(p.read_text())["tools"]["deepResearch"]["apiKey"] == "sk-bad"  # saved anyway
@@ -199,7 +211,9 @@ def test_enable_flag_bad_key_warns_but_writes(tmp_path: Path, monkeypatch):
 def test_enable_with_api_base_flag_writes_it(tmp_path: Path, monkeypatch):
     p = tmp_path / "config.json"
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
-    monkeypatch.setattr(drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None})
+    monkeypatch.setattr(
+        drc, "_validate_key", lambda *a, **k: {"ok": True, "status": "ok", "model_ids": [], "error": None}
+    )
     runner.invoke(deep_research_app, ["enable", "--key", "sk-x", "--api-base", "https://mirror.example.com/v1"])
     assert json.loads(p.read_text())["tools"]["deepResearch"]["apiBase"] == "https://mirror.example.com/v1"
 
@@ -252,7 +266,9 @@ def test_enable_refuses_malformed_config_and_preserves_file(tmp_path: Path, monk
     monkeypatch.setattr(ut, "get_config_path", lambda: p)
     original = '{\n  "providers": {"openai": {"apiKey": "sk-o"}},\n  // comment => invalid JSON\n}\n'
     p.write_text(original, encoding="utf-8")
-    result = runner.invoke(deep_research_app, ["enable", "--key", "sk-x", "--model", "mirothinker-1-7-deepresearch-mini"])
+    result = runner.invoke(
+        deep_research_app, ["enable", "--key", "sk-x", "--model", "mirothinker-1-7-deepresearch-mini"]
+    )
     assert result.exit_code != 0
     assert p.read_text(encoding="utf-8") == original  # NOT clobbered
 

@@ -23,8 +23,8 @@ from raven.spine import (
     TurnStarted,
     Usage,
 )
-from raven.spine.events import Reasoning
 from raven.spine.delivery import Outlet
+from raven.spine.events import Reasoning
 
 
 def _src(channel="cli", chat_id="c1") -> Source:
@@ -75,9 +75,7 @@ async def test_runner_delegates_to_run_turn_with_stream_false():
     events, emit = _collect()
     outcome = await runner.run(req, emit, lambda: [])
     # The REPL runner passes stream=False so run_turn emits a Text, not StreamDelta.
-    assert loop.calls == [
-        {"text": "hi", "stream": False, "inline_tool_stream": False, "conversation": "cli:c1"}
-    ]
+    assert loop.calls == [{"text": "hi", "stream": False, "inline_tool_stream": False, "conversation": "cli:c1"}]
     assert len(events) == 1 and isinstance(events[0], Text)
     assert events[0].content == "hi there" and events[0].source is src
     assert outcome.explicit_reply is True

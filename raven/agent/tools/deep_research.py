@@ -39,6 +39,7 @@ class _Routing:
     chat_id: str
     conversation: str
 
+
 # Coarse progress shown while the engine works, keyed by the reasoning-step type
 # the stream reports. One line per step-type change (not per token) keeps it
 # readable on both a terminal and the TUI.
@@ -167,9 +168,7 @@ class DeepResearchTool(Tool):
                 ) as r:
                     if r.status_code != 200:
                         await r.aread()
-                        return self._result(
-                            "error", content=f"deep_research HTTP {r.status_code}: {_error_message(r)}"
-                        )
+                        return self._result("error", content=f"deep_research HTTP {r.status_code}: {_error_message(r)}")
                     content, finish, usage = await self._consume(r, cb)
         except httpx.TimeoutException as e:
             detail = str(e) or "the research engine went quiet"
@@ -388,7 +387,9 @@ class DeepResearchManager:
                 # must not lose the answer we already have, so log, don't raise.
                 try:
                     logger.info(
-                        "deep_research [{}] report saved: {}", resp_id, _write_report_file(self._workspace, answer, query)
+                        "deep_research [{}] report saved: {}",
+                        resp_id,
+                        _write_report_file(self._workspace, answer, query),
                     )
                 except Exception as e:
                     logger.error("deep_research [{}] report save failed: {}", resp_id, e)

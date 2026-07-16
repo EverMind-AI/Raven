@@ -3623,9 +3623,7 @@ def register(app: typer.Typer) -> None:
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
-        skip_deep_research: bool = typer.Option(
-            False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"
-        ),
+        skip_deep_research: bool = typer.Option(False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"),
         non_interactive: bool = typer.Option(
             False,
             "--non-interactive",
