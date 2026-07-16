@@ -86,6 +86,21 @@ def test_purpose_spans_record_input_and_output(trace_dir):
     assert "skill.rewrite.output.artifact_path" in a
 
 
+def test_personalize_extractor_records_step_io(trace_dir):
+    from raven.tracing import semconv
+
+    with trace.span("personalize.classify", kind="memory") as s:
+        semconv.personalize(
+            s, {"self": object(), "message": "hi", "history": None}, {"needs_clarification": False}, None
+        )
+    a = _spans_written(trace_dir)[0]["attributes"]
+    assert a["span.type"] == "memory"
+    assert a["personalize.step"] == "classify"
+    assert a["personalize.ok"] is True
+    assert "personalize.input.artifact_path" in a
+    assert "personalize.output.artifact_path" in a
+
+
 def test_error_marks_status_and_reraises(trace_dir):
     with pytest.raises(ValueError):
         with trace.span("tool.call", {"tool.name": "read_file"}):

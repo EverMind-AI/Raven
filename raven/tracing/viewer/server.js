@@ -318,6 +318,7 @@ function buildSpanTitle(name, attrs) {
   if (name === 'skill.rewrite') return 'Query Rewrite';
   if (name === 'skill.gate') return 'Skill Gate';
   if (name === 'context.curate') return 'Context Curation';
+  if (name.startsWith('personalize.')) return 'Personalize ' + name.slice('personalize.'.length);
   if (name === 'memory.recall') return 'Memory Recall';
   if (name === 'memory.store') return 'Memory Store';
   if (name === 'memory.extract') return 'Memory Extract';
@@ -356,6 +357,7 @@ function buildSpanSubtitle(name, attrs) {
     return `${attrs['skill.gate.selected_count'] ?? 0}/${attrs['skill.gate.candidate_count'] ?? 0} selected`;
   }
   if (name === 'context.curate') return attrs['context.curate.produced'] ? 'curated' : '';
+  if (name.startsWith('personalize.')) return attrs['personalize.ok'] === false ? 'failed' : '';
   if (name === 'skill.inject') {
     const names = attrs['skill.inject.names'];
     const label = Array.isArray(names) && names.length ? names.join(', ') : `${attrs['skill.inject.count'] || 0} skills`;

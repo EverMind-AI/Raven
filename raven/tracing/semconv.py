@@ -448,6 +448,17 @@ def context_curate(span, bound: dict[str, Any], result: Any, exc: BaseException 
     )
 
 
+def personalize(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
+    """Personalizer steps (classify / question / extract / post_learn). These call
+    ``provider.chat`` directly (not the instrumented ``chat_with_retry``), so the
+    step itself is the traced node: input = the call arguments, output = the step
+    result. The raw model round-trip is summarized here rather than a child span."""
+    args = {k: v for k, v in bound.items() if k != "self"}
+    span.set({"personalize.step": span.name.split(".", 1)[-1], "personalize.ok": exc is None})
+    span.artifact("personalize.input", args)
+    span.artifact("personalize.output", {"result": result})
+
+
 def memory_recall(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
     self = bound.get("self")
     span.set(
