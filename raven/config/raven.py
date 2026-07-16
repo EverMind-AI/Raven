@@ -1255,6 +1255,20 @@ class RuntimeConfig(_Base):
     checkpoint: CheckpointConfig = Field(default_factory=CheckpointConfig)
 
 
+class TracingConfig(_Base):
+    """Observability tracing (in-tree ``raven.tracing``).
+
+    On by default; every ``raven`` command auto-installs non-invasive
+    instrumentation before any AgentLoop is built. ``RAVEN_TRACING=0`` is an
+    explicit env kill-switch that overrides this block. View captured traces
+    with ``raven tracing`` (or ``/tracing`` in the TUI).
+    """
+
+    enabled: bool = True
+    port: int = 4318
+    preview_len: int = 500
+
+
 # ---------------------------------------------------------------------------
 # Root
 # ---------------------------------------------------------------------------
@@ -1272,6 +1286,7 @@ class RavenConfig(_Base):
     # separate top-level ``skillRouter`` block.
     skill_forge: SkillForgeConfig = Field(default_factory=SkillForgeConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    tracing: TracingConfig = Field(default_factory=TracingConfig)
 
     # CFG-1: plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)

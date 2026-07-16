@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from raven.context_engine.base import AssemblyContext, Segment
+from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import LocalSkillCatalog
@@ -18,6 +19,7 @@ class ActiveSkillsSegmentBuilder:
     def __init__(self, skill_catalog: "LocalSkillCatalog") -> None:
         self._skills = skill_catalog
 
+    @trace.instrument("skill.inject", kind="skill", detached=True, extract=semconv.skill_inject_active)
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         always_skills = self._skills.get_always_skills()
         if not always_skills:

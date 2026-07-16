@@ -10,6 +10,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.tracing import semconv, trace
+
 
 @dataclass(frozen=True)
 class ErrorClassification:
@@ -486,6 +488,7 @@ class LLMProvider(ABC):
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
 
+    @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
         self,
         messages: list[dict[str, Any]],

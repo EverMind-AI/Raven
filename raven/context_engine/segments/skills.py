@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
 from raven.memory_engine.skill_forge.refs import resolve_refs
+from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import SkillForgeRouter
@@ -72,6 +73,7 @@ class SkillsSegmentBuilder:
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
 
+    @trace.instrument("skill.inject", kind="skill", detached=True, extract=semconv.skill_inject_skills)
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if self._router is None:
             return Segment(

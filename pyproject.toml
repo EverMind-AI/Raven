@@ -147,6 +147,11 @@ include = [
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
+    # Tracing dashboard viewer (dependency-free Node server + static client).
+    "raven/tracing/viewer/**/*.js",
+    "raven/tracing/viewer/**/*.css",
+    "raven/tracing/viewer/**/*.html",
+    "raven/tracing/viewer/**/*.json",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -182,6 +187,10 @@ ignore = ["E501"]
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
+
+# Tracing probe factories take the target class as an argument, named after
+# the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
+"raven/tracing/instrument.py" = ["N803"]
 
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]

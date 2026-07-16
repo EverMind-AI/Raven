@@ -168,6 +168,7 @@ REGISTERED_COMMAND_NAMES = {
     "sessions",
     "skill",
     "status",
+    "tracing",
     "tui",
     "upgrade",
 }

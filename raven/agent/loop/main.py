@@ -42,6 +42,7 @@ from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, buil
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
 from raven.token_wise.pricing import resolve_context_window
+from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens
 
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
@@ -861,6 +862,7 @@ class AgentLoop:
             return  # unexpected content shape → keep pending
         self._pending_recovery.pop(session_key, None)
 
+    @trace.instrument("memory.feedback", extract=semconv.memory_feedback)
     async def _dispatch_backend_feedback(
         self,
         session_key: str,
@@ -909,6 +911,7 @@ class AgentLoop:
                 session_key,
             )
 
+    @trace.instrument("memory.store", extract=semconv.memory_store)
     async def _dispatch_backend_store(
         self,
         session_key: str,
@@ -1176,6 +1179,7 @@ class AgentLoop:
             session_key=session_key or None,
         )
 
+    @trace.instrument("llm.call", extract=semconv.llm_call_stream)
     async def _llm_call_stream(
         self,
         messages: list[dict],
@@ -1765,6 +1769,7 @@ class AgentLoop:
         self._running = False
         logger.info("Agent loop stopping")
 
+    @trace.instrument("session.turn", seed=semconv.turn_seed, on_open=semconv.turn_open, extract=semconv.turn)
     async def _process_message(
         self,
         req: TurnRequest,

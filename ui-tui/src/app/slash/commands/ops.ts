@@ -69,6 +69,21 @@ interface SkillsReloadResponse {
 
 export const opsCommands: SlashCommand[] = [
   {
+    help: 'open the tracing dashboard (LLM/tool/memory spans)',
+    name: 'tracing',
+    run: (_arg, ctx) => {
+      ctx.gateway
+        .rpc<SlashExecResponse>('slash.exec', { command: 'tracing', session_id: ctx.sid })
+        .then(
+          ctx.guarded<SlashExecResponse>(r => {
+            const body = r?.output || 'tracing dashboard'
+            ctx.transcript.sys(r?.warning ? `warning: ${r.warning}\n${body}` : body)
+          })
+        )
+        .catch(ctx.guardedErr)
+    }
+  },
+  {
     help: 'stop background processes',
     name: 'stop',
     supported: false,

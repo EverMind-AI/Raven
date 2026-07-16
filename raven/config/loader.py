@@ -24,6 +24,8 @@ EXTENSION_KEYS = (
     "memory",
     # Bug2 / runtime-discipline 5th pillar — checkpoint policy etc.
     "runtime",
+    # In-tree observability tracing (raven.tracing).
+    "tracing",
 )
 
 # Global variable to store current config path (for multi-instance support)

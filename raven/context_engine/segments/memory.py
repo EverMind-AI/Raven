@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import render
+from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.memory_engine.backend import MemoryBackend
@@ -48,6 +49,7 @@ class MemorySegmentBuilder:
             return Segment(text="", meta=meta)
         return Segment(text="# Memory\n\n" + "\n\n".join(sections), meta=meta)
 
+    @trace.instrument("memory.recall", extract=semconv.memory_recall)
     async def _recall(self, query: str) -> list[Any]:
         if self._backend is None:
             return []
