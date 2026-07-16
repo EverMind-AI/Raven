@@ -30,7 +30,7 @@ from raven.agent.tools.media_gen import (
     SpeechGenerateTool,
     VideoGenerateTool,
 )
-from raven.agent.tools.deep_research import DeepResearchTool
+from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
@@ -601,9 +601,18 @@ class AgentLoop:
         # Deep research (MiroThinker) is opt-in: a paid, minute-scale HTTP engine
         # registered only when a key is configured, so an unconfigured deploy
         # never exposes a tool that errors on first call.
+        self.deep_research_manager: DeepResearchManager | None = None
         if DeepResearchTool.is_configured(self.deep_research_config):
+            self.deep_research_manager = DeepResearchManager(
+                self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy
+            )
             self.tools.register(
-                DeepResearchTool(self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy)
+                DeepResearchTool(
+                    self.deep_research_config,
+                    workspace=self.workspace,
+                    proxy=self.web_proxy,
+                    manager=self.deep_research_manager,
+                )
             )
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
@@ -1121,13 +1130,13 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron"):
+        for name in ("message", "spawn", "cron", "deep_research"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name == "spawn":
+                elif name in ("spawn", "deep_research"):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
@@ -2212,6 +2221,25 @@ class AgentLoop:
         from raven.spine.runner import TurnOutcome
 
         cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+
+        # Verbatim delivery (deliver_text — see TurnRequest). Persist before
+        # emit, mirroring the normal turn's save-then-reply order, so a save
+        # failure never leaves the user a delivered message no turn recorded.
+        # The after-turn work a normal turn does in _process_message is reduced
+        # to what a no-model delivery needs: backend.store indexes the report;
+        # after_turn is a no-op without a turn_id; consolidation is the curator's
+        # job on its next assemble.
+        if req.deliver_text is not None:
+            session = self.sessions.get_or_create(cid)
+            msg = {"role": "assistant", "content": req.deliver_text}
+            self._save_turn(session, [msg], 0)
+            self.sessions.save(session)
+            await self._dispatch_backend_store(cid, [msg])
+            await emit(Text(content=req.deliver_text))
+            return TurnOutcome(
+                usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                explicit_reply=True,
+            )
 
         streamed = False
 

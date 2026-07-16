@@ -710,6 +710,122 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     assert seen.get("message_id") == "m1"  # extras -> metadata -> _set_tool_context
 
 
+# ── deliver_text: verbatim background delivery, skips the model (2b) ──
+
+
+async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_path):
+    # A background task pushes a finished result back via deliver_text: run_turn
+    # emits it as one Text verbatim, records it to the session, and hands it to
+    # the backend index — and never touches the model.
+    class _NoCallProvider:
+        async def chat_stream(self, **kwargs):
+            raise AssertionError("model must not be called for a deliver_text turn")
+            yield  # unreachable; keeps this an async generator
+
+        async def chat_with_retry(self, **kwargs):
+            raise AssertionError("model must not be called for a deliver_text turn")
+
+        def get_default_model(self) -> str:
+            return "fake/model"
+
+    stored: list = []
+
+    class _FakeBackend:
+        async def store(self, key, messages) -> None:
+            stored.append((key, messages))
+
+    loop = AgentLoop(provider=_NoCallProvider(), workspace=tmp_path)
+    _stub_edges(loop)
+    loop.backend = _FakeBackend()
+    sink = _EmitCollector()
+
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="weixin", chat_id="c", sender_id="deep_research", chat_type=ChatType.DM),
+        text="",
+        conversation="weixin:c",
+        deliver_text="FULL REPORT [1]",
+    )
+    outcome = await loop.run_turn(req, sink, _drain, stream=False)
+
+    texts = [e for e in sink.events if isinstance(e, EvText)]
+    assert len(texts) == 1 and texts[0].content == "FULL REPORT [1]"
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)  # not streamed through the model
+    assert outcome.explicit_reply is True
+
+    session = loop.sessions.get_or_create("weixin:c")
+    assert any(m.get("role") == "assistant" and m.get("content") == "FULL REPORT [1]" for m in session.messages)
+    assert stored and stored[0][0] == "weixin:c"
+    assert stored[0][1][0]["content"] == "FULL REPORT [1]"
+
+
+async def test_run_turn_deliver_text_persists_before_emit(tmp_path):
+    # save-then-send order: if the session save fails, nothing was emitted, so
+    # the user is never left with a delivered message that no turn recorded.
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+
+    def _boom(_session) -> None:
+        raise RuntimeError("save failed")
+
+    loop.sessions.save = _boom
+    sink = _EmitCollector()
+
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="weixin", chat_id="c", sender_id="deep_research", chat_type=ChatType.DM),
+        text="",
+        conversation="weixin:c",
+        deliver_text="REPORT",
+    )
+    with pytest.raises(RuntimeError):
+        await loop.run_turn(req, sink, _drain, stream=False)
+    assert not any(isinstance(e, EvText) for e in sink.events)  # save failed -> nothing delivered
+
+
+async def test_run_turn_wires_deep_research_delivery_routing(tmp_path):
+    # _set_tool_context routes the deep_research tool's delivery context so the
+    # async transport knows which conversation to push the finished answer to.
+    class _FakeDRRouting(Tool):
+        def __init__(self) -> None:
+            self.ctx: tuple | None = None
+
+        @property
+        def name(self) -> str:
+            return "deep_research"
+
+        @property
+        def description(self) -> str:
+            return "fake deep research (routing)"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}, "required": []}
+
+        def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
+            self.ctx = (channel, chat_id, session_key)
+
+        async def execute(self, **kwargs) -> str:
+            return "{}"
+
+    loop = AgentLoop(
+        provider=_FakeChatProvider([LLMResponse(content="ok", finish_reason="stop")]),
+        workspace=tmp_path,
+    )
+    _stub_edges(loop)
+    dr = _FakeDRRouting()
+    loop.tools.register(dr)
+
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="weixin", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+        conversation="weixin:c",
+    )
+    await loop.run_turn(req, _EmitCollector(), _drain, stream=False)
+    assert dr.ctx == ("weixin", "c", "weixin:c")
+
+
 async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
     # No-regression: a host source carries no extras -> metadata={} ->
     # _set_tool_context sees message_id=None.

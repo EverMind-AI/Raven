@@ -8,6 +8,7 @@ content is a self-contained answer with a References section).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import httpx
 import pytest
 
 from raven.agent.tools import deep_research as dr_mod
-from raven.agent.tools.deep_research import DeepResearchTool
+from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool, _extract_output_text
 from raven.config.schema import DeepResearchToolConfig
 
 ANSWER = "## Answer\n\nLangChain leads [1].\n\n### References\n[1] LangChain. <https://github.com/langchain-ai/langchain>\n"
@@ -182,3 +183,128 @@ def test_is_configured_gate(monkeypatch):
     assert DeepResearchTool.is_configured(DeepResearchToolConfig(api_key="sk")) is True
     monkeypatch.setenv("MIROTHINKER_API_KEY", "sk-env")
     assert DeepResearchTool.is_configured(DeepResearchToolConfig()) is True
+
+
+# ── async (channel) transport: Responses API + background delivery (2b) ──
+
+
+def _responses_handler(answer: str = ANSWER, poll_status: str = "completed"):
+    """MockTransport handler for the Responses API: POST submit -> 202 with id;
+    GET poll -> the given status (completed carries a multi-item output)."""
+
+    def handler(req):
+        if req.method == "POST":
+            return httpx.Response(202, json={"id": "resp_x", "status": "in_progress", "output": []})
+        if poll_status == "completed":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "output": [
+                        {"type": "reasoning", "content": []},
+                        {"type": "message", "content": [{"type": "output_text", "text": answer}]},
+                    ],
+                },
+            )
+        return httpx.Response(200, json={"status": poll_status, "output": []})
+
+    return handler
+
+
+def _async_tool(tmp_path: Path, submit) -> DeepResearchTool:
+    cfg = DeepResearchToolConfig(api_key="sk-test")
+    mgr = DeepResearchManager(cfg, workspace=tmp_path)
+    if submit is not None:
+        mgr.set_submit(submit)
+    tool = DeepResearchTool(cfg, workspace=tmp_path, manager=mgr)
+    tool.set_context("weixin", "chat1", "weixin:chat1")
+    tool._mgr = mgr  # test handle
+    return tool
+
+
+async def test_async_mode_returns_ack_then_delivers_verbatim(tmp_path: Path, monkeypatch):
+    captured: list = []
+    tool = _async_tool(tmp_path, submit=lambda req: captured.append(req))
+    _patch(monkeypatch, _responses_handler())
+
+    ack = json.loads(await tool.execute(query="q"))
+    assert ack["status"] == "started"  # immediate ack, does not block for the research
+    assert "content" not in ack  # no answer inline — it is delivered later
+
+    await tool._mgr._active["weixin:chat1"]  # let the background poller finish
+
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.deliver_text == ANSWER  # delivered verbatim, not rewritten
+    assert req.conversation == "weixin:chat1"
+    assert req.source.channel == "weixin" and req.source.chat_id == "chat1"
+    assert (tmp_path / "deep_research").is_dir()  # report also saved to disk
+
+
+async def test_async_guard_one_research_per_conversation(tmp_path: Path):
+    tool = _async_tool(tmp_path, submit=lambda req: None)
+
+    async def _never() -> None:
+        await asyncio.Event().wait()
+
+    t = asyncio.create_task(_never())
+    tool._mgr._active["weixin:chat1"] = t  # simulate an in-flight research
+    try:
+        ack = json.loads(await tool.execute(query="q"))
+        assert ack["status"] == "busy"  # refused, no second task
+    finally:
+        t.cancel()
+
+
+async def test_async_failure_releases_guard_and_delivers_error(tmp_path: Path, monkeypatch):
+    captured: list = []
+    tool = _async_tool(tmp_path, submit=lambda req: captured.append(req))
+    _patch(monkeypatch, _responses_handler(poll_status="failed"))
+
+    ack = json.loads(await tool.execute(query="q"))
+    assert ack["status"] == "started"
+    await tool._mgr._active["weixin:chat1"]
+    await asyncio.sleep(0)  # let the done-callback run
+
+    assert len(captured) == 1 and "failed" in captured[0].deliver_text.lower()
+    assert "weixin:chat1" not in tool._mgr._active  # guard released despite the failure
+
+
+async def test_async_not_wired_falls_back_to_sse(tmp_path: Path, monkeypatch):
+    # Manager present but submit not wired (non-gateway) -> can_deliver False ->
+    # the tool takes the synchronous SSE path, never the async ack.
+    tool = _async_tool(tmp_path, submit=None)
+    tool.set_context("cli", "direct", "cli:direct")
+    _patch(monkeypatch, lambda req: httpx.Response(200, content=_sse(ANSWER)))
+    result = json.loads(await tool.execute(query="q"))
+    assert result["status"] == "ok" and result["content"] == ANSWER
+
+
+async def test_async_report_write_failure_still_delivers_answer(tmp_path: Path, monkeypatch):
+    # A disk/permission failure saving the local report must NOT discard the real
+    # answer we already have — deliver it anyway, don't report a false failure.
+    captured: list = []
+    tool = _async_tool(tmp_path, submit=lambda req: captured.append(req))
+    _patch(monkeypatch, _responses_handler())
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(dr_mod, "_write_report_file", _boom)
+
+    await tool.execute(query="q")
+    await tool._mgr._active["weixin:chat1"]
+
+    assert len(captured) == 1
+    assert captured[0].deliver_text == ANSWER  # answer delivered, not a "failed" message
+
+
+def test_extract_output_text_concatenates_message_output_only():
+    body = {
+        "output": [
+            {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "ignore"}]},
+            {"type": "message", "content": [{"type": "output_text", "text": "A"}, {"type": "refusal", "text": "X"}]},
+            {"type": "message", "content": [{"type": "output_text", "text": "B"}]},
+        ]
+    }
+    assert _extract_output_text(body) == "AB"

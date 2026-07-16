@@ -123,7 +123,7 @@ class ContextAssembler(ContextEngine):
         for _, text in seg6_parts:
             system = system + "\n\n---\n\n" + text
 
-        messages = [{"role": "system", "content": system}, *history, user_msg]
+        messages = [{"role": "system", "content": system}, *_coalesce_assistant(history), user_msg]
         return AssembledContext(
             messages=messages,
             metadata=meta | {"engine": self.name},
@@ -150,6 +150,42 @@ class ContextAssembler(ContextEngine):
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         return {"role": "user", "content": merged}
+
+
+def _coalesce_assistant(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge adjacent plain-assistant messages into one.
+
+    A verbatim ``deliver_text`` turn records the bot's answer as an assistant
+    message; it can land right after a prior assistant reply (the "on it" ack),
+    leaving two adjacent assistant turns. Some providers reject consecutive
+    same-role messages and nothing else in the pipeline merges them. Only plain
+    assistants (no ``tool_calls``, str content) merge — an assistant carrying
+    tool_calls is always followed by its tool result, never another assistant,
+    and merging it would break tool-call adjacency. The merged-in message must
+    also carry no reasoning fields, so the merge never silently drops the
+    reasoning_content / thinking_blocks history projection preserves (deliver_text
+    answers have none; this only guards a hypothetical future adjacency source).
+    """
+    out: list[dict[str, Any]] = []
+    for msg in history:
+        prev = out[-1] if out else None
+        if (
+            prev is not None
+            and msg.get("role") == "assistant"
+            and prev.get("role") == "assistant"
+            and not msg.get("tool_calls")
+            and not prev.get("tool_calls")
+            and not msg.get("reasoning_content")
+            and not msg.get("thinking_blocks")
+            and isinstance(msg.get("content"), str)
+            and isinstance(prev.get("content"), str)
+        ):
+            merged = dict(prev)
+            merged["content"] = f"{prev['content']}\n\n{msg['content']}"
+            out[-1] = merged
+            continue
+        out.append(msg)
+    return out
 
 
 __all__ = ["ContextAssembler"]
