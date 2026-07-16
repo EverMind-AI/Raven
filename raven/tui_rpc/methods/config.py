@@ -144,17 +144,20 @@ def _config_path() -> Path:
 
 
 def _load_config() -> dict[str, Any]:
-    """Load ``config.json`` or return an empty dict on any failure.
+    """Load ``config.json`` for a read-modify-write (get/set/_set_model).
 
-    Symmetric with setup.status's v0.1 fallback policy — we never want a stray
-    write or unreadable file to crash a get/set call. The on-disk file is the
+    Absent / empty -> ``{}`` (safe to create fresh). A present-but-unparseable
+    file raises ConfigValidationError rather than the old empty-dict fallback:
+    returning ``{}`` here and then ``_save_config`` would overwrite the user's
+    whole config with just the changed key (data loss). The on-disk file is the
     source of truth; downstream loaders read the same file independently.
     """
-    path = _config_path()
+    from raven.config.loader import ConfigReadError, read_raw_or_raise
+
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return {}
+        return read_raw_or_raise(_config_path())
+    except ConfigReadError as exc:
+        raise ConfigValidationError(str(exc)) from exc
 
 
 def _save_config(payload: dict[str, Any]) -> None:

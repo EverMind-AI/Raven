@@ -449,3 +449,58 @@ class TestTurnPassthrough:
         joined = "\n".join(str(m.get("content")) for m in ac.messages)
         assert "slack" in joined
         assert "C123" in joined
+
+
+# ── consecutive-assistant coalescing (2b deliver_text support) ──
+
+
+def test_coalesce_assistant_merges_adjacent_plain_only():
+    from raven.context_engine.assembler import _coalesce_assistant
+
+    # The ack ("on it") + a verbatim deliver_text answer land as two adjacent
+    # assistant messages; they merge into one so providers that reject
+    # consecutive same-role messages do not choke on the next turn.
+    history = [
+        {"role": "user", "content": "research X"},
+        {"role": "assistant", "content": "on it"},
+        {"role": "assistant", "content": "FULL REPORT"},
+    ]
+    out = _coalesce_assistant(history)
+    assert [m["role"] for m in out] == ["user", "assistant"]
+    assert out[-1]["content"] == "on it\n\nFULL REPORT"
+
+
+def test_coalesce_assistant_preserves_tool_call_adjacency():
+    from raven.context_engine.assembler import _coalesce_assistant
+
+    # An assistant carrying tool_calls is never merged — its tool result follows
+    # it, so merging would break tool-call adjacency.
+    history = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "res"},
+        {"role": "assistant", "content": "done"},
+    ]
+    assert _coalesce_assistant(history) == history
+
+
+def test_coalesce_assistant_ignores_non_adjacent():
+    from raven.context_engine.assembler import _coalesce_assistant
+
+    history = [
+        {"role": "assistant", "content": "a"},
+        {"role": "user", "content": "u"},
+        {"role": "assistant", "content": "b"},
+    ]
+    assert _coalesce_assistant(history) == history
+
+
+def test_coalesce_assistant_skips_when_merged_in_carries_reasoning():
+    from raven.context_engine.assembler import _coalesce_assistant
+
+    # The merged-in message carries reasoning_content — merging would silently
+    # drop it (contra the reasoning-field history projection), so skip the merge.
+    history = [
+        {"role": "assistant", "content": "a"},
+        {"role": "assistant", "content": "b", "reasoning_content": "why"},
+    ]
+    assert _coalesce_assistant(history) == history

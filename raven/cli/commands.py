@@ -129,6 +129,7 @@ upgrade_commands.register(app)
 
 from raven.cli.channel_commands import channels_app
 from raven.cli.cron_commands import cron_app
+from raven.cli.deep_research_commands import deep_research_app
 from raven.cli.provider_commands import provider_app
 from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
@@ -136,6 +137,7 @@ from raven.cli.skill_commands import skill_app
 
 app.add_typer(channels_app, name="channels")
 app.add_typer(cron_app, name="cron")
+app.add_typer(deep_research_app, name="deep-research")
 app.add_typer(provider_app, name="provider")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
@@ -162,9 +164,18 @@ def run() -> None:
     so in-process test hosts keep normal exit semantics.
     """
     from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
+    from raven.config.loader import ConfigReadError
 
     try:
         app()
+    except ConfigReadError as exc:
+        # A config-write command (channels/provider/deep-research/onboard) hit an
+        # unparseable config. The write layer already refused (file untouched);
+        # surface it cleanly here, once, for every command instead of a traceback.
+        from rich.console import Console
+
+        Console(stderr=True).print(f"[red]✗[/red] {exc}")
+        raise SystemExit(1) from exc
     except SystemExit as exc:
         code = exc.code
         if not isinstance(code, int):

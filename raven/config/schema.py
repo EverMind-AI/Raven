@@ -487,6 +487,21 @@ class MediaGenConfig(Base):
     output_subdir: str = "generated"  # where generated files are written under workspace
 
 
+class DeepResearchToolConfig(Base):
+    """MiroThinker deep-research tool configuration.
+
+    A blocking HTTP tool that delegates a research question to the MiroThinker
+    API and returns a structured result. Registered only when ``api_key`` (or
+    ``MIROTHINKER_API_KEY``) is set — it is a paid, minute-scale engine, not a
+    default tool. Empty ``api_base`` / ``model`` fall back at call time to the
+    MiroMind endpoint and the mini engine.
+    """
+
+    api_key: str = ""
+    api_base: str = ""  # defaults to https://api.miromind.ai/v1
+    model: str = ""  # defaults to mirothinker-1-7-deepresearch-mini
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -526,6 +541,7 @@ class ToolsConfig(Base):
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     media: MediaGenConfig = Field(default_factory=MediaGenConfig)
+    deep_research: DeepResearchToolConfig = Field(default_factory=DeepResearchToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)

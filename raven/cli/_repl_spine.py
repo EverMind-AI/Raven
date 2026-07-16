@@ -24,17 +24,20 @@ from raven.spine import (
     TurnRequest,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
+from raven.spine.events import Reasoning
 
 
 class CliOutlet:
     """Renders a turn's deliverables to the terminal. Runs non-streaming (run_turn
     stream=False), so the reply arrives as one Text; ToolEvent/MediaOut are eaten.
 
-    ``render_notice`` is opt-in progress rendering for the one-shot ``-m`` path:
-    when set, a Notice renders as a progress line, gated by the same two config
-    flags the bus path honored — PROGRESS by ``send_progress``, TOOL_HINT by
-    ``send_tool_hints``. The interactive REPL leaves it None (it never showed
-    progress, so eating Notice is status quo, not a regression).
+    ``render_notice`` is opt-in progress rendering: when set, a Notice (and the
+    Reasoning a long tool like deep_research streams, see ``deliver``) renders as
+    a progress line, gated by ``send_progress`` (PROGRESS) and ``send_tool_hints``
+    (TOOL_HINT). Both the one-shot ``-m`` path and the interactive REPL wire it so
+    deep_research progress is visible; note this also surfaces the model's
+    per-tool progress hint on every tool call, gated by the same flags. A surface
+    that omits it eats Notice / Reasoning as before.
 
     ``render_marker`` is opt-in: a Text whose ``source.extras._sentinel_origin``
     is set renders this proactive marker before its content (the interactive
@@ -69,6 +72,11 @@ class CliOutlet:
                 self._render_notice(out.detail or "")
             elif out.kind is NoticeKind.TOOL_HINT and self._send_tool_hints:
                 self._render_notice(out.detail or "")
+        elif isinstance(out, Reasoning):
+            # A long tool (deep_research) streams coarse progress as Reasoning; the
+            # model itself never emits Reasoning here (REPL runs non-streaming).
+            if self._render_notice is not None and self._send_progress and out.content:
+                self._render_notice(out.content)
         # Other Notice kinds / ToolEvent / MediaOut are eaten (render-can't path).
 
 
@@ -104,7 +112,7 @@ def build_repl(
         )
     )
     scheduler = Scheduler(
-        AgentTurnRunner(agent_loop, stream=False),
+        AgentTurnRunner(agent_loop, stream=False, inline_tool_stream=True),
         OriginPools(user=user_pool, system=system_pool),
         make_hub_sink(hub),
     )

@@ -57,3 +57,8 @@ class TurnRequest:
     conversation: str | None = None
     busy: BusyPolicy = BusyPolicy.APPEND
     sentinel: SentinelExtras | None = None
+    # Verbatim delivery: when set, the turn skips the model entirely and emits
+    # this text as-is (a background task pushing a finished result back to its
+    # conversation). Runs through the lane so the session write stays serialized;
+    # the model never sees it, so it cannot be rewritten. See AgentLoop.run_turn.
+    deliver_text: str | None = None

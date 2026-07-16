@@ -76,3 +76,10 @@ def test_turn_request_has_no_conversation_id_derivation():
     fields = {f.name for f in dataclasses.fields(TurnRequest)}
     assert "conversation" in fields
     assert "conversation_id" not in fields
+
+
+def test_turn_request_deliver_text_defaults_none():
+    # New optional field must default None so existing keyword constructors
+    # (~15 call sites) are unaffected.
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
+    assert req.deliver_text is None

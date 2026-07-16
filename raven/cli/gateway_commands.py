@@ -217,6 +217,7 @@ def register(app: typer.Typer) -> None:
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
+            deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -427,6 +428,11 @@ def register(app: typer.Typer) -> None:
                     agent.decision_consumer.executor.set_submit(gw_scheduler.submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(gw_scheduler.submit)
+                # Deep research (channel/async) delivers its finished answer back
+                # via a deliver_text turn; wiring submit here (gateway only) is
+                # what flips the tool from its synchronous path to the async one.
+                if agent.deep_research_manager is not None:
+                    agent.deep_research_manager.set_submit(gw_scheduler.submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the

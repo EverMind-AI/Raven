@@ -68,6 +68,12 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
 
+**Deep Research** (`agent/tools/deep_research.py`):
+Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a
+finished, cited answer. Streamed inline on CLI/TUI, async on channels (background run +
+verbatim `deliver_text` push). Configured via `raven deep-research` or onboarding Step 5.
+_Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
+
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit of the workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back.
@@ -403,7 +409,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory) that also seeds the
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research) that also seeds the
 Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:

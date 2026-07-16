@@ -18,7 +18,7 @@ from typing import Any
 from loguru import logger
 from pydantic.alias_generators import to_camel
 
-from raven.config.loader import get_config_path
+from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 
 # Shared Skill Hub endpoint seeded into a fresh config's skillForge.router.hub.
@@ -27,16 +27,6 @@ from raven.config.schema import CronConfig
 # onboarded config shows the live endpoint. apiKey is NOT seeded — the user
 # supplies their own Bearer token.
 _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
-
-
-def _load_raw(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("config/update: failed to read {}: {}", path, exc)
-        return {}
 
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -62,7 +52,7 @@ def update_cron_config(
     if key not in CronConfig.model_fields:
         raise KeyError(f"Unknown cron config key: {key!r}. Supported: {sorted(CronConfig.model_fields)}")
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     cron_section = data.setdefault("cron", {})
     camel_key = to_camel(key)
     prev = cron_section.get(camel_key)
@@ -80,7 +70,7 @@ def reset_cron_config(*, config_path: Path | None = None) -> None:
     defaults to disk" principle.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     removed = data.pop("cron", None)
     _write_atomic(path, data)
     logger.info("config/update: cron section reset (was {!r})", removed)
@@ -100,7 +90,7 @@ def set_sentinel_enabled(
     on a running process.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     section = data.setdefault("sentinel", {})
     prev = section.get("enabled")
     # No-op when already in the desired state (absent defaults to False) —
@@ -133,7 +123,7 @@ def set_sentinel_nudge_quota(
             raise ValueError(f"{label} must be >= 1 (got {val})")
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     sentinel = data.setdefault("sentinel", {})
     np_key = "nudge_policy" if "nudge_policy" in sentinel else "nudgePolicy"
     np = sentinel.setdefault(np_key, {})
@@ -179,7 +169,7 @@ def set_language(
     chosen language.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     prev = data.get("language")
     data["language"] = language
     _write_atomic(path, data)
@@ -200,7 +190,7 @@ def set_default_model(
     created ``Config()`` baked in, which is typically a different vendor).
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     defaults = data.setdefault("agents", {}).setdefault("defaults", {})
     prev = defaults.get("model")
     defaults["model"] = model
@@ -221,7 +211,7 @@ def set_sandbox_backend(
     the loader validates on next read.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     # sandbox lives under tools (Config.tools.sandbox), not at the root — the
     # root Config forbids extras, so a top-level "sandbox" key fails schema
     # validation on the next load.
@@ -274,7 +264,7 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     )
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
 
     mem = MemoryConfig()
     memory = data.setdefault("memory", {})
@@ -334,7 +324,7 @@ def set_memory_backend(
     and flips this flag here.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     section = data.setdefault("memory", {})
     prev = section.get("backend")
     section["backend"] = backend

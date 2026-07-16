@@ -24,6 +24,7 @@ from raven.spine import (
     Usage,
 )
 from raven.spine.delivery import Outlet
+from raven.spine.events import Reasoning
 
 
 def _src(channel="cli", chat_id="c1") -> Source:
@@ -35,8 +36,15 @@ class FakeAgentLoop:
         self.reply = reply
         self.calls: list[dict] = []
 
-    async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
-        self.calls.append({"text": req.text, "stream": stream, "conversation": req.conversation})
+    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
+        self.calls.append(
+            {
+                "text": req.text,
+                "stream": stream,
+                "inline_tool_stream": inline_tool_stream,
+                "conversation": req.conversation,
+            }
+        )
         # The REPL wires stream=False, so run_turn emits the reply as one Text.
         await emit(Text(content=self.reply, source=req.source))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -67,7 +75,7 @@ async def test_runner_delegates_to_run_turn_with_stream_false():
     events, emit = _collect()
     outcome = await runner.run(req, emit, lambda: [])
     # The REPL runner passes stream=False so run_turn emits a Text, not StreamDelta.
-    assert loop.calls == [{"text": "hi", "stream": False, "conversation": "cli:c1"}]
+    assert loop.calls == [{"text": "hi", "stream": False, "inline_tool_stream": False, "conversation": "cli:c1"}]
     assert len(events) == 1 and isinstance(events[0], Text)
     assert events[0].content == "hi there" and events[0].source is src
     assert outcome.explicit_reply is True
@@ -79,6 +87,16 @@ async def test_runner_stream_flag_is_forwarded():
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
     assert loop.calls[0]["stream"] is True  # build_tui would pass True; build_repl False
+
+
+async def test_runner_forwards_inline_tool_stream():
+    # build_repl / build_tui wire inline_tool_stream=True so deep_research streams
+    # its answer inline; the gateway leaves it False.
+    loop = FakeAgentLoop()
+    runner = AgentTurnRunner(loop, stream=False, inline_tool_stream=True)
+    events, emit = _collect()
+    await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
+    assert loop.calls[0]["inline_tool_stream"] is True
 
 
 # --- CliOutlet ---
@@ -138,6 +156,25 @@ async def test_cli_outlet_renders_tool_hint_when_send_tool_hints_on():
     assert notices == ['read_file("x")']  # progress suppressed, tool-hint shown
 
 
+async def test_cli_outlet_renders_reasoning_as_progress():
+    # deep_research streams coarse progress as Reasoning; CliOutlet renders it as a
+    # progress line (gated by render_notice + send_progress, like Notice PROGRESS).
+    notices, outlet = _notice_outlet(send_progress=True, send_tool_hints=False)
+    await outlet.deliver(Reasoning(content="searching the web..."))
+    assert notices == ["searching the web..."]
+
+
+async def test_cli_outlet_eats_reasoning_without_progress():
+    # No render_notice (interactive REPL before wiring) -> eaten, status quo.
+    rendered: list[str] = []
+    await CliOutlet("cli", rendered.append).deliver(Reasoning(content="searching..."))
+    assert rendered == []
+    # render_notice set but send_progress off -> also eaten.
+    notices, outlet = _notice_outlet(send_progress=False, send_tool_hints=False)
+    await outlet.deliver(Reasoning(content="searching..."))
+    assert notices == []
+
+
 # --- make_hub_sink ---
 
 
@@ -166,7 +203,7 @@ async def test_sink_routes_deliverables_and_drops_lifecycle():
 
 
 class _EchoLoop:
-    async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
+    async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
         # REPL wires stream=False; run_turn emits the reply as one Text.
         await emit(Text(content=f"reply<{req.text}>", source=req.source))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -228,7 +265,7 @@ async def test_repl_loop_handles_empty_reply_without_hanging():
     events: list[str] = []
 
     class EmptyLoop:
-        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
             # An empty reply emits no Text (run_turn skips empty content); the loop
             # must still not hang — wait_idle returns since no queue was built.
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)

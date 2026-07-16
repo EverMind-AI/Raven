@@ -346,3 +346,20 @@ def test_init_extension_defaults_round_trips_through_loader(cfg_path: Path) -> N
     assert rc.skill_forge.embedding_url == "http://localhost:1357"
     assert rc.skill_forge.embedding_api_key is None
     assert rc.skill_forge.mass_library_db is None
+
+
+def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:
+    # REGRESSION: update.py is the write path for cron/sentinel/onboard; a
+    # present-but-unparseable config must NOT be clobbered (the real-machine bug
+    # reproduced via set_sandbox_backend wiping providers).
+    from raven.config.loader import ConfigReadError
+    from raven.config.update import set_default_model, set_language
+
+    original = '{\n  "providers": {"openai": {"apiKey": "sk-o"}},\n  // comment => invalid JSON\n}\n'
+    cfg_path.write_text(original, encoding="utf-8")
+    with pytest.raises(ConfigReadError):
+        set_language("zh", config_path=cfg_path)
+    assert cfg_path.read_text(encoding="utf-8") == original  # untouched
+    with pytest.raises(ConfigReadError):
+        set_default_model("openrouter/x", config_path=cfg_path)
+    assert cfg_path.read_text(encoding="utf-8") == original

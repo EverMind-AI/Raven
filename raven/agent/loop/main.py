@@ -23,6 +23,7 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -260,6 +261,7 @@ class AgentLoop:
         max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
         media_config: Any = None,
+        deep_research_config: Any = None,
         disabled_tools: list[str] | None = None,
         tool_search_config: Any = None,
         # AG-1: optional plugin-provided MemoryBackend. When supplied,
@@ -319,9 +321,10 @@ class AgentLoop:
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        from raven.config.schema import MediaGenConfig
+        from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
 
         self.media_config = media_config or MediaGenConfig()
+        self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
@@ -595,6 +598,22 @@ class AgentLoop:
                         output_subdir=media.output_subdir,
                     )
                 )
+        # Deep research (MiroThinker) is opt-in: a paid, minute-scale HTTP engine
+        # registered only when a key is configured, so an unconfigured deploy
+        # never exposes a tool that errors on first call.
+        self.deep_research_manager: DeepResearchManager | None = None
+        if DeepResearchTool.is_configured(self.deep_research_config):
+            self.deep_research_manager = DeepResearchManager(
+                self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy
+            )
+            self.tools.register(
+                DeepResearchTool(
+                    self.deep_research_config,
+                    workspace=self.workspace,
+                    proxy=self.web_proxy,
+                    manager=self.deep_research_manager,
+                )
+            )
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -1111,13 +1130,13 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron"):
+        for name in ("message", "spawn", "cron", "deep_research"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name == "spawn":
+                elif name in ("spawn", "deep_research"):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
@@ -2149,6 +2168,7 @@ class AgentLoop:
         drain: Drain,
         *,
         stream: bool = True,
+        inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
@@ -2201,6 +2221,25 @@ class AgentLoop:
         from raven.spine.runner import TurnOutcome
 
         cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+
+        # Verbatim delivery (deliver_text — see TurnRequest). Persist before
+        # emit, mirroring the normal turn's save-then-reply order, so a save
+        # failure never leaves the user a delivered message no turn recorded.
+        # The after-turn work a normal turn does in _process_message is reduced
+        # to what a no-model delivery needs: backend.store indexes the report;
+        # after_turn is a no-op without a turn_id; consolidation is the curator's
+        # job on its next assemble.
+        if req.deliver_text is not None:
+            session = self.sessions.get_or_create(cid)
+            msg = {"role": "assistant", "content": req.deliver_text}
+            self._save_turn(session, [msg], 0)
+            self.sessions.save(session)
+            await self._dispatch_backend_store(cid, [msg])
+            await emit(Text(content=req.deliver_text))
+            return TurnOutcome(
+                usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+                explicit_reply=True,
+            )
 
         streamed = False
 
@@ -2277,6 +2316,27 @@ class AgentLoop:
                     await emit(Text(content=content))
 
             message_tool.set_send_callback(_route_to_stream)
+
+        # deep_research (streaming surfaces only): stream its progress live and
+        # deliver its finished answer inline, so the tool returns a compact
+        # receipt and the model relays instead of re-emitting/rewriting. Progress
+        # rides Reasoning (TUI thinking.delta / CLI progress line); the answer
+        # follows the same stream switch as the main reply.
+        if inline_tool_stream:
+            dr_tool = self.tools.get("deep_research")
+            if dr_tool is not None and hasattr(dr_tool, "set_stream_callback"):
+
+                async def _route_deep_research(kind: str, text: str) -> None:
+                    if not text:
+                        return
+                    if kind == "progress":
+                        await emit(Reasoning(content=text))
+                    elif stream:
+                        await on_token(text)
+                    else:
+                        await emit(Text(content=text))
+
+                dr_tool.set_stream_callback(_route_deep_research)
 
         # A CRON turn must not let the agent schedule new cron jobs mid-run. The
         # CronTool guards via a ContextVar; set it here, in the lane task that runs

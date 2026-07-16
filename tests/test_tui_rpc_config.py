@@ -272,3 +272,24 @@ async def test_config_methods_registered_via_helper(fake_home: Path) -> None:
         }
     )
     assert resp["error"]["code"] == -32010
+
+
+async def test_config_set_refuses_malformed_config_and_preserves_file(fake_home: Path) -> None:
+    # REGRESSION: TUI config.set must not clobber a malformed config down to one
+    # key (same data-loss failure mode as the CLI write path).
+    cfg = fake_home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    original = '{\n  "tui": {"theme": "dark"},\n  // comment => invalid JSON\n}\n'
+    cfg.write_text(original, encoding="utf-8")
+    with pytest.raises(ConfigValidationError):
+        await config_set({"key": "tui.theme", "value": "dracula"})
+    assert cfg.read_text(encoding="utf-8") == original  # NOT clobbered
+
+
+async def test_config_get_refuses_malformed_config(fake_home: Path) -> None:
+    # The read path also surfaces a broken config (not a silent empty dict).
+    cfg = fake_home / ".raven" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('{\n  "tui": {"theme": "dark"},\n  // bad\n}\n', encoding="utf-8")
+    with pytest.raises(ConfigValidationError):
+        await config_get({"keys": ["tui.theme"]})

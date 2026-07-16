@@ -386,6 +386,7 @@ def _build_tui_agent_loop():
             brave_api_key=config.tools.web.search.api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
+            deep_research_config=config.tools.deep_research,
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,

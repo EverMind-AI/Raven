@@ -141,3 +141,64 @@ def test_schema_validation_error_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="schema validation"):
         load_config(p)
+
+
+def test_read_raw_or_raise_absent_returns_empty(tmp_path: Path) -> None:
+    from raven.config.loader import read_raw_or_raise
+
+    assert read_raw_or_raise(tmp_path / "nope.json") == {}
+
+
+def test_read_raw_or_raise_valid(tmp_path: Path) -> None:
+    from raven.config.loader import read_raw_or_raise
+
+    p = tmp_path / "c.json"
+    p.write_text('{"a": 1}', encoding="utf-8")
+    assert read_raw_or_raise(p) == {"a": 1}
+
+
+def test_read_raw_or_raise_malformed_raises(tmp_path: Path) -> None:
+    from raven.config.loader import ConfigReadError, read_raw_or_raise
+
+    p = tmp_path / "bad.json"
+    p.write_text("{  // comment\n}", encoding="utf-8")
+    with pytest.raises(ConfigReadError):
+        read_raw_or_raise(p)
+
+
+def test_load_config_malformed_warns_loudly_and_uses_defaults(tmp_path: Path, capsys) -> None:
+    from raven.config.loader import load_config
+    from raven.config.schema import Config
+
+    p = tmp_path / "bad.json"
+    p.write_text("{  // comment\n}", encoding="utf-8")
+    cfg = load_config(p)  # must NOT raise (boot resilience)
+    assert isinstance(cfg, Config)
+    assert "IGNORING" in capsys.readouterr().err  # loud stderr warning, not silent
+
+
+def test_read_raw_or_raise_empty_file_is_empty_dict(tmp_path: Path) -> None:
+    from raven.config.loader import read_raw_or_raise
+
+    p = tmp_path / "empty.json"
+    p.write_text("   \n", encoding="utf-8")
+    assert read_raw_or_raise(p) == {}  # empty = no data to lose, not malformed
+
+
+def test_read_raw_or_raise_json_null_is_empty_dict(tmp_path: Path) -> None:
+    from raven.config.loader import read_raw_or_raise
+
+    p = tmp_path / "null.json"
+    p.write_text("null", encoding="utf-8")
+    assert read_raw_or_raise(p) == {}  # valid JSON but not an object -> {} (no AttributeError)
+
+
+def test_config_read_error_is_not_runtimeerror() -> None:
+    # Intentional: the CLI write commands wrap ops in `except RuntimeError`
+    # (OAuth-refusal etc.); ConfigReadError must NOT be a RuntimeError so a parse
+    # error bypasses those and reaches the single run() handler. Do not "fix"
+    # this to RuntimeError.
+    from raven.config.loader import ConfigReadError
+
+    assert not issubclass(ConfigReadError, RuntimeError)
+    assert issubclass(ConfigReadError, Exception)

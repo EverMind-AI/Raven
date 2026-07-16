@@ -1,8 +1,11 @@
 """Configuration loading utilities."""
 
 import json
+import sys
 from pathlib import Path
+from typing import Any
 
+from loguru import logger
 from pydantic import ValidationError
 
 from raven.config.schema import Config
@@ -45,6 +48,44 @@ def get_config_path() -> Path:
     return Path.home() / ".raven" / "config.json"
 
 
+class ConfigReadError(Exception):
+    """An existing config file could not be parsed. Callers doing a
+    read-modify-write MUST NOT proceed: overwriting would replace the user's
+    whole config with just their section (data loss). Only a genuinely-absent
+    file is safe to create fresh.
+
+    Deliberately NOT a RuntimeError: the CLI write commands wrap their ops in a
+    broad ``except RuntimeError`` (for provider OAuth-refusal etc.), and we want
+    a parse error to bypass those and reach the single ``run()`` handler (or a
+    caller's explicit ``except ConfigReadError``), not be swept up implicitly."""
+
+
+def read_raw_or_raise(path: Path) -> dict[str, Any]:
+    """Read a config file as raw JSON for a read-modify-write cycle.
+
+    Returns ``{}`` ONLY when the file is absent. A present-but-unreadable file
+    raises :class:`ConfigReadError` rather than returning ``{}`` -- returning
+    ``{}`` and then writing was the bug that wiped a real config over a lone
+    JSON syntax error (e.g. a // comment). The single read path for every
+    ``update_*`` write module.
+    """
+    if not path.exists():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
+            return {}  # empty file: no data to lose, safe to create fresh (like absent)
+        data = json.loads(text)
+        # A valid-JSON non-object (null / list / scalar) is not a usable config;
+        # return {} so callers get a mapping (not None) without an AttributeError.
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        raise ConfigReadError(
+            f"{path} is not valid JSON ({exc}). Fix it first (JSON allows no comments or "
+            "trailing commas); your config was left unchanged."
+        ) from exc
+
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
@@ -64,11 +105,16 @@ def load_config(config_path: Path | None = None) -> Config:
                 data = json.load(f)
             data = _migrate_config(data)
         except json.JSONDecodeError as e:
-            # Corrupted JSON (e.g. mid-write race): tolerate and fall
-            # back to defaults so a transient bad-read doesn't brick
-            # callers. Schema mismatches below are NOT tolerated.
-            print(f"Warning: corrupted JSON in {path}: {e}")
-            print("Using default configuration.")
+            # Boot on defaults for a malformed file (a transient mid-write race
+            # shouldn't brick callers) but warn LOUDLY -- a persistent syntax
+            # error would else revert every setting with no visible cause.
+            # Raising instead needs atomic save_config first (separate change).
+            msg = (
+                f"config at {path} is not valid JSON ({e}) -- IGNORING it and running on "
+                "DEFAULTS. Fix the file (JSON allows no comments or trailing commas) and restart."
+            )
+            print(f"WARNING: {msg}", file=sys.stderr)
+            logger.warning(msg)
         else:
             try:
                 config = Config.model_validate(data)

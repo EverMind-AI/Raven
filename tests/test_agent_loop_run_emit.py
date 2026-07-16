@@ -55,6 +55,36 @@ class _FakeTool(Tool):
         return "tool-ran"
 
 
+class _FakeDeepResearch(Tool):
+    """Fake deep_research: on execute it drives its stream callback with a progress
+    line then the finished answer, so run_turn's inline routing can be pinned
+    without real HTTP."""
+
+    def __init__(self) -> None:
+        self._cb = None
+
+    @property
+    def name(self) -> str:
+        return "deep_research"
+
+    @property
+    def description(self) -> str:
+        return "fake deep research"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+
+    def set_stream_callback(self, cb) -> None:
+        self._cb = cb
+
+    async def execute(self, query, **kwargs) -> str:
+        if self._cb is not None:
+            await self._cb("progress", "searching the web...")
+            await self._cb("answer", "ANSWER-BODY")
+        return '{"status": "ok", "delivered": true}'
+
+
 class _FakeChatProvider:
     """Non-streaming path: ``chat_with_retry`` returns scripted LLMResponses."""
 
@@ -254,6 +284,89 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
+
+
+# ── deep_research inline streaming: run_turn's _route_deep_research (2a) ──
+
+
+def _dr_stream_provider():
+    return _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "d1",
+                                "function": {"name": "deep_research", "arguments": '{"query": "q"}'},
+                            }
+                        ]
+                    },
+                )
+            ],
+            [StreamDelta(content="ok done")],
+        ]
+    )
+
+
+def _dr_chat_provider():
+    return _FakeChatProvider(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="d1", name="deep_research", arguments={"query": "q"})],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="", finish_reason="stop"),
+        ]
+    )
+
+
+async def test_inline_tool_stream_routes_progress_to_reasoning_and_answer_to_stream(tmp_path):
+    # TUI path (stream=True): deep_research progress -> Reasoning (thinking.delta),
+    # the finished answer -> StreamDelta (token.delta). Pins _route_deep_research.
+    loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeDeepResearch())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("q"), sink, _drain, stream=True, inline_tool_stream=True)
+
+    deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
+    assert any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
+    # Answer streams as a delta AND the model's coda still flows after it (the
+    # `if not streamed` boundary must not swallow the coda once the answer set it).
+    assert "ANSWER-BODY" in deltas
+    assert "ok done" in deltas
+
+
+async def test_inline_tool_stream_answer_as_text_when_not_streaming(tmp_path):
+    # CLI/REPL path (stream=False): answer -> Text so a non-streaming outlet renders it.
+    loop = AgentLoop(provider=_dr_chat_provider(), workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeDeepResearch())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("q"), sink, _drain, stream=False, inline_tool_stream=True)
+
+    assert any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
+    assert any(isinstance(e, EvText) and e.content == "ANSWER-BODY" for e in sink.events)
+
+
+async def test_no_inline_tool_stream_leaves_deep_research_callback_unset(tmp_path):
+    # Without inline_tool_stream (gateway/channels), the callback is never wired, so
+    # the tool emits nothing inline -> no progress/answer routing.
+    loop = AgentLoop(provider=_dr_chat_provider(), workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeDeepResearch())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("q"), sink, _drain, stream=False, inline_tool_stream=False)
+
+    assert not any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
+    assert not any(isinstance(e, EvText) and e.content == "ANSWER-BODY" for e in sink.events)
 
 
 async def test_inject_message_merged_before_next_iteration(tmp_path):
@@ -599,6 +712,122 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     )
     await loop.run_turn(req, _EmitCollector(), _drain, stream=False)
     assert seen.get("message_id") == "m1"  # extras -> metadata -> _set_tool_context
+
+
+# ── deliver_text: verbatim background delivery, skips the model (2b) ──
+
+
+async def test_run_turn_deliver_text_emits_verbatim_skips_model_and_indexes(tmp_path):
+    # A background task pushes a finished result back via deliver_text: run_turn
+    # emits it as one Text verbatim, records it to the session, and hands it to
+    # the backend index — and never touches the model.
+    class _NoCallProvider:
+        async def chat_stream(self, **kwargs):
+            raise AssertionError("model must not be called for a deliver_text turn")
+            yield  # unreachable; keeps this an async generator
+
+        async def chat_with_retry(self, **kwargs):
+            raise AssertionError("model must not be called for a deliver_text turn")
+
+        def get_default_model(self) -> str:
+            return "fake/model"
+
+    stored: list = []
+
+    class _FakeBackend:
+        async def store(self, key, messages) -> None:
+            stored.append((key, messages))
+
+    loop = AgentLoop(provider=_NoCallProvider(), workspace=tmp_path)
+    _stub_edges(loop)
+    loop.backend = _FakeBackend()
+    sink = _EmitCollector()
+
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="weixin", chat_id="c", sender_id="deep_research", chat_type=ChatType.DM),
+        text="",
+        conversation="weixin:c",
+        deliver_text="FULL REPORT [1]",
+    )
+    outcome = await loop.run_turn(req, sink, _drain, stream=False)
+
+    texts = [e for e in sink.events if isinstance(e, EvText)]
+    assert len(texts) == 1 and texts[0].content == "FULL REPORT [1]"
+    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)  # not streamed through the model
+    assert outcome.explicit_reply is True
+
+    session = loop.sessions.get_or_create("weixin:c")
+    assert any(m.get("role") == "assistant" and m.get("content") == "FULL REPORT [1]" for m in session.messages)
+    assert stored and stored[0][0] == "weixin:c"
+    assert stored[0][1][0]["content"] == "FULL REPORT [1]"
+
+
+async def test_run_turn_deliver_text_persists_before_emit(tmp_path):
+    # save-then-send order: if the session save fails, nothing was emitted, so
+    # the user is never left with a delivered message that no turn recorded.
+    loop = AgentLoop(provider=_FakeChatProvider([]), workspace=tmp_path)
+    _stub_edges(loop)
+
+    def _boom(_session) -> None:
+        raise RuntimeError("save failed")
+
+    loop.sessions.save = _boom
+    sink = _EmitCollector()
+
+    req = TurnRequest(
+        origin=Origin.SUBAGENT,
+        source=Source(channel="weixin", chat_id="c", sender_id="deep_research", chat_type=ChatType.DM),
+        text="",
+        conversation="weixin:c",
+        deliver_text="REPORT",
+    )
+    with pytest.raises(RuntimeError):
+        await loop.run_turn(req, sink, _drain, stream=False)
+    assert not any(isinstance(e, EvText) for e in sink.events)  # save failed -> nothing delivered
+
+
+async def test_run_turn_wires_deep_research_delivery_routing(tmp_path):
+    # _set_tool_context routes the deep_research tool's delivery context so the
+    # async transport knows which conversation to push the finished answer to.
+    class _FakeDRRouting(Tool):
+        def __init__(self) -> None:
+            self.ctx: tuple | None = None
+
+        @property
+        def name(self) -> str:
+            return "deep_research"
+
+        @property
+        def description(self) -> str:
+            return "fake deep research (routing)"
+
+        @property
+        def parameters(self) -> dict:
+            return {"type": "object", "properties": {}, "required": []}
+
+        def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
+            self.ctx = (channel, chat_id, session_key)
+
+        async def execute(self, **kwargs) -> str:
+            return "{}"
+
+    loop = AgentLoop(
+        provider=_FakeChatProvider([LLMResponse(content="ok", finish_reason="stop")]),
+        workspace=tmp_path,
+    )
+    _stub_edges(loop)
+    dr = _FakeDRRouting()
+    loop.tools.register(dr)
+
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="weixin", chat_id="c", sender_id="u", chat_type=ChatType.DM),
+        text="hi",
+        conversation="weixin:c",
+    )
+    await loop.run_turn(req, _EmitCollector(), _drain, stream=False)
+    assert dr.ctx == ("weixin", "c", "weixin:c")
 
 
 async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):

@@ -57,7 +57,9 @@ class _RunTurnLoop:
         self.tools = tools if tools is not None else {}
         self.last_stream = None
 
-    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
+    async def run_turn(
+        self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None
+    ) -> TurnOutcome:
         self.last_stream = stream
         for ev in self._events:
             await emit(ev)
@@ -113,7 +115,7 @@ async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fire
     message_tool = MessageTool()
     loop = _RunTurnLoop(tools={"message": message_tool})
 
-    async def _run_turn(req, emit, drain, *, stream, usage_sink=None):
+    async def _run_turn(req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None):
         # the message tool replied this turn (turn-local sent flag)
         message_tool._turn.set(replace(message_tool._cur(), sent=True))
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
@@ -378,7 +380,7 @@ async def test_cron_turn_deliverables_key_to_dead_conversation_not_user_session(
 
 async def test_failed_turn_emits_error():
     class _BoomLoop:
-        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
             raise RuntimeError("boom")
 
     emitter = FakeEmitter()
@@ -401,7 +403,7 @@ async def test_cancelled_turn_does_not_emit_error():
     started = asyncio.Event()
 
     class _HangLoop:
-        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None) -> TurnOutcome:
             started.set()
             await asyncio.sleep(3600)
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
