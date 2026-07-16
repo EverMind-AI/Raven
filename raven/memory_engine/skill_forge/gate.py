@@ -24,6 +24,7 @@ import time
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
+from raven.tracing import semconv, trace
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -60,6 +61,7 @@ class LLMGateFilter:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
+    @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
         self,
         task: str,

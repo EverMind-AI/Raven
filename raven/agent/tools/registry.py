@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 from raven.agent.tools.base import Tool
+from raven.tracing import semconv, trace
 
 
 class ToolRegistry:
@@ -41,6 +42,7 @@ class ToolRegistry:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
 
+    @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(self, name: str, params: dict[str, Any]) -> str:
         """Execute a tool by name with given parameters."""
         _hint = "\n\n[Analyze the error above and try a different approach.]"
