@@ -389,3 +389,18 @@ def test_email_two_secrets_both_redacted(cfg_path: Path) -> None:
     assert cfg["imap_password"] == "****set****"
     assert cfg["smtp_password"] == "****set****"
     assert cfg["imap_host"] == "imap.x"  # non-secret stays plain
+
+
+def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:
+    # REGRESSION: a present-but-unparseable config must NOT be clobbered by a
+    # write command (the bug that wiped a real config down to one section).
+    from raven.config.loader import ConfigReadError
+
+    original = '{\n  "channels": {"telegram": {"enabled": true}},\n  // comment => invalid JSON\n}\n'
+    cfg_path.write_text(original, encoding="utf-8")
+    with pytest.raises(ConfigReadError):
+        enable_channel("telegram", {"token": "x"}, config_path=cfg_path)
+    assert cfg_path.read_text(encoding="utf-8") == original  # untouched
+    with pytest.raises(ConfigReadError):
+        set_channel_fields("telegram", {"token": "y"}, config_path=cfg_path)
+    assert cfg_path.read_text(encoding="utf-8") == original

@@ -28,7 +28,6 @@ already written.
 
 from __future__ import annotations
 
-import json
 import sys
 from typing import Any, Callable, Optional
 
@@ -162,7 +161,9 @@ def _require_questionary() -> Any:
 def _config_language() -> str:
     """Read the saved UI language from the on-disk config ('en' / 'zh').
 
-    Tolerant of a missing / unreadable config (fresh install) → defaults to 'en'.
+    A missing / empty config (fresh install) defaults to 'en'; a malformed one
+    raises ConfigReadError (surfaced by the CLI entrypoint) rather than being
+    silently read as empty.
     """
     data = _load_raw_config()
     lang = data.get("language")
@@ -247,16 +248,16 @@ def _check_tty_or_die(non_interactive: bool) -> None:
 
 
 def _load_raw_config() -> dict[str, Any]:
-    """Return the parsed on-disk config, or ``{}`` if absent/unreadable."""
-    from raven.config.loader import get_config_path
+    """Return the parsed on-disk config, or ``{}`` if absent/empty.
 
-    path = get_config_path()
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8")) or {}
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return {}
+    A present-but-unparseable config raises ConfigReadError (surfaced cleanly by
+    the CLI entrypoint) instead of being silently treated as empty -- which
+    would let onboard misread state and write over a config whose only fault is
+    a syntax typo.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+
+    return read_raw_or_raise(get_config_path()) or {}
 
 
 def _configured_providers() -> list[str]:

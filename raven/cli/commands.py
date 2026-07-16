@@ -164,9 +164,18 @@ def run() -> None:
     so in-process test hosts keep normal exit semantics.
     """
     from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
+    from raven.config.loader import ConfigReadError
 
     try:
         app()
+    except ConfigReadError as exc:
+        # A config-write command (channels/provider/deep-research/onboard) hit an
+        # unparseable config. The write layer already refused (file untouched);
+        # surface it cleanly here, once, for every command instead of a traceback.
+        from rich.console import Console
+
+        Console(stderr=True).print(f"[red]✗[/red] {exc}")
+        raise SystemExit(1) from exc
     except SystemExit as exc:
         code = exc.code
         if not isinstance(code, int):

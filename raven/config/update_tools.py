@@ -20,34 +20,10 @@ from typing import Any
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.config.loader import get_config_path
+from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
 from raven.config.schema import DeepResearchToolConfig
 
 _SECTION = "deepResearch"  # camelCase alias of ToolsConfig.deep_research
-
-
-class ConfigReadError(RuntimeError):
-    """An existing config file could not be parsed. Callers MUST NOT proceed to
-    write: overwriting would replace the user's whole config with just the new
-    section (data loss). Only a genuinely-absent file is safe to create fresh."""
-
-
-def _load_raw(path: Path) -> dict[str, Any]:
-    """Read raw JSON. Empty dict ONLY when the file is absent.
-
-    A present-but-unreadable file raises ConfigReadError rather than returning
-    {} -- returning {} here and then writing was exactly the bug that wiped a
-    real config whose only fault was a JSON syntax error (e.g. // comments).
-    """
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise ConfigReadError(
-            f"{path} is not valid JSON ({exc}). Fix it first (JSON allows no comments or "
-            "trailing commas); your config was left unchanged."
-        ) from exc
 
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -59,7 +35,7 @@ def _write_atomic(path: Path, data: dict[str, Any]) -> None:
 
 
 def _current(path: Path) -> DeepResearchToolConfig:
-    raw = (_load_raw(path).get("tools") or {}).get(_SECTION) or {}
+    raw = (read_raw_or_raise(path).get("tools") or {}).get(_SECTION) or {}
     try:
         return DeepResearchToolConfig.model_validate(raw)
     except ValidationError:
@@ -79,7 +55,7 @@ def set_deep_research(fields: dict[str, Any], *, config_path: Path | None = None
         raise KeyError(f"Unknown deep_research field(s) {unknown}. Available: {sorted(valid)}")
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     working = _current(path).model_dump()
     prev = {k: working.get(k) for k in fields}
     working.update(fields)
@@ -104,7 +80,7 @@ def get_deep_research(*, redact: bool = True, config_path: Path | None = None) -
 def reset_deep_research(*, config_path: Path | None = None) -> None:
     """Reset ``tools.deepResearch`` to schema defaults (clears the key)."""
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     data.setdefault("tools", {})[_SECTION] = DeepResearchToolConfig().model_dump(by_alias=True)
     _write_atomic(path, data)
     logger.info("update_tools: deep_research reset to defaults")

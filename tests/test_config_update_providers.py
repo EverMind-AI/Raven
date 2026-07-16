@@ -486,3 +486,14 @@ def test_remove_absent_model_is_noop(cfg_path: Path) -> None:
 def test_add_provider_model_unknown_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError):
         add_provider_model("nonexistent_provider", "x", config_path=cfg_path)
+
+
+def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:
+    # REGRESSION: a present-but-unparseable config must NOT be clobbered.
+    from raven.config.loader import ConfigReadError
+
+    original = '{\n  "providers": {"openai": {"apiKey": "sk-o"}},\n  // comment => invalid JSON\n}\n'
+    cfg_path.write_text(original, encoding="utf-8")
+    with pytest.raises(ConfigReadError):
+        set_provider_fields("openai", {"api_key": "sk-x"}, config_path=cfg_path)
+    assert cfg_path.read_text(encoding="utf-8") == original  # untouched

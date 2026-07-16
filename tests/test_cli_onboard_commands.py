@@ -1614,3 +1614,13 @@ def test_step5_interactive_delegates_to_shared_flow(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(drc, "configure_deep_research", lambda **k: seen.update(k) or True)
     onboard_commands._step5_deep_research(skip=False, non_interactive=False, warnings=["w"])
     assert seen.get("non_interactive") is False and seen.get("warnings") == ["w"]
+
+
+def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
+    # onboard's read gate must not silently treat a malformed config as empty
+    # (which would let it misread state / write over a config with a typo).
+    from raven.config.loader import ConfigReadError
+
+    tmp_env.write_text("{  // comment => invalid JSON\n}", encoding="utf-8")
+    with pytest.raises(ConfigReadError):
+        onboard_commands._load_raw_config()

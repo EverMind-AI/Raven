@@ -27,24 +27,13 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
-from raven.config.loader import get_config_path
+from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProvidersConfig
 from raven.providers.registry import ProviderSpec, find_by_name
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _load_raw(path: Path) -> dict[str, Any]:
-    """Read raw JSON. Returns empty dict if file is missing or malformed."""
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("update_providers: failed to read {}: {}", path, exc)
-        return {}
 
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -345,7 +334,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     - ``api_base``           current value (or ``None`` if untouched)
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     raw_providers = data.get("providers") or {}
 
     out: list[dict[str, Any]] = []
@@ -406,7 +395,7 @@ def get_provider_config(
     """
     cls = _provider_schema_cls(name)
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     raw_section = (data.get("providers") or {}).get(name) or {}
 
     try:
@@ -468,7 +457,7 @@ def set_provider_fields(
             )
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     raw_section = (data.get("providers") or {}).get(name) or {}
 
     try:
@@ -520,7 +509,7 @@ def reset_provider(
     spec = _provider_spec(name)
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     data.setdefault("providers", {})
     data["providers"][name] = cls().model_dump(by_alias=True)
     _write_atomic(path, data)
@@ -560,7 +549,7 @@ def add_provider_model(
     Returns the new model list. Raises KeyError for an unknown provider.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model not in models:
         models.append(model)
@@ -584,7 +573,7 @@ def remove_provider_model(
     Returns the new model list. Raises KeyError for an unknown provider.
     """
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model in models:
         models = [m for m in models if m != model]

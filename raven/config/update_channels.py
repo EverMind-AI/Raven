@@ -18,23 +18,12 @@ from loguru import logger
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
-from raven.config.loader import get_config_path
+from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ChannelsConfig
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-def _load_raw(path: Path) -> dict[str, Any]:
-    """Read raw JSON. Returns empty dict if file is missing or malformed."""
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("update_channels: failed to read {}: {}", path, exc)
-        return {}
 
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -364,7 +353,7 @@ def get_channel_config(
     """
     cls = _channel_schema_cls(name)
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     raw_section = (data.get("channels") or {}).get(name) or {}
 
     try:
@@ -400,7 +389,7 @@ def reset_channel(
     """
     cls = _channel_schema_cls(name)
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     data.setdefault("channels", {})
     instance = cls()
     data["channels"][name] = instance.model_dump(by_alias=True)
@@ -427,7 +416,7 @@ def _patch_channel(
         raise KeyError(f"Unknown field(s) {unknown} for channel '{name}'. Available fields: {sorted(specs.keys())}")
 
     path = config_path or get_config_path()
-    data = _load_raw(path)
+    data = read_raw_or_raise(path)
     raw_section = (data.get("channels") or {}).get(name) or {}
 
     try:

@@ -357,3 +357,14 @@ def test_test_command_unknown_provider_exits_1(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "test", "no-such-provider"])
     assert r.exit_code == 1
     assert "No registry entry" in r.output or "Unknown provider" in r.output
+
+
+def test_provider_set_refuses_malformed_config_and_preserves_file(tmp_config: Path) -> None:
+    # REGRESSION: provider set must not clobber a malformed config. ConfigReadError
+    # is not a RuntimeError, so it bypasses the command's `except RuntimeError`
+    # (which is for OAuth-refusal) and is handled uniformly at the CLI entrypoint.
+    original = '{\n  "providers": {"openai": {"apiKey": "sk-o"}},\n  // comment => invalid JSON\n}\n'
+    tmp_config.write_text(original, encoding="utf-8")
+    result = runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-x"])
+    assert result.exit_code != 0
+    assert tmp_config.read_text(encoding="utf-8") == original  # NOT clobbered
