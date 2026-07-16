@@ -1,4 +1,4 @@
-"""Four-step onboarding wizard: LLM provider → sandbox → channel → memory.
+"""Five-step onboarding wizard: LLM provider → sandbox → channel → memory → deep research.
 
 Goal: get a new user from ``pip install`` to a working agent in a few
 minutes, without ever opening ``~/.raven/config.json`` or
@@ -11,7 +11,8 @@ Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
   3. Chat channel (optional, stackable)
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
-  5. Done
+  5. deep_research tool (optional; MiroThinker key + model)
+  6. Done
 
 All writes go through the ``update_providers`` / ``update_channels`` /
 ``update`` / ``update_everos`` ops libraries — this module owns the UX layer,
@@ -20,7 +21,7 @@ not config-schema knowledge.
 Navigation: questionary 2.1.1 has no first-class cross-screen "back", so the
 wizard is a screen state machine and back is expressed as a ``0) back``
 sentinel choice on the screens that support it (Step 1 <-> language pick,
-Step 2 -> Step 1); Steps 3 and 4 are optional and forward-only (re-run
+Step 2 -> Step 1); Steps 3, 4 and 5 are optional and forward-only (re-run
 ``onboard`` to change them). Ctrl+C exits at any point, keeping whatever was
 already written.
 """
@@ -43,7 +44,7 @@ from raven.cli._helpers import (
 
 console = Console()
 
-_TOTAL_STEPS = 4
+_TOTAL_STEPS = 5
 
 # Sentinel returned by a screen function to ask the runner to go back one
 # screen; ``None`` from a picker means Ctrl+C (exit).
@@ -3417,12 +3418,13 @@ def run_wizard(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
+    skip_deep_research: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
     skip_test: bool = False,
 ) -> None:
-    """Run the 4-step onboarding wizard end-to-end.
+    """Run the 5-step onboarding wizard end-to-end.
 
     The reusable entry point: the ``onboard`` CLI command and the startup gate
     both call this. Screens form a state machine so a ``0) Back`` choice can
@@ -3445,6 +3447,7 @@ def run_wizard(
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
+            skip_deep_research=skip_deep_research,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
@@ -3452,6 +3455,29 @@ def run_wizard(
         )
     finally:
         _logger.enable("raven")
+
+
+def _step5_deep_research(*, skip: bool, non_interactive: bool, warnings: list[str]) -> object:
+    """Step 5 — deep_research (MiroThinker) tool, optional, forward-only.
+
+    Delegates to the shared configure flow (also reachable via
+    ``raven deep-research enable``). Skipped on --skip-deep-research or
+    non-interactive; leaving it unconfigured just means the opt-in tool stays
+    unregistered.
+    """
+    _step_header(5, _t("Deep research tool", "深度研究工具"))
+    if skip or non_interactive:
+        console.print(
+            _t(
+                "  [dim]Skipping deep_research (configure later: raven deep-research enable).[/dim]",
+                "  [dim]跳过 deep_research(以后可用 raven deep-research enable 配置)。[/dim]",
+            )
+        )
+        return None
+    from raven.cli.deep_research_commands import configure_deep_research
+
+    configure_deep_research(non_interactive=non_interactive, warnings=warnings)
+    return None
 
 
 def _run_wizard_body(
@@ -3464,6 +3490,7 @@ def _run_wizard_body(
     skip_sandbox: bool = False,
     skip_channel: bool = False,
     skip_memory: bool = False,
+    skip_deep_research: bool = False,
     non_interactive: bool = False,
     yes: bool = False,
     reset: bool = False,
@@ -3488,12 +3515,14 @@ def _run_wizard_body(
                 "[bold #fbe23f]✨ Welcome to the Raven setup wizard[/bold #fbe23f]\n\n"
                 "[dim]We'll configure, in order:[/dim]\n"
                 "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] Run location      "
-                "[#fbe23f]③[/#fbe23f] Chat channel      [#fbe23f]④[/#fbe23f] Long-term memory\n\n"
+                "[#fbe23f]③[/#fbe23f] Chat channel      [#fbe23f]④[/#fbe23f] Long-term memory      "
+                "[#fbe23f]⑤[/#fbe23f] Deep research\n\n"
                 "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
                 "[bold #fbe23f]✨ 欢迎使用 Raven 配置向导[/bold #fbe23f]\n\n"
                 "[dim]我们将依次配置:[/dim]\n"
                 "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] 运行位置      "
-                "[#fbe23f]③[/#fbe23f] 聊天渠道      [#fbe23f]④[/#fbe23f] 长期记忆\n\n"
+                "[#fbe23f]③[/#fbe23f] 聊天渠道      [#fbe23f]④[/#fbe23f] 长期记忆      "
+                "[#fbe23f]⑤[/#fbe23f] 深度研究\n\n"
                 "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
             border_style="#c8a900",
@@ -3524,6 +3553,11 @@ def _run_wizard_body(
             main_model=_load_current_default_model(),
             warnings=warnings,
             skip_test=skip_test,
+        ),
+        lambda: _step5_deep_research(
+            skip=skip_deep_research,
+            non_interactive=non_interactive,
+            warnings=warnings,
         ),
     ]
 
@@ -3588,6 +3622,9 @@ def register(app: typer.Typer) -> None:
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),
         skip_channel: bool = typer.Option(False, "--skip-channel", help="Skip Step 3 (channel setup)"),
         skip_memory: bool = typer.Option(False, "--skip-memory", help="Skip Step 4 (long-term memory)"),
+        skip_deep_research: bool = typer.Option(
+            False, "--skip-deep-research", help="Skip Step 5 (deep_research tool)"
+        ),
         non_interactive: bool = typer.Option(
             False,
             "--non-interactive",
@@ -3605,7 +3642,7 @@ def register(app: typer.Typer) -> None:
             help="Skip the one-shot test message (avoids a billed call; connectivity is still checked)",
         ),
     ) -> None:
-        """Four-step setup wizard: LLM provider → sandbox → channel → memory."""
+        """Five-step setup wizard: LLM provider → sandbox → channel → memory → deep research."""
         run_wizard(
             provider=provider,
             api_key=api_key,
@@ -3615,6 +3652,7 @@ def register(app: typer.Typer) -> None:
             skip_sandbox=skip_sandbox,
             skip_channel=skip_channel,
             skip_memory=skip_memory,
+            skip_deep_research=skip_deep_research,
             non_interactive=non_interactive,
             yes=yes,
             reset=reset,
