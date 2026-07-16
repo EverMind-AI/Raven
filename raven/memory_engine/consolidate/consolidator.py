@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.tracing import semconv, trace
 from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
@@ -1063,6 +1064,7 @@ class MemoryStore:
             )
         return "\n".join(lines)
 
+    @trace.instrument("memory.extract", extract=semconv.memory_extract)
     async def annotate(
         self,
         messages: list[dict],
@@ -1648,6 +1650,7 @@ section_body: full new content for that H2, every bullet ending with
                 self.write_long_term(new_content)
             return True
 
+    @trace.instrument("memory.profile_refresh", extract=semconv.memory_profile_refresh)
     async def maybe_refresh_hot_tags(
         self,
         provider: LLMProvider,
@@ -1798,6 +1801,7 @@ class MemoryConsolidator:
                 await self.maybe_refresh_hot_tags()
             return ok
 
+    @trace.instrument("memory.consolidate", extract=semconv.memory_consolidate)
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
         """Loop: archive old messages until prompt fits within half the context window."""
         if not session.messages or self.context_window_tokens <= 0:

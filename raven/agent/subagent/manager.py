@@ -18,6 +18,7 @@ from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
+from raven.tracing import semconv, trace
 from raven.utils.helpers import build_assistant_message
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
@@ -119,6 +120,7 @@ class SubagentManager:
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
         return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
 
+    @trace.instrument("subagent.run", extract=semconv.subagent)
     async def _run_subagent(
         self,
         task_id: str,

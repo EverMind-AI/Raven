@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from raven.tracing import semconv, trace
+
 if TYPE_CHECKING:
     from raven.memory_engine.consolidate.consolidator import MemoryStore
     from raven.providers.base import LLMProvider
@@ -144,6 +146,7 @@ class Personalizer:
 
     # ── Step 1: request triage ────────────────────────────────────────────────
 
+    @trace.instrument("personalize.classify", kind="memory", extract=semconv.personalize)
     async def classify(self, message: str, history: list[dict] | None = None) -> dict:
         """Determine if the request needs a personalization clarification question.
 
@@ -184,6 +187,7 @@ class Personalizer:
 
     # ── Step 2a: generate a clarifying question ───────────────────────────────
 
+    @trace.instrument("personalize.question", kind="memory", extract=semconv.personalize)
     async def generate_question(self, message: str, domain: str) -> str:
         """Generate a single focused clarifying question for the given request.
 
@@ -215,6 +219,7 @@ class Personalizer:
 
     # ── Step 2b: extract preferences and write them to memory ─────────────────
 
+    @trace.instrument("personalize.extract", kind="memory", extract=semconv.personalize)
     async def extract_and_store_preference(self, original_message: str, question: str, answer: str) -> bool:
         """Extract reusable preferences from a Q&A pair and persist to MEMORY.md.
 
@@ -256,6 +261,7 @@ class Personalizer:
 
     # ── Step 4: post-action learning ──────────────────────────────────────────
 
+    @trace.instrument("personalize.postlearn", kind="memory", extract=semconv.personalize)
     async def post_learn(self, message: str, response_summary: str) -> bool:
         """Passively extract new preference signals from a completed interaction.
 

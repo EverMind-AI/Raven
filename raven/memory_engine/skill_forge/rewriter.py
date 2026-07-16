@@ -21,6 +21,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from raven.tracing import semconv, trace
+
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
 
@@ -72,6 +74,7 @@ class QueryRewriter:
         self._max_tokens = max_tokens
         self._temperature = temperature
 
+    @trace.instrument("skill.rewrite", kind="skill", extract=semconv.skill_rewrite)
     async def analyze(self, query: str) -> RewriteResult:
         truncated = (query or "").strip()[:_QUERY_MAX_LENGTH]
         if not truncated:

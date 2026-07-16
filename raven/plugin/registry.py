@@ -32,6 +32,7 @@ from typing import Any
 
 from raven.plugin.discover import DiscoveredPlugin, Source
 from raven.plugin.manifest import PluginManifest
+from raven.tracing import semconv, trace
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,7 @@ class PluginRegistry:
 
     # ── Build (PG-3 entry point) ──────────────────────────────────
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("memory_backend"))
     def build_memory_backend(
         self,
         name: str,
@@ -280,6 +282,7 @@ class PluginRegistry:
         )
         return factory(ctx)
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("tool"))
     def build_tool(
         self,
         name: str,

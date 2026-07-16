@@ -44,6 +44,7 @@ from raven.context_engine.curator import (
 )
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.providers.base import LLMProvider
+from raven.tracing import semconv, trace
 
 
 class CuratorSegmentBuilder:
@@ -174,6 +175,7 @@ class CuratorSegmentBuilder:
     # Slow path (bounded internal Curator LLM loop)
     # ------------------------------------------------------------------
 
+    @trace.instrument("context.curate", kind="memory", extract=semconv.context_curate)
     async def _slow_path(self, state: CuratorState, turn_id: str) -> Segment | None:
         registry = self._make_tools(state, turn_id)
         messages = [
