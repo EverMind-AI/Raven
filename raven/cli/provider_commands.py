@@ -106,9 +106,10 @@ def _login_github_copilot() -> None:
     console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
 
     async def _trigger():
-        from litellm import acompletion
+        from raven.providers.litellm_setup import import_litellm
 
-        await acompletion(
+        litellm = import_litellm()
+        await litellm.acompletion(
             model="github_copilot/gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=1,

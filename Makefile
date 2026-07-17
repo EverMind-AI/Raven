@@ -46,7 +46,7 @@ lint-bridge:
 test: test-python test-tui
 
 test-python:
-	uv run --extra dev pytest tests/test_commit_lint.py tests/test_large_file_check.py -q
+	uv run --extra dev pytest tests/test_commit_lint.py tests/test_large_file_check.py tests/test_cli_smoke.py tests/test_litellm_setup.py -q
 
 test-tui:
 	npm test --prefix ui-tui

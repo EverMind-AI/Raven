@@ -53,7 +53,9 @@ _OPENROUTER_CACHE_TIME: float = 0.0
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
-        import litellm
+        from raven.providers.litellm_setup import import_litellm
+
+        litellm = import_litellm()
     except Exception:
         return None
 
@@ -166,7 +168,9 @@ def _try_openrouter_rates(model: str) -> tuple[float, float] | None:
 def _try_litellm_context_window(model: str) -> int | None:
     """LiteLLM's static model metadata — offline, covers most mapped providers."""
     try:
-        import litellm
+        from raven.providers.litellm_setup import import_litellm
+
+        litellm = import_litellm()
     except Exception:
         return None
 
