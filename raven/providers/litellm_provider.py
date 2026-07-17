@@ -9,12 +9,14 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import json_repair
-import litellm
-from litellm import acompletion
 from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
+from raven.providers.litellm_setup import import_litellm
 from raven.providers.registry import find_by_model, find_gateway
+
+litellm = import_litellm()
+acompletion = litellm.acompletion
 
 # LiteLLM's async logging worker (LoggingWorker) binds its queue to a single
 # event loop. Raven runs each turn under a fresh loop (asyncio.run per call), so
@@ -97,8 +99,6 @@ class LiteLLMProvider(LLMProvider):
         if api_base:
             litellm.api_base = api_base
 
-        # Disable LiteLLM logging noise
-        litellm.suppress_debug_info = True
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
 
