@@ -53,20 +53,24 @@ class TestInfraRerunLadder:
         assert out["t1"].passes == 1
 
     def test_infra_task_rerun_and_salvaged(self):
-        fake = _ScriptedEval([
-            {"t1": _te("t1", 0, 3, infra=2), "t2": _te("t2", 3, 3)},
-            {"t1": _te("t1", 2, 3, infra=0)},
-        ])
+        fake = _ScriptedEval(
+            [
+                {"t1": _te("t1", 0, 3, infra=2), "t2": _te("t2", 3, 3)},
+                {"t1": _te("t1", 2, 3, infra=0)},
+            ]
+        )
         out = eval_with_infra_rerun(fake, None, ["t1", "t2"], 3, "job")
         assert out["t1"].passes == 2 and out["t1"].infra_attempts == 0
         # Only the contaminated task is re-scored, under the ladder job name.
         assert fake.calls[1] == (["t1"], "job_infra_rerun1")
 
     def test_missing_task_is_infra_by_definition(self):
-        fake = _ScriptedEval([
-            {"t1": _te("t1", 3, 3)},                    # t2 never came back
-            {"t2": _te("t2", 1, 3)},
-        ])
+        fake = _ScriptedEval(
+            [
+                {"t1": _te("t1", 3, 3)},  # t2 never came back
+                {"t2": _te("t2", 1, 3)},
+            ]
+        )
         out = eval_with_infra_rerun(fake, None, ["t1", "t2"], 3, "job")
         assert fake.calls[1][0] == ["t2"]
         assert out["t2"].passes == 1
@@ -75,11 +79,13 @@ class TestInfraRerunLadder:
         # The rerun came back just as contaminated: keep the original (strictly
         # fewer infra trials required to replace).
         first = _te("t1", 1, 3, infra=1)
-        fake = _ScriptedEval([
-            {"t1": first},
-            {"t1": _te("t1", 0, 3, infra=1)},
-            {"t1": _te("t1", 0, 3, infra=2)},
-        ])
+        fake = _ScriptedEval(
+            [
+                {"t1": first},
+                {"t1": _te("t1", 0, 3, infra=1)},
+                {"t1": _te("t1", 0, 3, infra=2)},
+            ]
+        )
         out = eval_with_infra_rerun(fake, None, ["t1"], 3, "job")
         assert out["t1"] is first
         assert len(fake.calls) == 3  # base + 2 reruns, then the ladder ends
@@ -96,10 +102,12 @@ class TestInfraRerunLadder:
         assert with_infra_rerun(inner, 0) is inner
 
     def test_wrapper_applies_ladder(self):
-        fake = _ScriptedEval([
-            {"t1": _te("t1", 0, 3, infra=1)},
-            {"t1": _te("t1", 2, 3)},
-        ])
+        fake = _ScriptedEval(
+            [
+                {"t1": _te("t1", 0, 3, infra=1)},
+                {"t1": _te("t1", 2, 3)},
+            ]
+        )
         wrapped = with_infra_rerun(fake, 1)
         out = wrapped(None, ["t1"], 3, "job")
         assert out["t1"].passes == 2 and len(fake.calls) == 2
@@ -110,7 +118,7 @@ class TestFlipSummary:
         cand = {"t1": _te("t1", 2, 3), "t2": _te("t2", 0, 3), "t3": _te("t3", 3, 3)}
         ctrl = {"t1": _te("t1", 1, 3), "t2": _te("t2", 1, 3), "t3": _te("t3", 3, 3)}
         s = flip_summary(cand, ctrl, ["t1", "t2", "t3"])
-        assert s["rescued"] == ["t1"]          # 1/3 -> 2/3 counts as rescued
+        assert s["rescued"] == ["t1"]  # 1/3 -> 2/3 counts as rescued
         assert s["regressed"] == ["t2"]
         assert s["still_failing"] == ["t1", "t2"]  # anything below 1.0
 

@@ -33,8 +33,8 @@ from raven.evolver.scheduler.anchor_selection import AnchorSelection
 from raven.evolver.tree.node import HarnessNode, NodeStatus
 
 if TYPE_CHECKING:
-    from raven.evolver.orchestrator.gates.pipeline import GateResult
     from raven.evolver.orchestrator.gates.paired import PairedResult
+    from raven.evolver.orchestrator.gates.pipeline import GateResult
     from raven.evolver.orchestrator.nodes.screen import ScreenResult
 
 
@@ -112,9 +112,7 @@ class BaselineProvider(Protocol):
         anchor: Optional[AnchorSelection],
     ) -> Baseline: ...
 
-    def on_promote(
-        self, node: HarnessNode, outcome: CandidateOutcome, *, train_task_ids: list[str]
-    ) -> None: ...
+    def on_promote(self, node: HarnessNode, outcome: CandidateOutcome, *, train_task_ids: list[str]) -> None: ...
 
 
 class FrozenColdStartBaseline:
@@ -191,9 +189,7 @@ class SameSessionPairedBaseline:
 
     def for_round(self, round_index, parent, *, eval, train_task_ids, anchor) -> Baseline:
         evals = eval(parent, train_task_ids, self._k, f"{self._label}_r{round_index}")
-        return Baseline(
-            evals, train_mean(evals, train_task_ids), f"{parent.node_id}_{self._label}_r{round_index}"
-        )
+        return Baseline(evals, train_mean(evals, train_task_ids), f"{parent.node_id}_{self._label}_r{round_index}")
 
     def on_promote(self, node, outcome, *, train_task_ids) -> None:  # re-measured each round
         return None
@@ -229,11 +225,7 @@ def make_frozen_baseline(
         return Baseline(evals, train_mean(evals, train_ids), f"{d.name}(resumed)")
 
     return PerParentFrozenBaseline(
-        seed={
-            root_node_id: Baseline(
-                van_evals, train_mean(van_evals, list(train_task_ids)), seed_label
-            )
-        },
+        seed={root_node_id: Baseline(van_evals, train_mean(van_evals, list(train_task_ids)), seed_label)},
         fallback=fallback,
     )
 

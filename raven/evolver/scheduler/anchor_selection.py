@@ -171,9 +171,7 @@ def select_anchor(
         key=lambda s: (-affinity.get(s.task_id, 0.0), s.task_id),
     )
     # borderline tasks are the discriminators: rank by variance desc, then id.
-    borderline_pool = [
-        stab for bucket in _BORDERLINE_BUCKETS for stab in by_bucket[bucket]
-    ]
+    borderline_pool = [stab for bucket in _BORDERLINE_BUCKETS for stab in by_bucket[bucket]]
     _record(
         "borderline",
         borderline_pool,
@@ -183,10 +181,7 @@ def select_anchor(
 
     n = len(picked)
     if n == 0:
-        raise ValueError(
-            f"anchor selection produced 0 tasks from {ledger_dir} "
-            "(empty buckets for every role?)"
-        )
+        raise ValueError(f"anchor selection produced 0 tasks from {ledger_dir} (empty buckets for every role?)")
     sigma_screen = math.sqrt(sum(t.variance for t in picked) / (n * n))
     cull_threshold = cull_sigma_mult * sigma_screen
 

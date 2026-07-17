@@ -20,6 +20,7 @@ surface as docker daemon errors during exec). It is intentionally loose
 since per-trial occurrences should be rare; spikes indicate infra issues
 worth filtering out before bandit stratification.
 """
+
 from __future__ import annotations
 
 import json
@@ -225,10 +226,7 @@ def _find_attempt_root(trial_dir: Path) -> Path:
     """Same logic as stability_bucket: discriminate by ``verifier/`` subdir."""
     if not trial_dir.is_dir():
         raise NotADirectoryError(trial_dir)
-    has_trial_children = any(
-        p.is_dir() and "__" in p.name and (p / "verifier").is_dir()
-        for p in trial_dir.iterdir()
-    )
+    has_trial_children = any(p.is_dir() and "__" in p.name and (p / "verifier").is_dir() for p in trial_dir.iterdir())
     if has_trial_children:
         return trial_dir
     nested = [p for p in trial_dir.iterdir() if p.is_dir()]
@@ -278,21 +276,25 @@ def main(argv: list[str] | None = None) -> int:
     turns = sorted(f.turn_count for f in feats.values())
     if turns:
         for q, p in (("min", 0.0), ("p25", 0.25), ("p50", 0.5), ("p75", 0.75), ("max", 1.0)):
-            idx = min(len(turns)-1, int(p * len(turns)))
+            idx = min(len(turns) - 1, int(p * len(turns)))
             print(f"  {q}: {turns[idx]}")
 
     if args.json:
         with open(args.json, "w") as f:
             json.dump(
-                {tid: {
-                    "task_id": x.task_id,
-                    "turn_count": x.turn_count,
-                    "final_exit_status": x.final_exit_status.value,
-                    "has_tool_calls_ever": x.has_tool_calls_ever,
-                    "assistant_text_length_avg": x.assistant_text_length_avg,
-                    "docker_error_count": x.docker_error_count,
-                } for tid, x in sorted(feats.items())},
-                f, indent=2,
+                {
+                    tid: {
+                        "task_id": x.task_id,
+                        "turn_count": x.turn_count,
+                        "final_exit_status": x.final_exit_status.value,
+                        "has_tool_calls_ever": x.has_tool_calls_ever,
+                        "assistant_text_length_avg": x.assistant_text_length_avg,
+                        "docker_error_count": x.docker_error_count,
+                    }
+                    for tid, x in sorted(feats.items())
+                },
+                f,
+                indent=2,
             )
     return 0
 

@@ -34,14 +34,12 @@ def subject_repo(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "subject"
     (repo / "raven/agent").mkdir(parents=True)
     (repo / "raven/agent/loop.py").write_text("x = 1\n")
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
-                ["git", "commit", "-qm", "init"]):
-        subprocess.run(cmd, cwd=repo, check=True, env={**env, "PATH": "/usr/bin:/bin"},
-                       capture_output=True)
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-                         capture_output=True, text=True).stdout.strip()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
+        subprocess.run(cmd, cwd=repo, check=True, env={**env, "PATH": "/usr/bin:/bin"}, capture_output=True)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
     return repo, sha
 
 
@@ -70,11 +68,15 @@ class TestRunSpec:
     def test_omitted_base_sha_resolves_to_head(self, tmp_path, subject_repo):
         repo, sha = subject_repo
         path = tmp_path / "spec.yaml"
-        path.write_text(yaml.safe_dump({
-            "bench": "appworld",
-            "repo_root": str(repo),
-            "work_dir": str(tmp_path / "work"),
-        }))
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "bench": "appworld",
+                    "repo_root": str(repo),
+                    "work_dir": str(tmp_path / "work"),
+                }
+            )
+        )
         spec = load_run_spec(path)
         assert spec.base_sha == sha
         assert spec.base_sha_defaulted is True
@@ -106,8 +108,7 @@ class TestRunSpec:
 
     def test_funnel_nonpositive_rejected(self, tmp_path, subject_repo):
         repo, sha = subject_repo
-        path = _write_spec(tmp_path, repo, sha,
-                           funnel={"termination": {"patience": 0}})
+        path = _write_spec(tmp_path, repo, sha, funnel={"termination": {"patience": 0}})
         with pytest.raises(RunSpecError, match=">= 1"):
             load_run_spec(path)
 
@@ -117,17 +118,19 @@ class TestRunSpec:
         with pytest.raises(RunSpecError, match="models.driver"):
             load_run_spec(path)
 
-    def test_relative_paths_resolve_against_config_dir(
-        self, tmp_path, subject_repo, monkeypatch
-    ):
+    def test_relative_paths_resolve_against_config_dir(self, tmp_path, subject_repo, monkeypatch):
         repo, sha = subject_repo
         path = tmp_path / "spec.yaml"
-        path.write_text(yaml.safe_dump({
-            "bench": "appworld",
-            "repo_root": str(repo),
-            "base_sha": sha,
-            "work_dir": "evo_work",
-        }))
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "bench": "appworld",
+                    "repo_root": str(repo),
+                    "base_sha": sha,
+                    "work_dir": "evo_work",
+                }
+            )
+        )
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         monkeypatch.chdir(elsewhere)
@@ -146,12 +149,12 @@ class TestRunSpec:
         with pytest.raises(RunSpecError, match="unknown roles"):
             load_run_spec(path)
 
-    def test_smoke_applies_builtin_shrink_then_user_overlay(
-        self, tmp_path, subject_repo
-    ):
+    def test_smoke_applies_builtin_shrink_then_user_overlay(self, tmp_path, subject_repo):
         repo, sha = subject_repo
         path = _write_spec(
-            tmp_path, repo, sha,
+            tmp_path,
+            repo,
+            sha,
             funnel={"k_confirm": 3},
             smoke={"funnel": {"termination": {"max_rounds": 2}}},
         )
@@ -194,9 +197,7 @@ class TestRunMeta:
         assert again.finalize_reason == "user_finalized"
 
     def test_fingerprint_is_order_insensitive(self):
-        assert config_fingerprint({"a": 1, "b": 2}) == config_fingerprint(
-            {"b": 2, "a": 1}
-        )
+        assert config_fingerprint({"a": 1, "b": 2}) == config_fingerprint({"b": 2, "a": 1})
 
     def test_atomic_write_leaves_no_tmp_on_success(self, tmp_path):
         target = tmp_path / "x.json"
@@ -229,7 +230,8 @@ class TestAppWorldEntry:
         path = _write_spec(tmp_path, repo, sha, bench_config=bench_config)
         spec = load_run_spec(path, smoke=smoke)
         return LaunchContext(
-            spec=spec, models={"driver": None, "design": None, "verdict": None},
+            spec=spec,
+            models={"driver": None, "design": None, "verdict": None},
         )
 
     def _bench_config(self, tmp_path):
@@ -285,9 +287,7 @@ class TestAppWorldEntry:
         with pytest.raises(ValueError, match="placeholder"):
             build(self._ctx(tmp_path, subject_repo, bc))
 
-    def test_missing_appworld_install_refuses_at_build(
-        self, tmp_path, subject_repo, monkeypatch
-    ):
+    def test_missing_appworld_install_refuses_at_build(self, tmp_path, subject_repo, monkeypatch):
         build = load_bench("appworld", repo_root=REPO_ROOT)
         bc = self._bench_config(tmp_path)
         bc["appworld_data_root"] = str(tmp_path / "nowhere")
@@ -307,28 +307,38 @@ class TestScorerImmutability:
     def test_scorer_surface_is_immutable(self):
         from raven.evolver.applier.path_guard import check_patch_paths
 
-        offenders = check_patch_paths([
-            "benchmarks/appworld/evolve/grade.py",
-            "benchmarks/appworld/evolve/adapter.py",
-            "benchmarks/appworld/batch.py",
-            "raven/evolver/orchestrator/gates/pipeline.py",
-        ])
+        offenders = check_patch_paths(
+            [
+                "benchmarks/appworld/evolve/grade.py",
+                "benchmarks/appworld/evolve/adapter.py",
+                "benchmarks/appworld/batch.py",
+                "raven/evolver/orchestrator/gates/pipeline.py",
+            ]
+        )
         assert len(offenders) == 4
 
     def test_agent_surface_is_editable(self):
         from raven.evolver.applier.path_guard import check_patch_paths
 
-        assert check_patch_paths([
-            "benchmarks/appworld/agent_cli.py",
-            "benchmarks/appworld/tool.py",
-        ]) == []
+        assert (
+            check_patch_paths(
+                [
+                    "benchmarks/appworld/agent_cli.py",
+                    "benchmarks/appworld/tool.py",
+                ]
+            )
+            == []
+        )
 
 
 class TestSecretRedaction:
     def _spec_with(self, tmp_path, repo, sha, **driver):
-        path = _write_spec(tmp_path, repo, sha, models={"driver": {
-            "provider": "openai_compat", "base_url": "http://h/v1",
-            "model": "m", **driver}})
+        path = _write_spec(
+            tmp_path,
+            repo,
+            sha,
+            models={"driver": {"provider": "openai_compat", "base_url": "http://h/v1", "model": "m", **driver}},
+        )
         return load_run_spec(path)
 
     def test_api_key_never_reaches_snapshot(self, tmp_path, subject_repo):
@@ -339,13 +349,9 @@ class TestSecretRedaction:
 
     def test_fingerprint_stable_across_key_rotation(self, tmp_path, subject_repo):
         repo, sha = subject_repo
-        f1 = config_fingerprint(
-            self._spec_with(tmp_path, repo, sha, api_key="sk-AAA").snapshot())
-        f2 = config_fingerprint(
-            self._spec_with(tmp_path, repo, sha, api_key="sk-BBB").snapshot())
-        f3 = config_fingerprint(
-            self._spec_with(tmp_path, repo, sha, api_key="sk-AAA",
-                            model="other").snapshot())
+        f1 = config_fingerprint(self._spec_with(tmp_path, repo, sha, api_key="sk-AAA").snapshot())
+        f2 = config_fingerprint(self._spec_with(tmp_path, repo, sha, api_key="sk-BBB").snapshot())
+        f3 = config_fingerprint(self._spec_with(tmp_path, repo, sha, api_key="sk-AAA", model="other").snapshot())
         assert f1 == f2
         assert f1 != f3
 
@@ -356,22 +362,20 @@ class TestColdStartPrecheck:
         import benchmarks.appworld.evolve.precheck as precheck_mod
 
         monkeypatch.setattr(
-            precheck_mod, "make_appworld_precheck",
-            lambda cfg, **kw: (lambda: calls.__setitem__(
-                "precheck", calls["precheck"] + 1)),
+            precheck_mod,
+            "make_appworld_precheck",
+            lambda cfg, **kw: lambda: calls.__setitem__("precheck", calls["precheck"] + 1),
         )
         monkeypatch.setattr(
-            entry_mod, "eval_with_infra_rerun",
+            entry_mod,
+            "eval_with_infra_rerun",
             lambda *a, **k: calls.__setitem__("eval", calls["eval"] + 1),
         )
         helper = TestAppWorldEntry()
-        ctx = helper._ctx(tmp_path, subject_repo,
-                          helper._bench_config(tmp_path))
+        ctx = helper._ctx(tmp_path, subject_repo, helper._bench_config(tmp_path))
         return load_bench("appworld", repo_root=REPO_ROOT)(ctx), ctx
 
-    def test_precheck_fires_before_fill_and_skips_when_clean(
-        self, tmp_path, subject_repo, monkeypatch
-    ):
+    def test_precheck_fires_before_fill_and_skips_when_clean(self, tmp_path, subject_repo, monkeypatch):
         calls = {"precheck": 0, "eval": 0}
         bundle, ctx = self._bundle(tmp_path, subject_repo, monkeypatch, calls)
 
@@ -382,15 +386,12 @@ class TestColdStartPrecheck:
         van.mkdir(parents=True, exist_ok=True)
         for tid in ("t1", "t2"):
             for k in range(3):
-                (van / f"{tid}_k{k}.json").write_text(
-                    json.dumps({"task_id": tid, "success": True}))
+                (van / f"{tid}_k{k}.json").write_text(json.dumps({"task_id": tid, "success": True}))
         bundle.run_cold_start()
         assert calls["precheck"] == 1  # complete + infra-clean: no probe
         assert calls["eval"] == 2
 
-    def test_precheck_fires_when_ladder_has_salvage_work(
-        self, tmp_path, subject_repo, monkeypatch
-    ):
+    def test_precheck_fires_when_ladder_has_salvage_work(self, tmp_path, subject_repo, monkeypatch):
         calls = {"precheck": 0, "eval": 0}
         bundle, ctx = self._bundle(tmp_path, subject_repo, monkeypatch, calls)
         van = ctx.spec.work_dir / "runs" / "vanilla"
@@ -481,10 +482,10 @@ class TestCli:
         bin_dir.mkdir(parents=True, exist_ok=True)
         (bin_dir / "appworld").write_text("#!/bin/sh\n")
         return _write_spec(
-            tmp_path, repo, sha,
-            models={"driver": {"provider": "openai_compat",
-                               "base_url": "http://localhost:1/v1",
-                               "model": "m"}},
+            tmp_path,
+            repo,
+            sha,
+            models={"driver": {"provider": "openai_compat", "base_url": "http://localhost:1/v1", "model": "m"}},
             bench_config={
                 "config_path": str(cfg),
                 "appworld_data_root": str(tmp_path / "appworld"),
@@ -520,9 +521,7 @@ class TestCli:
         assert exc.value.code == 2
         assert "config drift" in capsys.readouterr().err
 
-    def test_first_launch_config_mistake_leaves_no_meta(
-        self, tmp_path, subject_repo
-    ):
+    def test_first_launch_config_mistake_leaves_no_meta(self, tmp_path, subject_repo):
         from raven.evolver.launch.runner import cmd_run
 
         repo, sha = subject_repo

@@ -48,9 +48,7 @@ class ScreenResult:
         return self.candidate_mean - self.vanilla_mean
 
 
-def _vanilla_anchor_mean(
-    vanilla_evals: dict[str, TaskEval], anchor_task_ids: list[str]
-) -> float:
+def _vanilla_anchor_mean(vanilla_evals: dict[str, TaskEval], anchor_task_ids: list[str]) -> float:
     """Mean vanilla per-task pass rate over the anchor subset (control arm).
 
     A control arm that is a fresh eval (e.g. a same-session paired baseline) can

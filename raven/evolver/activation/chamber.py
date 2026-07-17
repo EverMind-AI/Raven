@@ -35,10 +35,14 @@ class ChamberReport:
         return "PASS" if self.reachable_count > 0 else "BLOCK"
 
     def to_dict(self) -> dict:
-        return {"node_id": self.node_id, "spec_kind": self.spec_kind,
-                "reachable_count": self.reachable_count,
-                "corpus_size": self.corpus_size,
-                "provenance": self.provenance, "verdict": self.verdict}
+        return {
+            "node_id": self.node_id,
+            "spec_kind": self.spec_kind,
+            "reachable_count": self.reachable_count,
+            "corpus_size": self.corpus_size,
+            "provenance": self.provenance,
+            "verdict": self.verdict,
+        }
 
 
 def load_corpus(roots: list[Path]) -> Corpus:
@@ -63,7 +67,10 @@ def load_corpus(roots: list[Path]) -> Corpus:
 
 def run_chamber(node_id: str, spec: ActivationSpec, corpus: Corpus) -> ChamberReport:
     count = evaluate_spec(spec, corpus.trajectories)
-    return ChamberReport(node_id=node_id, spec_kind=spec.kind,
-                         reachable_count=count,
-                         corpus_size=len(corpus.trajectories),
-                         provenance=corpus.provenance)
+    return ChamberReport(
+        node_id=node_id,
+        spec_kind=spec.kind,
+        reachable_count=count,
+        corpus_size=len(corpus.trajectories),
+        provenance=corpus.provenance,
+    )

@@ -29,14 +29,17 @@ from benchmarks.appworld.evolve.precheck import (  # noqa: E402
 class TestSubjectEndpoint:
     def test_reads_api_base_and_model(self, tmp_path):
         cfg = tmp_path / "subject.json"
-        cfg.write_text('{"providers": {"custom": {"api_base": "http://h/v1"}},'
-                       '"agents": {"defaults": {"provider": "custom", "model": "m1"}}}')
+        cfg.write_text(
+            '{"providers": {"custom": {"api_base": "http://h/v1"}},'
+            '"agents": {"defaults": {"provider": "custom", "model": "m1"}}}'
+        )
         assert _subject_endpoint(cfg) == ("http://h/v1", "m1", None)
 
     def test_missing_model_is_a_problem(self, tmp_path):
         cfg = tmp_path / "subject.json"
-        cfg.write_text('{"providers": {"custom": {"api_base": "http://h/v1"}},'
-                       '"agents": {"defaults": {"provider": "custom"}}}')
+        cfg.write_text(
+            '{"providers": {"custom": {"api_base": "http://h/v1"}},"agents": {"defaults": {"provider": "custom"}}}'
+        )
         _, _, problem = _subject_endpoint(cfg)
         assert "missing provider api_base/model" in problem
 
@@ -55,8 +58,7 @@ def _response(status: int = 200, tokens: int = 300):
     )
 
 
-def _probe(monkeypatch, *, post=None, seconds_per_call: float = 1.0,
-           min_tok_per_s: float = 12.0):
+def _probe(monkeypatch, *, post=None, seconds_per_call: float = 1.0, min_tok_per_s: float = 12.0):
     clock = {"t": 0.0}
 
     def monotonic():
@@ -75,12 +77,14 @@ class TestEndpointProblem:
     def test_timeout_is_degraded(self, monkeypatch):
         def post(*a, **k):
             raise httpx.TimeoutException("slow")
+
         problem = _probe(monkeypatch, post=post)
         assert "degraded" in problem and "no 300-token completion" in problem
 
     def test_connection_error_is_unreachable(self, monkeypatch):
         def post(*a, **k):
             raise httpx.ConnectError("nodename nor servname")
+
         problem = _probe(monkeypatch, post=post)
         assert "unreachable" in problem and "ConnectError" in problem
 
@@ -94,6 +98,5 @@ class TestEndpointProblem:
 
     def test_slow_decode_trips_the_throughput_floor(self, monkeypatch):
         # 300 tokens in 30s = 10 tok/s, below the 12 tok/s SOP health bar.
-        problem = _probe(monkeypatch, post=lambda *a, **k: _response(),
-                         seconds_per_call=30.0)
+        problem = _probe(monkeypatch, post=lambda *a, **k: _response(), seconds_per_call=30.0)
         assert "degraded" in problem and "tok/s floor" in problem

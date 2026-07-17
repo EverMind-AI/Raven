@@ -1,9 +1,9 @@
 """``python -m raven.evolver`` — the unified self-evolution entry point.
 
-    run      cold start -> rounds -> unseal, resumable at any interruption
-    check    validate config / models / bench setup without running anything
-    status   inspect progress (never reveals sealed test numbers)
-    finalize end the run now and unseal (one-way)
+run      cold start -> rounds -> unseal, resumable at any interruption
+check    validate config / models / bench setup without running anything
+status   inspect progress (never reveals sealed test numbers)
+finalize end the run now and unseal (one-way)
 """
 
 from __future__ import annotations
@@ -21,13 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--config", required=True, help="run spec YAML")
-        sp.add_argument("--smoke", action="store_true",
-                        help="shrunk verification run in <work_dir>_smoke")
+        sp.add_argument("--smoke", action="store_true", help="shrunk verification run in <work_dir>_smoke")
 
     run = sub.add_parser("run", help="start or resume an evolution run")
     common(run)
-    run.add_argument("--force", action="store_true",
-                     help="override the unseal / config-drift guards")
+    run.add_argument("--force", action="store_true", help="override the unseal / config-drift guards")
 
     check = sub.add_parser("check", help="validate config/models/bench setup, run nothing")
     common(check)

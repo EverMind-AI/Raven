@@ -19,10 +19,11 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 def normalize_response(response: Any) -> dict:
     if isinstance(response, dict):
-        return {"content": str(response.get("content") or ""),
-                "tool_calls": response.get("tool_calls") or []}
-    return {"content": str(getattr(response, "content", None) or ""),
-            "tool_calls": getattr(response, "tool_calls", None) or []}
+        return {"content": str(response.get("content") or ""), "tool_calls": response.get("tool_calls") or []}
+    return {
+        "content": str(getattr(response, "content", None) or ""),
+        "tool_calls": getattr(response, "tool_calls", None) or [],
+    }
 
 
 def is_empty_response(rec: dict) -> bool:

@@ -34,6 +34,7 @@ from .schema import (
     IssueType,
     JudgeAction,
     JudgeResult,
+    PassFailResult,
     PatchWhere,
     PatchWhy,
     ProposedComponent,
@@ -111,16 +112,12 @@ def _coerce_enum(value: Any, enum_cls: type, field_name: str) -> Any:
     enum member ``.name``, or any other shape.
     """
     if not isinstance(value, str):
-        raise JudgeParseError(
-            f"field '{field_name}' must be a string, got {type(value).__name__}"
-        )
+        raise JudgeParseError(f"field '{field_name}' must be a string, got {type(value).__name__}")
     try:
         return enum_cls(value)
     except ValueError as exc:
         valid = [m.value for m in enum_cls]
-        raise JudgeParseError(
-            f"field '{field_name}'={value!r} not one of {valid}"
-        ) from exc
+        raise JudgeParseError(f"field '{field_name}'={value!r} not one of {valid}") from exc
 
 
 def _parse_components(action_obj: dict[str, Any]) -> list[ProposedComponent]:
@@ -136,47 +133,25 @@ def _parse_components(action_obj: dict[str, Any]) -> list[ProposedComponent]:
     # Path A: new schema — explicit components list
     if raw_components is not None:
         if not isinstance(raw_components, list):
-            raise JudgeParseError(
-                f"proposed_action.components must be a list, got "
-                f"{type(raw_components).__name__}"
-            )
+            raise JudgeParseError(f"proposed_action.components must be a list, got {type(raw_components).__name__}")
         if not raw_components:
-            raise JudgeParseError(
-                "proposed_action.components must be non-empty for patch_proposal"
-            )
+            raise JudgeParseError("proposed_action.components must be non-empty for patch_proposal")
         parsed: list[ProposedComponent] = []
         for i, item in enumerate(raw_components):
             if not isinstance(item, dict):
-                raise JudgeParseError(
-                    f"proposed_action.components[{i}] must be an object, "
-                    f"got {type(item).__name__}"
-                )
+                raise JudgeParseError(f"proposed_action.components[{i}] must be an object, got {type(item).__name__}")
             component_id = item.get("component_id") or f"comp_{i + 1}"
             if not isinstance(component_id, str) or not component_id.strip():
-                raise JudgeParseError(
-                    f"proposed_action.components[{i}].component_id must be a "
-                    "non-empty string"
-                )
+                raise JudgeParseError(f"proposed_action.components[{i}].component_id must be a non-empty string")
             target_file = item.get("target_file")
             if not isinstance(target_file, str) or not target_file.strip():
-                raise JudgeParseError(
-                    f"proposed_action.components[{i}].target_file must be a "
-                    "non-empty string"
-                )
+                raise JudgeParseError(f"proposed_action.components[{i}].target_file must be a non-empty string")
             summary = item.get("summary")
             if not isinstance(summary, str) or not summary.strip():
-                raise JudgeParseError(
-                    f"proposed_action.components[{i}].summary must be a "
-                    "non-empty string"
-                )
+                raise JudgeParseError(f"proposed_action.components[{i}].summary must be a non-empty string")
             depends_on_raw = item.get("depends_on") or []
-            if not isinstance(depends_on_raw, list) or not all(
-                isinstance(x, str) for x in depends_on_raw
-            ):
-                raise JudgeParseError(
-                    f"proposed_action.components[{i}].depends_on must be a "
-                    "list of strings"
-                )
+            if not isinstance(depends_on_raw, list) or not all(isinstance(x, str) for x in depends_on_raw):
+                raise JudgeParseError(f"proposed_action.components[{i}].depends_on must be a list of strings")
             parsed.append(
                 ProposedComponent(
                     component_id=component_id,
@@ -214,22 +189,14 @@ def _parse_evidence_range(raw: Any) -> Optional[tuple[int, int]]:
     if raw is None:
         return None
     if not isinstance(raw, (list, tuple)):
-        raise JudgeParseError(
-            f"evidence_turn_range must be a list/tuple, got {type(raw).__name__}"
-        )
+        raise JudgeParseError(f"evidence_turn_range must be a list/tuple, got {type(raw).__name__}")
     if len(raw) != 2:
-        raise JudgeParseError(
-            f"evidence_turn_range must have exactly 2 elements, got {len(raw)}"
-        )
+        raise JudgeParseError(f"evidence_turn_range must have exactly 2 elements, got {len(raw)}")
     a, b = raw
     if not (isinstance(a, int) and isinstance(b, int)):
-        raise JudgeParseError(
-            f"evidence_turn_range elements must be ints, got {a!r}, {b!r}"
-        )
+        raise JudgeParseError(f"evidence_turn_range elements must be ints, got {a!r}, {b!r}")
     if a > b:
-        raise JudgeParseError(
-            f"evidence_turn_range start ({a}) > end ({b})"
-        )
+        raise JudgeParseError(f"evidence_turn_range start ({a}) > end ({b})")
     return (a, b)
 
 
@@ -261,9 +228,7 @@ def parse_judge_output(
         raise JudgeParseError(f"JSON decode failed: {exc}") from exc
 
     if not isinstance(obj, dict):
-        raise JudgeParseError(
-            f"top-level must be a JSON object, got {type(obj).__name__}"
-        )
+        raise JudgeParseError(f"top-level must be a JSON object, got {type(obj).__name__}")
 
     trajectory_id = _require(obj, "trajectory_id", "judge output")
     if not isinstance(trajectory_id, str):
@@ -277,25 +242,16 @@ def parse_judge_output(
         # Accept the parsed id if it starts with the expected id so the
         # batch doesn't lose otherwise-valid records over a cosmetic
         # suffix. Strict mismatch (different task entirely) still raises.
-        if trajectory_id != expected_trajectory_id and not trajectory_id.startswith(
-            expected_trajectory_id
-        ):
-            raise JudgeParseError(
-                f"trajectory_id mismatch: expected {expected_trajectory_id!r}, "
-                f"got {trajectory_id!r}"
-            )
+        if trajectory_id != expected_trajectory_id and not trajectory_id.startswith(expected_trajectory_id):
+            raise JudgeParseError(f"trajectory_id mismatch: expected {expected_trajectory_id!r}, got {trajectory_id!r}")
 
     issue_type = _coerce_enum(_require(obj, "issue_type", "judge output"), IssueType, "issue_type")
     confidence = _require(obj, "confidence", "judge output")
     if not isinstance(confidence, (int, float)):
-        raise JudgeParseError(
-            f"confidence must be a number, got {type(confidence).__name__}"
-        )
+        raise JudgeParseError(f"confidence must be a number, got {type(confidence).__name__}")
     confidence = float(confidence)
     if not 0.0 <= confidence <= 1.0:
-        raise JudgeParseError(
-            f"confidence must be in [0.0, 1.0], got {confidence}"
-        )
+        raise JudgeParseError(f"confidence must be in [0.0, 1.0], got {confidence}")
 
     signal_description = _require(obj, "signal_description", "judge output")
     if not isinstance(signal_description, str):
@@ -334,9 +290,7 @@ def parse_judge_output(
         patch_why_extra_raw = action_obj.get("patch_why_extra")
         if patch_why == PatchWhy.other:
             if not patch_why_extra_raw or not isinstance(patch_why_extra_raw, str):
-                raise JudgeParseError(
-                    "patch_why='other' requires non-empty patch_why_extra string"
-                )
+                raise JudgeParseError("patch_why='other' requires non-empty patch_why_extra string")
             patch_why_extra = patch_why_extra_raw
 
     try:
@@ -363,14 +317,12 @@ def parse_judge_output(
     )
 
 
-def parse_pass_fail(raw: str, *, expected_trajectory_id: str = "") -> "PassFailResult":
+def parse_pass_fail(raw: str, *, expected_trajectory_id: str = "") -> PassFailResult:
     """Parse a no-benchmark pass/fail verdict; raise on any defect (for retry).
 
     Reuses the judge's tolerant JSON extractor so the same ``SemanticNode``
     repair loop applies. Requires a boolean-ish ``passed`` field.
     """
-    from .schema import PassFailResult
-
     obj = json.loads(_extract_json_object(raw))
     if "passed" not in obj:
         raise JudgeParseError("pass/fail verdict missing required 'passed' field")

@@ -72,9 +72,7 @@ def draft_verdict(
     curve cannot be judged from one round. ``why_keys`` constrains
     ``next_target`` to the taxonomy so the field stays machine-readable.
     """
-    target_rule = (
-        f" — MUST be one of the WHY keys: {', '.join(why_keys)}" if why_keys else ""
-    )
+    target_rule = f" — MUST be one of the WHY keys: {', '.join(why_keys)}" if why_keys else ""
     messages = [
         {
             "role": "system",

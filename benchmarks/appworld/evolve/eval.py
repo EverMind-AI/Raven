@@ -28,10 +28,10 @@ class Candidate:
     preflight.
     """
 
-    files: dict[str, bytes]          # full new bytes for each edited repo-rel path
-    why: str                          # the WHY this candidate targets
+    files: dict[str, bytes]  # full new bytes for each edited repo-rel path
+    why: str  # the WHY this candidate targets
     focused_task_ids: list[str] = field(default_factory=list)  # WHY's evidence subset
-    summary: str = ""                 # the editor's one-line "what I changed"
+    summary: str = ""  # the editor's one-line "what I changed"
     deletions: list[str] = field(default_factory=list)  # repo-rel paths removed
     has_beacon: bool = False
     activation_spec: dict | None = None
@@ -57,11 +57,10 @@ def make_appworld_eval_fn(aw: "aw_adapter.AppWorldConfig", repo_root: str | Path
         cfg = aw
         if split != aw.split:
             from dataclasses import replace
+
             cfg = replace(aw, split=split)
         with git_ops.worktree_at(root, node.git_commit_sha) as wt:
-            return aw_adapter.run_eval(
-                cfg, K=k, experiment=job_name, task_ids=task_ids, cwd=wt
-            )
+            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, cwd=wt)
 
     return eval_fn
 

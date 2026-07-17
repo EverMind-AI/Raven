@@ -132,9 +132,7 @@ class BanditTaskScheduler:
         exploration_weight: float = 1.0,
         rng_seed: int | None = None,
     ) -> None:
-        self.tasks: dict[str, TaskStats] = {
-            tid: TaskStats(task_id=tid) for tid in all_task_ids
-        }
+        self.tasks: dict[str, TaskStats] = {tid: TaskStats(task_id=tid) for tid in all_task_ids}
         if not self.tasks:
             raise ValueError("BanditTaskScheduler requires at least one task id")
         self._exploration_weight = exploration_weight
@@ -255,7 +253,4 @@ class BanditTaskScheduler:
     def __repr__(self) -> str:
         active = self.active_task_count()
         total = len(self.tasks)
-        return (
-            f"BanditTaskScheduler(total={total}, active={active}, "
-            f"exploration_weight={self._exploration_weight})"
-        )
+        return f"BanditTaskScheduler(total={total}, active={active}, exploration_weight={self._exploration_weight})"

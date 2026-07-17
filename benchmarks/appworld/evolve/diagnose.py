@@ -30,7 +30,11 @@ from typing import Callable, Optional
 from raven.evolver.orchestrator.nodes.taxonomy import (
     TaxonomySpec,
     classify_failures,
+)
+from raven.evolver.orchestrator.nodes.taxonomy import (
     ensure_taxonomy as _generic_ensure_taxonomy,
+)
+from raven.evolver.orchestrator.nodes.taxonomy import (
     induce_taxonomy as _generic_induce_taxonomy,
 )
 from raven.evolver.tree.node import HarnessNode
@@ -96,10 +100,13 @@ def diagnose_appworld(
     Thin AppWorld binding over the bench-neutral :func:`classify_failures`.
     """
     return classify_failures(
-        call_fn, trajectories, taxonomy,
+        call_fn,
+        trajectories,
+        taxonomy,
         bench_intro=APPWORLD_BENCH_INTRO,
         extra_rules=APPWORLD_DIAGNOSIS_RULES,
-        max_workers=max_workers, retries=retries,
+        max_workers=max_workers,
+        retries=retries,
     )
 
 
@@ -114,9 +121,13 @@ def induce_taxonomy(
 ) -> tuple[TaxonomySpec, dict]:
     """AppWorld-bound wrapper over the generic induction (see nodes/taxonomy)."""
     return _generic_induce_taxonomy(
-        call_fn, trajectories, bench_desc=APPWORLD_BENCH_DESC,
-        max_workers=max_workers, retries=retries,
-        target_min=target_min, target_max=target_max,
+        call_fn,
+        trajectories,
+        bench_desc=APPWORLD_BENCH_DESC,
+        max_workers=max_workers,
+        retries=retries,
+        target_min=target_min,
+        target_max=target_max,
     )
 
 
@@ -133,8 +144,13 @@ def ensure_taxonomy(
     """AppWorld-bound wrapper: W1-W7 as the hardcoded default, AppWorld bench
     description for induction. Induction failure raises (no silent fallback)."""
     return _generic_ensure_taxonomy(
-        call_fn, trajectories, path, mode=mode, default=default,
-        bench_desc=APPWORLD_BENCH_DESC, max_workers=max_workers,
+        call_fn,
+        trajectories,
+        path,
+        mode=mode,
+        default=default,
+        bench_desc=APPWORLD_BENCH_DESC,
+        max_workers=max_workers,
         seed_path=seed_path,
     )
 

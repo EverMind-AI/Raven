@@ -55,9 +55,7 @@ def _subject_endpoint(config_path: Path) -> tuple[Optional[str], Optional[str], 
     return api_base, model, None
 
 
-def _endpoint_problem(
-    api_base: str, model: str, timeout: float, min_tok_per_s: float
-) -> Optional[str]:
+def _endpoint_problem(api_base: str, model: str, timeout: float, min_tok_per_s: float) -> Optional[str]:
     import time
 
     import httpx  # lazy, same as the driver transport
@@ -68,8 +66,7 @@ def _endpoint_problem(
     # which is fine — usage.completion_tokens still measures decode speed.
     body = {
         "model": model,
-        "messages": [{"role": "user", "content":
-                      "Explain how TCP congestion control works, in about 300 words."}],
+        "messages": [{"role": "user", "content": "Explain how TCP congestion control works, in about 300 words."}],
         "max_tokens": 300,
         "temperature": 0,
     }
@@ -77,8 +74,7 @@ def _endpoint_problem(
     try:
         resp = httpx.post(url, json=body, timeout=timeout)
     except httpx.TimeoutException:
-        return (f"subject endpoint degraded ({url}): no 300-token completion "
-                f"within {timeout:.0f}s")
+        return f"subject endpoint degraded ({url}): no 300-token completion within {timeout:.0f}s"
     except httpx.HTTPError as e:
         return f"subject endpoint unreachable ({url}): {type(e).__name__}: {e}"
     elapsed = max(time.monotonic() - t0, 1e-6)
@@ -92,8 +88,10 @@ def _endpoint_problem(
         return f"subject endpoint unhealthy ({url}): empty generation (0 completion tokens)"
     tps = ntok / elapsed
     if tps < min_tok_per_s:
-        return (f"subject endpoint degraded ({url}): {ntok} tokens in {elapsed:.1f}s "
-                f"= {tps:.1f} tok/s (< {min_tok_per_s:.1f} tok/s floor)")
+        return (
+            f"subject endpoint degraded ({url}): {ntok} tokens in {elapsed:.1f}s "
+            f"= {tps:.1f} tok/s (< {min_tok_per_s:.1f} tok/s floor)"
+        )
     return None
 
 
@@ -131,8 +129,7 @@ def make_appworld_precheck(
             if cfg_problem:
                 problems.append(cfg_problem)
             else:
-                ep_problem = _endpoint_problem(
-                    api_base, model, endpoint_timeout, min_tok_per_s)
+                ep_problem = _endpoint_problem(api_base, model, endpoint_timeout, min_tok_per_s)
                 if ep_problem:
                     problems.append(ep_problem)
 

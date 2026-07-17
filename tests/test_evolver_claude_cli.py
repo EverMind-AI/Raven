@@ -18,8 +18,7 @@ from raven.evolver.orchestrator.providers.claude_cli import (
 )
 
 
-def _proc(result: str = "ok", *, returncode: int = 0, is_error: bool = False,
-          stderr: str = "") -> SimpleNamespace:
+def _proc(result: str = "ok", *, returncode: int = 0, is_error: bool = False, stderr: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         returncode=returncode,
         stdout=json.dumps({"result": result, "is_error": is_error}),
@@ -44,18 +43,22 @@ class _FakeRun:
 
 class TestRenderMessages:
     def test_single_user_message_passes_through(self):
-        system, prompt = render_messages([
-            {"role": "system", "content": "be terse"},
-            {"role": "user", "content": "hello"},
-        ])
+        system, prompt = render_messages(
+            [
+                {"role": "system", "content": "be terse"},
+                {"role": "user", "content": "hello"},
+            ]
+        )
         assert system == "be terse" and prompt == "hello"
 
     def test_multi_turn_serializes_with_role_tags(self):
-        system, prompt = render_messages([
-            {"role": "user", "content": "do X"},
-            {"role": "assistant", "content": "did X"},
-            {"role": "user", "content": "now Y"},
-        ])
+        system, prompt = render_messages(
+            [
+                {"role": "user", "content": "do X"},
+                {"role": "assistant", "content": "did X"},
+                {"role": "user", "content": "now Y"},
+            ]
+        )
         assert system == ""
         assert "[USER]\ndo X" in prompt
         assert "[ASSISTANT]\ndid X" in prompt
@@ -88,8 +91,7 @@ class TestCallFn:
         sleeps: list[float] = []
         monkeypatch.setattr("time.sleep", sleeps.append)
         run = _FakeRun([_proc("", returncode=1, stderr="429 rate limit"), _proc("ok")])
-        call = make_claude_call_fn("m", run=run, retry_delays=(3.0,),
-                                   rate_limit_delay=120.0)
+        call = make_claude_call_fn("m", run=run, retry_delays=(3.0,), rate_limit_delay=120.0)
         assert call([{"role": "user", "content": "q"}]) == "ok"
         assert sleeps == [120.0]
 

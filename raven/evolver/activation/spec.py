@@ -74,8 +74,14 @@ from raven.evolver.activation.predicates import (
     is_short_toolcall_iteration,
 )
 
-_CORPUS_KINDS = {"trajectory_regex", "consecutive_repeat", "short_content_run",
-                 "empty_run", "repeated_failure_run", "min_iterations"}
+_CORPUS_KINDS = {
+    "trajectory_regex",
+    "consecutive_repeat",
+    "short_content_run",
+    "empty_run",
+    "repeated_failure_run",
+    "min_iterations",
+}
 _KNOWN_KINDS = _CORPUS_KINDS | {"skill_routing", "presence"}
 
 _DEFAULT_MAX_CHARS = 80
@@ -85,8 +91,7 @@ def _normalize_record(r: dict) -> dict:
     """Coerce a logged session record into the predicate record shape
     (content as str, tool_calls as list) so the shared predicate functions
     see the same view the hooks build via normalize_response()."""
-    return {"content": str(r.get("content") or ""),
-            "tool_calls": r.get("tool_calls") or []}
+    return {"content": str(r.get("content") or ""), "tool_calls": r.get("tool_calls") or []}
 
 
 @dataclass
@@ -107,54 +112,47 @@ class ActivationSpec:
             try:
                 re.compile(d["pattern"])
             except re.error as exc:
-                raise ValueError(
-                    f"trajectory_regex pattern is not valid regex: {exc}") from exc
+                raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
         if kind == "consecutive_repeat" and "threshold" not in d:
             raise ValueError("consecutive_repeat requires 'threshold'")
         if kind == "consecutive_repeat":
             try:
                 int(d["threshold"])
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"consecutive_repeat threshold must be an int: {d['threshold']!r}") from exc
+                raise ValueError(f"consecutive_repeat threshold must be an int: {d['threshold']!r}") from exc
         if kind == "short_content_run" and "threshold" not in d:
             raise ValueError("short_content_run requires 'threshold'")
         if kind == "short_content_run":
             try:
                 int(d["threshold"])
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"short_content_run threshold must be an int: {d['threshold']!r}") from exc
+                raise ValueError(f"short_content_run threshold must be an int: {d['threshold']!r}") from exc
             if "max_chars" in d:
                 try:
                     int(d["max_chars"])
                 except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        f"short_content_run max_chars must be an int: {d['max_chars']!r}") from exc
+                    raise ValueError(f"short_content_run max_chars must be an int: {d['max_chars']!r}") from exc
         if kind == "empty_run" and "threshold" not in d:
             raise ValueError("empty_run requires 'threshold'")
         if kind == "empty_run":
             try:
                 int(d["threshold"])
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"empty_run threshold must be an int: {d['threshold']!r}") from exc
+                raise ValueError(f"empty_run threshold must be an int: {d['threshold']!r}") from exc
         if kind == "repeated_failure_run" and "threshold" not in d:
             raise ValueError("repeated_failure_run requires 'threshold'")
         if kind == "repeated_failure_run":
             try:
                 int(d["threshold"])
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"repeated_failure_run threshold must be an int: {d['threshold']!r}") from exc
+                raise ValueError(f"repeated_failure_run threshold must be an int: {d['threshold']!r}") from exc
         if kind == "min_iterations" and "threshold" not in d:
             raise ValueError("min_iterations requires 'threshold'")
         if kind == "min_iterations":
             try:
                 int(d["threshold"])
             except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"min_iterations threshold must be an int: {d['threshold']!r}") from exc
+                raise ValueError(f"min_iterations threshold must be an int: {d['threshold']!r}") from exc
         if kind == "skill_routing" and "skill_name" not in d:
             raise ValueError("skill_routing requires 'skill_name'")
         if kind == "presence" and "needle" not in d:
@@ -176,14 +174,12 @@ class ActivationSpec:
 
 
 def _scope_contents(traj: list[dict], scope: str) -> list[str]:
-    return [str(r.get("content") or "") for r in traj
-            if scope in ("any", r.get("role"))]
+    return [str(r.get("content") or "") for r in traj if scope in ("any", r.get("role"))]
 
 
 def evaluate_spec(spec: ActivationSpec, corpus: list[list[dict]]) -> int:
     if spec.kind not in _CORPUS_KINDS:
-        raise ValueError(
-            f"{spec.kind} is not corpus-evaluable; use the preflight CLI path")
+        raise ValueError(f"{spec.kind} is not corpus-evaluable; use the preflight CLI path")
     scope = spec.raw.get("scope", "assistant")
     hits = 0
     if spec.kind == "trajectory_regex":

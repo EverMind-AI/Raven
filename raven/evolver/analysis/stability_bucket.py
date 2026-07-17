@@ -21,6 +21,7 @@ some failed pre-trial; the bucket label reflects fractional pass count
 over the attempts actually observed (so a 1/2 task with k=3 nominal still
 gets bucketed as ``BORDERLINE_1_3`` in that grouping).
 """
+
 from __future__ import annotations
 
 import json
@@ -92,12 +93,7 @@ def _looks_like_trial_dir(p: Path) -> bool:
     too but no ``verifier/`` of its own, so the verifier check is what
     discriminates a trial dir from the job dir.
     """
-    return (
-        p.is_dir()
-        and "__" in p.name
-        and (p / "result.json").exists()
-        and (p / "verifier").is_dir()
-    )
+    return p.is_dir() and "__" in p.name and (p / "result.json").exists() and (p / "verifier").is_dir()
 
 
 def _find_attempt_root(trial_dir: Path) -> Path:
@@ -173,9 +169,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         with open(args.json, "w") as f:
             json.dump(
-                {tid: {"attempts": ts.attempts, "passes": ts.passes, "bucket": ts.bucket.value}
-                 for tid, ts in sorted(stab.items())},
-                f, indent=2,
+                {
+                    tid: {"attempts": ts.attempts, "passes": ts.passes, "bucket": ts.bucket.value}
+                    for tid, ts in sorted(stab.items())
+                },
+                f,
+                indent=2,
             )
     return 0
 

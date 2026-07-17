@@ -46,10 +46,7 @@ def assert_no_test_leak(
     anchor_leak = sorted(test & set(anchor_task_ids))
     train_leak = sorted(test & set(train_task_ids))
     if anchor_leak or train_leak:
-        raise TestLeakError(
-            f"sealed test ids leaked into decision sets: "
-            f"anchor={anchor_leak} train={train_leak}"
-        )
+        raise TestLeakError(f"sealed test ids leaked into decision sets: anchor={anchor_leak} train={train_leak}")
 
 
 @dataclass
@@ -75,7 +72,10 @@ class SealedTestRunner:
     def score(self, node: HarnessNode, round_index: int) -> None:
         """Blind-score ``node`` on the test set; persist, return nothing."""
         evals = self.eval_fn(
-            node, self.test_task_ids, self.k, f"{node.node_id}_sealed_test",
+            node,
+            self.test_task_ids,
+            self.k,
+            f"{node.node_id}_sealed_test",
             split=self.split,
         )
         self.sealed_dir.mkdir(parents=True, exist_ok=True)
@@ -89,13 +89,10 @@ class SealedTestRunner:
             "k": self.k,
             "per_task": {t: [ev.passes, ev.attempts] for t, ev in evals.items()},
             "pass_at_1": (
-                sum(evals[t].pass_rate if t in evals else 0.0 for t in self.test_task_ids)
-                / n_test if n_test else 0.0
+                sum(evals[t].pass_rate if t in evals else 0.0 for t in self.test_task_ids) / n_test if n_test else 0.0
             ),
         }
-        (self.sealed_dir / f"round_{round_index}_{node.node_id}.json").write_text(
-            json.dumps(record, indent=2)
-        )
+        (self.sealed_dir / f"round_{round_index}_{node.node_id}.json").write_text(json.dumps(record, indent=2))
 
     def unseal(self) -> list[dict]:
         """Read all sealed test results (call only after the loop ends)."""
@@ -107,8 +104,7 @@ class SealedTestRunner:
         return out
 
 
-def retention(*, vanilla_train: float, best_train: float,
-              vanilla_test: float, best_test: float) -> float | None:
+def retention(*, vanilla_train: float, best_train: float, vanilla_test: float, best_test: float) -> float | None:
     """Retention = test lift / train lift (generalisation), or None if no train lift."""
     train_lift = best_train - vanilla_train
     if train_lift <= 0:
@@ -155,8 +151,12 @@ class RetentionReport:
 def _shim_node(node_id: str, sha: str) -> HarnessNode:
     """A minimal node carrying just the identity + commit an eval needs."""
     return HarnessNode(
-        node_id=node_id, parent_id=None, git_commit_sha=sha,
-        git_branch="sealed", created_at=HarnessNode.utc_now(), created_at_iter=0,
+        node_id=node_id,
+        parent_id=None,
+        git_commit_sha=sha,
+        git_branch="sealed",
+        created_at=HarnessNode.utc_now(),
+        created_at_iter=0,
     )
 
 
@@ -199,9 +199,7 @@ def unseal_retention(
 
     records = runner.unseal()
     test_by_node: dict[str, float] = {d["node_id"]: d["pass_at_1"] for d in records}
-    per_task_by_node: dict[str, dict] = {
-        d["node_id"]: d.get("per_task", {}) for d in records
-    }
+    per_task_by_node: dict[str, dict] = {d["node_id"]: d.get("per_task", {}) for d in records}
     van_test = test_by_node.get(vanilla_node.node_id, 0.0)
 
     curve: list[CurvePoint] = []
@@ -211,20 +209,23 @@ def unseal_retention(
         tr = rec.get("next_parent_train")
         if tr is not None:
             last_train = tr
-        curve.append(CurvePoint(
-            round_index=rec["round_index"], node_id=nid,
-            train_pass_at_1=last_train,
-            test_pass_at_1=test_by_node.get(nid, van_test),
-        ))
+        curve.append(
+            CurvePoint(
+                round_index=rec["round_index"],
+                node_id=nid,
+                train_pass_at_1=last_train,
+                test_pass_at_1=test_by_node.get(nid, van_test),
+            )
+        )
 
     # Train-argmax over the promoting rounds whose deliverable was measurable
     # (has a recorded train score and a scored commit); ties -> earliest round
     # (same train, fewer stacked patches). Falls back to vanilla when nothing
     # promoted — then there is no lift to report and no paired test to run.
     promoting = [
-        rec for rec in journal_records
-        if rec.get("next_parent_train") is not None
-        and rec["next_parent_id"] in test_by_node
+        rec
+        for rec in journal_records
+        if rec.get("next_parent_train") is not None and rec["next_parent_id"] in test_by_node
     ]
     if promoting:
         best_rec = max(
@@ -240,11 +241,9 @@ def unseal_retention(
     sealed_z: float | None = None
     sealed_credited: bool | None = None
     if best_node != vanilla_node.node_id and runner.test_task_ids:
+
         def _evals(nid: str) -> dict[str, TaskEval]:
-            return {
-                t: TaskEval(t, int(p), int(a))
-                for t, (p, a) in per_task_by_node.get(nid, {}).items()
-            }
+            return {t: TaskEval(t, int(p), int(a)) for t, (p, a) in per_task_by_node.get(nid, {}).items()}
 
         paired = paired_lift(
             candidate_evals=_evals(best_node),
@@ -255,12 +254,17 @@ def unseal_retention(
 
     return RetentionReport(
         curve=curve,
-        vanilla_train=vanilla_train, vanilla_test=van_test,
-        best_round=best_round, best_node_id=best_node,
-        best_train=best_train, best_test=best_test,
+        vanilla_train=vanilla_train,
+        vanilla_test=van_test,
+        best_round=best_round,
+        best_node_id=best_node,
+        best_train=best_train,
+        best_test=best_test,
         retention=retention(
-            vanilla_train=vanilla_train, best_train=best_train,
-            vanilla_test=van_test, best_test=best_test,
+            vanilla_train=vanilla_train,
+            best_train=best_train,
+            vanilla_test=van_test,
+            best_test=best_test,
         ),
         sealed_z=sealed_z,
         sealed_credited_2sigma=sealed_credited,

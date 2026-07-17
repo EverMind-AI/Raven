@@ -21,7 +21,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from raven.evolver.launch.config import RunSpec, RunSpecError, load_run_spec
 from raven.evolver.launch.contract import BenchBundle, LaunchContext
@@ -45,9 +44,15 @@ def _load_spec(config_path: str, smoke: bool) -> RunSpec:
 
 def _build_bundle(spec: RunSpec, *, with_models: bool) -> BenchBundle:
     try:
-        models = build_role_call_fns(spec.models) if with_models else {
-            "driver": None, "design": None, "verdict": None,
-        }
+        models = (
+            build_role_call_fns(spec.models)
+            if with_models
+            else {
+                "driver": None,
+                "design": None,
+                "verdict": None,
+            }
+        )
     except ValueError as exc:
         print(f"models error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
@@ -62,17 +67,21 @@ def _build_bundle(spec: RunSpec, *, with_models: bool) -> BenchBundle:
 def _note_defaulted_base(spec: RunSpec) -> None:
     if not spec.base_sha_defaulted:
         return
-    _say(f"base_sha not set — using repo HEAD {spec.base_sha[:12]} "
-         "(pin base_sha in the yaml to freeze the root explicitly)")
+    _say(
+        f"base_sha not set — using repo HEAD {spec.base_sha[:12]} "
+        "(pin base_sha in the yaml to freeze the root explicitly)"
+    )
     proc = subprocess.run(
-        ["git", "-C", str(spec.repo_root), "status", "--porcelain",
-         "--untracked-files=no"],
-        capture_output=True, text=True,
+        ["git", "-C", str(spec.repo_root), "status", "--porcelain", "--untracked-files=no"],
+        capture_output=True,
+        text=True,
     )
     if proc.stdout.strip():
-        _say("warning: repo_root has uncommitted changes — they are NOT part "
-             "of the root node (evaluations check out commits, not the "
-             "working tree)")
+        _say(
+            "warning: repo_root has uncommitted changes — they are NOT part "
+            "of the root node (evaluations check out commits, not the "
+            "working tree)"
+        )
 
 
 def _claim_ephemeral_root(spec: RunSpec) -> None:
@@ -88,7 +97,8 @@ def _claim_ephemeral_root(spec: RunSpec) -> None:
         shutil.rmtree(tmp_root, ignore_errors=True)
         subprocess.run(
             ["git", "-C", str(spec.repo_root), "worktree", "prune"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
     git_ops.set_ephemeral_root(tmp_root)
 
@@ -138,8 +148,9 @@ def _run_rounds(spec: RunSpec, bundle: BenchBundle):
     return orch, journal, result
 
 
-def _unseal_and_report(spec: RunSpec, bundle: BenchBundle, orch, records: list[dict],
-                       meta: RunMeta, reason: str) -> bool:
+def _unseal_and_report(
+    spec: RunSpec, bundle: BenchBundle, orch, records: list[dict], meta: RunMeta, reason: str
+) -> bool:
     """Returns True on success; False when unseal scoring failed (not stamped)."""
     if bundle.unseal is None:
         _say("no sealed test set configured; skipping unseal")
@@ -151,8 +162,10 @@ def _unseal_and_report(spec: RunSpec, bundle: BenchBundle, orch, records: list[d
         report = bundle.unseal(records, orch)
     except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
         print(f"unseal scoring failed: {exc}", file=sys.stderr)
-        print("the run is NOT stamped; fix the environment and re-run the "
-              "same command to retry the unseal", file=sys.stderr)
+        print(
+            "the run is NOT stamped; fix the environment and re-run the same command to retry the unseal",
+            file=sys.stderr,
+        )
         return False
     # Stamp before writing the report: the stamp is what stops a resume, so
     # no crash window may leave test numbers on disk in a still-resumable
@@ -162,9 +175,16 @@ def _unseal_and_report(spec: RunSpec, bundle: BenchBundle, orch, records: list[d
         meta.stamp_unsealed(reason=reason)
     atomic_write_json(Path(spec.work_dir) / "retention.json", report)
     _say(f"retention report -> {Path(spec.work_dir) / 'retention.json'}")
-    for key in ("best_round", "best_node_id", "best_train", "best_test",
-                "vanilla_train", "vanilla_test", "retention",
-                "sealed_credited_2sigma"):
+    for key in (
+        "best_round",
+        "best_node_id",
+        "best_train",
+        "best_test",
+        "vanilla_train",
+        "vanilla_test",
+        "retention",
+        "sealed_credited_2sigma",
+    ):
         if isinstance(report, dict) and key in report:
             _say(f"  {key}: {report[key]}")
     return True
@@ -189,58 +209,61 @@ def cmd_run(config_path: str, *, smoke: bool = False, force: bool = False) -> in
     if done < total:
         _say(f"phase 1/3 cold start: {done}/{total} trials present, running the rest …")
     else:
-        _say(f"phase 1/3 cold start: {total} trials present, "
-             "verifying the infra-rerun ladder …")
+        _say(f"phase 1/3 cold start: {total} trials present, verifying the infra-rerun ladder …")
     # Always invoked: run_cold_start is idempotent (fills missing trials only)
     # and owns the infra-rerun ladder, which may have salvage work to do even
     # when every base trial file exists.
     try:
         bundle.run_cold_start()
     except KeyboardInterrupt:
-        _say(f"interrupted during cold start "
-             f"({bundle.cold_start_done()}/{total} trials done and kept); "
-             "re-run the same command to continue")
+        _say(
+            f"interrupted during cold start "
+            f"({bundle.cold_start_done()}/{total} trials done and kept); "
+            "re-run the same command to continue"
+        )
         return 130
     except (subprocess.CalledProcessError, OSError, RuntimeError) as exc:
         print(f"cold start failed: {exc}", file=sys.stderr)
-        print(f"completed trials are kept "
-              f"({bundle.cold_start_done()}/{total} present); fix the "
-              "environment and re-run the same command to resume",
-              file=sys.stderr)
+        print(
+            f"completed trials are kept "
+            f"({bundle.cold_start_done()}/{total} present); fix the "
+            "environment and re-run the same command to resume",
+            file=sys.stderr,
+        )
         return 1
     done = bundle.cold_start_done()
     if done < total:
-        _say(f"cold start still incomplete ({done}/{total}); re-run to retry "
-             "the missing trials")
+        _say(f"cold start still incomplete ({done}/{total}); re-run to retry the missing trials")
         return 1
     _say(f"phase 1/3 cold start complete ({total} trials)")
 
     _say("phase 2/3 evolution rounds (interrupt any time; same command resumes)")
-    _say(f"  live progress: {spec.work_dir}/findings.md (per-round log), "
-         f"{spec.work_dir}/journal/rounds.jsonl (checkpoints)")
+    _say(
+        f"  live progress: {spec.work_dir}/findings.md (per-round log), "
+        f"{spec.work_dir}/journal/rounds.jsonl (checkpoints)"
+    )
     try:
         orch, journal, result = _run_rounds(spec, bundle)
     except KeyboardInterrupt:
-        _say("interrupted — completed rounds are journaled; "
-             "re-run the same command to resume, `status` to inspect, "
-             "`finalize` to stop here and unseal")
+        _say(
+            "interrupted — completed rounds are journaled; "
+            "re-run the same command to resume, `status` to inspect, "
+            "`finalize` to stop here and unseal"
+        )
         return 130
     except RuntimeError as exc:
         # Environment-shaped failures (Gate0 precheck, dead endpoint) are
         # actionable messages, not tracebacks; completed work is durable.
         print(f"run stopped: {exc}", file=sys.stderr)
-        print("fix the environment and re-run the same command to resume",
-              file=sys.stderr)
+        print("fix the environment and re-run the same command to resume", file=sys.stderr)
         return 1
 
     for rr in result.rounds:
-        _say(f"round {rr.round_index}: parent={rr.parent_id} "
-             f"promoted={rr.promoted} -> {rr.next_parent_id}")
+        _say(f"round {rr.round_index}: parent={rr.parent_id} promoted={rr.promoted} -> {rr.next_parent_id}")
     _say(f"stopped: {result.stop_reason}; final parent: {result.final_parent_id}")
 
     _say("phase 3/3 unseal")
-    ok = _unseal_and_report(spec, bundle, orch, journal.load(), meta,
-                            reason=result.stop_reason or "terminated")
+    ok = _unseal_and_report(spec, bundle, orch, journal.load(), meta, reason=result.stop_reason or "terminated")
     return 0 if ok else 1
 
 
@@ -257,10 +280,12 @@ def cmd_check(config_path: str, *, smoke: bool = False) -> int:
     _say(f"bench:    {spec.bench} (root {spec.base_sha[:12]} @ {spec.repo_root})")
     _say(f"work_dir: {spec.work_dir}")
     _say(f"models:   {describe_models(spec.models)}")
-    _say(f"funnel:   k_screen={spec.funnel.k_screen} k_confirm={spec.funnel.k_confirm} "
-         f"budget={spec.funnel.budget.max_why_per_round}x"
-         f"{spec.funnel.budget.candidates_per_why} "
-         f"rounds<={spec.funnel.termination.max_rounds}")
+    _say(
+        f"funnel:   k_screen={spec.funnel.k_screen} k_confirm={spec.funnel.k_confirm} "
+        f"budget={spec.funnel.budget.max_why_per_round}x"
+        f"{spec.funnel.budget.candidates_per_why} "
+        f"rounds<={spec.funnel.termination.max_rounds}"
+    )
     _say(f"cold start: {bundle.cold_start_done()}/{bundle.cold_start_total} trials present")
     _say(f"sealed test: {'configured' if bundle.unseal else 'not configured'}")
     if bundle.precheck is not None:
@@ -311,20 +336,19 @@ def cmd_status(config_path: str, *, smoke: bool = False) -> int:
     if not records:
         _say("phase 2: cold start done, no completed rounds yet")
         return 0
-    _say(f"phase 2: {len(records)} completed round(s); test stays sealed until "
-         "termination or `finalize`")
+    _say(f"phase 2: {len(records)} completed round(s); test stays sealed until termination or `finalize`")
     counts = _node_status_counts(spec.work_dir)
     if counts:
-        _say("candidates by status: "
-             + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        _say("candidates by status: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
     promoted = []
     for rec in records:
-        _say(f"  round {rec.get('round_index')}: promoted={rec.get('promoted')} "
-             f"beat_vanilla={rec.get('beat_vanilla')} "
-             f"parent -> {rec.get('next_parent_id')}")
+        _say(
+            f"  round {rec.get('round_index')}: promoted={rec.get('promoted')} "
+            f"beat_vanilla={rec.get('beat_vanilla')} "
+            f"parent -> {rec.get('next_parent_id')}"
+        )
         if rec.get("promoted") and rec.get("next_parent_sha"):
-            promoted.append((rec.get("next_parent_id"), rec.get("next_parent_sha"),
-                             rec.get("next_parent_train")))
+            promoted.append((rec.get("next_parent_id"), rec.get("next_parent_sha"), rec.get("next_parent_train")))
     if promoted:
         _say("promoted commits (train-side numbers only):")
         for node_id, sha, train in promoted:
@@ -347,21 +371,24 @@ def cmd_finalize(config_path: str, *, smoke: bool = False, yes: bool = False) ->
     if recompute:
         if bundle.unseal is None:
             # Finalized without a sealed test: there is no report to rebuild.
-            _say(f"already finalized at {meta.unsealed_at} "
-                 f"({meta.finalize_reason}); no sealed test was configured")
+            _say(f"already finalized at {meta.unsealed_at} ({meta.finalize_reason}); no sealed test was configured")
             return 0
-        _say("unseal stamp present but retention.json is missing (interrupted "
-             "unseal); recomputing the report — the run stays final")
+        _say(
+            "unseal stamp present but retention.json is missing (interrupted "
+            "unseal); recomputing the report — the run stays final"
+        )
     from raven.evolver.orchestrator.state.journal import RoundJournal
 
     records = RoundJournal(bundle.journal_path).load()
     if not records:
-        print("nothing to finalize: no completed rounds in the journal",
-              file=sys.stderr)
+        print("nothing to finalize: no completed rounds in the journal", file=sys.stderr)
         return 2
     if not yes and not recompute:
-        what = ("and unseal the test set" if bundle.unseal is not None
-                else "(no sealed test configured — no test numbers exist)")
+        what = (
+            "and unseal the test set"
+            if bundle.unseal is not None
+            else "(no sealed test configured — no test numbers exist)"
+        )
         print(
             f"finalize will END this run after {len(records)} round(s) {what} "
             "— it cannot be resumed afterwards. Re-run with --yes.",
@@ -375,8 +402,7 @@ def cmd_finalize(config_path: str, *, smoke: bool = False, yes: bool = False) ->
     # build it without LLM roles (they are only called during rounds).
     _claim_ephemeral_root(spec)
     orch = bundle.build_orchestrator()
-    ok = _unseal_and_report(spec, bundle, orch, records, meta,
-                            reason="user_finalized")
+    ok = _unseal_and_report(spec, bundle, orch, records, meta, reason="user_finalized")
     return 0 if ok else 1
 
 

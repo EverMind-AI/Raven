@@ -24,6 +24,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
+from benchmarks.appworld.evolve import adapter as aw_adapter
+from benchmarks.appworld.evolve.adapter import make_appworld_backend
 from benchmarks.appworld.evolve.diagnose import (
     DEFAULT_APPWORLD_TAXONOMY,
     make_appworld_diagnose_fn,
@@ -41,8 +43,6 @@ from benchmarks.appworld.evolve.trajectories import (
     build_passing_ids_source,
     render_candidate_failure,
 )
-from benchmarks.appworld.evolve import adapter as aw_adapter
-from benchmarks.appworld.evolve.adapter import make_appworld_backend
 from raven.evolver.orchestrator.config import Budget, OrchestratorConfig
 from raven.evolver.orchestrator.gates.policy import make_frozen_baseline
 from raven.evolver.orchestrator.gates.strategies import (
@@ -118,6 +118,7 @@ def build_appworld_orchestrator(
         from raven.evolver.orchestrator.providers.claude_agentic import (
             require_claude_for_agentic,
         )
+
         require_claude_for_agentic(agentic_model)
 
     budget = budget or config.budget
@@ -128,27 +129,20 @@ def build_appworld_orchestrator(
         # Diagnosis reads a promoted parent's confirm out-dir under runs_root;
         # the gate writes it under aw_cfg.out_dir_root. Split roots would make
         # every round-2+ diagnosis silently come up empty.
-        raise ValueError(
-            f"runs_root ({runs_root}) must equal aw_cfg.out_dir_root "
-            f"({aw_cfg.out_dir_root})"
-        )
+        raise ValueError(f"runs_root ({runs_root}) must equal aw_cfg.out_dir_root ({aw_cfg.out_dir_root})")
     # Same contract on the session side: diagnosis looks for session jsonls
     # under ws_root, so the batch runner must actually write them there.
     if aw_cfg.workspace is None:
         aw_cfg = _dc_replace(aw_cfg, workspace=ws_root)
     elif Path(aw_cfg.workspace) != ws_root:
-        raise ValueError(
-            f"ws_root ({ws_root}) must equal aw_cfg.workspace ({aw_cfg.workspace})"
-        )
+        raise ValueError(f"ws_root ({ws_root}) must equal aw_cfg.workspace ({aw_cfg.workspace})")
 
     # ① diagnose (W1-W7) over the parent's baseline failing trajectories: the
     # root diagnoses the vanilla out-dir (by ITS name); a promoted parent
     # diagnoses its OWN confirm out-dir (confirm_job_name — the naming contract
     # shared with the gate policies).
     exp_of = exp_of or (
-        lambda parent: vanilla_out_dir.name
-        if parent.node_id == root_node_id
-        else confirm_job_name(parent.node_id)
+        lambda parent: vanilla_out_dir.name if parent.node_id == root_node_id else confirm_job_name(parent.node_id)
     )
     trajectory_source = build_out_dir_trajectory_source(
         runs_root=runs_root, ws_root=ws_root, exp_of=exp_of, k=config.k_confirm
@@ -157,11 +151,17 @@ def build_appworld_orchestrator(
     # ⑤ eval: worktree checkout of the candidate commit, batch.py with cwd=worktree.
     # vanilla_node lets cold_start run the vanilla ledger if it is missing (SOP §1).
     backend = make_appworld_backend(
-        aw_cfg, vanilla_out_dir=vanilla_out_dir, train_task_ids=train_task_ids,
-        test_task_ids=list(test_task_ids), eval_fn=make_appworld_eval_fn(aw_cfg, repo_root),
+        aw_cfg,
+        vanilla_out_dir=vanilla_out_dir,
+        train_task_ids=train_task_ids,
+        test_task_ids=list(test_task_ids),
+        eval_fn=make_appworld_eval_fn(aw_cfg, repo_root),
         vanilla_node=HarnessNode(
-            node_id=root_node_id, parent_id=None, git_commit_sha=base_sha,
-            git_branch="evolver/orchestrator", created_at=HarnessNode.utc_now(),
+            node_id=root_node_id,
+            parent_id=None,
+            git_commit_sha=base_sha,
+            git_branch="evolver/orchestrator",
+            created_at=HarnessNode.utc_now(),
             created_at_iter=0,
         ),
         cold_start_k=config.k_confirm,
@@ -176,9 +176,13 @@ def build_appworld_orchestrator(
 
     def diagnose_of(vanilla_node):
         taxonomy, seed = resolve_taxonomy(
-            driver_call_fn, trajectory_source, vanilla_node,
-            mode=taxonomy_mode, work_dir=config.work_dir,
-            hardcoded=DEFAULT_APPWORLD_TAXONOMY, taxonomy_path=taxonomy_path,
+            driver_call_fn,
+            trajectory_source,
+            vanilla_node,
+            mode=taxonomy_mode,
+            work_dir=config.work_dir,
+            hardcoded=DEFAULT_APPWORLD_TAXONOMY,
+            taxonomy_path=taxonomy_path,
         )
         taxonomy_keys[:] = list(taxonomy.why_classes)
         taxonomy_why_defs.clear()
@@ -187,11 +191,17 @@ def build_appworld_orchestrator(
             from benchmarks.appworld.evolve.agentic import (
                 make_agentic_diagnose_fn,
             )
+
             return (
                 make_agentic_diagnose_fn(
-                    repo_root=repo_root, runs_root=runs_root, ws_root=ws_root,
-                    exp_of=exp_of, work_dir=config.work_dir, taxonomy=taxonomy,
-                    k=config.k_confirm, model=agentic_model,
+                    repo_root=repo_root,
+                    runs_root=runs_root,
+                    ws_root=ws_root,
+                    exp_of=exp_of,
+                    work_dir=config.work_dir,
+                    taxonomy=taxonomy,
+                    k=config.k_confirm,
+                    model=agentic_model,
                 ),
                 None,
             )
@@ -205,15 +215,20 @@ def build_appworld_orchestrator(
     # default; sha_of (owned by the assembler) resolves the parent commit.
     def design_of(sha_of, history, archive_summary_of):
         return make_bash_editor_design_fn(
-            design_call_fn, repo_root=repo_root, worktree_root=worktree_root,
-            sha_of=sha_of, budget=budget, history=history,
+            design_call_fn,
+            repo_root=repo_root,
+            worktree_root=worktree_root,
+            sha_of=sha_of,
+            budget=budget,
+            history=history,
             archive_summary_of=archive_summary_of,
             require_beacon=require_beacon,
             whitelist_prefixes=whitelist_prefixes,
             import_smoke_python=aw_cfg.python_exe,
             render_failed=render_failed,
             render_failed_of=(
-                None if render_failed is not None
+                None
+                if render_failed is not None
                 else build_failed_attempt_renderer(
                     runs_root=runs_root, ws_root=ws_root, exp_of=exp_of, k=config.k_confirm
                 )
@@ -232,9 +247,7 @@ def build_appworld_orchestrator(
     # cross-time-shift blind (see gates.policy); "same_session" re-measures
     # the parent every round (~2x eval cost, drift-immune).
     if baseline_mode not in ("frozen", "same_session"):
-        raise ValueError(
-            f"baseline_mode must be 'frozen' or 'same_session', got {baseline_mode!r}"
-        )
+        raise ValueError(f"baseline_mode must be 'frozen' or 'same_session', got {baseline_mode!r}")
 
     def baseline_of():
         if baseline_mode == "same_session":
@@ -244,10 +257,12 @@ def build_appworld_orchestrator(
 
             return SameSessionPairedBaseline(k=config.k_confirm)
         return make_frozen_baseline(
-            root_node_id=root_node_id, vanilla_dir=vanilla_out_dir,
+            root_node_id=root_node_id,
+            vanilla_dir=vanilla_out_dir,
             kept_reader=aw_adapter.read_kept_out_dir,
             confirm_dir_of=lambda p: runs_root / confirm_job_name(p.node_id),
-            train_task_ids=train_task_ids, seed_label="van0",
+            train_task_ids=train_task_ids,
+            seed_label="van0",
         )
 
     # Gate-b read-back: which train tasks a beacon-carrying candidate actually
@@ -265,11 +280,18 @@ def build_appworld_orchestrator(
         preflight_fn = make_zero_hit_preflight(trajectory_source)
 
     return build_evolution_orchestrator(
-        config, repo_root=repo_root, base_sha=base_sha, root_node_id=root_node_id,
+        config,
+        repo_root=repo_root,
+        base_sha=base_sha,
+        root_node_id=root_node_id,
         backend=backend,
         gate_policy=FocusedFisherGate(k=config.k_confirm, min_confirm_lift=min_confirm_lift),
-        diagnose_of=diagnose_of, design_of=design_of, baseline_of=baseline_of,
-        files_of=files_of, deletions_of=deletions_of, driver_call_fn=driver_call_fn,
+        diagnose_of=diagnose_of,
+        design_of=design_of,
+        baseline_of=baseline_of,
+        files_of=files_of,
+        deletions_of=deletions_of,
+        driver_call_fn=driver_call_fn,
         verdict_call_fn=verdict_call_fn,
         verdict_why_keys_of=lambda: taxonomy_keys or None,
         harm_excerpt_of=lambda node_id, tid: render_candidate_failure(
@@ -304,13 +326,13 @@ def build_appworld_sealed_runner(
     raw = make_appworld_eval_fn(aw_cfg, repo_root)
 
     def sealed_eval(node, task_ids, k_, job_name, *, split="test"):
-        return eval_with_infra_rerun(
-            raw, node, task_ids, k_, job_name, split=split, max_reruns=infra_max_reruns
-        )
+        return eval_with_infra_rerun(raw, node, task_ids, k_, job_name, split=split, max_reruns=infra_max_reruns)
 
     return SealedTestRunner(
-        eval_fn=sealed_eval, test_task_ids=list(test_task_ids),
-        sealed_dir=Path(sealed_dir), k=k,
+        eval_fn=sealed_eval,
+        test_task_ids=list(test_task_ids),
+        sealed_dir=Path(sealed_dir),
+        k=k,
     )
 
 

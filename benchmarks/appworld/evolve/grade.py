@@ -34,14 +34,22 @@ def post(env_url: str, path: str, body: dict, timeout: float = 120.0) -> dict:
 _LLM_TRANSPORT_SIGNS = (
     "error: connection error",
     "sorry, i encountered an error calling the ai model",
-    "apiconnectionerror", "apitimeouterror", "api timeout error",
-    "ratelimiterror", "rate limit",
-    "internal server error", "service unavailable",
-    "502 bad gateway", "503 service", "bad gateway",
+    "apiconnectionerror",
+    "apitimeouterror",
+    "api timeout error",
+    "ratelimiterror",
+    "rate limit",
+    "internal server error",
+    "service unavailable",
+    "502 bad gateway",
+    "503 service",
+    "bad gateway",
     # litellm renders provider failures without the spaced/colon forms above
     # (observed leaking through as INCOMPLETE: "Error calling LLM:
     # litellm.InternalServerError: OpenAIException - Connection error.")
-    "error calling llm", "connection error", "internalservererror",
+    "error calling llm",
+    "connection error",
+    "internalservererror",
 )
 
 
@@ -79,8 +87,7 @@ def endpoint_dead(config_path: str) -> bool:
         return False
 
 
-def grade_and_record(result: dict, *, env_url: str, task_id: str,
-                     response: str, config_path: str, t0: float) -> None:
+def grade_and_record(result: dict, *, env_url: str, task_id: str, response: str, config_path: str, t0: float) -> None:
     """Score one finished attempt via the env oracle and fill ``result``.
 
     Raises ``RuntimeError`` on a transport-shaped final response so the
@@ -89,8 +96,7 @@ def grade_and_record(result: dict, *, env_url: str, task_id: str,
     if is_llm_transport_error(response):
         raise RuntimeError(f"llm_transport_error: {response.strip()[:160]}")
     if not response.strip() and endpoint_dead(config_path):
-        raise RuntimeError(
-            "llm_transport_error: empty response and subject endpoint unreachable")
+        raise RuntimeError("llm_transport_error: empty response and subject endpoint unreachable")
     ev = post(env_url, "/evaluate", {"task_id": task_id, "suppress_errors": True})
     done = post(env_url, "/task_completed", {"task_id": task_id})
     # Capture the full evaluation oracle (passes/failures) for the evolver's
@@ -109,9 +115,12 @@ def grade_and_record(result: dict, *, env_url: str, task_id: str,
 
 
 def record_infra(result: dict, exc: BaseException, *, t0: float) -> None:
-    result.update(success=False, infra_error=f"{type(exc).__name__}: {exc}",
-                  traceback=traceback.format_exc()[-2000:],
-                  elapsed_s=round(time.time() - t0, 1))
+    result.update(
+        success=False,
+        infra_error=f"{type(exc).__name__}: {exc}",
+        traceback=traceback.format_exc()[-2000:],
+        elapsed_s=round(time.time() - t0, 1),
+    )
 
 
 def write_result(out_path: str, result: dict) -> None:

@@ -70,7 +70,7 @@ def _why_prefix_match(why: str, key: str) -> bool:
     w = str(why).upper()
     if not w.startswith(prefix):
         return False
-    rest = w[len(prefix):len(prefix) + 1]
+    rest = w[len(prefix) : len(prefix) + 1]
     return not rest.isalnum()
 
 
@@ -85,7 +85,8 @@ def coerce_mode(obj: dict, taxonomy: TaxonomySpec) -> dict:
         why = cand or "other"
     where = obj.get("where") if obj.get("where") in taxonomy.where_classes else "none"
     return {
-        "why": why, "where": where,
+        "why": why,
+        "where": where,
         "dominant": bool(obj.get("dominant", False)),
         "reasoning": str(obj.get("reasoning", ""))[:400],
         "fix_hint": str(obj.get("fix_hint", ""))[:300],
@@ -105,11 +106,13 @@ def add_failure_mode(fm: dict, trajectory_id: str, mode: dict) -> None:
     weight = 1.0 if mode.get("dominant", True) else 0.5
     fm["why_distribution"][why] = fm["why_distribution"].get(why, 0) + weight
     cell = fm["cells"].setdefault(f"{where}::{why}", {"candidates": []})
-    cell["candidates"].append({
-        "trajectory_id": trajectory_id,
-        "reasoning": mode["reasoning"],
-        "components": [{"summary": mode["fix_hint"]}] if mode["fix_hint"] else [],
-    })
+    cell["candidates"].append(
+        {
+            "trajectory_id": trajectory_id,
+            "reasoning": mode["reasoning"],
+            "components": [{"summary": mode["fix_hint"]}] if mode["fix_hint"] else [],
+        }
+    )
 
 
 def _parse_modes(raw: str, taxonomy: TaxonomySpec) -> list[dict] | None:
@@ -123,14 +126,14 @@ def _parse_modes(raw: str, taxonomy: TaxonomySpec) -> list[dict] | None:
     i, j = s.find("["), s.rfind("]")
     if i >= 0 and j > i:
         try:
-            obj = json.loads(s[i:j + 1])
+            obj = json.loads(s[i : j + 1])
         except json.JSONDecodeError:
             obj = None
     if obj is None:
         i, j = s.find("{"), s.rfind("}")
         if i >= 0 and j > i:
             try:
-                obj = json.loads(s[i:j + 1])
+                obj = json.loads(s[i : j + 1])
             except json.JSONDecodeError:
                 obj = None
     if obj is None:
@@ -174,10 +177,11 @@ def classify_failures(
         "one-line reasoning and a concrete fix hint.\n\n"
         "WHY classes:\n" + "\n".join(f"  - {k}: {v}" for k, v in taxonomy.why_classes.items()) + "\n\n"
         "WHERE classes:\n" + "\n".join(f"  - {k}: {v}" for k, v in taxonomy.where_classes.items()) + "\n\n"
-        "Rules: mark EXACTLY ONE mode \"dominant\": true — the failure that directly explains the "
+        'Rules: mark EXACTLY ONE mode "dominant": true — the failure that directly explains the '
         "benchmark's verdict — and list it first; other modes are secondary symptoms "
-        "(\"dominant\": false). " + (extra_rules + "\n" if extra_rules else "") +
-        "Respond with ONLY a JSON ARRAY, no prose, no code fences; each element is one mode:\n"
+        '("dominant": false). '
+        + (extra_rules + "\n" if extra_rules else "")
+        + "Respond with ONLY a JSON ARRAY, no prose, no code fences; each element is one mode:\n"
         '[{"why":"<one WHY key>","where":"<one WHERE key>","dominant":true|false,'
         '"reasoning":"<=1 line","fix_hint":"<=1 line concrete lever>"}]'
     )
@@ -196,9 +200,7 @@ def classify_failures(
                 modes = None
             if modes:
                 return tid, modes
-            msgs = msgs + [
-                {"role": "user", "content": "Return ONLY a JSON array of {why,where,...} with valid keys."}
-            ]
+            msgs = msgs + [{"role": "user", "content": "Return ONLY a JSON array of {why,where,...} with valid keys."}]
         return None
 
     fm = empty_failure_map()
@@ -224,9 +226,9 @@ def _parse_reports(raw: str) -> list[dict] | None:
         i, j = s.find("{"), s.rfind("}")
         if i < 0 or j <= i:
             return None
-        s = "[" + s[i:j + 1] + "]"
+        s = "[" + s[i : j + 1] + "]"
     else:
-        s = s[i:j + 1]
+        s = s[i : j + 1]
     try:
         arr = json.loads(s)
     except json.JSONDecodeError:
@@ -248,7 +250,9 @@ def _induce_reports(call_fn, trajectories, *, bench_desc, max_workers, retries) 
 
     def _one(t):
         tid, desc, transcript = t
-        user = f"TASK: {desc}\n\nFAILING TRAJECTORY ({tid}):\n{transcript}\n\nReport its failure modes. JSON array only."
+        user = (
+            f"TASK: {desc}\n\nFAILING TRAJECTORY ({tid}):\n{transcript}\n\nReport its failure modes. JSON array only."
+        )
         msgs = [{"role": "system", "content": sys}, {"role": "user", "content": user}]
         for _ in range(retries + 1):
             try:
@@ -274,7 +278,7 @@ def _parse_taxonomy(raw: str) -> tuple[TaxonomySpec, list[dict]]:
     i, j = s.find("{"), s.rfind("}")
     if i < 0 or j <= i:
         raise ValueError("no JSON object in taxonomy reduce output")
-    obj = json.loads(s[i:j + 1])
+    obj = json.loads(s[i : j + 1])
     why = {c["key"]: str(c.get("desc", "")) for c in obj.get("why_classes", []) if c.get("key")}
     where = {c["key"]: str(c.get("desc", "")) for c in obj.get("where_classes", []) if c.get("key")}
     if not why:
@@ -327,13 +331,9 @@ def induce_taxonomy(
     the reduce never yields a taxonomy — never silently substitutes another
     bench's table.
     """
-    reports = _induce_reports(
-        call_fn, trajectories, bench_desc=bench_desc, max_workers=max_workers, retries=retries
-    )
+    reports = _induce_reports(call_fn, trajectories, bench_desc=bench_desc, max_workers=max_workers, retries=retries)
     if not reports:
-        raise TaxonomyInductionError(
-            "taxonomy induction produced no parseable per-trajectory reports"
-        )
+        raise TaxonomyInductionError("taxonomy induction produced no parseable per-trajectory reports")
 
     sys = (
         "You are consolidating many per-trajectory failure reports into a REUSABLE failure "
@@ -362,9 +362,7 @@ def induce_taxonomy(
             last_exc = exc
             msgs = msgs + [{"role": "user", "content": f"Invalid ({exc}). Return ONLY the JSON object."}]
     if taxonomy is None:
-        raise TaxonomyInductionError(
-            f"taxonomy reduce failed after {retries + 1} attempts; last error: {last_exc!r}"
-        )
+        raise TaxonomyInductionError(f"taxonomy reduce failed after {retries + 1} attempts; last error: {last_exc!r}")
 
     # The seed carries the stage-1 report content (failure_point / harness_fixes)
     # into its cells, so a round-1 design step can consume it directly — the
@@ -382,14 +380,20 @@ def induce_taxonomy(
         for i, w in enumerate(whys):
             rep = reps[i] if i < len(reps) else reps[0]
             fixes = rep.get("harness_fixes") or []
-            add_failure_mode(seed, tid, coerce_mode(
-                {
-                    "why": w, "where": wheres[0], "dominant": i == 0,
-                    "reasoning": str(rep.get("failure_point", "")),
-                    "fix_hint": str(fixes[0]) if fixes else "",
-                },
-                taxonomy,
-            ))
+            add_failure_mode(
+                seed,
+                tid,
+                coerce_mode(
+                    {
+                        "why": w,
+                        "where": wheres[0],
+                        "dominant": i == 0,
+                        "reasoning": str(rep.get("failure_point", "")),
+                        "fix_hint": str(fixes[0]) if fixes else "",
+                    },
+                    taxonomy,
+                ),
+            )
     return taxonomy, seed
 
 
@@ -425,9 +429,7 @@ def ensure_taxonomy(
     p = Path(path)
     if p.exists():
         return TaxonomySpec.from_dict(json.loads(p.read_text()))
-    taxonomy, seed = induce_taxonomy(
-        call_fn, trajectories, bench_desc=bench_desc, max_workers=max_workers
-    )
+    taxonomy, seed = induce_taxonomy(call_fn, trajectories, bench_desc=bench_desc, max_workers=max_workers)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(taxonomy.to_dict(), indent=2))
     if seed_path is not None:
@@ -465,8 +467,11 @@ def resolve_taxonomy(
     tax_path = Path(taxonomy_path) if taxonomy_path else (Path(work_dir) / "taxonomy.json")
     seed_path = tax_path.with_name(tax_path.stem + "_seed.json")
     taxonomy = ensure_taxonomy(
-        call_fn, trajectory_source(1, vanilla_node),
-        tax_path, mode="induce", seed_path=seed_path,
+        call_fn,
+        trajectory_source(1, vanilla_node),
+        tax_path,
+        mode="induce",
+        seed_path=seed_path,
     )
     seed_failure_map: Optional[dict] = None
     if seed_path.exists():

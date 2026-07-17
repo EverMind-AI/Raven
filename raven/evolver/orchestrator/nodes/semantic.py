@@ -35,8 +35,7 @@ class SemanticNodeError(RuntimeError):
 
     def __init__(self, name: str, attempts: int, last_error: Exception) -> None:
         super().__init__(
-            f"semantic node {name!r} failed to parse after {attempts} attempt(s); "
-            f"last error: {last_error!r}"
+            f"semantic node {name!r} failed to parse after {attempts} attempt(s); last error: {last_error!r}"
         )
         self.name = name
         self.attempts = attempts

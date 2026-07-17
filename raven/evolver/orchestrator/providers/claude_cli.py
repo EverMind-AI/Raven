@@ -45,9 +45,7 @@ def render_messages(messages: Messages) -> tuple[str, str]:
     serialized with role tags plus a continue-instruction, since print mode
     accepts one prompt, not a message array.
     """
-    system = "\n\n".join(
-        str(m.get("content", "")) for m in messages if m.get("role") == "system"
-    )
+    system = "\n\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
     turns = [m for m in messages if m.get("role") != "system"]
     if len(turns) == 1:
         return system, str(turns[0].get("content", ""))
@@ -95,22 +93,28 @@ def make_claude_call_fn(
 
     def _once(system: str, prompt: str) -> str:
         argv = [
-            claude_bin, "-p",
-            "--model", model,
-            "--output-format", "json",
-            "--allowedTools", "",
+            claude_bin,
+            "-p",
+            "--model",
+            model,
+            "--output-format",
+            "json",
+            "--allowedTools",
+            "",
             *(["--system-prompt", system] if system else []),
             *extra_args,
         ]
         with gate:
             proc = _run(
-                argv, input=prompt, capture_output=True, text=True,
-                timeout=timeout, cwd=workdir,
+                argv,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=workdir,
             )
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude -p exit {proc.returncode}: {(proc.stderr or proc.stdout)[:400]}"
-            )
+            raise RuntimeError(f"claude -p exit {proc.returncode}: {(proc.stderr or proc.stdout)[:400]}")
         data = json.loads(proc.stdout)
         if data.get("is_error"):
             raise RuntimeError(f"claude -p is_error: {str(data.get('result'))[:400]}")
@@ -133,9 +137,7 @@ def make_claude_call_fn(
                 if _looks_rate_limited(str(exc)):
                     delay = max(delay, rate_limit_delay)
                 time.sleep(delay)
-        raise RuntimeError(
-            f"claude driver ({model}) failed after {len(retry_delays) + 1} attempts"
-        ) from last
+        raise RuntimeError(f"claude driver ({model}) failed after {len(retry_delays) + 1} attempts") from last
 
     return call_fn
 

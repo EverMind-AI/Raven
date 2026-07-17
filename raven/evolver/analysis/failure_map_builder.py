@@ -78,7 +78,6 @@ from raven.evolver.judge.schema import (
     PatchWhy,
 )
 
-
 SCHEMA_VERSION = "1.0"
 DEFAULT_MIN_WHY_CLASSES = 7  # spec §14 step ③ acceptance gate
 
@@ -107,9 +106,7 @@ def build_failure_map(
     """
     results = list(judge_results)
 
-    cells: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"n_candidates": 0, "trajectory_ids": [], "candidates": []}
-    )
+    cells: dict[str, dict[str, Any]] = defaultdict(lambda: {"n_candidates": 0, "trajectory_ids": [], "candidates": []})
     l1_alerts: list[dict[str, Any]] = []
     where_distribution: dict[str, int] = defaultdict(int)
     why_distribution: dict[str, int] = defaultdict(int)
@@ -119,12 +116,14 @@ def build_failure_map(
     for r in results:
         if r.issue_type == IssueType.L1:
             n_l1 += 1
-            l1_alerts.append({
-                "trajectory_id": r.trajectory_id,
-                "signal_description": r.signal_description,
-                "reasoning": r.proposed_action.reasoning,
-                "confidence": r.confidence,
-            })
+            l1_alerts.append(
+                {
+                    "trajectory_id": r.trajectory_id,
+                    "signal_description": r.signal_description,
+                    "reasoning": r.proposed_action.reasoning,
+                    "confidence": r.confidence,
+                }
+            )
             continue
 
         # L2 / L3: must have patch_proposal (schema invariant enforces this)
@@ -143,10 +142,7 @@ def build_failure_map(
         where_key = where.value
         # patch_why_extra carries the full sub-name including the
         # "other:" prefix per schema convention (see PatchWhy.other docstring).
-        why_key = (
-            why.value if why != PatchWhy.other
-            else (action.patch_why_extra or "other:unknown")
-        )
+        why_key = why.value if why != PatchWhy.other else (action.patch_why_extra or "other:unknown")
         where_distribution[where_key] += 1
         why_distribution[why_key] += 1
         covered_why.add(why_key)
@@ -154,13 +150,15 @@ def build_failure_map(
         cell_key = f"{where_key}::{why_key}"
         cells[cell_key]["n_candidates"] += 1
         cells[cell_key]["trajectory_ids"].append(r.trajectory_id)
-        cells[cell_key]["candidates"].append({
-            "trajectory_id": r.trajectory_id,
-            "issue_type": r.issue_type.value,
-            "confidence": r.confidence,
-            "reasoning": action.reasoning,
-            "components": [c.to_dict() for c in action.components],
-        })
+        cells[cell_key]["candidates"].append(
+            {
+                "trajectory_id": r.trajectory_id,
+                "issue_type": r.issue_type.value,
+                "confidence": r.confidence,
+                "reasoning": action.reasoning,
+                "components": [c.to_dict() for c in action.components],
+            }
+        )
 
     coverage_count = len(covered_why)
     return {

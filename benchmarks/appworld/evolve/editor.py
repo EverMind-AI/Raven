@@ -166,7 +166,7 @@ def rerank_whys(
     for why, count in why_dist.items():
         fw = why_fix_weight.get(why, 1.0)
         n_fail, n_inert, n_win = _attempt_counts(history.get(why, []))
-        penalty = (0.55 ** n_fail) * (0.85 ** n_inert) if n_win == 0 else 1.0
+        penalty = (0.55**n_fail) * (0.85**n_inert) if n_win == 0 else 1.0
         scored.append((why, count * fw * penalty))
     scored.sort(key=lambda x: (-x[1], x[0]))
     return [w for w, s in scored[:k] if s > 0]
@@ -178,7 +178,7 @@ def _strip_hints(brief: str) -> str:
     On attempt >=1 the hints are withheld: attempt 0 already followed them, and
     an anchor that strong makes "take a DISTINCT approach" a dead letter — the
     driver must re-derive the mechanism from the trajectories instead."""
-    return "\n".join(l for l in brief.splitlines() if "judge fix-hint:" not in l)
+    return "\n".join(line for line in brief.splitlines() if "judge fix-hint:" not in line)
 
 
 _WHY_SELECT_SYS = (
@@ -233,9 +233,7 @@ def driver_select_whys(
         hints = _why_where_hints(failure_map, why)
         total = sum(hints.values())
         none_pct = round(100 * hints.get("none", 0) / total) if total else 0
-        hint_str = ", ".join(
-            f"{w}={c}" for w, c in sorted(hints.items(), key=lambda x: -x[1])
-        ) or "(no WHERE data)"
+        hint_str = ", ".join(f"{w}={c}" for w, c in sorted(hints.items(), key=lambda x: -x[1])) or "(no WHERE data)"
         attempts = f"prior attempts: {n_fail} failed / {n_win} promoted"
         if n_inert:
             attempts += f" / {n_inert} never-fired"
@@ -248,14 +246,17 @@ def driver_select_whys(
         if d:
             lines.append(f"    def: {d[:200]}")
     user = (
-        f"K={k}\nDiagnosed failure modes this round:\n" + "\n".join(lines)
+        f"K={k}\nDiagnosed failure modes this round:\n"
+        + "\n".join(lines)
         + "\n\nPick the K modes to attack. JSON array only."
     )
     try:
-        raw = call_fn([
-            {"role": "system", "content": _WHY_SELECT_SYS},
-            {"role": "user", "content": user},
-        ])
+        raw = call_fn(
+            [
+                {"role": "system", "content": _WHY_SELECT_SYS},
+                {"role": "user", "content": user},
+            ]
+        )
     except Exception:  # noqa: BLE001 — selection must never kill the round
         return [], {}
     s = raw.strip()
@@ -266,7 +267,7 @@ def driver_select_whys(
     if i < 0 or j <= i:
         return [], {}
     try:
-        arr = json.loads(s[i:j + 1])
+        arr = json.loads(s[i : j + 1])
     except json.JSONDecodeError:
         return [], {}
     whys, reasons = [], {}
@@ -293,10 +294,7 @@ def _fmt_history(history: dict[str, list[dict]], why: str) -> str:
         flip = ""
         if "rescued" in h:
             ids = ",".join(h.get("regressed_ids", []))
-            flip = (
-                f" (rescued {h['rescued']}, regressed {h['regressed']}"
-                + (f": {ids}" if ids else "") + ")"
-            )
+            flip = f" (rescued {h['rescued']}, regressed {h['regressed']}" + (f": {ids}" if ids else "") + ")"
         reason = f" ({h['reason']})" if h.get("reason") else ""
         lines.append(
             f"- {h['node_id']} [{','.join(h.get('files', []))}]: {h.get('summary', '')[:160]} "
@@ -305,8 +303,7 @@ def _fmt_history(history: dict[str, list[dict]], why: str) -> str:
         if h.get("harm"):
             lines.append(
                 "    HOW it broke a healthy task (that candidate's own run — "
-                "your fix must not reproduce this):\n    | "
-                + h["harm"][:450].replace("\n", "\n    | ")
+                "your fix must not reproduce this):\n    | " + h["harm"][:450].replace("\n", "\n    | ")
             )
     return "\n".join(lines)
 
@@ -329,9 +326,7 @@ _TRIGGER_RE = re.compile(r"TRIGGER_REGEX:\s*(.+?)\s*$", re.M)
 
 
 def _has_beacon(changed: dict[str, bytes]) -> bool:
-    return any(
-        p.endswith(".py") and b"activation_beacon(" in b for p, b in changed.items()
-    )
+    return any(p.endswith(".py") and b"activation_beacon(" in b for p, b in changed.items())
 
 
 def _code_changed(old: Optional[bytes], new: bytes) -> bool:
@@ -421,7 +416,8 @@ def bash_edit_candidate(
         + (
             f"PASSING task_ids for CONTRAST (read_trajectory works on these too): "
             f"{passing_ids[:4]} — healthy runs your fix must NOT change.\n"
-            if passing_ids else ""
+            if passing_ids
+            else ""
         )
         + f"Editable files: under {' and '.join(sandbox.whitelist)}.\n\n"
         "PROTOCOL — do NOT skip straight to editing:\n"
@@ -436,8 +432,8 @@ def bash_edit_candidate(
             "on the failing evidence and NOT on a passing trajectory (read one, or test the "
             "condition with bash/python on its text). Report hits vs false-positives in your "
             "done summary.\n"
-            if passing_ids else
-            "5) BEFORE done: sanity-check your trigger condition against the failing evidence "
+            if passing_ids
+            else "5) BEFORE done: sanity-check your trigger condition against the failing evidence "
             "text (test it with bash/python) and say in your done summary when it fires.\n"
         )
         + (
@@ -445,7 +441,8 @@ def bash_edit_candidate(
             "from earlier attempts: pick a DIFFERENT lever (prompt vs hook vs loop vs tool). "
             "Judge fix-hints are withheld this attempt on purpose: derive the mechanism yourself "
             "from the evidence trajectories.\n"
-            if attempt else ""
+            if attempt
+            else ""
         )
         + (_BEACON_REQUIREMENT if require_beacon else "")
         + "Begin."
@@ -525,9 +522,10 @@ def bash_edit_candidate(
         ok, err = sandbox.import_check(import_smoke_module, python_exe=import_smoke_python)
         if not ok:
             return None, [], f"import smoke FAIL: {err}"
-    if require_beacon and not _has_beacon(changed) and any(
-        p.endswith(".py") and _code_changed(sandbox.original(p), b)
-        for p, b in changed.items()
+    if (
+        require_beacon
+        and not _has_beacon(changed)
+        and any(p.endswith(".py") and _code_changed(sandbox.original(p), b) for p, b in changed.items())
     ):
         # A code edit without a beacon is unmeasurable by Gate-b (its firing
         # leaves no per-task record), so it is rejected before any eval spend.
@@ -585,15 +583,17 @@ def make_bash_editor_design_fn(
         why_reasons: dict[str, str] = {}
         if why_selection == "driver":
             whys, why_reasons = driver_select_whys(
-                call_fn, failure_map, budget.max_why_per_round, history,
+                call_fn,
+                failure_map,
+                budget.max_why_per_round,
+                history,
                 why_defs=why_defs_of() if why_defs_of else None,
             )
             if not whys:
                 whys = formula
             # Shadow log: driver choice vs formula choice, so a few rounds of
             # data can arbitrate which selector earns the default.
-            print(f"[why-select] driver={whys} formula={formula} "
-                  f"reasons={why_reasons}", flush=True)
+            print(f"[why-select] driver={whys} formula={formula} reasons={why_reasons}", flush=True)
         else:
             whys = formula
         cands: list[Candidate] = []
@@ -605,22 +605,23 @@ def make_bash_editor_design_fn(
             for attempt in range(budget.candidates_per_why):
                 tag = f"r{round_index}-{why.split('_')[0]}-{attempt}"
                 sb = (
-                    Sandbox(repo_root, worktree_root / tag, base_sha,
-                            whitelist_prefixes=whitelist_prefixes)
+                    Sandbox(repo_root, worktree_root / tag, base_sha, whitelist_prefixes=whitelist_prefixes)
                     if whitelist_prefixes is not None
                     else Sandbox(repo_root, worktree_root / tag, base_sha)
                 )
                 try:
                     changed, deleted, summary = bash_edit_candidate(
-                        call_fn, sb, brief if attempt == 0 else _strip_hints(brief),
-                        ev_ids, tag,
-                        render_failed=rf, passing_ids=p_ids,
+                        call_fn,
+                        sb,
+                        brief if attempt == 0 else _strip_hints(brief),
+                        ev_ids,
+                        tag,
+                        render_failed=rf,
+                        passing_ids=p_ids,
                         max_turns=max_turns,
                         force_after_readonly=force_after_readonly,
                         attempt=attempt,
-                        history_text="\n\n".join(
-                            s for s in (arch_text, _fmt_history(history, why)) if s
-                        ),
+                        history_text="\n\n".join(s for s in (arch_text, _fmt_history(history, why)) if s),
                         guard_text=guard_text_of() if guard_text_of else "",
                         import_smoke_module=import_smoke_module,
                         import_smoke_python=import_smoke_python,
@@ -631,10 +632,15 @@ def make_bash_editor_design_fn(
                     sb.close()
                 if changed is not None:
                     cands.append(
-                        Candidate(files=changed, why=why, focused_task_ids=focused,
-                                  summary=summary, deletions=deleted,
-                                  has_beacon=_has_beacon(changed),
-                                  activation_spec=_parse_trigger_spec(summary))
+                        Candidate(
+                            files=changed,
+                            why=why,
+                            focused_task_ids=focused,
+                            summary=summary,
+                            deletions=deleted,
+                            has_beacon=_has_beacon(changed),
+                            activation_spec=_parse_trigger_spec(summary),
+                        )
                     )
         return cands
 

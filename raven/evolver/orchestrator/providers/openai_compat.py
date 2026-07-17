@@ -94,8 +94,7 @@ def make_call_fn(
             return content
         raise EndpointError(
             f"endpoint {model!r} returned empty content after "
-            f"{len(retry_delays) + 1} attempts"
-            + (f"; last exc: {last_exc!r}" if last_exc else "")
+            f"{len(retry_delays) + 1} attempts" + (f"; last exc: {last_exc!r}" if last_exc else "")
         )
 
     return call_fn

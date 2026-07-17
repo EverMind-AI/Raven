@@ -41,7 +41,6 @@ from raven.evolver.scheduler.tree_aware_bandit import TreeAwareTaskScheduler
 from raven.evolver.tree.node import HarnessNode
 from raven.evolver.tree.store import EvolverTreeStore
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -96,21 +95,14 @@ def load_tree_into_scheduler(
         )
         nodes = [n for n in nodes if not n.status.value.startswith("archived")]
     if not nodes:
-        raise ValueError(
-            f"No non-archived HarnessNode JSONs found in {nodes_dir}"
-        )
-
-    node_by_id: dict[str, HarnessNode] = {n.node_id: n for n in nodes}
+        raise ValueError(f"No non-archived HarnessNode JSONs found in {nodes_dir}")
 
     # ── Determine the task pool ──
     if all_task_ids is None:
         # Use the root's bandit_tasks_chosen as the canonical pool
         roots = [n for n in nodes if n.parent_id is None]
         if len(roots) != 1:
-            raise ValueError(
-                f"Expected exactly one root node, found {len(roots)}: "
-                f"{[r.node_id for r in roots]}"
-            )
+            raise ValueError(f"Expected exactly one root node, found {len(roots)}: {[r.node_id for r in roots]}")
         root = roots[0]
         if root.eval is None:
             raise ValueError(
@@ -138,7 +130,9 @@ def load_tree_into_scheduler(
 
     logger.info(
         "Loaded tree from %s: %d nodes, %d observations",
-        nodes_dir, scheduler.n_nodes(), scheduler.n_observations(),
+        nodes_dir,
+        scheduler.n_nodes(),
+        scheduler.n_observations(),
     )
     return scheduler
 
@@ -153,10 +147,7 @@ def _topological_order(nodes: list[HarnessNode]) -> list[HarnessNode]:
     # through to the "possible cycle" branch with a less useful message.)
     for n in nodes:
         if n.parent_id is not None and n.parent_id not in by_id:
-            raise ValueError(
-                f"Node {n.node_id!r} references parent_id "
-                f"{n.parent_id!r} which is not in the node set"
-            )
+            raise ValueError(f"Node {n.node_id!r} references parent_id {n.parent_id!r} which is not in the node set")
 
     children_of: dict[Optional[str], list[HarnessNode]] = {}
     for n in nodes:
@@ -179,9 +170,7 @@ def _topological_order(nodes: list[HarnessNode]) -> list[HarnessNode]:
             queue.append(child)
     if len(ordered) != len(nodes):
         missing = {n.node_id for n in nodes} - seen
-        raise ValueError(
-            f"Topological sort incomplete — possible cycle. Missing: {missing}"
-        )
+        raise ValueError(f"Topological sort incomplete — possible cycle. Missing: {missing}")
     return ordered
 
 
@@ -200,11 +189,7 @@ def _record_outcomes(
 
     # ── 1. Multi-attempt replay (root k=3 case) ──
     replay_dir_rel = dense.get("k_attempt_replay_dir")
-    if (
-        isinstance(replay_dir_rel, str)
-        and replay_dir_rel
-        and not skip_multi_attempt_replay
-    ):
+    if isinstance(replay_dir_rel, str) and replay_dir_rel and not skip_multi_attempt_replay:
         replay_dir = repo_root / replay_dir_rel
         if replay_dir.is_dir():
             _replay_k_attempts(
@@ -216,9 +201,9 @@ def _record_outcomes(
             # Skip the per_task_results union — we just replayed every attempt
         else:
             logger.warning(
-                "node %s: k_attempt_replay_dir does not exist: %s — "
-                "falling back to per_task_results union",
-                node.node_id, replay_dir,
+                "node %s: k_attempt_replay_dir does not exist: %s — falling back to per_task_results union",
+                node.node_id,
+                replay_dir,
             )
             _replay_primary(scheduler, node)
     else:
@@ -234,14 +219,17 @@ def _record_outcomes(
         if not (isinstance(path_rel, str) and isinstance(fmt, str)):
             logger.warning(
                 "node %s secondary_eval_%d missing path/format — skipping",
-                node.node_id, i,
+                node.node_id,
+                i,
             )
             continue
         path = repo_root / path_rel
         if not path.is_file():
             logger.warning(
                 "node %s secondary_eval_%d path missing: %s — skipping",
-                node.node_id, i, path,
+                node.node_id,
+                i,
+                path,
             )
             continue
         try:
@@ -249,7 +237,9 @@ def _record_outcomes(
         except json.JSONDecodeError:
             logger.warning(
                 "node %s secondary_eval_%d not valid JSON: %s — skipping",
-                node.node_id, i, path,
+                node.node_id,
+                i,
+                path,
             )
             continue
         _apply_secondary_format(scheduler, node.node_id, label, fmt, data)
@@ -263,7 +253,8 @@ def _replay_primary(scheduler: TreeAwareTaskScheduler, node: HarnessNode) -> Non
         if task_id not in pool:
             logger.debug(
                 "node %s: per_task task %s not in task pool, skipping",
-                node.node_id, task_id,
+                node.node_id,
+                task_id,
             )
             continue
         scheduler.add_outcome(node.node_id, task_id, result.pass_outcome)
@@ -293,7 +284,9 @@ def _replay_k_attempts(
         n_replayed += 1
     logger.info(
         "node %s: replayed %d k-attempt outcomes from %s",
-        node_id, n_replayed, trial_dir,
+        node_id,
+        n_replayed,
+        trial_dir,
     )
 
 
@@ -333,12 +326,17 @@ def _apply_secondary_format(
     else:
         logger.warning(
             "node %s secondary_eval %r unknown format: %r — skipping",
-            node_id, label, fmt,
+            node_id,
+            label,
+            fmt,
         )
         return
     logger.info(
         "node %s secondary_eval %r (%s): added %d outcomes",
-        node_id, label, fmt, n_added,
+        node_id,
+        label,
+        fmt,
+        n_added,
     )
 
 

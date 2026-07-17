@@ -55,7 +55,7 @@ def _instruction_of(first_user_msg: str) -> str:
     """
     marker = "Your task:"
     i = first_user_msg.find(marker)
-    return first_user_msg[i + len(marker):].strip() if i >= 0 else first_user_msg
+    return first_user_msg[i + len(marker) :].strip() if i >= 0 else first_user_msg
 
 
 def _clip(s: str, cap: int) -> str:
@@ -155,9 +155,7 @@ def _kept_measurement(
     return chosen
 
 
-def _failing_attempt(
-    runs_root: Path, ws_root: Path, exp: str, tid: str, k: int
-) -> Optional[tuple[Path, dict]]:
+def _failing_attempt(runs_root: Path, ws_root: Path, exp: str, tid: str, k: int) -> Optional[tuple[Path, dict]]:
     """First non-infra FAILING attempt of ``tid`` in ``exp``'s out-dir, as
     ``(session_path, result)``; None when the task has none there."""
     bdir = runs_root / exp
@@ -197,9 +195,7 @@ def _attempts_line(runs_root: Path, exp: str, tid: str, k: int) -> str:
     return f"ATTEMPTS (k={k}): " + ", ".join(parts) if parts else ""
 
 
-def _passing_attempt(
-    runs_root: Path, ws_root: Path, exp: str, tid: str, k: int
-) -> Optional[tuple[Path, dict]]:
+def _passing_attempt(runs_root: Path, ws_root: Path, exp: str, tid: str, k: int) -> Optional[tuple[Path, dict]]:
     """First non-infra PASSING attempt of ``tid`` in ``exp``'s out-dir — the
     contrast material for the design step's over-trigger self-check."""
     bdir = runs_root / exp

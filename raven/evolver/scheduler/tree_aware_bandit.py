@@ -152,9 +152,7 @@ class TreeAwareTaskScheduler:
         if node_id in self._nodes:
             raise ValueError(f"node {node_id!r} already registered")
         if parent_id is not None and parent_id not in self._nodes:
-            raise ValueError(
-                f"parent {parent_id!r} of node {node_id!r} not registered yet"
-            )
+            raise ValueError(f"parent {parent_id!r} of node {node_id!r} not registered yet")
         self._nodes[node_id] = _NodeInfo(node_id=node_id, parent_id=parent_id)
 
     def add_outcome(self, node_id: str, task_id: str, passed: bool) -> None:
@@ -169,9 +167,7 @@ class TreeAwareTaskScheduler:
             raise ValueError(f"task {task_id!r} not in the registered task pool")
         self._nodes[node_id].outcomes[task_id].append(bool(passed))
 
-    def ancestry_distance(
-        self, descendant_id: str, ancestor_id: str
-    ) -> Optional[int]:
+    def ancestry_distance(self, descendant_id: str, ancestor_id: str) -> Optional[int]:
         """Distance from ``descendant_id`` up to ``ancestor_id``.
 
         Returns the number of edges if ``ancestor_id`` is on the
@@ -191,9 +187,7 @@ class TreeAwareTaskScheduler:
             d += 1
         return None
 
-    def ancestors_with_distance(
-        self, node_id: str, *, include_self: bool = True
-    ) -> list[tuple[str, int]]:
+    def ancestors_with_distance(self, node_id: str, *, include_self: bool = True) -> list[tuple[str, int]]:
         """All ancestors of ``node_id`` with their distances.
 
         Ordered from nearest (self at d=0 if ``include_self``) outward
@@ -217,9 +211,7 @@ class TreeAwareTaskScheduler:
         """Ancestry kernel ``exp(-λ × distance)``."""
         return math.exp(-self._lambda * distance)
 
-    def weighted_posterior(
-        self, task_id: str, v_new_id: str
-    ) -> tuple[float, float]:
+    def weighted_posterior(self, task_id: str, v_new_id: str) -> tuple[float, float]:
         """Hierarchical Bernoulli posterior for (task_id, v_new_id).
 
         Returns ``(p_hat, effective_n)``:
@@ -272,10 +264,7 @@ class TreeAwareTaskScheduler:
         tree (not ancestry-weighted) — exploration is about "have we
         looked at this task at all", independent of who's asking.
         """
-        n = sum(
-            len(info.outcomes.get(task_id, ()))
-            for info in self._nodes.values()
-        )
+        n = sum(len(info.outcomes.get(task_id, ())) for info in self._nodes.values())
         return 1.0 / math.sqrt(n + 1)
 
     def score(self, task_id: str, v_new_id: str) -> float:
@@ -378,10 +367,7 @@ class TreeAwareTaskScheduler:
         return len(self._nodes)
 
     def n_observations(self) -> int:
-        return sum(
-            sum(len(outs) for outs in info.outcomes.values())
-            for info in self._nodes.values()
-        )
+        return sum(sum(len(outs) for outs in info.outcomes.values()) for info in self._nodes.values())
 
     def __repr__(self) -> str:
         return (

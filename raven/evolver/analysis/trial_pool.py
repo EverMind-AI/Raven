@@ -31,11 +31,9 @@ from raven.evolver.analysis.proxy_features import (
     extract_trial_dir,
 )
 from raven.evolver.analysis.stability_bucket import (
-    StabilityBucket,
     compute_stability,
 )
 from raven.evolver.scheduler.cold_start_bandit import Trial
-
 
 _EXIT_STATUS_ORDINAL: dict[ExitStatus, int] = {
     ExitStatus.PASSED: 0,
@@ -66,9 +64,7 @@ def proxy_features_to_kmeans_dict(pf: ProxyFeatures) -> dict[str, float]:
         "has_tool_calls_ever": 1.0 if pf.has_tool_calls_ever else 0.0,
         "assistant_text_length_avg": float(pf.assistant_text_length_avg),
         "docker_error_count": float(pf.docker_error_count),
-        "exit_status_ordinal": float(
-            _EXIT_STATUS_ORDINAL.get(pf.final_exit_status, 99)
-        ),
+        "exit_status_ordinal": float(_EXIT_STATUS_ORDINAL.get(pf.final_exit_status, 99)),
     }
 
 
@@ -105,14 +101,16 @@ def build_trial_pool(trial_dir: str | Path) -> list[Trial]:
             continue
         for attempt_idx, pf in enumerate(by_task[task_id], start=1):
             passed = pf.final_exit_status == ExitStatus.PASSED
-            trials.append(Trial(
-                trial_id=pf.trial_id,
-                task_id=task_id,
-                attempt=attempt_idx,
-                passed=passed,
-                stability=task_stability.bucket,
-                proxy_features=proxy_features_to_kmeans_dict(pf),
-            ))
+            trials.append(
+                Trial(
+                    trial_id=pf.trial_id,
+                    task_id=task_id,
+                    attempt=attempt_idx,
+                    passed=passed,
+                    stability=task_stability.bucket,
+                    proxy_features=proxy_features_to_kmeans_dict(pf),
+                )
+            )
     return trials
 
 

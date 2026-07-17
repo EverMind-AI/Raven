@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 from .parser import JudgeParseError, parse_judge_output
@@ -185,8 +185,7 @@ class OpenRouterBackend(JudgeLLMBackend):
         key = os.environ.get(self._api_key_env)
         if not key:
             raise RuntimeError(
-                f"OpenRouterBackend({self.name}): no API key — pass api_key, "
-                f"or set env {self._api_key_env}"
+                f"OpenRouterBackend({self.name}): no API key — pass api_key, or set env {self._api_key_env}"
             )
         return key
 
@@ -199,6 +198,7 @@ class OpenRouterBackend(JudgeLLMBackend):
     ) -> str:
         # Lazy import: tests that don't hit OpenRouter don't need httpx
         import asyncio  # noqa: PLC0415
+
         import httpx  # noqa: PLC0415
 
         api_key = self._resolve_api_key()
@@ -280,9 +280,7 @@ class MockBackend(JudgeLLMBackend):
     of times with the expected payload.
     """
 
-    def __init__(
-        self, responses: list[str], *, name: str = "mock"
-    ) -> None:
+    def __init__(self, responses: list[str], *, name: str = "mock") -> None:
         self._responses = list(responses)
         self.calls: list[dict[str, Any]] = []
         self.name = name
@@ -303,8 +301,7 @@ class MockBackend(JudgeLLMBackend):
         )
         if not self._responses:
             raise IndexError(
-                f"MockBackend({self.name}): no more scripted responses; "
-                f"received {len(self.calls)} call(s) total"
+                f"MockBackend({self.name}): no more scripted responses; received {len(self.calls)} call(s) total"
             )
         return self._responses.pop(0)
 
@@ -409,11 +406,15 @@ class JudgeLLM:
         full (with a debug log when ``debug_log=True``).
         """
         l1_text = self._select_trajectory_text(
-            self._config.l1_trajectory_format, trajectory_text, trajectory_text_compressed,
+            self._config.l1_trajectory_format,
+            trajectory_text,
+            trajectory_text_compressed,
             slot="l1",
         )
         patch_text = self._select_trajectory_text(
-            self._config.patch_trajectory_format, trajectory_text, trajectory_text_compressed,
+            self._config.patch_trajectory_format,
+            trajectory_text,
+            trajectory_text_compressed,
             slot="patch",
         )
 
@@ -491,15 +492,14 @@ class JudgeLLM:
         except JudgeParseError:
             logger.warning(
                 "judge.parse failed on backend=%s, traj=%s; raw=%s",
-                backend.name, trajectory_id, raw[:500],
+                backend.name,
+                trajectory_id,
+                raw[:500],
             )
             raise
 
     def __repr__(self) -> str:
-        return (
-            f"JudgeLLM(mode={self._config.mode!r}, "
-            f"l1={self._l1!r}, patch={self._patch!r})"
-        )
+        return f"JudgeLLM(mode={self._config.mode!r}, l1={self._l1!r}, patch={self._patch!r})"
 
 
 # ---------------------------------------------------------------------------
@@ -538,8 +538,7 @@ def build_backend(spec: dict[str, Any]) -> JudgeLLMBackend:
     if backend_type == "litellm":
         if "provider" not in spec:
             raise ValueError(
-                "litellm backend spec requires a pre-built 'provider' "
-                "object; cannot construct from pure dict"
+                "litellm backend spec requires a pre-built 'provider' object; cannot construct from pure dict"
             )
         return LitellmBackend(
             provider=spec["provider"],
@@ -551,9 +550,7 @@ def build_backend(spec: dict[str, Any]) -> JudgeLLMBackend:
             responses=list(spec.get("responses", [])),
             name=spec.get("name", "mock"),
         )
-    raise ValueError(
-        f"unknown backend type {backend_type!r}; supported: openrouter, litellm, mock"
-    )
+    raise ValueError(f"unknown backend type {backend_type!r}; supported: openrouter, litellm, mock")
 
 
 def build_judge_llm(spec: dict[str, Any]) -> JudgeLLM:
@@ -596,9 +593,7 @@ def build_judge_llm(spec: dict[str, Any]) -> JudgeLLM:
     if mode == "two_step":
         l1_spec = spec.get("l1_backend")
         if l1_spec is None:
-            raise ValueError(
-                "build_judge_llm: mode='two_step' requires 'l1_backend'"
-            )
+            raise ValueError("build_judge_llm: mode='two_step' requires 'l1_backend'")
         l1_backend = build_backend(l1_spec)
     else:
         # single mode: reuse patch_backend in the l1 slot, never called

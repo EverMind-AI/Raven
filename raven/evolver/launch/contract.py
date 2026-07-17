@@ -60,9 +60,7 @@ class BenchBundle:
     precheck: Optional[Callable[[], None]] = None
 
 
-def validate_whitelist(
-    repo_root: Path, base_sha: str, prefixes: tuple[str, ...]
-) -> None:
+def validate_whitelist(repo_root: Path, base_sha: str, prefixes: tuple[str, ...]) -> None:
     """Fail loudly on a whitelist prefix matching nothing at ``base_sha``.
 
     A dead prefix does not error at run time — the designer's edits are
@@ -73,12 +71,12 @@ def validate_whitelist(
         raise ValueError("whitelist is empty: the designer would have no editable surface")
     proc = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", base_sha],
-        cwd=str(repo_root), capture_output=True, text=True,
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
-        raise ValueError(
-            f"cannot list {base_sha} in {repo_root}: {proc.stderr.strip()}"
-        )
+        raise ValueError(f"cannot list {base_sha} in {repo_root}: {proc.stderr.strip()}")
     paths = proc.stdout.splitlines()
     dead = [p for p in prefixes if not any(f.startswith(p) for f in paths)]
     if dead:

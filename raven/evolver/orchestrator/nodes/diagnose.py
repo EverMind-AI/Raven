@@ -103,9 +103,7 @@ def merge_failure_maps(acc: dict[str, Any], new: dict[str, Any]) -> dict[str, An
         m[k] = acc.get(k, 0) + new.get(k, 0)
     if "_n_judged" in acc or "_n_judged" in new:
         m["_n_judged"] = acc.get("_n_judged", 0) + new.get("_n_judged", 0)
-    diag_failures = list(acc.get("_diagnose_failures", [])) + list(
-        new.get("_diagnose_failures", [])
-    )
+    diag_failures = list(acc.get("_diagnose_failures", [])) + list(new.get("_diagnose_failures", []))
     if diag_failures:
         m["_diagnose_failures"] = diag_failures
 
@@ -114,12 +112,8 @@ def merge_failure_maps(acc: dict[str, Any], new: dict[str, Any]) -> dict[str, An
         if key in cells:
             base = cells[key]
             base["n_candidates"] = base.get("n_candidates", 0) + cell.get("n_candidates", 0)
-            base["trajectory_ids"] = list(base.get("trajectory_ids", [])) + list(
-                cell.get("trajectory_ids", [])
-            )
-            base["candidates"] = list(base.get("candidates", [])) + list(
-                cell.get("candidates", [])
-            )
+            base["trajectory_ids"] = list(base.get("trajectory_ids", [])) + list(cell.get("trajectory_ids", []))
+            base["candidates"] = list(base.get("candidates", [])) + list(cell.get("candidates", []))
         else:
             cells[key] = dict(cell)
     m["cells"] = cells
@@ -130,9 +124,7 @@ def merge_failure_maps(acc: dict[str, Any], new: dict[str, Any]) -> dict[str, An
             d[k] = d.get(k, 0) + v
         m[dist] = d
 
-    covered = sorted(
-        set(acc.get("covered_why_classes", [])) | set(new.get("covered_why_classes", []))
-    )
+    covered = sorted(set(acc.get("covered_why_classes", [])) | set(new.get("covered_why_classes", [])))
     m["covered_why_classes"] = covered
     m["covered_why_count"] = len(covered)
     m["l1_alerts"] = list(acc.get("l1_alerts", [])) + list(new.get("l1_alerts", []))

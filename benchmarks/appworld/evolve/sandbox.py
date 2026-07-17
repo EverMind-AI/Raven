@@ -90,8 +90,11 @@ class Sandbox:
             )
         try:
             r = subprocess.run(
-                ["bash", "-c", command], cwd=str(self.root),
-                capture_output=True, text=True, timeout=timeout,
+                ["bash", "-c", command],
+                cwd=str(self.root),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             return (
@@ -126,7 +129,9 @@ class Sandbox:
         """Revert any edit OUTSIDE the whitelist (the worktree is a full checkout)."""
         r = subprocess.run(
             ["git", "status", "--porcelain", "-uall"],
-            cwd=str(self.root), capture_output=True, text=True,
+            cwd=str(self.root),
+            capture_output=True,
+            text=True,
         )
         reverted = []
         for line in r.stdout.splitlines():
@@ -179,8 +184,11 @@ class Sandbox:
         exe = python_exe or sys.executable
         try:
             r = subprocess.run(
-                [exe, "-c", f"import {module}"], cwd=str(self.root),
-                capture_output=True, text=True, timeout=timeout,
+                [exe, "-c", f"import {module}"],
+                cwd=str(self.root),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             return False, f"import {module} timed out after {timeout:.0f}s"

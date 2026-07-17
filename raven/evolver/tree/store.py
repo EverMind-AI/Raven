@@ -47,7 +47,6 @@ from raven.evolver.tree.node import (
     NodeStatus,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -76,7 +75,7 @@ class TreeView:
     """
 
     nodes: dict[str, HarnessNode]
-    children_of: dict[str, list[str]]   # parent_id → child node_ids
+    children_of: dict[str, list[str]]  # parent_id → child node_ids
     root_id: Optional[str]
     orphans: list[str] = field(default_factory=list)
 
@@ -172,9 +171,7 @@ class EvolverTreeStore:
         if the JSON is missing."""
         path = self._node_path(node_id)
         if not path.exists():
-            raise FileNotFoundError(
-                f"node {node_id!r} not found in {self.nodes_dir}"
-            )
+            raise FileNotFoundError(f"node {node_id!r} not found in {self.nodes_dir}")
         return HarnessNode.load(path)
 
     def has_node(self, node_id: str) -> bool:
@@ -192,9 +189,7 @@ class EvolverTreeStore:
             try:
                 out.append(HarnessNode.load(jpath))
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(
-                    "Skipping unloadable node file %s: %s", jpath, exc
-                )
+                logger.warning("Skipping unloadable node file %s: %s", jpath, exc)
         return out
 
     def build_tree(self) -> TreeView:
@@ -230,8 +225,7 @@ class EvolverTreeStore:
             # Any additional roots are reported as orphans-by-policy
             if len(root_candidates) > 1:
                 logger.warning(
-                    "Multiple root nodes detected; keeping %s, treating "
-                    "%s as orphans",
+                    "Multiple root nodes detected; keeping %s, treating %s as orphans",
                     root_id,
                     root_candidates[1:],
                 )

@@ -99,13 +99,16 @@ class RunMeta:
         return meta
 
     def save(self) -> None:
-        atomic_write_json(self.path, {
-            "created_at": self.created_at,
-            "config_snapshot": self.config_snapshot,
-            "config_hash": self.config_hash,
-            "unsealed_at": self.unsealed_at,
-            "finalize_reason": self.finalize_reason,
-        })
+        atomic_write_json(
+            self.path,
+            {
+                "created_at": self.created_at,
+                "config_snapshot": self.config_snapshot,
+                "config_hash": self.config_hash,
+                "unsealed_at": self.unsealed_at,
+                "finalize_reason": self.finalize_reason,
+            },
+        )
 
     def check_config(self, snapshot: dict) -> bool:
         """True iff ``snapshot`` matches the run's recorded configuration."""

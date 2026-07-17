@@ -47,6 +47,5 @@ def assert_beacon_present(
         return
     if BEACON_TOKEN not in diff_text:
         raise MissingBeaconError(
-            f"{node_id}: {patch_where} patch contains no "
-            f"{BEACON_TOKEN}...) call - unmonitorable, rejected"
+            f"{node_id}: {patch_where} patch contains no {BEACON_TOKEN}...) call - unmonitorable, rejected"
         )

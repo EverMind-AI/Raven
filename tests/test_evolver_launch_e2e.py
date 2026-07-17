@@ -33,14 +33,18 @@ def repo(tmp_path: Path) -> tuple[Path, str]:
     repo = tmp_path / "subject"
     (repo / "src").mkdir(parents=True)
     (repo / "src/x.py").write_text("x = 1\n")
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-           "PATH": "/usr/bin:/bin"}
-    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
-                ["git", "commit", "-qm", "init"]):
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": "/usr/bin:/bin",
+    }
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
         subprocess.run(cmd, cwd=repo, check=True, env=env, capture_output=True)
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-                         capture_output=True, text=True).stdout.strip()
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
     return repo, sha
 
 
@@ -48,18 +52,21 @@ def repo(tmp_path: Path) -> tuple[Path, str]:
 def spec_path(tmp_path: Path, repo) -> Path:
     repo_dir, sha = repo
     path = tmp_path / "spec.yaml"
-    path.write_text(yaml.safe_dump({
-        "bench": "fake",
-        "repo_root": str(repo_dir),
-        "base_sha": sha,
-        "work_dir": str(tmp_path / "work"),
-        "funnel": {
-            "k_confirm": 1,
-            "budget": {"max_why_per_round": 1, "candidates_per_why": 1,
-                       "recombinations_per_round": 0},
-            "termination": {"patience": 5, "max_rounds": 2},
-        },
-    }))
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "bench": "fake",
+                "repo_root": str(repo_dir),
+                "base_sha": sha,
+                "work_dir": str(tmp_path / "work"),
+                "funnel": {
+                    "k_confirm": 1,
+                    "budget": {"max_why_per_round": 1, "candidates_per_why": 1, "recombinations_per_round": 0},
+                    "termination": {"patience": 5, "max_rounds": 2},
+                },
+            }
+        )
+    )
     return path
 
 
@@ -67,14 +74,14 @@ def spec_path(tmp_path: Path, repo) -> Path:
 def fake_bench(monkeypatch):
     """Install a fake bench and return its control/observation flags."""
     flags = {
-        "cold_interrupt_after": None,   # write N trial files, then KeyboardInterrupt
-        "kb_on_round": None,            # raise inside design of this round
+        "cold_interrupt_after": None,  # write N trial files, then KeyboardInterrupt
+        "kb_on_round": None,  # raise inside design of this round
         "cold_writes": 0,
         "design_calls": 0,
         "unseal_calls": 0,
-        "no_unseal": False,             # build the bundle without a sealed test
-        "unseal_fail_times": 0,         # make the next N unseal calls raise
-        "precheck_error": None,         # make the Gate0 precheck raise this message
+        "no_unseal": False,  # build the bundle without a sealed test
+        "unseal_fail_times": 0,  # make the next N unseal calls raise
+        "precheck_error": None,  # make the Gate0 precheck raise this message
         "precheck_calls": 0,
     }
 
@@ -100,8 +107,10 @@ def fake_bench(monkeypatch):
                     out = van / f"{tid}_k{i}.json"
                     if out.exists():
                         continue
-                    if (flags["cold_interrupt_after"] is not None
-                            and flags["cold_writes"] >= flags["cold_interrupt_after"]):
+                    if (
+                        flags["cold_interrupt_after"] is not None
+                        and flags["cold_writes"] >= flags["cold_interrupt_after"]
+                    ):
                         raise KeyboardInterrupt
                     out.write_text("{}")
                     flags["cold_writes"] += 1
@@ -117,9 +126,7 @@ def fake_bench(monkeypatch):
         backend = EvalBackend(
             train_task_ids=train,
             test_task_ids=[],
-            eval=lambda node, ids, k_, job, **kw: {
-                t: TaskEval(task_id=t, passes=0, attempts=k_) for t in ids
-            },
+            eval=lambda node, ids, k_, job, **kw: {t: TaskEval(task_id=t, passes=0, attempts=k_) for t in ids},
             cold_start=lambda: stability,
             anchor=lambda affinity=None: simple_anchor(stability),
         )
@@ -149,8 +156,12 @@ def fake_bench(monkeypatch):
             )
 
         root = HarnessNode(
-            node_id="C0", parent_id=None, git_commit_sha=ctx.spec.base_sha,
-            git_branch="", created_at=HarnessNode.utc_now(), created_at_iter=0,
+            node_id="C0",
+            parent_id=None,
+            git_commit_sha=ctx.spec.base_sha,
+            git_branch="",
+            created_at=HarnessNode.utc_now(),
+            created_at_iter=0,
         )
 
         def unseal(records, orch) -> dict:
@@ -177,8 +188,7 @@ def fake_bench(monkeypatch):
             precheck=precheck,
         )
 
-    monkeypatch.setattr(runner_mod, "load_bench",
-                        lambda name, repo_root=None: build)
+    monkeypatch.setattr(runner_mod, "load_bench", lambda name, repo_root=None: build)
     return flags
 
 
@@ -219,12 +229,10 @@ class TestInterruptResume:
         # Resume filled only the missing trial (2 before + 1 after = 3 writes).
         assert fake_bench["cold_writes"] == 3
 
-    def test_round_interrupt_then_resume_replays_journal(
-        self, spec_path, fake_bench, tmp_path
-    ):
+    def test_round_interrupt_then_resume_replays_journal(self, spec_path, fake_bench, tmp_path):
         fake_bench["kb_on_round"] = 2  # round 1 completes, round 2 dies mid-design
         assert runner_mod.cmd_run(str(spec_path)) == 130
-        journal = (tmp_path / "work" / "journal" / "rounds.jsonl")
+        journal = tmp_path / "work" / "journal" / "rounds.jsonl"
         assert len(journal.read_text().splitlines()) == 1
 
         calls_before = fake_bench["design_calls"]
@@ -234,9 +242,7 @@ class TestInterruptResume:
         assert fake_bench["design_calls"] == calls_before + 1
         assert len(journal.read_text().splitlines()) == 2
 
-    def test_status_midway_shows_rounds_and_no_test_numbers(
-        self, spec_path, fake_bench, capsys
-    ):
+    def test_status_midway_shows_rounds_and_no_test_numbers(self, spec_path, fake_bench, capsys):
         fake_bench["kb_on_round"] = 2
         runner_mod.cmd_run(str(spec_path))
         capsys.readouterr()
@@ -248,9 +254,7 @@ class TestInterruptResume:
 
 
 class TestFinalize:
-    def test_unseal_failure_leaves_run_resumable(
-        self, spec_path, fake_bench, tmp_path
-    ):
+    def test_unseal_failure_leaves_run_resumable(self, spec_path, fake_bench, tmp_path):
         """A dead endpoint during sealed scoring must not stamp the run;
         re-running retries the unseal and succeeds."""
         fake_bench["unseal_fail_times"] = 1
@@ -266,9 +270,7 @@ class TestFinalize:
         assert (work / "retention.json").exists()
         assert fake_bench["unseal_calls"] == 2
 
-    def test_finalize_after_no_sealed_run_is_stable(
-        self, spec_path, fake_bench, tmp_path
-    ):
+    def test_finalize_after_no_sealed_run_is_stable(self, spec_path, fake_bench, tmp_path):
         """A run finalized without a sealed test must not have its stamp
         rewritten (or --yes bypassed) by later finalize calls."""
         fake_bench["no_unseal"] = True
@@ -327,9 +329,7 @@ class TestCheck:
 
 
 class TestEphemeralWorktreeSweep:
-    def test_run_sweeps_stale_worktrees_from_a_hard_killed_run(
-        self, spec_path, fake_bench, tmp_path, repo
-    ):
+    def test_run_sweeps_stale_worktrees_from_a_hard_killed_run(self, spec_path, fake_bench, tmp_path, repo):
         """SIGKILL leaves ephemeral worktrees behind (context managers never
         ran); the next launch of the same run must sweep them and drop their
         registration from the subject repo."""
@@ -342,13 +342,14 @@ class TestEphemeralWorktreeSweep:
         assert not (tmp_path / "work" / "tmp" / "evolver-wt-stale").exists()
         listed = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            cwd=repo_dir, capture_output=True, text=True, check=True,
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         assert "evolver-wt-stale" not in listed
 
-    def test_ephemeral_worktrees_land_under_work_dir(
-        self, spec_path, fake_bench, tmp_path, repo
-    ):
+    def test_ephemeral_worktrees_land_under_work_dir(self, spec_path, fake_bench, tmp_path, repo):
         repo_dir, sha = repo
         assert runner_mod.cmd_run(str(spec_path)) == 0
         with git_ops.worktree_at(repo_dir, sha) as wt:

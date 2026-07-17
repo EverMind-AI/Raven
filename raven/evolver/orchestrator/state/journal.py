@@ -49,9 +49,7 @@ class RoundJournal:
             # train pass@1, so its test curve is reconstructable after the run.
             "next_parent_sha": rr.next_parent_sha,
             "next_parent_train": rr.next_parent_train,
-            "candidates": [
-                {"node_id": o.node_id, "status": o.status.value} for o in rr.outcomes
-            ],
+            "candidates": [{"node_id": o.node_id, "status": o.status.value} for o in rr.outcomes],
         }
         with self.path.open("a") as f:
             f.write(json.dumps(record) + "\n")
@@ -76,9 +74,7 @@ class RoundJournal:
             except ValueError as exc:
                 if i == len(lines) - 1:
                     break
-                raise ValueError(
-                    f"corrupt journal record at line {i + 1} of {self.path}: {exc}"
-                ) from exc
+                raise ValueError(f"corrupt journal record at line {i + 1} of {self.path}: {exc}") from exc
         return out
 
 

@@ -15,9 +15,13 @@ import pytest
 
 from raven.evolver.tree import git_ops
 
-_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-        "PATH": "/usr/bin:/bin"}
+_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+    "PATH": "/usr/bin:/bin",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -32,24 +36,24 @@ def repo(tmp_path: Path) -> tuple[Path, str]:
     (repo / "src").mkdir(parents=True)
     (repo / "src/x.py").write_text("x = 1\n")
     (repo / "old.txt").write_text("legacy\n")
-    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
-                ["git", "commit", "-qm", "init"]):
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
         subprocess.run(cmd, cwd=repo, check=True, env=_ENV, capture_output=True)
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-                         capture_output=True, text=True, env=_ENV).stdout.strip()
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True, env=_ENV
+    ).stdout.strip()
     return repo, sha
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, env=_ENV,
-                          capture_output=True, text=True).stdout
+    return subprocess.run(["git", *args], cwd=repo, check=True, env=_ENV, capture_output=True, text=True).stdout
 
 
 class TestCommitFilesAsChild:
     def test_edit_delete_and_create_land_in_the_child(self, repo):
         repo_dir, sha = repo
         child, changed = git_ops.commit_files_as_child(
-            repo_dir, sha,
+            repo_dir,
+            sha,
             {"src/x.py": b"x = 2\n", "src/new.py": b"y = 1\n"},
             "evolver: candidate",
             deletions=("old.txt",),
@@ -64,8 +68,7 @@ class TestCommitFilesAsChild:
 
     def test_main_working_tree_and_head_are_untouched(self, repo):
         repo_dir, sha = repo
-        git_ops.commit_files_as_child(
-            repo_dir, sha, {"src/x.py": b"x = 99\n"}, "evolver: candidate")
+        git_ops.commit_files_as_child(repo_dir, sha, {"src/x.py": b"x = 99\n"}, "evolver: candidate")
         assert (repo_dir / "src/x.py").read_text() == "x = 1\n"
         assert _git(repo_dir, "rev-parse", "HEAD").strip() == sha
         assert _git(repo_dir, "status", "--porcelain") == ""
@@ -74,8 +77,7 @@ class TestCommitFilesAsChild:
     def test_unknown_parent_refused(self, repo):
         repo_dir, _ = repo
         with pytest.raises(ValueError, match="not a known commit"):
-            git_ops.commit_files_as_child(
-                repo_dir, "f" * 40, {"src/x.py": b""}, "msg")
+            git_ops.commit_files_as_child(repo_dir, "f" * 40, {"src/x.py": b""}, "msg")
 
 
 class TestWorktreeAt:
@@ -110,8 +112,7 @@ class TestWorktreeAt:
 class TestRefs:
     def test_ref_anchors_evolver_commit_against_gc(self, repo):
         repo_dir, sha = repo
-        child, _ = git_ops.commit_files_as_child(
-            repo_dir, sha, {"src/x.py": b"x = 3\n"}, "evolver: candidate")
+        child, _ = git_ops.commit_files_as_child(repo_dir, sha, {"src/x.py": b"x = 3\n"}, "evolver: candidate")
         git_ops.create_ref(repo_dir, "refs/evolver/n1", child)
         assert _git(repo_dir, "rev-parse", "refs/evolver/n1").strip() == child
         # Overwrite is allowed (re-promotion re-points the ref).
@@ -119,6 +120,5 @@ class TestRefs:
         assert _git(repo_dir, "rev-parse", "refs/evolver/n1").strip() == sha
         git_ops.delete_ref(repo_dir, "refs/evolver/n1")
         git_ops.delete_ref(repo_dir, "refs/evolver/n1")  # absent: no-op
-        proc = subprocess.run(["git", "rev-parse", "refs/evolver/n1"],
-                              cwd=repo_dir, env=_ENV, capture_output=True)
+        proc = subprocess.run(["git", "rev-parse", "refs/evolver/n1"], cwd=repo_dir, env=_ENV, capture_output=True)
         assert proc.returncode != 0

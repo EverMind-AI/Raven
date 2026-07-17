@@ -109,10 +109,7 @@ def eval_with_infra_rerun(
     """
     evals = dict(eval_fn(node, task_ids, k, job_name, split=split))
     for i in range(1, max_reruns + 1):
-        infra_tasks = [
-            t for t in task_ids
-            if (ev := evals.get(t)) is None or ev.infra_attempts > 0
-        ]
+        infra_tasks = [t for t in task_ids if (ev := evals.get(t)) is None or ev.infra_attempts > 0]
         if not infra_tasks:
             break
         redo = eval_fn(node, infra_tasks, k, f"{job_name}_infra_rerun{i}", split=split)
@@ -136,9 +133,7 @@ def with_infra_rerun(inner: "EvalFn", max_reruns: int) -> "EvalFn":
         return inner
 
     def wrapped(node, task_ids, k, job_name, *, split="train"):
-        return eval_with_infra_rerun(
-            inner, node, task_ids, k, job_name, split=split, max_reruns=max_reruns
-        )
+        return eval_with_infra_rerun(inner, node, task_ids, k, job_name, split=split, max_reruns=max_reruns)
 
     return wrapped
 
@@ -182,9 +177,7 @@ def flip_summary(
     }
 
 
-def anchor_mean_pass_rate(
-    evals: dict[str, TaskEval], anchor_task_ids: list[str]
-) -> float:
+def anchor_mean_pass_rate(evals: dict[str, TaskEval], anchor_task_ids: list[str]) -> float:
     """Mean per-task pass rate over the anchor subset.
 
     The quantity the screen compares against vanilla's anchor mean. Anchor tasks

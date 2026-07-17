@@ -14,6 +14,7 @@ No LLM is involved: the LLM gate and query rewriter are disabled, so selection
 reduces to filesystem discovery + lexical (BM25) scoring — the deterministic
 core of the real path that the benchmark must wire up.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
         ``select()`` hits, deduped by name.
     """
     from raven.config.raven import LocalDirConfig, SkillForgeConfig
+
     # Raven split the old unified SkillService into a discovery catalog
     # (always-skills + registry/pool) and a retrieval router over sources.
     from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
@@ -49,9 +51,7 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
 
     local_dirs: list[LocalDirConfig] = []
     if library_root is not None:
-        local_dirs.append(
-            LocalDirConfig(path=str(Path(library_root)), name="tb2_gap_fill")
-        )
+        local_dirs.append(LocalDirConfig(path=str(Path(library_root)), name="tb2_gap_fill"))
 
     config = SkillForgeConfig(
         enabled=True,

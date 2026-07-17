@@ -50,7 +50,6 @@ from typing import Any, Optional, Union
 
 from raven.evolver.judge.schema import PatchWhere, PatchWhy
 
-
 # ---------------------------------------------------------------------------
 # Status enum
 # ---------------------------------------------------------------------------
@@ -124,9 +123,7 @@ class SourceEvidence:
     def from_dict(cls, d: dict[str, Any]) -> "SourceEvidence":
         tr = d.get("turn_range")
         if not isinstance(tr, (list, tuple)) or len(tr) != 2:
-            raise ValueError(
-                f"SourceEvidence.turn_range must be 2-element list/tuple, got {tr!r}"
-            )
+            raise ValueError(f"SourceEvidence.turn_range must be 2-element list/tuple, got {tr!r}")
         return cls(
             trajectory_id=_require(d, "trajectory_id", "SourceEvidence"),
             turn_range=(int(tr[0]), int(tr[1])),
@@ -214,25 +211,20 @@ class AppliedPatch:
 
     def __post_init__(self) -> None:
         if self.patch_why == PatchWhy.other and not self.patch_why_extra:
-            raise ValueError(
-                "AppliedPatch with patch_why=other requires non-empty patch_why_extra"
-            )
+            raise ValueError("AppliedPatch with patch_why=other requires non-empty patch_why_extra")
         if not self.components and self.patch_where != PatchWhere.control:
             raise ValueError("AppliedPatch requires at least one component")
         # Component ids must be unique within the patch
         ids = [c.component_id for c in self.components]
         if len(ids) != len(set(ids)):
-            raise ValueError(
-                f"AppliedPatch components have duplicate component_id: {ids}"
-            )
+            raise ValueError(f"AppliedPatch components have duplicate component_id: {ids}")
         # depends_on references must resolve to existing component_ids
         valid_ids = set(ids)
         for c in self.components:
             for dep in c.depends_on:
                 if dep not in valid_ids:
                     raise ValueError(
-                        f"PatchComponent {c.component_id!r} depends_on "
-                        f"{dep!r} which is not a sibling component"
+                        f"PatchComponent {c.component_id!r} depends_on {dep!r} which is not a sibling component"
                     )
 
     @property
@@ -266,23 +258,21 @@ class AppliedPatch:
         patch_where_raw = d.get("patch_where", "")
         is_control = patch_where_raw == PatchWhere.control.value
         if not isinstance(components_raw, list) or (not components_raw and not is_control):
-            raise ValueError(
-                "AppliedPatch.components must be a non-empty list"
-            )
+            raise ValueError("AppliedPatch.components must be a non-empty list")
         return cls(
             patch_where=_coerce_enum(
                 _require(d, "patch_where", "AppliedPatch"),
-                PatchWhere, "patch_where",
+                PatchWhere,
+                "patch_where",
             ),
             patch_why=_coerce_enum(
                 _require(d, "patch_why", "AppliedPatch"),
-                PatchWhy, "patch_why",
+                PatchWhy,
+                "patch_why",
             ),
             components=[PatchComponent.from_dict(c) for c in components_raw],
             overall_reasoning=_require(d, "overall_reasoning", "AppliedPatch"),
-            source_evidence=[
-                SourceEvidence.from_dict(e) for e in (d.get("source_evidence") or [])
-            ],
+            source_evidence=[SourceEvidence.from_dict(e) for e in (d.get("source_evidence") or [])],
             patch_why_extra=d.get("patch_why_extra"),
             partial=bool(d.get("partial", False)),
             dropped_components=list(d.get("dropped_components") or []),
@@ -344,13 +334,9 @@ class EvalResult:
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.subset_pass_rate <= 1.0:
-            raise ValueError(
-                f"subset_pass_rate must be in [0,1], got {self.subset_pass_rate}"
-            )
+            raise ValueError(f"subset_pass_rate must be in [0,1], got {self.subset_pass_rate}")
         if self.l1_alert_count < 0:
-            raise ValueError(
-                f"l1_alert_count must be >= 0, got {self.l1_alert_count}"
-            )
+            raise ValueError(f"l1_alert_count must be >= 0, got {self.l1_alert_count}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -366,8 +352,7 @@ class EvalResult:
         return cls(
             bandit_tasks_chosen=list(_require(d, "bandit_tasks_chosen", "EvalResult")),
             per_task_results={
-                k: PerTaskResult.from_dict(v)
-                for k, v in _require(d, "per_task_results", "EvalResult").items()
+                k: PerTaskResult.from_dict(v) for k, v in _require(d, "per_task_results", "EvalResult").items()
             },
             subset_pass_rate=float(_require(d, "subset_pass_rate", "EvalResult")),
             dense_signals=dict(d.get("dense_signals") or {}),
@@ -441,23 +426,18 @@ class CandidatePatch:
 
     def __post_init__(self) -> None:
         if self.patch_why == PatchWhy.other and not self.patch_why_extra:
-            raise ValueError(
-                "CandidatePatch with patch_why=other requires non-empty patch_why_extra"
-            )
+            raise ValueError("CandidatePatch with patch_why=other requires non-empty patch_why_extra")
         if not self.components:
             raise ValueError("CandidatePatch requires at least one component")
         ids = [c.component_id for c in self.components]
         if len(ids) != len(set(ids)):
-            raise ValueError(
-                f"CandidatePatch components have duplicate component_id: {ids}"
-            )
+            raise ValueError(f"CandidatePatch components have duplicate component_id: {ids}")
         valid_ids = set(ids)
         for c in self.components:
             for dep in c.depends_on:
                 if dep not in valid_ids:
                     raise ValueError(
-                        f"ProposedComponent {c.component_id!r} depends_on "
-                        f"{dep!r} which is not a sibling component"
+                        f"ProposedComponent {c.component_id!r} depends_on {dep!r} which is not a sibling component"
                     )
 
     @property
@@ -483,11 +463,13 @@ class CandidatePatch:
         return cls(
             patch_where=_coerce_enum(
                 _require(d, "patch_where", "CandidatePatch"),
-                PatchWhere, "patch_where",
+                PatchWhere,
+                "patch_where",
             ),
             patch_why=_coerce_enum(
                 _require(d, "patch_why", "CandidatePatch"),
-                PatchWhy, "patch_why",
+                PatchWhy,
+                "patch_why",
             ),
             components=[ProposedComponent.from_dict(c) for c in components_raw],
             overall_reasoning=_require(d, "overall_reasoning", "CandidatePatch"),
@@ -522,9 +504,7 @@ class JudgeAnalysis:
     def from_dict(cls, d: dict[str, Any]) -> "JudgeAnalysis":
         return cls(
             issue_types_seen=dict(d.get("issue_types_seen") or {}),
-            candidate_patches=[
-                CandidatePatch.from_dict(p) for p in (d.get("candidate_patches") or [])
-            ],
+            candidate_patches=[CandidatePatch.from_dict(p) for p in (d.get("candidate_patches") or [])],
         )
 
 
@@ -572,9 +552,7 @@ class HarnessNode:
 
     def __post_init__(self) -> None:
         if self.created_at_iter < 0:
-            raise ValueError(
-                f"created_at_iter must be >= 0, got {self.created_at_iter}"
-            )
+            raise ValueError(f"created_at_iter must be >= 0, got {self.created_at_iter}")
         if not self.node_id:
             raise ValueError("node_id must be non-empty")
         if not self.git_commit_sha:
@@ -582,14 +560,10 @@ class HarnessNode:
         if not self.core_version:
             # Empty string isn't valid — caller must pass either a real
             # version like "1.0.0" or the sentinel "unknown".
-            raise ValueError(
-                "core_version must be non-empty (use 'unknown' if not available)"
-            )
+            raise ValueError("core_version must be non-empty (use 'unknown' if not available)")
         # Root invariant: no parent → no applied patch
         if self.parent_id is None and self.patch is not None:
-            raise ValueError(
-                "root node (parent_id=None) must not carry an AppliedPatch"
-            )
+            raise ValueError("root node (parent_id=None) must not carry an AppliedPatch")
 
     @staticmethod
     def utc_now() -> str:
@@ -639,7 +613,8 @@ class HarnessNode:
             core_version=d.get("core_version", "unknown"),
             status=_coerce_enum(
                 d.get("status", NodeStatus.active.value),
-                NodeStatus, "status",
+                NodeStatus,
+                "status",
             ),
             patch=AppliedPatch.from_dict(patch_raw) if patch_raw else None,
             eval=EvalResult.from_dict(eval_raw) if eval_raw else None,
@@ -658,6 +633,7 @@ class HarnessNode:
         """
         try:
             from raven.__core_version__ import __version__
+
             return __version__
         except ImportError:
             return "unknown"
@@ -685,9 +661,7 @@ class HarnessNode:
         p = Path(path)
         raw = json.loads(p.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise ValueError(
-                f"node file {p} top-level must be a JSON object, got {type(raw).__name__}"
-            )
+            raise ValueError(f"node file {p} top-level must be a JSON object, got {type(raw).__name__}")
         return cls.from_dict(raw)
 
 
@@ -708,16 +682,12 @@ def _coerce_enum(value: Any, enum_cls: type, field_name: str) -> Any:
     if isinstance(value, enum_cls):
         return value
     if not isinstance(value, str):
-        raise ValueError(
-            f"field {field_name!r} must be a string, got {type(value).__name__}"
-        )
+        raise ValueError(f"field {field_name!r} must be a string, got {type(value).__name__}")
     try:
         return enum_cls(value)
     except ValueError as exc:
         valid = [m.value for m in enum_cls]
-        raise ValueError(
-            f"field {field_name!r}={value!r} not one of {valid}"
-        ) from exc
+        raise ValueError(f"field {field_name!r}={value!r} not one of {valid}") from exc
 
 
 __all__ = [

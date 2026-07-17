@@ -34,7 +34,6 @@ import copy
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -48,8 +47,7 @@ from raven.evolver.orchestrator.config import (
 SMOKE_BUILTIN: dict = {
     "funnel": {
         "k_confirm": 1,
-        "budget": {"max_why_per_round": 1, "candidates_per_why": 1,
-                   "recombinations_per_round": 0},
+        "budget": {"max_why_per_round": 1, "candidates_per_why": 1, "recombinations_per_round": 0},
         "termination": {"patience": 1, "max_rounds": 1},
     },
 }
@@ -65,10 +63,7 @@ def _redact_secrets(models: dict) -> dict:
     out = {}
     for role, spec in models.items():
         if isinstance(spec, dict):
-            out[role] = {
-                k: ("<redacted>" if "key" in k.lower() and k != "api_key_env" else v)
-                for k, v in spec.items()
-            }
+            out[role] = {k: ("<redacted>" if "key" in k.lower() and k != "api_key_env" else v) for k, v in spec.items()}
         else:
             out[role] = spec
     return out
@@ -118,11 +113,8 @@ class RunSpec:
 
 def _build_funnel(repo_root: Path, work_dir: Path, funnel: dict) -> OrchestratorConfig:
     if not isinstance(funnel, dict):
-        raise RunSpecError(
-            f"funnel: must be a mapping, got {type(funnel).__name__}"
-        )
-    known = {"k_screen", "k_confirm", "anchor", "budget", "termination",
-             "sealed_test_split"}
+        raise RunSpecError(f"funnel: must be a mapping, got {type(funnel).__name__}")
+    known = {"k_screen", "k_confirm", "anchor", "budget", "termination", "sealed_test_split"}
     unknown = set(funnel) - known
     if unknown:
         raise RunSpecError(f"funnel: unknown keys {sorted(unknown)}")
@@ -144,14 +136,9 @@ def _build_funnel(repo_root: Path, work_dir: Path, funnel: dict) -> Orchestrator
     if cfg.k_screen < 1 or cfg.k_confirm < 1:
         raise RunSpecError("funnel: k_screen and k_confirm must be >= 1")
     if cfg.budget.max_why_per_round < 1 or cfg.budget.candidates_per_why < 1:
-        raise RunSpecError(
-            "funnel: budget.max_why_per_round and budget.candidates_per_why "
-            "must be >= 1"
-        )
+        raise RunSpecError("funnel: budget.max_why_per_round and budget.candidates_per_why must be >= 1")
     if cfg.termination.patience < 1 or cfg.termination.max_rounds < 1:
-        raise RunSpecError(
-            "funnel: termination.patience and termination.max_rounds must be >= 1"
-        )
+        raise RunSpecError("funnel: termination.patience and termination.max_rounds must be >= 1")
     return cfg
 
 
@@ -204,10 +191,7 @@ def load_run_spec(config_path: str | Path, *, smoke: bool = False) -> RunSpec:
         raise RunSpecError(f"models: unknown roles {sorted(unknown_roles)}")
     for role, spec_val in models.items():
         if not isinstance(spec_val, dict):
-            raise RunSpecError(
-                f"models.{role}: must be a mapping (provider/model/...), "
-                f"got {type(spec_val).__name__}"
-            )
+            raise RunSpecError(f"models.{role}: must be a mapping (provider/model/...), got {type(spec_val).__name__}")
 
     return RunSpec(
         bench=str(data["bench"]),
@@ -235,15 +219,13 @@ def _resolve_head(repo_root: Path) -> str:
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
     except OSError as exc:
         raise RunSpecError(f"git is not runnable ({exc}) — install git") from exc
     if proc.returncode != 0:
-        raise RunSpecError(
-            f"base_sha omitted and resolving HEAD of {repo_root} failed: "
-            f"{proc.stderr.strip()}"
-        )
+        raise RunSpecError(f"base_sha omitted and resolving HEAD of {repo_root} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
 
 

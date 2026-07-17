@@ -30,110 +30,83 @@ from __future__ import annotations
 
 from .schema import PatchWhere, PatchWhy
 
-
 # --- Human-readable descriptions injected into the prompt ----------------
 
 
 WHERE_DESCRIPTIONS: dict[PatchWhere, str] = {
-    PatchWhere.system_prompt_template:
-        "Raven's system prompt templates (raven/templates/*.md: SOUL, AGENTS, "
-        "TOOLS, etc). Use when the agent's identity / behavioural guidelines need "
-        "wording changes.",
-    PatchWhere.task_wrapper_prompt:
-        "external scorer task domain prompt (src/domains/<domain>/prompt.md). "
-        "This is the user-message wrapper telling agent what the task is and what "
-        "rules to follow. Common L2 fixes live here.",
-    PatchWhere.judge_prompt:
-        "Raven's internal turn-judge prompt (eval_engine/prompts/*.py, L-B "
-        "layer). Affects memory updates, NOT the benchmark verifier; safe to "
-        "evolve.",
-    PatchWhere.tool_description:
-        "A tool's description string or safety pattern in agent/tools/*.py. Use "
-        "when the model misuses a tool because the description is vague / misleading.",
-    PatchWhere.hook_new:
-        "Add a new lifecycle hook file in agent/hook/<name>.py. Hooks fire at "
-        "phases (before_iteration / before_execute_tools / after_iteration / "
-        "after_send) and can inject nudges or short-circuit the loop. Best for "
-        "runtime behaviour interventions (repetition, test cadence, budget).",
-    PatchWhere.hook_modify:
-        "Tune an existing hook's parameters in eval_engine/hooks/*.py.",
-    PatchWhere.skill:
-        "Add / edit / retire a skill in memory_engine/skills/. Skills are "
-        "retrievable procedural recipes — use when a class of tasks needs a "
-        "reusable how-to.",
-    PatchWhere.memory:
-        "Add / edit / retire a memory entry in memory_engine/everos/. Memory "
-        "holds factual knowledge (e.g. 'Django ≥4 uses async views').",
-    PatchWhere.tool_new:
-        "Add a new Tool subclass in agent/tools/<name>.py. Rare — only when no "
-        "existing tool plus prompt nudge can express the needed operation.",
-    PatchWhere.loop_override:
-        "Scoped override to agent/loop/main.py or subsidiary loop logic (code "
-        "class). Use for instrumentation, conditional logic, or parameter patches "
-        "that don't merit a full hook. Must include activation_beacon().",
-    PatchWhere.context_override:
-        "Scoped override to context management (code class). Patches short-lived "
-        "state structures that vary per iteration. Must include activation_beacon().",
-    PatchWhere.tool_override:
-        "Scoped override to tool execution or selection logic (code class). Use for "
-        "tool-routing or execution-time patches. Must include activation_beacon().",
-    PatchWhere.config:
-        "Tune a yaml / json default value, threshold, or feature flag.",
-    PatchWhere.control:
-        "Control arm - no mechanism; measures infra runtime-neutrality. Not a real patch surface; never propose patches here.",
+    PatchWhere.system_prompt_template: "Raven's system prompt templates (raven/templates/*.md: SOUL, AGENTS, "
+    "TOOLS, etc). Use when the agent's identity / behavioural guidelines need "
+    "wording changes.",
+    PatchWhere.task_wrapper_prompt: "external scorer task domain prompt (src/domains/<domain>/prompt.md). "
+    "This is the user-message wrapper telling agent what the task is and what "
+    "rules to follow. Common L2 fixes live here.",
+    PatchWhere.judge_prompt: "Raven's internal turn-judge prompt (eval_engine/prompts/*.py, L-B "
+    "layer). Affects memory updates, NOT the benchmark verifier; safe to "
+    "evolve.",
+    PatchWhere.tool_description: "A tool's description string or safety pattern in agent/tools/*.py. Use "
+    "when the model misuses a tool because the description is vague / misleading.",
+    PatchWhere.hook_new: "Add a new lifecycle hook file in agent/hook/<name>.py. Hooks fire at "
+    "phases (before_iteration / before_execute_tools / after_iteration / "
+    "after_send) and can inject nudges or short-circuit the loop. Best for "
+    "runtime behaviour interventions (repetition, test cadence, budget).",
+    PatchWhere.hook_modify: "Tune an existing hook's parameters in eval_engine/hooks/*.py.",
+    PatchWhere.skill: "Add / edit / retire a skill in memory_engine/skills/. Skills are "
+    "retrievable procedural recipes — use when a class of tasks needs a "
+    "reusable how-to.",
+    PatchWhere.memory: "Add / edit / retire a memory entry in memory_engine/everos/. Memory "
+    "holds factual knowledge (e.g. 'Django ≥4 uses async views').",
+    PatchWhere.tool_new: "Add a new Tool subclass in agent/tools/<name>.py. Rare — only when no "
+    "existing tool plus prompt nudge can express the needed operation.",
+    PatchWhere.loop_override: "Scoped override to agent/loop/main.py or subsidiary loop logic (code "
+    "class). Use for instrumentation, conditional logic, or parameter patches "
+    "that don't merit a full hook. Must include activation_beacon().",
+    PatchWhere.context_override: "Scoped override to context management (code class). Patches short-lived "
+    "state structures that vary per iteration. Must include activation_beacon().",
+    PatchWhere.tool_override: "Scoped override to tool execution or selection logic (code class). Use for "
+    "tool-routing or execution-time patches. Must include activation_beacon().",
+    PatchWhere.config: "Tune a yaml / json default value, threshold, or feature flag.",
+    PatchWhere.control: "Control arm - no mechanism; measures infra runtime-neutrality. Not a real patch surface; never propose patches here.",
 }
 
 
 WHY_DESCRIPTIONS: dict[PatchWhy, str] = {
-    PatchWhy.repetition_breaker:
-        "Agent loops on near-identical (tool, args) sequences without making "
-        "progress (observed in 72% of 244-paired failed trajectories).",
-    PatchWhy.test_starvation_remedy:
-        "Agent spends most turns reading code, runs tests too infrequently to "
-        "iterate (PASS trajectories run tests at 25% of turns vs FAIL at 12%).",
-    PatchWhy.budget_awareness:
-        "Agent has no sense of how much budget is left and over-explores until "
-        "max_iter (100% of max_iter failures hit the ceiling).",
-    PatchWhy.tool_clarity:
-        "A registered tool is unused or misused because its description / "
-        "documentation is missing / vague / misleading.",
-    PatchWhy.env_contract_clarify:
-        "The environment's interface contract is inaccurately described — e.g. "
-        "a prompt forbids using a tool that the env actually supports, or a tool "
-        "is documented as host-side when it's container-side.",
-    PatchWhy.skill_gap_fill:
-        "A recurring task type (e.g. Django pytest setup) has no skill in the "
-        "library, so the agent re-discovers the same recipe in every trajectory.",
-    PatchWhy.memory_recall_fix:
-        "Agent repeats the same lookup / verification within a single trajectory "
-        "(re-reads same file range, re-runs same python -c). Short-term memory "
-        "is leaking.",
-    PatchWhy.reasoning_visibility:
-        "Agent does not externalize its reasoning before tool calls or final "
-        "answer. Trajectory shows long stretches of tool calls without "
-        "narrative explanation, making it hard to follow intent or diagnose "
-        "failures. Patch typically adds a prompt nudge to 'explain your "
-        "reasoning before each significant tool call' or similar visibility-"
-        "improving instruction. Promoted from B2 dry-run 2026-05-30 as the "
-        "dominant `other` extra (reasoning_visibility_improvement, "
-        "communication_traceability, explanatory_text_nudge, ...).",
-    PatchWhy.empty_response_recovery:
-        "Agent enters a streak of completely empty turns (content=None, no tool "
-        "calls) and does not self-recover. Patch typically adds a hook or prompt "
-        "nudge that detects the streak and injects a recovery instruction.",
-    PatchWhy.method_lock_in_remedy:
-        "Agent commits too early to one approach (e.g., a single file path or "
-        "algorithm) and stops exploring alternatives even when early attempts fail. "
-        "Patch introduces a method-diversity nudge or conditional branch check.",
-    PatchWhy.infra_neutrality_control:
-        "Control-arm bookkeeping: this node carries no real patch; it exists to "
-        "measure baseline infra runtime-neutrality across rounds. Not a real "
-        "pathology category — never use for actual patch proposals.",
-    PatchWhy.other:
-        "None of the above categories fit. You MUST specify a free-form "
-        "sub-name in `patch_why_extra` (e.g. 'plan_action_disconnect'). Reserve "
-        "for genuinely novel pathologies; do not abuse to avoid picking an "
-        "existing category.",
+    PatchWhy.repetition_breaker: "Agent loops on near-identical (tool, args) sequences without making "
+    "progress (observed in 72% of 244-paired failed trajectories).",
+    PatchWhy.test_starvation_remedy: "Agent spends most turns reading code, runs tests too infrequently to "
+    "iterate (PASS trajectories run tests at 25% of turns vs FAIL at 12%).",
+    PatchWhy.budget_awareness: "Agent has no sense of how much budget is left and over-explores until "
+    "max_iter (100% of max_iter failures hit the ceiling).",
+    PatchWhy.tool_clarity: "A registered tool is unused or misused because its description / "
+    "documentation is missing / vague / misleading.",
+    PatchWhy.env_contract_clarify: "The environment's interface contract is inaccurately described — e.g. "
+    "a prompt forbids using a tool that the env actually supports, or a tool "
+    "is documented as host-side when it's container-side.",
+    PatchWhy.skill_gap_fill: "A recurring task type (e.g. Django pytest setup) has no skill in the "
+    "library, so the agent re-discovers the same recipe in every trajectory.",
+    PatchWhy.memory_recall_fix: "Agent repeats the same lookup / verification within a single trajectory "
+    "(re-reads same file range, re-runs same python -c). Short-term memory "
+    "is leaking.",
+    PatchWhy.reasoning_visibility: "Agent does not externalize its reasoning before tool calls or final "
+    "answer. Trajectory shows long stretches of tool calls without "
+    "narrative explanation, making it hard to follow intent or diagnose "
+    "failures. Patch typically adds a prompt nudge to 'explain your "
+    "reasoning before each significant tool call' or similar visibility-"
+    "improving instruction. Promoted from B2 dry-run 2026-05-30 as the "
+    "dominant `other` extra (reasoning_visibility_improvement, "
+    "communication_traceability, explanatory_text_nudge, ...).",
+    PatchWhy.empty_response_recovery: "Agent enters a streak of completely empty turns (content=None, no tool "
+    "calls) and does not self-recover. Patch typically adds a hook or prompt "
+    "nudge that detects the streak and injects a recovery instruction.",
+    PatchWhy.method_lock_in_remedy: "Agent commits too early to one approach (e.g., a single file path or "
+    "algorithm) and stops exploring alternatives even when early attempts fail. "
+    "Patch introduces a method-diversity nudge or conditional branch check.",
+    PatchWhy.infra_neutrality_control: "Control-arm bookkeeping: this node carries no real patch; it exists to "
+    "measure baseline infra runtime-neutrality across rounds. Not a real "
+    "pathology category — never use for actual patch proposals.",
+    PatchWhy.other: "None of the above categories fit. You MUST specify a free-form "
+    "sub-name in `patch_why_extra` (e.g. 'plan_action_disconnect'). Reserve "
+    "for genuinely novel pathologies; do not abuse to avoid picking an "
+    "existing category.",
 }
 
 
@@ -141,15 +114,11 @@ WHY_DESCRIPTIONS: dict[PatchWhy, str] = {
 
 
 def _render_where_block() -> str:
-    return "\n".join(
-        f"  - `{w.value}`: {WHERE_DESCRIPTIONS[w]}" for w in PatchWhere
-    )
+    return "\n".join(f"  - `{w.value}`: {WHERE_DESCRIPTIONS[w]}" for w in PatchWhere)
 
 
 def _render_why_block() -> str:
-    return "\n".join(
-        f"  - `{w.value}`: {WHY_DESCRIPTIONS[w]}" for w in PatchWhy
-    )
+    return "\n".join(f"  - `{w.value}`: {WHY_DESCRIPTIONS[w]}" for w in PatchWhy)
 
 
 JUDGE_SYSTEM_PROMPT = f"""You are an expert LLM-agent harness analyst.

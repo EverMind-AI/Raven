@@ -66,18 +66,11 @@ class BranchingState:
         if self.round_idx < 1:
             raise ValueError(f"round_idx must be >= 1, got {self.round_idx}")
         if self.remaining_budget < 0:
-            raise ValueError(
-                f"remaining_budget must be >= 0, got {self.remaining_budget}"
-            )
+            raise ValueError(f"remaining_budget must be >= 0, got {self.remaining_budget}")
         if self.n_uncovered_cells < 0:
-            raise ValueError(
-                f"n_uncovered_cells must be >= 0, got {self.n_uncovered_cells}"
-            )
+            raise ValueError(f"n_uncovered_cells must be >= 0, got {self.n_uncovered_cells}")
         if not 0.0 <= self.archive_coverage <= 1.0:
-            raise ValueError(
-                f"archive_coverage must be in [0, 1], got "
-                f"{self.archive_coverage}"
-            )
+            raise ValueError(f"archive_coverage must be in [0, 1], got {self.archive_coverage}")
 
 
 @dataclass(frozen=True)
@@ -98,7 +91,7 @@ DEFAULT_MAX_B = 5
 DEFAULT_TARGET_COVERAGE = 0.85
 
 # Lift posterior thresholds (Bernoulli p̂_child − p̂_root)
-LIFT_STRONG_POSITIVE = 0.10   # ≥ +10% pass rate → depth on winner (−1 to B)
+LIFT_STRONG_POSITIVE = 0.10  # ≥ +10% pass rate → depth on winner (−1 to B)
 LIFT_STRONG_NEGATIVE = -0.05  # ≤ -5%  → broaden search (+1 to B)
 
 # Round-decay onset (≥ this round, B is shaded down by 1)
@@ -143,9 +136,7 @@ def branching_policy(
     if max_b < min_b:
         raise ValueError(f"max_b ({max_b}) must be >= min_b ({min_b})")
     if not 0.0 <= target_coverage <= 1.0:
-        raise ValueError(
-            f"target_coverage must be in [0, 1], got {target_coverage}"
-        )
+        raise ValueError(f"target_coverage must be in [0, 1], got {target_coverage}")
 
     components: dict[str, int] = {}
     rationale_parts: list[str] = []
@@ -161,17 +152,13 @@ def branching_policy(
     else:
         b_base = 1
     components["coverage_base"] = b_base
-    rationale_parts.append(
-        f"coverage gap {gap:+.2f} → base {b_base}"
-    )
+    rationale_parts.append(f"coverage gap {gap:+.2f} → base {b_base}")
 
     # ── 2. Uncovered-cell floor ──
     if state.n_uncovered_cells >= 5 and b_base < 3:
         b_after_floor = 3
         components["uncovered_floor"] = b_after_floor - b_base
-        rationale_parts.append(
-            f"{state.n_uncovered_cells} uncovered cells → floor to {b_after_floor}"
-        )
+        rationale_parts.append(f"{state.n_uncovered_cells} uncovered cells → floor to {b_after_floor}")
         b_base = b_after_floor
 
     # ── 3. Parent-lift adjustment ──
@@ -179,15 +166,13 @@ def branching_policy(
         if state.parent_lift_posterior >= LIFT_STRONG_POSITIVE:
             components["lift_adjustment"] = -1
             rationale_parts.append(
-                f"parent lift {state.parent_lift_posterior:+.3f} ≥ "
-                f"{LIFT_STRONG_POSITIVE:+.2f} → depth (-1)"
+                f"parent lift {state.parent_lift_posterior:+.3f} ≥ {LIFT_STRONG_POSITIVE:+.2f} → depth (-1)"
             )
             b_base -= 1
         elif state.parent_lift_posterior <= LIFT_STRONG_NEGATIVE:
             components["lift_adjustment"] = +1
             rationale_parts.append(
-                f"parent lift {state.parent_lift_posterior:+.3f} ≤ "
-                f"{LIFT_STRONG_NEGATIVE:+.2f} → broaden (+1)"
+                f"parent lift {state.parent_lift_posterior:+.3f} ≤ {LIFT_STRONG_NEGATIVE:+.2f} → broaden (+1)"
             )
             b_base += 1
         else:
@@ -196,26 +181,20 @@ def branching_policy(
     # ── 4. Late-round decay ──
     if state.round_idx >= LATE_ROUND_ONSET:
         components["late_round_decay"] = -1
-        rationale_parts.append(
-            f"round {state.round_idx} ≥ {LATE_ROUND_ONSET} → decay (-1)"
-        )
+        rationale_parts.append(f"round {state.round_idx} ≥ {LATE_ROUND_ONSET} → decay (-1)")
         b_base -= 1
 
     # ── 5. Budget cap ──
     if b_base > state.remaining_budget:
         components["budget_cap"] = state.remaining_budget - b_base
-        rationale_parts.append(
-            f"budget {state.remaining_budget} caps from {b_base}"
-        )
+        rationale_parts.append(f"budget {state.remaining_budget} caps from {b_base}")
         b_base = state.remaining_budget
 
     # ── 6. Clamp ──
     final_b = max(min_b, min(max_b, b_base))
     if final_b != b_base:
         components["clamp"] = final_b - b_base
-        rationale_parts.append(
-            f"clamped {b_base} → {final_b} (min_b={min_b}, max_b={max_b})"
-        )
+        rationale_parts.append(f"clamped {b_base} → {final_b} (min_b={min_b}, max_b={max_b})")
 
     components["final"] = final_b
     return BranchingDecision(

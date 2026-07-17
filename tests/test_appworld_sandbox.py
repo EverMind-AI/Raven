@@ -20,9 +20,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from benchmarks.appworld.evolve.sandbox import Sandbox  # noqa: E402
 
-_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-        "PATH": "/usr/bin:/bin"}
+_ENV = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+    "PATH": "/usr/bin:/bin",
+}
 
 
 @pytest.fixture()
@@ -35,11 +39,11 @@ def subject(tmp_path: Path) -> tuple[Path, str]:
     (repo / "raven/agent").mkdir(parents=True)
     (repo / "raven/agent/loop.py").write_text("x = 1\n")
     (repo / "grader.py").write_text("score = 1\n")
-    for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
-                ["git", "commit", "-qm", "init"]):
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-qm", "init"]):
         subprocess.run(cmd, cwd=repo, check=True, env=_ENV, capture_output=True)
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-                         capture_output=True, text=True, env=_ENV).stdout.strip()
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True, env=_ENV
+    ).stdout.strip()
     return repo, sha
 
 

@@ -59,18 +59,12 @@ class PairedTwoSigmaGate:
         if ctx.anchor is None:
             raise ValueError("PairedTwoSigmaGate requires an anchor in the context")
         node_id = ctx.node.node_id
-        screen_evals = ctx.eval(
-            ctx.node, ctx.anchor.task_ids, self.k_screen, f"{node_id}_screen"
-        )
-        screen = screen_candidate(
-            candidate_evals=screen_evals, anchor=ctx.anchor, vanilla_evals=ctx.baseline.evals
-        )
+        screen_evals = ctx.eval(ctx.node, ctx.anchor.task_ids, self.k_screen, f"{node_id}_screen")
+        screen = screen_candidate(candidate_evals=screen_evals, anchor=ctx.anchor, vanilla_evals=ctx.baseline.evals)
         if not screen.passes_to_confirm:
             return CandidateOutcome(node_id, NodeStatus.pruned_at_screen, screen=screen)
 
-        confirm = ctx.eval(
-            ctx.node, ctx.train_task_ids, self.k_confirm, confirm_job_name(node_id)
-        )
+        confirm = ctx.eval(ctx.node, ctx.train_task_ids, self.k_confirm, confirm_job_name(node_id))
         fired = ctx.fired_source(ctx.node, ctx.train_task_ids) if ctx.fired_source else None
         gate = run_gates(
             candidate_evals=confirm,
@@ -90,12 +84,15 @@ class PairedTwoSigmaGate:
         full_mean = train_mean(confirm, ctx.train_task_ids)
         control_full_mean = train_mean(ctx.baseline.evals, ctx.train_task_ids)
         promoted = gate.promoted and full_mean >= control_full_mean
-        status = (
-            NodeStatus.promoted_to_baseline if promoted else NodeStatus.pruned_at_confirm
-        )
+        status = NodeStatus.promoted_to_baseline if promoted else NodeStatus.pruned_at_confirm
         return CandidateOutcome(
-            node_id, status, score=full_mean, confirm_evals=confirm,
-            screen=screen, paired=gate.paired, gate=gate,
+            node_id,
+            status,
+            score=full_mean,
+            confirm_evals=confirm,
+            screen=screen,
+            paired=gate.paired,
+            gate=gate,
             stats={"full_mean": full_mean, "control_full_mean": control_full_mean},
         )
 
@@ -140,9 +137,7 @@ class FocusedFisherGate:
         # One eval over focused (the WHY subset) + sentinels (stable-pass controls),
         # so the regression guard costs no extra run.
         probe_ids = list(dict.fromkeys(list(focused) + list(sentinels)))
-        cand_probe = (
-            ctx.eval(ctx.node, probe_ids, self.k, f"{node_id}_focused") if probe_ids else {}
-        )
+        cand_probe = ctx.eval(ctx.node, probe_ids, self.k, f"{node_id}_focused") if probe_ids else {}
         stats: dict = {}
         if focused:
             cp, cn = focused_counts(cand_probe, focused)
@@ -182,9 +177,7 @@ class FocusedFisherGate:
                 stats.update(sentinel_guard=guard)
                 if st_c < st_v - guard:
                     stats["sentinel_regression"] = True
-                    return CandidateOutcome(
-                        node_id, NodeStatus.pruned_at_screen, stats=stats
-                    )
+                    return CandidateOutcome(node_id, NodeStatus.pruned_at_screen, stats=stats)
             if fragile:
                 fc_p, fc_n = focused_counts(cand_probe, fragile)
                 fv_p, fv_n = focused_counts(base, fragile)
@@ -194,9 +187,7 @@ class FocusedFisherGate:
                 frag_v = fv_p / (fv_p + fv_n) if (fv_p + fv_n) else 0.0
                 if frag_c < frag_v and p_worse < self.alpha:
                     stats["sentinel_regression"] = True
-                    return CandidateOutcome(
-                        node_id, NodeStatus.pruned_at_screen, stats=stats
-                    )
+                    return CandidateOutcome(node_id, NodeStatus.pruned_at_screen, stats=stats)
 
         # Wide-pass cull: only a probe that is SIGNIFICANTLY worse than the
         # baseline on the WHY subset is pruned without a full run. Slightly-low
@@ -218,12 +209,15 @@ class FocusedFisherGate:
         lift = cand_mean - ctx.baseline.mean
         stats["full_lift"] = lift
         promoted = gate.promoted and lift >= self.min_confirm_lift
-        status = (
-            NodeStatus.promoted_to_baseline if promoted else NodeStatus.pruned_at_confirm
-        )
+        status = NodeStatus.promoted_to_baseline if promoted else NodeStatus.pruned_at_confirm
         return CandidateOutcome(
-            node_id, status, score=cand_mean, confirm_evals=confirm,
-            paired=gate.paired, gate=gate, stats=stats,
+            node_id,
+            status,
+            score=cand_mean,
+            confirm_evals=confirm,
+            paired=gate.paired,
+            gate=gate,
+            stats=stats,
         )
 
 

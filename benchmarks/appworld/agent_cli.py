@@ -56,12 +56,11 @@ Your task:
 
 
 def _build_agent(args):
+    from benchmarks.appworld.tool import AppWorldExecuteTool
     from raven.agent.loop import AgentLoop
     from raven.cli._helpers import load_runtime_config, make_provider
     from raven.config.raven import load_raven_config
     from raven.session.manager import SessionManager
-
-    from benchmarks.appworld.tool import AppWorldExecuteTool
 
     config = load_runtime_config(args.config, args.workspace)
     ec_config = load_raven_config()
@@ -69,8 +68,16 @@ def _build_agent(args):
 
     # AppWorld is pure API/code: disable every default tool, give only `execute`.
     disabled = [
-        "read_file", "write_file", "edit_file", "list_dir",
-        "exec", "web_search", "web_fetch", "message", "spawn", "cron",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_dir",
+        "exec",
+        "web_search",
+        "web_fetch",
+        "message",
+        "spawn",
+        "cron",
     ]
     agent = AgentLoop(
         provider=provider,
@@ -97,12 +104,14 @@ async def _run(args) -> dict:
     t0 = time.time()
     result: dict = {"task_id": args.task_id, "experiment": args.experiment}
     try:
-        init = grade.post(args.env_url, "/initialize",
-                     # unique experiment_name per attempt -> isolated experiments/outputs/<...>/tasks/<task>/
-                     # dir, so concurrent K-trials of the same task never collide on model_hashes.json (Errno 22).
-                     {"task_id": args.task_id, "experiment_name": (args.session or args.experiment)})
-        prompt = APPWORLD_PROMPT.format(
-            supervisor=init.get("supervisor"), instruction=init.get("instruction"))
+        init = grade.post(
+            args.env_url,
+            "/initialize",
+            # unique experiment_name per attempt -> isolated experiments/outputs/<...>/tasks/<task>/
+            # dir, so concurrent K-trials of the same task never collide on model_hashes.json (Errno 22).
+            {"task_id": args.task_id, "experiment_name": (args.session or args.experiment)},
+        )
+        prompt = APPWORLD_PROMPT.format(supervisor=init.get("supervisor"), instruction=init.get("instruction"))
         agent, exec_tool = _build_agent(args)
         skey = args.session or args.task_id
         try:
@@ -121,13 +130,13 @@ async def _run(args) -> dict:
             sink: dict = {}
             req = TurnRequest(
                 origin=Origin.USER,
-                source=Source(channel="cli", chat_id="direct",
-                              sender_id="user", chat_type=ChatType.DM),
+                source=Source(channel="cli", chat_id="direct", sender_id="user", chat_type=ChatType.DM),
                 # Raven's SessionManager splits the conversation key on ':' into
                 # <channel>/<chat_id>.jsonl. Prefix a fixed channel so the per-
                 # attempt transcript lands at a clean flat path the evolver reads:
                 # ws/sessions/appworld/<tid>_<exp>_k<k>.jsonl.
-                text=prompt, conversation=f"appworld:{skey}",
+                text=prompt,
+                conversation=f"appworld:{skey}",
             )
             await agent.run_turn(req, _emit, _drain, stream=False, text_sink=sink)
             response = sink.get("text") or ""
@@ -141,8 +150,12 @@ async def _run(args) -> dict:
                 except Exception:
                     pass
         grade.grade_and_record(
-            result, env_url=args.env_url, task_id=args.task_id,
-            response=response, config_path=args.config, t0=t0,
+            result,
+            env_url=args.env_url,
+            task_id=args.task_id,
+            response=response,
+            config_path=args.config,
+            t0=t0,
         )
     except BaseException as e:
         grade.record_infra(result, e, t0=t0)
@@ -160,18 +173,22 @@ def main(argv=None) -> int:
     p.add_argument("--env-url", required=True, help="AppWorld environment server base URL.")
     p.add_argument("--config", required=True, help="Raven runtime config JSON.")
     p.add_argument("--out", required=True, help="Where to write the result JSON.")
-    p.add_argument("--workspace",
-                   default=os.path.expanduser("~/workspace/appworld-run/ws"))
+    p.add_argument("--workspace", default=os.path.expanduser("~/workspace/appworld-run/ws"))
     p.add_argument("--model", default=None)
     p.add_argument("--experiment", default="vanilla")
-    p.add_argument("--session", default=None,
-                   help="Session key (jsonl stem). Default task_id; pass a per-attempt "
-                        "key to retain all K trajectories instead of overwriting.")
+    p.add_argument(
+        "--session",
+        default=None,
+        help="Session key (jsonl stem). Default task_id; pass a per-attempt "
+        "key to retain all K trajectories instead of overwriting.",
+    )
     args = p.parse_args(argv)
 
     import contextlib
+
     try:
         import litellm
+
         litellm.suppress_debug_info = True
     except Exception:
         pass
@@ -180,11 +197,14 @@ def main(argv=None) -> int:
         result = asyncio.run(_run(args))
 
     grade.write_result(args.out, result)
-    sys.stderr.write(f"[appworld] {args.task_id} success={result.get('success')} "
-                     f"infra={result.get('infra_error')} t={result.get('elapsed_s')}s\n")
+    sys.stderr.write(
+        f"[appworld] {args.task_id} success={result.get('success')} "
+        f"infra={result.get('infra_error')} t={result.get('elapsed_s')}s\n"
+    )
     return 0
 
 
 if __name__ == "__main__":
     import os
+
     os._exit(main())

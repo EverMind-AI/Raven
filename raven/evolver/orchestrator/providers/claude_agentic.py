@@ -36,9 +36,7 @@ def claude_cli_available(claude_bin: str = "claude") -> bool:
     if shutil.which(claude_bin) is None:
         return False
     try:
-        r = subprocess.run(
-            [claude_bin, "--version"], capture_output=True, text=True, timeout=20
-        )
+        r = subprocess.run([claude_bin, "--version"], capture_output=True, text=True, timeout=20)
     except Exception:  # noqa: BLE001 — any probe failure means "not usable"
         return False
     return r.returncode == 0
@@ -85,24 +83,31 @@ def run_agentic_session(
     require_claude_for_agentic(model, claude_bin)
     _run = run or subprocess.run
     argv = [
-        claude_bin, "-p",
-        "--model", model,
-        "--output-format", "json",
-        "--allowedTools", ",".join(AGENTIC_TOOLS),
-        "--disallowedTools", "Bash,Write,Edit,NotebookEdit,Agent,WebFetch,WebSearch",
-        "--append-system-prompt", system_prompt,
+        claude_bin,
+        "-p",
+        "--model",
+        model,
+        "--output-format",
+        "json",
+        "--allowedTools",
+        ",".join(AGENTIC_TOOLS),
+        "--disallowedTools",
+        "Bash,Write,Edit,NotebookEdit,Agent,WebFetch,WebSearch",
+        "--append-system-prompt",
+        system_prompt,
     ]
     for d in add_dirs:
         argv += ["--add-dir", str(d)]
     proc = _run(
-        argv, input=prompt, capture_output=True, text=True,
-        timeout=timeout, cwd=str(cwd),
+        argv,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=str(cwd),
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"agentic session exit {proc.returncode}: "
-            f"{(proc.stderr or proc.stdout)[:400]}"
-        )
+        raise RuntimeError(f"agentic session exit {proc.returncode}: {(proc.stderr or proc.stdout)[:400]}")
     data = json.loads(proc.stdout)
     if data.get("is_error"):
         raise RuntimeError(f"agentic session is_error: {str(data.get('result'))[:400]}")

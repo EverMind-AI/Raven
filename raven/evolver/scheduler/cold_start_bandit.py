@@ -147,16 +147,11 @@ def _kmeans_strata(
     if not feature_keys:
         return {"stratum_0": list(trials)}
 
-    vectors = [
-        [float(t.proxy_features.get(k, 0.0)) for k in feature_keys] for t in trials
-    ]
+    vectors = [[float(t.proxy_features.get(k, 0.0)) for k in feature_keys] for t in trials]
     mins = [min(v[i] for v in vectors) for i in range(len(feature_keys))]
     maxs = [max(v[i] for v in vectors) for i in range(len(feature_keys))]
     spans = [(maxs[i] - mins[i]) or 1.0 for i in range(len(feature_keys))]
-    norm = [
-        [(v[i] - mins[i]) / spans[i] for i in range(len(feature_keys))]
-        for v in vectors
-    ]
+    norm = [[(v[i] - mins[i]) / spans[i] for i in range(len(feature_keys))] for v in vectors]
 
     centroid_indices = rng.sample(range(len(norm)), n_strata)
     centroids = [norm[i][:] for i in centroid_indices]
@@ -177,12 +172,9 @@ def _kmeans_strata(
             break
         labels = new_labels
         for k in range(n_strata):
-            members = [v for v, l in zip(norm, labels) if l == k]
+            members = [v for v, lab in zip(norm, labels) if lab == k]
             if members:
-                centroids[k] = [
-                    sum(v[i] for v in members) / len(members)
-                    for i in range(len(feature_keys))
-                ]
+                centroids[k] = [sum(v[i] for v in members) / len(members) for i in range(len(feature_keys))]
 
     result: dict[str, list[Trial]] = {f"stratum_{k}": [] for k in range(n_strata)}
     for trial, label in zip(trials, labels):
@@ -261,7 +253,9 @@ class ColdStartCoverageBandit:
 
         # Phase 2 K-means strata over stable_fail pool
         self._stable_fail_strata: dict[str, list[Trial]] = _kmeans_strata(
-            stable_fail_pool, n_stable_fail_strata, self._rng,
+            stable_fail_pool,
+            n_stable_fail_strata,
+            self._rng,
         )
         # Record which stratum each trial originated from, so update()
         # can find the right StratumStats after a trial has been popped

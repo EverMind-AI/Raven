@@ -72,8 +72,10 @@ def fisher_one_sided(cp: int, cn: int, vp: int, vn: int) -> float:
         if b < 0 or c < 0 or d < 0:
             return 0.0
         return math.exp(
-            math.lgamma(row1 + 1) + math.lgamma(row2 + 1)
-            + math.lgamma(col1 + 1) + math.lgamma(tot - col1 + 1)
+            math.lgamma(row1 + 1)
+            + math.lgamma(row2 + 1)
+            + math.lgamma(col1 + 1)
+            + math.lgamma(tot - col1 + 1)
             - math.lgamma(tot + 1)
             - sum(math.lgamma(x + 1) for x in (a, b, c, d))
         )

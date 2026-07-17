@@ -165,11 +165,7 @@ def cell_of(cand: Any) -> Optional[tuple[str, str]]:
     a driver-declared ``patch_where`` stays on the node ledger for audit but
     never decides the archive coordinate."""
     if isinstance(cand, AppliedPatch):
-        why = (
-            cand.patch_why_extra
-            if cand.patch_why == PatchWhy.other
-            else cand.patch_why.value
-        )
+        why = cand.patch_why_extra if cand.patch_why == PatchWhy.other else cand.patch_why.value
         paths = [c.target_file for c in cand.components]
         return bind_where(paths), str(why)
     why = getattr(cand, "why", None)
@@ -267,9 +263,7 @@ class GsmeArchive:
             pmeta = self._node_meta.get(parent_id, {})
             self._node_meta[node.node_id] = {
                 "cells": sorted(set(pmeta.get("cells", [])) | {key}),
-                "files": sorted(
-                    set(pmeta.get("files", [])) | set(changed) | set(deleted)
-                ),
+                "files": sorted(set(pmeta.get("files", [])) | set(changed) | set(deleted)),
             }
 
         # Navigation bar (paper Alg. 1): full-train confirm beat VANILLA. A
@@ -374,16 +368,12 @@ class GsmeArchive:
             if not self._path.exists():
                 return
             d = json.loads(self._path.read_text())
-            self._cells = {
-                k: CellElite.from_dict(v) for k, v in (d.get("cells") or {}).items()
-            }
+            self._cells = {k: CellElite.from_dict(v) for k, v in (d.get("cells") or {}).items()}
             self._node_meta = {
                 k: {"cells": list(v.get("cells", [])), "files": list(v.get("files", []))}
                 for k, v in (d.get("node_meta") or {}).items()
             }
-            self._pairings = {
-                k: dict(v) for k, v in (d.get("pairings") or {}).items()
-            }
+            self._pairings = {k: dict(v) for k, v in (d.get("pairings") or {}).items()}
         except (OSError, ValueError, KeyError):
             self._cells, self._node_meta, self._pairings = {}, {}, {}
 

@@ -45,19 +45,19 @@ class PatchWhere(str, Enum):
     """
 
     system_prompt_template = "system_prompt_template"  # templates/*.md
-    task_wrapper_prompt = "task_wrapper_prompt"        # scorer src/domains/*/prompt.md
-    judge_prompt = "judge_prompt"                       # eval_engine/prompts/*.py (L-B internal)
-    tool_description = "tool_description"               # agent/tools/*.py description field
-    hook_new = "hook_new"                               # new agent/hook/<name>.py
-    hook_modify = "hook_modify"                         # eval_engine/hooks/*.py existing
-    skill = "skill"                                     # memory_engine/skills/*
-    memory = "memory"                                   # memory_engine/everos/*
-    tool_new = "tool_new"                               # new agent/tools/<name>.py
-    loop_override = "loop_override"                     # scoped loop.py override (code class)
-    context_override = "context_override"               # scoped context.py override (code class)
-    tool_override = "tool_override"                     # scoped tool override (code class)
-    config = "config"                                   # yaml/json defaults
-    control = "control"                                 # control arm — no patch surface
+    task_wrapper_prompt = "task_wrapper_prompt"  # scorer src/domains/*/prompt.md
+    judge_prompt = "judge_prompt"  # eval_engine/prompts/*.py (L-B internal)
+    tool_description = "tool_description"  # agent/tools/*.py description field
+    hook_new = "hook_new"  # new agent/hook/<name>.py
+    hook_modify = "hook_modify"  # eval_engine/hooks/*.py existing
+    skill = "skill"  # memory_engine/skills/*
+    memory = "memory"  # memory_engine/everos/*
+    tool_new = "tool_new"  # new agent/tools/<name>.py
+    loop_override = "loop_override"  # scoped loop.py override (code class)
+    context_override = "context_override"  # scoped context.py override (code class)
+    tool_override = "tool_override"  # scoped tool override (code class)
+    config = "config"  # yaml/json defaults
+    control = "control"  # control arm — no patch surface
 
 
 class PatchWhy(str, Enum):
@@ -79,25 +79,25 @@ class PatchWhy(str, Enum):
     and control-arm bookkeeping respectively.
     """
 
-    repetition_breaker = "repetition_breaker"                # 72% trajectory tail repetition
-    test_starvation_remedy = "test_starvation_remedy"        # PASS 25% TEST vs FAIL 12%
-    budget_awareness = "budget_awareness"                    # FAIL 100% hits maxIter
-    tool_clarity = "tool_clarity"                            # tool docs missing/misleading
-    env_contract_clarify = "env_contract_clarify"            # env rules contradictory (e.g. NEVER prompt)
-    skill_gap_fill = "skill_gap_fill"                        # recurring task type, no skill
-    memory_recall_fix = "memory_recall_fix"                  # re-reads / re-verifies known facts
-    reasoning_visibility = "reasoning_visibility"            # tool-only stretches w/o narrative explanation
-    empty_response_recovery = "empty_response_recovery"      # repeated empty-response streak recovery
-    method_lock_in_remedy = "method_lock_in_remedy"          # early method lock-in remedy
-    infra_neutrality_control = "infra_neutrality_control"    # control-arm bookkeeping; not a real pathology
-    other = "other"                                           # judge-proposed; sub-name in patch_why_extra
+    repetition_breaker = "repetition_breaker"  # 72% trajectory tail repetition
+    test_starvation_remedy = "test_starvation_remedy"  # PASS 25% TEST vs FAIL 12%
+    budget_awareness = "budget_awareness"  # FAIL 100% hits maxIter
+    tool_clarity = "tool_clarity"  # tool docs missing/misleading
+    env_contract_clarify = "env_contract_clarify"  # env rules contradictory (e.g. NEVER prompt)
+    skill_gap_fill = "skill_gap_fill"  # recurring task type, no skill
+    memory_recall_fix = "memory_recall_fix"  # re-reads / re-verifies known facts
+    reasoning_visibility = "reasoning_visibility"  # tool-only stretches w/o narrative explanation
+    empty_response_recovery = "empty_response_recovery"  # repeated empty-response streak recovery
+    method_lock_in_remedy = "method_lock_in_remedy"  # early method lock-in remedy
+    infra_neutrality_control = "infra_neutrality_control"  # control-arm bookkeeping; not a real pathology
+    other = "other"  # judge-proposed; sub-name in patch_why_extra
 
 
 class ActionKind(str, Enum):
     """What downstream should do with this judge output."""
 
     human_review_needed = "human_review_needed"  # L1: evolver pauses, engineer fixes
-    patch_proposal = "patch_proposal"             # L2/L3: evolver applies patch
+    patch_proposal = "patch_proposal"  # L2/L3: evolver applies patch
 
 
 @dataclass
@@ -176,21 +176,16 @@ class JudgeAction:
     def __post_init__(self) -> None:
         if self.kind == ActionKind.patch_proposal:
             if not self.components:
-                raise ValueError(
-                    "patch_proposal JudgeAction requires at least one component"
-                )
+                raise ValueError("patch_proposal JudgeAction requires at least one component")
             ids = [c.component_id for c in self.components]
             if len(ids) != len(set(ids)):
-                raise ValueError(
-                    f"JudgeAction.components have duplicate component_id: {ids}"
-                )
+                raise ValueError(f"JudgeAction.components have duplicate component_id: {ids}")
             valid_ids = set(ids)
             for c in self.components:
                 for dep in c.depends_on:
                     if dep not in valid_ids:
                         raise ValueError(
-                            f"ProposedComponent {c.component_id!r} depends_on "
-                            f"{dep!r} which is not a sibling component"
+                            f"ProposedComponent {c.component_id!r} depends_on {dep!r} which is not a sibling component"
                         )
 
     def is_patch(self) -> bool:
@@ -244,38 +239,22 @@ class JudgeResult:
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
-            raise ValueError(
-                f"confidence must be in [0.0, 1.0], got {self.confidence!r}"
-            )
+            raise ValueError(f"confidence must be in [0.0, 1.0], got {self.confidence!r}")
         # Cross-field invariant: L1 must use human_review_needed
         if self.issue_type == IssueType.L1 and not self.proposed_action.is_human_review():
             raise ValueError(
-                "L1 issues must have proposed_action.kind=human_review_needed; "
-                f"got {self.proposed_action.kind!r}"
+                f"L1 issues must have proposed_action.kind=human_review_needed; got {self.proposed_action.kind!r}"
             )
         # L2/L3 must use patch_proposal with populated where/why
         if self.issue_type in (IssueType.L2, IssueType.L3):
             if not self.proposed_action.is_patch():
-                raise ValueError(
-                    f"{self.issue_type.value} issues must have "
-                    f"proposed_action.kind=patch_proposal"
-                )
+                raise ValueError(f"{self.issue_type.value} issues must have proposed_action.kind=patch_proposal")
             if self.proposed_action.patch_where is None:
-                raise ValueError(
-                    f"{self.issue_type.value} patch must have patch_where set"
-                )
+                raise ValueError(f"{self.issue_type.value} patch must have patch_where set")
             if self.proposed_action.patch_why is None:
-                raise ValueError(
-                    f"{self.issue_type.value} patch must have patch_why set"
-                )
-            if (
-                self.proposed_action.patch_why == PatchWhy.other
-                and not self.proposed_action.patch_why_extra
-            ):
-                raise ValueError(
-                    "patch_why=other requires patch_why_extra to carry "
-                    "the judge-proposed sub-name"
-                )
+                raise ValueError(f"{self.issue_type.value} patch must have patch_why set")
+            if self.proposed_action.patch_why == PatchWhy.other and not self.proposed_action.patch_why_extra:
+                raise ValueError("patch_why=other requires patch_why_extra to carry the judge-proposed sub-name")
 
 
 @dataclass(frozen=True)

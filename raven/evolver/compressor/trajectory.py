@@ -51,7 +51,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
-
 # ---------------------------------------------------------------------------
 # Event model
 # ---------------------------------------------------------------------------
@@ -269,9 +268,7 @@ class TrajectoryCompressor:
             asst_text = (ev.content or "").strip()
             if not asst_text and not ev.tool_calls:
                 empty_content_count += 1
-                out.append(
-                    f"\nTurn {turn_idx} (assistant): [EMPTY content + no tool_calls{fr_tag}]"
-                )
+                out.append(f"\nTurn {turn_idx} (assistant): [EMPTY content + no tool_calls{fr_tag}]")
                 i += 1
                 continue
             header_suffix = f" [finish_reason={ev.finish_reason}]" if ev.finish_reason else ""
@@ -371,9 +368,7 @@ class TrajectoryCompressor:
 
         return i
 
-    def _find_last_assistant(
-        self, events: list[Event], current_idx: int
-    ) -> Optional[Event]:
+    def _find_last_assistant(self, events: list[Event], current_idx: int) -> Optional[Event]:
         """The most recent assistant event strictly before ``current_idx``."""
         for j in range(current_idx - 1, -1, -1):
             if events[j].event_type == "assistant":
@@ -391,11 +386,7 @@ class TrajectoryCompressor:
             return self._oneline(content)
         head = content[:head_n]
         tail = content[-tail_n:]
-        return (
-            f"{self._oneline(head)} ... "
-            f"[ELIDED {total - head_n - tail_n} chars] "
-            f"... {self._oneline(tail)}"
-        )
+        return f"{self._oneline(head)} ... [ELIDED {total - head_n - tail_n} chars] ... {self._oneline(tail)}"
 
     @staticmethod
     def _oneline(text: str) -> str:
@@ -406,9 +397,7 @@ class TrajectoryCompressor:
     def _indent(text: str, prefix: str) -> str:
         return "\n".join(prefix + line for line in text.splitlines())
 
-    def _compute_anomaly_summary(
-        self, events: list[Event], empty_content_count: int
-    ) -> list[str]:
+    def _compute_anomaly_summary(self, events: list[Event], empty_content_count: int) -> list[str]:
         cfg = self._cfg
         out: list[str] = []
 
@@ -423,9 +412,7 @@ class TrajectoryCompressor:
             fr_breakdown = Counter(
                 (e.finish_reason or "unknown")
                 for e in events
-                if e.event_type == "assistant"
-                and not (e.content or "").strip()
-                and not e.tool_calls
+                if e.event_type == "assistant" and not (e.content or "").strip() and not e.tool_calls
             )
             fr_tag = ""
             if fr_breakdown:

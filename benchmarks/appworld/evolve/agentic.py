@@ -68,7 +68,11 @@ def _task_states(runs_root: Path, exp: str, k: int) -> dict[str, dict]:
 
 
 def build_analysis_workspace(
-    work_dir: Path, runs_root: Path, ws_root: Path, exp: str, k: int,
+    work_dir: Path,
+    runs_root: Path,
+    ws_root: Path,
+    exp: str,
+    k: int,
 ) -> tuple[Path, list[str]]:
     """Assemble the read-only workspace; returns ``(ws, failing_task_ids)``."""
     ws = work_dir / "agentic_analysis" / exp
@@ -78,8 +82,10 @@ def build_analysis_workspace(
     sig_hist = Counter(s["sig"] for t, s in states.items() if t in set(failing) and s["sig"])
 
     lines = [
-        "# Ledger digest (pre-aggregated — start here)", "",
-        f"experiment: {exp} | tasks: {len(states)} | failing (need labels): {len(failing)}", "",
+        "# Ledger digest (pre-aggregated — start here)",
+        "",
+        f"experiment: {exp} | tasks: {len(states)} | failing (need labels): {len(failing)}",
+        "",
         "## Failure signature histogram (oracle first-failed requirement)",
     ]
     lines += [f"- {c:3d}x  {s}" for s, c in sig_hist.most_common()]
@@ -91,7 +97,7 @@ def build_analysis_workspace(
     lines += [
         "",
         "## Where to look deeper",
-        f"- raw results: runs/<task>_k<n>.json (evaluation.failures = oracle)",
+        "- raw results: runs/<task>_k<n>.json (evaluation.failures = oracle)",
         f"- transcripts: sessions/appworld/<task>_{exp}_k<n>.jsonl (Raven layout) or att/<task>_{exp}_k<n>/sessions/",
         "- harness source (the code a fix would patch): harness/benchmarks/appworld/, harness/raven/agent/",
     ]
@@ -211,8 +217,13 @@ def make_agentic_diagnose_fn(
                 "Start with ledger_digest.md. Produce the diagnosis JSON."
             )
             raw = run_agentic_session(
-                user, system_prompt=_agentic_system(taxonomy), cwd=ws,
-                model=model, claude_bin=claude_bin, timeout=timeout, run=run,
+                user,
+                system_prompt=_agentic_system(taxonomy),
+                cwd=ws,
+                model=model,
+                claude_bin=claude_bin,
+                timeout=timeout,
+                run=run,
                 add_dirs=(runs_root, ws_root),
             )
         finally:
@@ -227,7 +238,7 @@ def make_agentic_diagnose_fn(
         i, j = s.find("{"), s.rfind("}")
         if i < 0 or j <= i:
             raise RuntimeError(f"agentic diagnosis returned no JSON: {raw[:300]}")
-        blob = s[i:j + 1]
+        blob = s[i : j + 1]
         try:
             obj = json.loads(blob)
         except json.JSONDecodeError:
@@ -235,24 +246,20 @@ def make_agentic_diagnose_fn(
             # and a final message cut mid-array by the output length cap —
             # salvage what was generated rather than discarding the session.
             import ast
+
             try:
                 obj = ast.literal_eval(blob)
             except (ValueError, SyntaxError):
                 obj = _salvage_truncated(blob)
             if obj is None:
-                raise RuntimeError(
-                    f"agentic diagnosis unparseable (saved to last_response.txt): "
-                    f"{blob[:200]}"
-                )
+                raise RuntimeError(f"agentic diagnosis unparseable (saved to last_response.txt): {blob[:200]}")
         fm = empty_failure_map()
         failing_set = set(failing)
         seen: set[str] = set()
         for a in obj.get("assignments", []):
             if not isinstance(a, dict):
                 continue
-            tids = a.get("trajectory_ids") or (
-                [a["trajectory_id"]] if a.get("trajectory_id") else []
-            )
+            tids = a.get("trajectory_ids") or ([a["trajectory_id"]] if a.get("trajectory_id") else [])
             for tid in tids:
                 if tid not in failing_set:
                     continue
@@ -262,8 +269,7 @@ def make_agentic_diagnose_fn(
         fm["_coverage"] = str(obj.get("coverage", ""))[:500]
         missed = failing_set - seen
         if missed:
-            print(f"[agentic] {len(missed)} failing tasks unlabeled: "
-                  f"{sorted(missed)[:5]}", flush=True)
+            print(f"[agentic] {len(missed)} failing tasks unlabeled: {sorted(missed)[:5]}", flush=True)
         return fm
 
     return diagnose_fn

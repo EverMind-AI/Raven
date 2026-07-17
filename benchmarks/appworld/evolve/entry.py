@@ -37,12 +37,30 @@ from raven.evolver.launch.contract import BenchBundle, LaunchContext, validate_w
 from raven.evolver.orchestrator.scoring import eval_with_infra_rerun
 
 _KNOWN_KEYS = {
-    "config_path", "train_task_file", "train_task_ids", "test_task_file",
-    "test_task_ids", "n", "conc", "base_port", "python_exe",
-    "vanilla_experiment", "extra_args", "whitelist", "min_confirm_lift",
-    "taxonomy_mode", "taxonomy_path", "why_selection", "analysis_mode",
-    "agentic_model", "require_beacon", "zero_hit_preflight",
-    "appworld_data_root", "precheck", "precheck_min_tok_s", "baseline_mode",
+    "config_path",
+    "train_task_file",
+    "train_task_ids",
+    "test_task_file",
+    "test_task_ids",
+    "n",
+    "conc",
+    "base_port",
+    "python_exe",
+    "vanilla_experiment",
+    "extra_args",
+    "whitelist",
+    "min_confirm_lift",
+    "taxonomy_mode",
+    "taxonomy_path",
+    "why_selection",
+    "analysis_mode",
+    "agentic_model",
+    "require_beacon",
+    "zero_hit_preflight",
+    "appworld_data_root",
+    "precheck",
+    "precheck_min_tok_s",
+    "baseline_mode",
 }
 
 
@@ -87,7 +105,7 @@ def _task_ids(bc: dict, prefix: str, base_dir: Path) -> list[str]:
         path = _abs_against(base_dir, bc[file_key])
         if not path.is_file():
             raise ValueError(f"bench_config.{file_key}: not found: {path}")
-        ids = [l.strip() for l in path.read_text().splitlines() if l.strip()]
+        ids = [line.strip() for line in path.read_text().splitlines() if line.strip()]
     placeholders = [t for t in ids if "<" in t or ">" in t]
     if placeholders:
         raise ValueError(
@@ -136,9 +154,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
     # batch scorer's default, but is validated unconditionally either way.
     data_root = _abs_against(
         spec.config_dir,
-        bc.get("appworld_data_root")
-        or os.environ.get("APPWORLD_ROOT")
-        or "~/workspace/appworld-run",
+        bc.get("appworld_data_root") or os.environ.get("APPWORLD_ROOT") or "~/workspace/appworld-run",
     )
     if not (data_root / "data").is_dir():
         raise ValueError(
@@ -151,9 +167,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
             f"AppWorld data dir is empty: {data_root / 'data'} — the download "
             "did not finish; run `appworld download data` in that install"
         )
-    appworld_bin = Path(
-        os.environ.get("APPWORLD_BIN") or data_root / "appworld-venv/bin/appworld"
-    )
+    appworld_bin = Path(os.environ.get("APPWORLD_BIN") or data_root / "appworld-venv/bin/appworld")
     if not appworld_bin.is_file():
         raise ValueError(
             f"appworld binary not found at {appworld_bin} — create the venv "
@@ -206,12 +220,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
     def cold_start_done() -> int:
         if not vanilla_out_dir.is_dir():
             return 0
-        return sum(
-            1
-            for tid in train_ids
-            for k in range(k_confirm)
-            if (vanilla_out_dir / f"{tid}_k{k}.json").is_file()
-        )
+        return sum(1 for tid in train_ids for k in range(k_confirm) if (vanilla_out_dir / f"{tid}_k{k}.json").is_file())
 
     def make_precheck():
         if not bc.get("precheck", True):
@@ -219,9 +228,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
         from benchmarks.appworld.evolve.precheck import make_appworld_precheck
 
         if bc.get("precheck_min_tok_s") is not None:
-            return make_appworld_precheck(
-                cfg, min_tok_per_s=float(bc["precheck_min_tok_s"])
-            )
+            return make_appworld_precheck(cfg, min_tok_per_s=float(bc["precheck_min_tok_s"]))
         return make_appworld_precheck(cfg)
 
     def run_cold_start() -> None:
@@ -235,10 +242,7 @@ def build(ctx: LaunchContext) -> BenchBundle:
         if not needs_fill:
             try:
                 kept = aw_adapter.read_kept_out_dir(vanilla_out_dir)
-                needs_salvage = (
-                    any(ev.infra_attempts > 0 for ev in kept.values())
-                    or len(kept) < len(train_ids)
-                )
+                needs_salvage = any(ev.infra_attempts > 0 for ev in kept.values()) or len(kept) < len(train_ids)
             except FileNotFoundError:
                 needs_fill = True
         if needs_fill or needs_salvage:
@@ -288,12 +292,17 @@ def build(ctx: LaunchContext) -> BenchBundle:
     from raven.evolver.tree.node import HarnessNode
 
     root_node = HarnessNode(
-        node_id="C0", parent_id=None, git_commit_sha=spec.base_sha,
-        git_branch="", created_at=HarnessNode.utc_now(), created_at_iter=0,
+        node_id="C0",
+        parent_id=None,
+        git_commit_sha=spec.base_sha,
+        git_branch="",
+        created_at=HarnessNode.utc_now(),
+        created_at_iter=0,
     )
 
     unseal = None
     if test_ids:
+
         def unseal(records: list[dict], orch) -> dict:
             import dataclasses
 
@@ -301,17 +310,19 @@ def build(ctx: LaunchContext) -> BenchBundle:
             from raven.evolver.orchestrator.sealed.runner import unseal_retention
 
             runner = build_appworld_sealed_runner(
-                aw_cfg=cfg, repo_root=spec.repo_root, test_task_ids=test_ids,
+                aw_cfg=cfg,
+                repo_root=spec.repo_root,
+                test_task_ids=test_ids,
                 sealed_dir=spec.funnel.sealed_output_dir or work / "sealed",
                 k=k_confirm,
             )
             report = unseal_retention(
-                runner, records,
+                runner,
+                records,
                 vanilla_node=root_node,
                 vanilla_train=orch.vanilla_train_mean,
             )
-            return dataclasses.asdict(report) if dataclasses.is_dataclass(report) \
-                else dict(report)
+            return dataclasses.asdict(report) if dataclasses.is_dataclass(report) else dict(report)
 
     return BenchBundle(
         root_node_id="C0",

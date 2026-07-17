@@ -43,7 +43,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -227,9 +226,7 @@ def apply_patch_as_commit(
     :raises ValueError: if ``parent_sha`` doesn't exist locally
     """
     if not commit_exists(repo_root, parent_sha):
-        raise ValueError(
-            f"parent_sha {parent_sha!r} is not a known commit in {repo_root}"
-        )
+        raise ValueError(f"parent_sha {parent_sha!r} is not a known commit in {repo_root}")
 
     git_dir = (repo_root / ".git").resolve()
     if not git_dir.exists():
@@ -321,9 +318,7 @@ def commit_files_as_child(
                     fp.unlink()
             _run(wt, "add", "-A")
             changed = [
-                line for line in _run(
-                    wt, "diff", "--cached", "--name-only", parent_sha
-                ).splitlines() if line.strip()
+                line for line in _run(wt, "diff", "--cached", "--name-only", parent_sha).splitlines() if line.strip()
             ]
             tree_sha = _run(wt, "write-tree").strip()
             commit_env = {
@@ -333,7 +328,13 @@ def commit_files_as_child(
                 "GIT_COMMITTER_EMAIL": author_email,
             }
             child_sha = _run(
-                wt, "commit-tree", tree_sha, "-p", parent_sha, "-m", message,
+                wt,
+                "commit-tree",
+                tree_sha,
+                "-p",
+                parent_sha,
+                "-m",
+                message,
                 env=commit_env,
             ).strip()
         finally:
@@ -390,16 +391,6 @@ def create_branch(repo_root: Path, branch_name: str, sha: str) -> None:
 
 def branch_exists(repo_root: Path, branch_name: str) -> bool:
     """True iff a local branch with this name exists."""
-    out = _run(
-        repo_root,
-        "show-ref",
-        "--verify",
-        "--quiet",
-        f"refs/heads/{branch_name}",
-        check=False,
-    )
-    # show-ref with --quiet sets exit code; _run returns "" on success
-    # but with check=False we have to call it differently
     proc = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
         cwd=str(repo_root),

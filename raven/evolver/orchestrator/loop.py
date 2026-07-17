@@ -86,15 +86,11 @@ class DiagnoseFn(Protocol):
 
 
 class DesignFn(Protocol):
-    def __call__(
-        self, round_index: int, failure_map: dict, parent: HarnessNode
-    ) -> list[AppliedPatch]: ...
+    def __call__(self, round_index: int, failure_map: dict, parent: HarnessNode) -> list[AppliedPatch]: ...
 
 
 class ApplyFn(Protocol):
-    def __call__(
-        self, parent_id: str, patch: AppliedPatch, round_index: int
-    ) -> HarnessNode: ...
+    def __call__(self, parent_id: str, patch: AppliedPatch, round_index: int) -> HarnessNode: ...
 
 
 # (candidate, parent) -> keep? The parent gives preflight its historical
@@ -145,10 +141,7 @@ def summarize_round(rr: RoundResult) -> str:
     for o in rr.outcomes:
         parts = [f"  {o.node_id}: {o.status.value}"]
         if o.screen is not None:
-            parts.append(
-                f"screen={o.screen.candidate_mean:.3f} vs van "
-                f"{o.screen.vanilla_mean:.3f} ({o.screen.bucket})"
-            )
+            parts.append(f"screen={o.screen.candidate_mean:.3f} vs van {o.screen.vanilla_mean:.3f} ({o.screen.bucket})")
         if o.paired is not None:
             parts.append(
                 f"confirm={o.paired.candidate_mean:.3f} vs van "
@@ -169,10 +162,7 @@ def _sha_or_none(sha: Optional[str]) -> Optional[str]:
 
 def _vanilla_control(vanilla_stability) -> dict[str, TaskEval]:
     """The cold-start baseline as an eval map to serve as the control arm."""
-    return {
-        tid: TaskEval(task_id=tid, passes=st.passes, attempts=st.attempts)
-        for tid, st in vanilla_stability.items()
-    }
+    return {tid: TaskEval(task_id=tid, passes=st.passes, attempts=st.attempts) for tid, st in vanilla_stability.items()}
 
 
 class EvolutionOrchestrator:
@@ -224,16 +214,12 @@ class EvolutionOrchestrator:
         # train mean vs VANILLA, never vs the previous round's parent) — the
         # same for every benchmark no matter which baseline provider gates
         # promotion.
-        self._vanilla_train_mean = train_mean(
-            _vanilla_control(self._vanilla_stability), self._train_task_ids
-        )
+        self._vanilla_train_mean = train_mean(_vanilla_control(self._vanilla_stability), self._train_task_ids)
 
         # Default policy = the SWE paired-2σ line; default baseline = frozen
         # cold-start (cost-bound; cross-time-invalid — see gates.policy). AppWorld
         # / same-session runs inject their own.
-        self._gate: GatePolicy = gate_policy or PairedTwoSigmaGate(
-            k_screen=config.k_screen, k_confirm=config.k_confirm
-        )
+        self._gate: GatePolicy = gate_policy or PairedTwoSigmaGate(k_screen=config.k_screen, k_confirm=config.k_confirm)
         self._baselines: BaselineProvider = baseline_provider or FrozenColdStartBaseline(
             _vanilla_control(self._vanilla_stability)
         )
@@ -283,9 +269,7 @@ class EvolutionOrchestrator:
                 continue
             if st.bucket == StabilityBucket.STABLE_PASS:
                 stable.append(tid)
-            elif st.bucket in (
-                StabilityBucket.BORDERLINE_2_3, StabilityBucket.BORDERLINE_1_3
-            ):
+            elif st.bucket in (StabilityBucket.BORDERLINE_2_3, StabilityBucket.BORDERLINE_1_3):
                 fragile.append(tid)
         return sorted(stable), sorted(fragile)
 
@@ -398,9 +382,7 @@ class EvolutionOrchestrator:
             if round_result.promoted and round_result.next_parent_train is not None:
                 parent_score = round_result.next_parent_train
 
-            term.record_round(
-                promoted=round_result.beat_vanilla, errored=round_result.errored
-            )
+            term.record_round(promoted=round_result.beat_vanilla, errored=round_result.errored)
             stop, reason = term.should_stop()
             if stop:
                 result.stop_reason = reason
@@ -409,9 +391,7 @@ class EvolutionOrchestrator:
         result.final_parent_id = parent_id
         return result
 
-    def _run_round(
-        self, round_index: int, parent_id: str, parent_score: float
-    ) -> RoundResult:
+    def _run_round(self, round_index: int, parent_id: str, parent_score: float) -> RoundResult:
         # Gate0 (SOP §0, before any scoring): verify the environment before scoring anything
         # this round. A dirty env (sandbox down / network unroutable / verifier
         # can't emit results) makes every score invalid, so let it raise — fix
@@ -426,18 +406,25 @@ class EvolutionOrchestrator:
         # instead of aborting an unattended run with no journal record.
         try:
             baseline = self._baselines.for_round(
-                round_index, parent, eval=self._eval,
-                train_task_ids=self._train_task_ids, anchor=anchor,
+                round_index,
+                parent,
+                eval=self._eval,
+                train_task_ids=self._train_task_ids,
+                anchor=anchor,
             )
         except Exception as exc:  # noqa: BLE001 — record + continue, don't abort
             outcome = CandidateOutcome(
-                f"r{round_index}-baseline", NodeStatus.errored,
+                f"r{round_index}-baseline",
+                NodeStatus.errored,
                 stats={"phase": "baseline", "error": repr(exc)},
             )
             return RoundResult(
-                round_index=round_index, parent_id=parent_id,
-                next_parent_id=parent_id, promoted=False,
-                outcomes=[outcome], errored=True,
+                round_index=round_index,
+                parent_id=parent_id,
+                next_parent_id=parent_id,
+                promoted=False,
+                outcomes=[outcome],
+                errored=True,
                 next_parent_sha=_sha_or_none(parent.git_commit_sha),
             )
 
@@ -466,7 +453,8 @@ class EvolutionOrchestrator:
                     # ③ zero-inference prune, recorded (never silently dropped):
                     # a pruned-inert candidate is a real decision this round.
                     outcome = CandidateOutcome(
-                        f"r{round_index}-preflight{i}", NodeStatus.pruned_inert,
+                        f"r{round_index}-preflight{i}",
+                        NodeStatus.pruned_inert,
                         stats={
                             "phase": "preflight",
                             "why": str(getattr(c, "why", "")),
@@ -482,7 +470,8 @@ class EvolutionOrchestrator:
         except Exception as exc:  # noqa: BLE001 — record + continue, don't abort
             outcomes.append(
                 CandidateOutcome(
-                    f"r{round_index}-design", NodeStatus.errored,
+                    f"r{round_index}-design",
+                    NodeStatus.errored,
                     stats={"phase": "diagnose_design", "error": repr(exc)},
                 )
             )
@@ -494,21 +483,18 @@ class EvolutionOrchestrator:
         # try/except — a driver outage does not stop deterministic recombination.
         if self._archive is not None and self._recombine is not None:
             try:
-                elites = self._archive.eligible_elites(
-                    parent_id, limit=self._cfg.budget.recombinations_per_round
-                )
+                elites = self._archive.eligible_elites(parent_id, limit=self._cfg.budget.recombinations_per_round)
                 for elite in elites:
                     recomb = self._recombine(parent, elite)
                     if recomb is None:
-                        self._archive.record_pairing(
-                            parent_id, elite.node_id, "recombine_failed"
-                        )
+                        self._archive.record_pairing(parent_id, elite.node_id, "recombine_failed")
                         continue
                     candidates.append(recomb)
             except Exception as exc:  # noqa: BLE001 — record + continue
                 outcomes.append(
                     CandidateOutcome(
-                        f"r{round_index}-recombine", NodeStatus.errored,
+                        f"r{round_index}-recombine",
+                        NodeStatus.errored,
                         stats={"phase": "recombine", "error": repr(exc)},
                     )
                 )
@@ -527,7 +513,8 @@ class EvolutionOrchestrator:
                     self._archive.record_pairing(parent_id, elite_id, "errored")
                 outcomes.append(
                     CandidateOutcome(
-                        f"r{round_index}-cand{idx}", NodeStatus.errored,
+                        f"r{round_index}-cand{idx}",
+                        NodeStatus.errored,
                         stats={"phase": "apply", "error": repr(exc)},
                     )
                 )
@@ -544,12 +531,8 @@ class EvolutionOrchestrator:
                 baseline=baseline,
                 train_task_ids=self._train_task_ids,
                 anchor=anchor,
-                focused_task_ids=(
-                    self._focused_source(node) if self._focused_source else []
-                ),
-                sentinel_task_ids=self._sentinels_for(
-                    node.node_id, self._cfg.anchor.n_sentinel
-                ),
+                focused_task_ids=(self._focused_source(node) if self._focused_source else []),
+                sentinel_task_ids=self._sentinels_for(node.node_id, self._cfg.anchor.n_sentinel),
                 fired_source=self._fired_source,
             )
             try:
@@ -559,7 +542,8 @@ class EvolutionOrchestrator:
                     self._archive.record_pairing(parent_id, elite_id, "errored")
                 outcomes.append(
                     CandidateOutcome(
-                        node.node_id, NodeStatus.errored,
+                        node.node_id,
+                        NodeStatus.errored,
                         stats={"phase": "decide", "error": repr(exc)},
                     )
                 )
@@ -571,19 +555,22 @@ class EvolutionOrchestrator:
             # map so the next diagnose/design sees CAUSAL feedback, not just the
             # static failure set.
             if outcome.confirm_evals:
-                flips = flip_summary(
-                    outcome.confirm_evals, baseline.evals, self._train_task_ids
-                )
+                flips = flip_summary(outcome.confirm_evals, baseline.evals, self._train_task_ids)
                 outcome.stats["flips"] = flips
                 self._failure_map.setdefault("_flips", {})[node.node_id] = {
-                    "round": round_index, "vs": baseline.label, **flips
+                    "round": round_index,
+                    "vs": baseline.label,
+                    **flips,
                 }
             outcomes.append(outcome)
             if self._archive is not None:
                 try:
                     self._archive.consider(
-                        parent_id=parent_id, node=node, cand=patch,
-                        outcome=outcome, round_index=round_index,
+                        parent_id=parent_id,
+                        node=node,
+                        cand=patch,
+                        outcome=outcome,
+                        round_index=round_index,
                         vanilla_train_mean=self._vanilla_train_mean,
                     )
                 except Exception:  # noqa: BLE001 — bank-keeping must not sink a round
@@ -594,9 +581,7 @@ class EvolutionOrchestrator:
                 except Exception:  # noqa: BLE001 — advisory learning hook, non-fatal
                     pass
             if outcome.promoted:
-                self._baselines.on_promote(
-                    node, outcome, train_task_ids=self._train_task_ids
-                )
+                self._baselines.on_promote(node, outcome, train_task_ids=self._train_task_ids)
                 if outcome.score > best_score:
                     best_score = outcome.score
                     best_node_id = node.node_id
@@ -613,12 +598,8 @@ class EvolutionOrchestrator:
         promoted = best_node_id is not None and best_score > parent_score
         next_parent_id = best_node_id if promoted else parent_id
         next_parent_node = self._node_registry.get(next_parent_id) or parent
-        beat_vanilla = any(
-            o.confirm_evals and o.score > self._vanilla_train_mean for o in outcomes
-        )
-        errored = bool(outcomes) and all(
-            o.status is NodeStatus.errored for o in outcomes
-        )
+        beat_vanilla = any(o.confirm_evals and o.score > self._vanilla_train_mean for o in outcomes)
+        errored = bool(outcomes) and all(o.status is NodeStatus.errored for o in outcomes)
 
         round_result = RoundResult(
             round_index=round_index,
@@ -675,8 +656,7 @@ class EvolutionOrchestrator:
                     "created_at": node.created_at,
                     "created_at_iter": node.created_at_iter,
                     "patch": (
-                        patch_to_dict() if callable(patch_to_dict)
-                        else (repr(patch) if patch is not None else None)
+                        patch_to_dict() if callable(patch_to_dict) else (repr(patch) if patch is not None else None)
                     ),
                     "status": o.status.value,
                     "round_index": rr.round_index,
@@ -690,9 +670,7 @@ class EvolutionOrchestrator:
                     rec["paired"] = dataclasses.asdict(o.paired)
                 if o.stats:
                     rec["stats"] = o.stats
-                (ndir / f"{o.node_id}.json").write_text(
-                    json.dumps(rec, indent=2, default=str)
-                )
+                (ndir / f"{o.node_id}.json").write_text(json.dumps(rec, indent=2, default=str))
         except OSError:
             pass
 

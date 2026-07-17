@@ -22,8 +22,7 @@ from pathlib import Path
 LEDGER_FILENAME = "activation_ledger.jsonl"
 WORKSPACE_ENV = "RAVEN_ACTIVATION_WORKSPACE"
 
-_workspace_var: ContextVar[str | None] = ContextVar(
-    "raven_activation_workspace", default=None)
+_workspace_var: ContextVar[str | None] = ContextVar("raven_activation_workspace", default=None)
 
 
 def set_activation_workspace(workspace: "Path | str"):
@@ -43,12 +42,17 @@ class ActivationLedger:
     def record(self, *, kind: str, source: str, detail: dict | None = None) -> None:
         try:
             with open(self._path, "a") as f:
-                f.write(json.dumps({
-                    "ts": time.time(),
-                    "kind": kind,
-                    "source": source,
-                    "detail": detail or {},
-                }) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "ts": time.time(),
+                            "kind": kind,
+                            "source": source,
+                            "detail": detail or {},
+                        }
+                    )
+                    + "\n"
+                )
         except Exception:
             pass
 
@@ -90,9 +94,7 @@ def mark_beacons_enabled(out_dir: "Path | str") -> None:
         pass
 
 
-def read_fired_tasks(
-    out_dirs: "list[Path | str]", task_ids: "list[str]"
-) -> "set[str] | None":
+def read_fired_tasks(out_dirs: "list[Path | str]", task_ids: "list[str]") -> "set[str] | None":
     """Which of ``task_ids`` have at least one beacon line under any of the
     given eval out-dirs (the confirm dir plus its infra-rerun ladder siblings).
 

@@ -164,9 +164,7 @@ def read_out_dir(out_dir: str | Path) -> dict[str, TaskEval]:
     out_dir = Path(out_dir)
     files = sorted(glob.glob(str(out_dir / "*_k*.json")))
     if not files:
-        raise FileNotFoundError(
-            f"no per-attempt *_k*.json files in AppWorld out-dir: {out_dir}"
-        )
+        raise FileNotFoundError(f"no per-attempt *_k*.json files in AppWorld out-dir: {out_dir}")
 
     passes: dict[str, int] = {}
     attempts: dict[str, int] = {}
@@ -217,9 +215,7 @@ def read_kept_out_dir(out_dir: str | Path) -> dict[str, TaskEval]:
     """
     dirs = ladder_out_dirs(out_dir)
     if not dirs:
-        raise FileNotFoundError(
-            f"no per-attempt *_k*.json files in AppWorld out-dir: {out_dir}"
-        )
+        raise FileNotFoundError(f"no per-attempt *_k*.json files in AppWorld out-dir: {out_dir}")
     kept: dict[str, TaskEval] = {}
     for d in dirs:
         for tid, ev in read_out_dir(d).items():
@@ -268,8 +264,7 @@ def run_eval(
         activation_env=activation_env,
         tasklist_path=tasklist_path,
     )
-    subprocess.run(argv, cwd=str(cwd or aw.appworld_root), env=dict(os.environ),
-                   check=True, timeout=timeout)
+    subprocess.run(argv, cwd=str(cwd or aw.appworld_root), env=dict(os.environ), check=True, timeout=timeout)
     return read_out_dir(out_dir)
 
 
@@ -327,25 +322,19 @@ def make_appworld_backend(
 
     def default_eval(node, task_ids, k, job_name, *, split="train"):
         cfg = aw if split == aw.split else replace(aw, split=split)
-        return run_eval(
-            cfg, K=k, experiment=job_name, task_ids=task_ids, activation_env=act(node)
-        )
+        return run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, activation_env=act(node))
 
     wrapped_eval = with_infra_rerun(eval_fn or default_eval, infra_max_reruns)
 
     def cold_start() -> dict[str, TaskStability]:
         if not (vdir.exists() and list(vdir.glob("*_k*.json"))):
             if vanilla_node is None:
-                raise FileNotFoundError(
-                    f"vanilla ledger missing at {vdir} and no vanilla_node given to run it"
-                )
+                raise FileNotFoundError(f"vanilla ledger missing at {vdir} and no vanilla_node given to run it")
             wrapped_eval(vanilla_node, list(train_task_ids), cold_start_k, vdir.name, split="train")
         return stability_from_out_dir(vdir)
 
     def anchor(affinity=None):
-        return simple_anchor(
-            stability_from_out_dir(vdir), cull_sigma_mult=cull_sigma_mult
-        )
+        return simple_anchor(stability_from_out_dir(vdir), cull_sigma_mult=cull_sigma_mult)
 
     return EvalBackend(
         train_task_ids=list(train_task_ids),

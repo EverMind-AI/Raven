@@ -43,16 +43,21 @@ def make_raven_call_fn(
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = LiteLLMProvider(
-        api_key=api_key, api_base=api_base,
+        api_key=api_key,
+        api_base=api_base,
         default_model=model or _raven_default_model(),
     )
 
     def call(messages: list) -> str:
         # Sync bridge: each call owns a private event loop, so this is safe
         # from the loop's worker threads (parallel taxonomy induction).
-        resp = asyncio.run(provider.chat_with_retry(
-            messages, max_tokens=max_tokens, temperature=temperature,
-        ))
+        resp = asyncio.run(
+            provider.chat_with_retry(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+        )
         content = getattr(resp, "content", None)
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("raven provider returned empty content")
@@ -105,21 +110,13 @@ def _build_call_fn(spec: dict) -> CallFn:
     if kind == "raven":
         model = kwargs.pop("model", None)
         return make_raven_call_fn(model, **kwargs)
-    raise ValueError(
-        f"unknown model provider {kind!r} (expected openai_compat / claude_cli / raven)"
-    )
+    raise ValueError(f"unknown model provider {kind!r} (expected openai_compat / claude_cli / raven)")
 
 
 def build_role_call_fns(models_cfg: dict) -> dict[str, Optional[CallFn]]:
     driver = build_call_fn(models_cfg.get("driver", _DEFAULT_SPEC), role="driver")
-    design = (
-        build_call_fn(models_cfg["design"], role="design")
-        if models_cfg.get("design") else driver
-    )
-    verdict = (
-        build_call_fn(models_cfg["verdict"], role="verdict")
-        if models_cfg.get("verdict") else None
-    )
+    design = build_call_fn(models_cfg["design"], role="design") if models_cfg.get("design") else driver
+    verdict = build_call_fn(models_cfg["verdict"], role="verdict") if models_cfg.get("verdict") else None
     return {"driver": driver, "design": design, "verdict": verdict}
 
 
@@ -136,8 +133,12 @@ def describe_models(models_cfg: dict) -> dict:
             else:
                 spec = {"omitted": "driver drafts verdicts"}
         out[role] = {k: v for k, v in spec.items() if "key" not in k.lower()}
-        if out[role].get("provider", "raven") == "raven" and "model" not in out[role] \
-                and "inherit" not in out[role] and "omitted" not in out[role]:
+        if (
+            out[role].get("provider", "raven") == "raven"
+            and "model" not in out[role]
+            and "inherit" not in out[role]
+            and "omitted" not in out[role]
+        ):
             try:
                 out[role]["model"] = _raven_default_model()
             except Exception:  # noqa: BLE001 — description is best-effort
@@ -145,5 +146,4 @@ def describe_models(models_cfg: dict) -> dict:
     return out
 
 
-__all__ = ["CallFn", "build_call_fn", "build_role_call_fns", "describe_models",
-           "make_raven_call_fn"]
+__all__ = ["CallFn", "build_call_fn", "build_role_call_fns", "describe_models", "make_raven_call_fn"]
