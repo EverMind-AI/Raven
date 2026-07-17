@@ -220,6 +220,25 @@ ignore = ["E501"]
 "scripts/check_large_files.py" = ["S607"]
 "scripts/skill_hub_e2e.py" = ["S101"]
 
+# evolver + appworld bench: git/bash subprocess drivers by design (S607);
+# K is SOP domain vocabulary for trials-per-task (N803/N806); *_PASS /
+# *_TOKEN constants are outcome labels and a beacon marker, not credentials
+# (S105); asserts tracked with the convert-vs-keep batch above (S101).
+"raven/evolver/tree/git_ops.py" = ["S607"]
+"raven/evolver/launch/config.py" = ["S607"]
+"raven/evolver/launch/contract.py" = ["S607"]
+"raven/evolver/launch/runner.py" = ["S607"]
+"raven/evolver/orchestrator/nodes/semantic.py" = ["S101"]
+"raven/evolver/scheduler/cold_start_bandit.py" = ["N803", "N806"]
+"raven/evolver/scheduler/tree_aware_bandit.py" = ["N803"]
+"raven/evolver/scheduler/tree_loader.py" = ["S101"]
+"raven/evolver/analysis/stability_bucket.py" = ["S105"]
+"raven/evolver/applier/beacon_guard.py" = ["S105"]
+"raven/evolver/judge/prompts.py" = ["S105"]
+"benchmarks/appworld/evolve/adapter.py" = ["N803", "S105"]
+"benchmarks/appworld/evolve/editor.py" = ["N806"]
+"benchmarks/appworld/evolve/sandbox.py" = ["S607"]
+
 # benchmarks/: eval harness; naming, ambiguous names, unused vars,
 # partial-path subprocess.
 "benchmarks/clawbench/stream.py" = ["S607"]
