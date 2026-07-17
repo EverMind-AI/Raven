@@ -175,6 +175,17 @@ REGISTERED_COMMAND_NAMES = {
 }
 
 
+def test_version_flag_matches_installed_metadata() -> None:
+    """``raven --version`` reports the installed package version, not a
+    hand-written literal, so it can never drift from ``pyproject.toml``."""
+    from importlib.metadata import version as pkg_version
+
+    r = runner.invoke(app, ["--version"])
+    assert r.exception is None
+    assert r.exit_code == 0
+    assert f"Raven v{pkg_version('raven')}" in r.stdout
+
+
 def test_no_logs_subcommand_registered() -> None:
     """There is no ``raven logs`` command; adding one must break this test."""
     assert "logs" not in _registered_command_names()

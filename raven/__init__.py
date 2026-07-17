@@ -15,6 +15,8 @@ See LICENSE for attribution.
 """
 
 import logging as _logging
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 
 class _LiteLLMBotocorePreloadFilter(_logging.Filter):
@@ -42,5 +44,8 @@ class _LiteLLMBotocorePreloadFilter(_logging.Filter):
 
 _logging.getLogger("LiteLLM").addFilter(_LiteLLMBotocorePreloadFilter())
 
-__version__ = "0.1.3"
+try:
+    __version__ = _pkg_version("raven")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 __logo__ = "🐦‍⬛"
