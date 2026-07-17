@@ -173,9 +173,10 @@ is the reference implementation.
 
 ## Status and known limitations (2026-07)
 
-- **Verified:** the unit/e2e suite (56 tests: config, guards, idempotency,
-  interrupt -> resume -> finalize with a fake bench) plus a real AppWorld
-  smoke through the unified entry: cold start -> resume -> one full round
+- **Verified:** the unit/e2e suite (126 tests: gate math, the infra-rerun
+  ladder, git commit/worktree primitives, sandbox whitelist capture, driver
+  transports, config, guards, idempotency, interrupt -> resume -> finalize
+  with a fake bench) plus a real AppWorld smoke through the unified entry: cold start -> resume -> one full round
   (real diagnose/design, a real candidate commit, focused probe + confirm,
   promoted with an honest `credited=False` Gate-b verdict) -> termination.
 - **Not yet exercised at scale:** a full-size run (90 tasks x K=3,
