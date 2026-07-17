@@ -12,6 +12,12 @@ part of the end-user CLI package.
 
 ```
 benchmarks/
+├── appworld/           AppWorld agent benchmark + evolver plugin
+│   ├── agent_cli.py       One-task subject agent (drives AgentLoop)
+│   ├── batch.py           Batch scorer: N tasks x K trials, resumable
+│   └── evolve/            raven.evolver BenchBundle plugin (entry.py)
+│                          + designer/diagnosis/sandbox/precheck glue
+│
 ├── pinchbench/         Context / AgentLoop capability benchmark
 │   ├── tasks/             23 task_*.md cards (YAML frontmatter + sections)
 │   ├── direct/            Drives AgentLoop.process_direct() per task
@@ -135,9 +141,15 @@ uv run python benchmarks/proactivity_eval/runners/run.py \
 
 ## Relation to runtime
 
-The runtime (`raven/`) **never imports from `benchmarks/`** — this is the
-"independent eval track" principle. The reverse is allowed and expected:
-benchmarks import `raven.agent`, `raven.providers`, etc. directly.
+The runtime (`raven/`) **never statically imports from `benchmarks/`** — this
+is the "independent eval track" principle. The reverse is allowed and
+expected: benchmarks import `raven.agent`, `raven.providers`, etc. directly.
+
+One scoped exception: `raven.evolver` loads its bench *plugins* from here by
+registry name at launch (`benchmarks.appworld.evolve.entry:build`), inserting
+the subject repo root on `sys.path` first. It is lazy, opt-in, and only works
+from a repo checkout — evolution needs the git repo as its subject anyway, so
+nothing in the installed wheel depends on this directory.
 
 Two unit tests under `tests/` reach into `benchmarks/proactivity_eval/runners/`
 via `sys.path` injection because they exercise the synthesizer / prompt-loader

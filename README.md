@@ -236,6 +236,15 @@ SkillForge treats skills as procedural memory. It can detect reusable workflows,
 write skill files, track execution feedback, and evolve instructions when they
 stop working.
 
+### 6. A Harness That Evolves Itself
+
+`raven.evolver` runs measured self-evolution against a benchmark: it diagnoses
+failing trajectories, designs candidate harness patches as real git commits,
+and promotes only what passes statistical gates — with a sealed test set for
+an honest generalisation number. One command
+(`python -m raven.evolver run --config <yaml>`), fully resumable. Start at
+[raven/evolver/README.md](raven/evolver/README.md).
+
 <br>
 <div align="right">
 
@@ -293,6 +302,7 @@ official endorsement unless explicitly approved by EverMind.
 | Memory and plugin architecture | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
 | Sandbox usage and debugging | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
 | Proactivity design | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
+| Benchmark self-evolution | [raven/evolver/README.md](raven/evolver/README.md) |
 | Detailed design notes | [docs/README.md](docs/README.md) |
 
 <br>
