@@ -16,10 +16,12 @@ Foreground mode and port are options, not subcommands.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
 import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -40,6 +42,32 @@ def _port_live(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.25)
         return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _viewer_health(port: int) -> bool:
+    """True only if *our* tracing viewer is serving on ``port``.
+
+    A live port is not enough: a stale viewer from an older layout, or an
+    unrelated server (e.g. another observability tool), can hold it and 404
+    every request. The viewer answers ``/api/health`` with ``{"ok": true}``;
+    a foreign server does not, so this distinguishes reuse from a clash.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=0.5) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 — any failure means "not our viewer"
+        return False
+    return isinstance(data, dict) and data.get("ok") is True
+
+
+def _find_free_port(start: int, span: int = 20) -> int | None:
+    """First free port in ``[start, start+span)``, or ``None`` if all are taken."""
+    for candidate in range(start, start + span):
+        if not _port_live(candidate):
+            return candidate
+    return None
 
 
 def _viewer_env(port: int) -> dict:
@@ -73,11 +101,27 @@ def _server_js() -> Path:
 
 
 def _open_dashboard(port: int) -> None:
-    url = f"http://127.0.0.1:{port}/"
     if _port_live(port):
-        console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
-        webbrowser.open(url)
-        return
+        if _viewer_health(port):
+            url = f"http://127.0.0.1:{port}/"
+            console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+            webbrowser.open(url)
+            return
+        # Port is held by something that is NOT our viewer (a stale instance or
+        # an unrelated server) — reusing it would open a broken/foreign page.
+        # Move to the next free port instead of clashing.
+        free = _find_free_port(port + 1)
+        if free is None:
+            console.print(
+                f"[red]Port {port} is in use by another process, and no free port "
+                f"was found nearby.[/red] Stop it, or pass --port to pick one."
+            )
+            raise typer.Exit(1)
+        console.print(
+            f"[yellow]Port {port} is held by another process (not the tracing viewer); "
+            f"starting on {free} instead.[/yellow]"
+        )
+        port = free
 
     node = _resolve_node()
     server_js = _server_js()
@@ -93,11 +137,12 @@ def _open_dashboard(port: int) -> None:
         start_new_session=True,
     )
 
-    for _ in range(24):  # wait up to ~6s for the server to bind
-        if _port_live(port):
+    for _ in range(24):  # wait up to ~6s for the server to actually serve
+        if _viewer_health(port):
             break
         time.sleep(0.25)
 
+    url = f"http://127.0.0.1:{port}/"
     console.print(f"Tracing dashboard at [cyan]{url}[/cyan]")
     webbrowser.open(url)
 
