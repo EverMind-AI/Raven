@@ -186,6 +186,23 @@ def test_version_flag_matches_installed_metadata() -> None:
     assert f"Raven v{pkg_version('raven')}" in r.stdout
 
 
+def test_cli_import_does_not_pull_litellm() -> None:
+    """The CLI entry module must not eagerly import litellm (it dominates cold
+    start). Checked in a subprocess: ``sys.modules`` is process-global, so a full
+    ``pytest tests/`` run pollutes it via sibling tests that import litellm and an
+    in-process assertion would false-fail.
+    """
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "-c", "import raven.cli.commands, sys; assert 'litellm' not in sys.modules"],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+
+
 def test_no_logs_subcommand_registered() -> None:
     """There is no ``raven logs`` command; adding one must break this test."""
     assert "logs" not in _registered_command_names()
