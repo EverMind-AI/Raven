@@ -42,17 +42,6 @@ from rich.console import Console
 
 from raven import __logo__, __version__
 
-# LiteLLM prints a red-bold "Provider List: ..." banner to stdout when it
-# can't match a model prefix. For our custom-provider setup this fires on
-# every call, clashes with prompt_toolkit's rendered prompt, and shows up
-# as ?[1;31m... garbage when patch_stdout is active. Silence it.
-try:
-    import litellm
-
-    litellm.suppress_debug_info = True
-except Exception:
-    pass
-
 app = typer.Typer(
     name="raven",
     help=f"{__logo__} Raven - Agent Framework",
