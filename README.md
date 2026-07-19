@@ -159,10 +159,13 @@ breaks down when the agent becomes part of your daily environment:
 Raven treats the harness around the agent as the product, not a thin wrapper or
 an edge case.
 
-Raven's self-improving harness is built around three product bets:
+Raven's self-improving harness is built around four product bets:
 
 - **Memory-first harness:** user memory, agent memory, and world knowledge stay
   separate, durable, and reusable across sessions.
+- **Deep Research as a tool:** long-form, multi-source research can be enabled
+  with `raven deep-research enable` and then used by the agent when the task
+  calls for deeper investigation.
 - **Self-improving skills:** repeated workflows can become skills, collect
   feedback, and evolve instead of staying buried in chat history.
 - **Agent Templates:** builders can start from Raven, define an agent for a
@@ -193,6 +196,11 @@ Raven's self-improving harness is built around three product bets:
 <td><strong>Proactivity</strong></td>
 <td>Sentinel, scheduler, nudge policy, and deferred decision flow</td>
 <td>Usually waits until the user types again</td>
+</tr>
+<tr>
+<td><strong>Deep Research</strong></td>
+<td>Opt-in MiroThinker-backed deep_research tool enabled with <code>raven deep-research enable</code></td>
+<td>Usually external search tabs, ad hoc browser prompts, or one-off research scripts</td>
 </tr>
 <tr>
 <td><strong>Skill evolution</strong></td>
