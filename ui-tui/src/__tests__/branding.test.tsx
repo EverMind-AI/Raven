@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import type { SessionInfo } from '../types.js'
 
 import { ravenLogo, ravenLogoWord, RAVEN_WORD_WIDTH } from '../banner.js'
-import { Branding, formatProvider, SessionPanel } from '../components/branding.js'
+import { Branding, formatProvider, SessionPanel, StartupLoader } from '../components/branding.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 describe('Branding', () => {
@@ -36,6 +36,14 @@ describe('SessionPanel', () => {
     const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="test" t={DEFAULT_THEME} />)
     expect(lastFrame()).toContain('raven upgrade')
     expect(lastFrame()).not.toContain('raven update')
+  })
+})
+
+describe('StartupLoader', () => {
+  it('renders a spinner frame and the first startup message', () => {
+    const { lastFrame } = render(<StartupLoader t={DEFAULT_THEME} />)
+    expect(lastFrame()).toContain('summoning raven')
+    expect(lastFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
   })
 })
 
