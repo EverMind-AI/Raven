@@ -18,12 +18,15 @@
 # Raven
 
 Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
-**The Self-Improving Agent Harness**。
+**The Self-Improving Agent Harness**，并内置可选 Deep Research，用于多来源深度研究。
 
 Raven 会持续迭代支撑 Agent 的 harness：tools、skills、memory、code execution
 runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持久存在的用户
 记忆、Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，
 并把可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
+
+**Update：** Raven 新增 Deep Research。运行 `raven deep-research enable` 后，
+Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来源 research tool。
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="从命令行启动 Raven" width="100%">
@@ -119,6 +122,8 @@ helper，让当前运行的可执行文件退出；请等 helper 输出完成消
 - 用 `raven` 或 `raven tui` 启动 Raven 的终端原生 harness。
 - 用 `raven agent -m "..."` 执行一次性 shell 任务。
 - 用 `raven onboard` 配置 providers、sandbox、channels 和 memory。
+- 用 `raven deep-research enable` 启用 MiroThinker-backed deep_research tool。
+- 用 `raven tracing` 打开 LLM/tool/memory spans 的本地 tracing dashboard。
 - 用 `raven skill list` 浏览内置和本地 SkillForge skills。
 - 用 `raven sessions list` 恢复、fork、导出或删除之前的工作。
 - 用 `raven sentinel status` 查看主动记忆和 scheduled nudges 状态。
@@ -155,10 +160,12 @@ Raven 目前内置 12 个 gateway adapters。用 `raven channels list` 查看本
 
 Raven 把 Agent 周围的 harness 当成产品本身，而不是一层薄包装或边缘 case。
 
-Raven 的 self-improving harness 围绕三个产品判断构建：
+Raven 的 self-improving harness 围绕四个产品判断构建：
 
 - **Memory-first harness：** 用户记忆、Agent 记忆和世界知识彼此独立、持久存在，并且
   可以跨会话复用。
+- **Deep Research as a tool：** 长篇、多来源研究可以通过 `raven deep-research enable`
+  启用，并在任务需要更深调查时交给 Agent 使用。
 - **Self-improving skills：** 重复工作流可以沉淀成 skills，记录反馈，并在失效时
   继续进化，而不是埋在聊天记录里。
 - **Agent Templates：** 构建者可以从 Raven 出发，为具体场景定义一个 Agent，并在
@@ -189,6 +196,11 @@ Raven 的 self-improving harness 围绕三个产品判断构建：
 <td><strong>主动性</strong></td>
 <td>Sentinel、scheduler、nudge policy 和 deferred decision flow</td>
 <td>通常等用户再次输入</td>
+</tr>
+<tr>
+<td><strong>Deep Research</strong></td>
+<td>可选的 MiroThinker-backed deep_research tool，通过 <code>raven deep-research enable</code> 启用</td>
+<td>通常依赖外部搜索标签页、临时 browser prompt 或一次性 research scripts</td>
 </tr>
 <tr>
 <td><strong>Skill 进化</strong></td>
@@ -229,6 +241,21 @@ Sentinel 监听事件、调度检查、判断 nudge 是否有用，并通过 gua
 SkillForge 把 skills 当成 procedural memory。它可以识别可复用工作流、写入
 skill 文件、追踪执行反馈，并在 instruction 失效时进化它。
 
+### 6. 会自我进化的 Harness
+
+`raven.evolver` 可以基于 benchmark 做可度量的 harness self-evolution：诊断失败
+trajectories，把候选 harness patch 设计成真实 git commits，并且只提升通过统计
+gate 的改动。它带有 sealed test set，用来保留诚实的泛化结果。一个命令
+（`python -m raven.evolver run --config <yaml>`）即可运行，并支持完整 resume。
+从 [raven/evolver/README.md](raven/evolver/README.md) 开始。
+
+### 7. Harness 内的研究与可观测性
+
+Raven 现在提供两个可选入口来支持更深的工作：`raven deep-research` 用于配置
+MiroThinker-backed `deep_research` tool，让 Agent 在任务需要时执行多来源 research；
+`raven tracing` 会打开本地 dashboard，查看已捕获的 LLM、tool 和 memory spans，
+方便在不改变 agent workflow 的情况下复盘一次运行内部发生了什么。
+
 <br>
 <div align="right">
 
@@ -263,6 +290,9 @@ digital worker。
 | 配置 Raven | `raven onboard` |
 | 执行一次性 shell 任务 | `raven agent -m "..."` |
 | 查看 providers | `raven provider list` |
+| 配置 Deep Research | `raven deep-research enable` |
+| 查看 Deep Research 配置 | `raven deep-research get` |
+| 打开 tracing dashboard | `raven tracing` |
 | 列出消息渠道 | `raven channels list` |
 | 启动 messaging gateway | `raven gateway` |
 | 管理 sessions | `raven sessions list` |
@@ -283,8 +313,11 @@ digital worker。
 | 第一次安装和配置 | [快速安装](#快速安装) |
 | 源码开发 | [开发工作流](#开发工作流) 和 [docs/dev.md](docs/dev.md) |
 | Memory 和 plugin 架构 | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
+| 配置 Deep Research | `raven deep-research --help` |
+| 查看 tracing 和 observability | `raven tracing` 和 [docs/TRACING_STANDARD_API.md](docs/TRACING_STANDARD_API.md) |
 | Sandbox 使用和调试 | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
 | Proactivity 设计 | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
+| Benchmark self-evolution | [raven/evolver/README.md](raven/evolver/README.md) |
 | 详细设计文档 | [docs/README.md](docs/README.md) |
 
 <br>
@@ -315,7 +348,9 @@ Channels / TUI / Gateway
         +--> Memory Engine    EverOS / local skills / SkillForge
         +--> Proactive Engine Sentinel / scheduler / nudge policy
         +--> TokenWise        usage tracking / cache placement / routing
+        +--> Tracing          captured LLM / tool / memory spans
         +--> Eval Engine      task judgement and coordination
+        +--> Evolver          benchmark-driven harness self-evolution
 ```
 
 ### 仓库结构
@@ -331,6 +366,8 @@ raven/
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
 ├── memory_engine/      # EverOS memory, local skills, SkillForge
 ├── token_wise/         # Usage tracking, cache placement, routing
+├── tracing/            # Span capture 和本地 tracing dashboard
+├── evolver/            # Benchmark-driven harness self-evolution
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point
@@ -338,6 +375,7 @@ raven/
 
 ui-tui/                 # React/Ink 原生终端 UI
 bridge/                 # WhatsApp TypeScript bridge
+benchmarks/             # Benchmark adapters，包括 AppWorld evolver wiring
 ```
 
 <br>
@@ -373,6 +411,9 @@ Raven 仍处于 pre-alpha，变化会很快。API 可能调整，但核心产品
 | Sentinel proactivity | 已实现，持续演进 |
 | TokenWise strategies | 已实现 |
 | SkillForge | 已实现 |
+| Deep Research tool | 已实现，可选配置 |
+| Tracing dashboard | 已实现 |
+| Evolver pipeline | 已实现，benchmark adapters 持续演进 |
 | Eval engine | 部分完成 |
 
 <br>
