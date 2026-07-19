@@ -61,26 +61,49 @@ def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
         )
 
 
+def check_provider_credentials(config: Config) -> None:
+    """Fail-fast when the configured provider is missing required credentials.
+
+    Cheap (no litellm import), so it can run at startup even when the real
+    provider is built lazily. Kept in sync with the branches of make_provider.
+    """
+    model = config.agents.defaults.model
+    provider_name = config.get_provider_name(model)
+    p = config.get_provider(model)
+
+    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+        return
+    if provider_name == "azure_openai":
+        if not p or not p.api_key or not p.api_base:
+            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
+            console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
+            console.print("Use the model field to specify the deployment name.")
+            raise typer.Exit(1)
+        return
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name(provider_name)
+    if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
+        console.print("[red]Error: No API key configured.[/red]")
+        console.print("Set one in ~/.raven/config.json under providers section")
+        raise typer.Exit(1)
+
+
 def make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
 
+    check_provider_credentials(config)
+
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
         provider = OpenAICodexProvider(default_model=model)
-    # Azure OpenAI: direct Azure OpenAI endpoint with deployment name
     elif provider_name == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
         provider = AzureOpenAIProvider(
             api_key=p.api_key,
             api_base=p.api_base,
@@ -88,17 +111,7 @@ def make_provider(config: Config):
         )
     else:
         from raven.providers.litellm_provider import LiteLLMProvider
-        from raven.providers.registry import find_by_name
 
-        spec = find_by_name(provider_name)
-        if (
-            not model.startswith("bedrock/")
-            and not (p and p.api_key)
-            and not (spec and (spec.is_oauth or spec.is_local))
-        ):
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.raven/config.json under providers section")
-            raise typer.Exit(1)
         # OpenRouter routes qwen3.x-27B through providers that default to
         # reasoning mode (e.g. AtlasCloud): every chat completion emits
         # ~800 chain-of-thought tokens and takes ~30s wall — fatal for
@@ -123,6 +136,28 @@ def make_provider(config: Config):
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
     )
+    return provider
+
+
+def make_lazy_provider(config: Config):
+    """Provider that defers the real (litellm-importing) build to the first model
+    call, so AgentLoop construction stays fast. Credentials are checked now
+    (fail-fast preserved) and the real provider is pre-warmed in the background."""
+    from raven.providers.base import GenerationSettings
+    from raven.providers.lazy import LazyProvider
+
+    check_provider_credentials(config)
+    defaults = config.agents.defaults
+    provider = LazyProvider(
+        factory=lambda: make_provider(config),
+        default_model=defaults.model,
+        generation=GenerationSettings(
+            temperature=defaults.temperature,
+            max_tokens=defaults.max_tokens,
+            reasoning_effort=defaults.reasoning_effort,
+        ),
+    )
+    provider.prewarm()
     return provider
 
 

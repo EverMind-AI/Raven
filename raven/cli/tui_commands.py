@@ -338,7 +338,7 @@ def _build_tui_agent_loop():
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.cli._helpers import load_runtime_config, make_provider
+        from raven.cli._helpers import load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
             build_plugin_tools,
@@ -354,7 +354,7 @@ def _build_tui_agent_loop():
         ec_config = load_raven_config()
         skill_forge_cfg = ec_config.skill_forge
 
-        provider = make_provider(config)
+        provider = make_lazy_provider(config)
         session_manager = SessionManager(config.workspace_path)
 
         cron = CronService(
@@ -600,23 +600,27 @@ async def _run_rpc_server_until_done(
     # backend.start() (which may trigger lazy warns) through the end of stop().
     # The Node child already inherited the real terminal fds at Popen time (before
     # this function ran), so this dup2 does not affect the child's terminal.
-    with redirect_terminal_fds_to_file(get_logs_dir() / "tui.log"):
-        # Start the embedded backend before serving so the EverOS runtime is up
-        # and its index lock is held for the session. No-op for http/no-op backends.
-        if agent_loop is not None and agent_loop.backend is not None:
-            try:
-                await agent_loop.backend.start()
-            except Exception:
-                from loguru import logger as _logger
+    async def _start_memory_backend() -> None:
+        # Bring up the memory backend off the render path: its everos/lancedb
+        # import (~2-3s) + lifespan must not block the handshake / first render.
+        # recall/store degrade to empty until it is ready.
+        try:
+            await agent_loop.backend.start()
+        except Exception:
+            from loguru import logger as _logger
 
-                _logger.exception(
-                    "tui: memory backend start failed; continuing with degraded memory path",
-                )
-        # everos configure_logging installs a root stdout StreamHandler during start();
-        # strip it so everos records flow to the file sink and never reach the terminal.
+            _logger.exception("tui: memory backend start failed; continuing with degraded memory path")
+        # everos installs a root stdout StreamHandler during start(); strip it now
+        # (after the deferred start) so its records reach the file sink.
+        _strip_tty_stream_handlers()
+
+    with redirect_terminal_fds_to_file(get_logs_dir() / "tui.log"):
+        # Strip any tty handlers installed before serve; the deferred backend
+        # start strips again after it runs.
         _strip_tty_stream_handlers()
 
         serve_task = asyncio.create_task(server.serve_forever())
+        backend_start_task: asyncio.Task | None = None
 
         try:
             # Wait until EITHER handshake completes OR deadline expires OR child exits.
@@ -639,10 +643,21 @@ async def _run_rpc_server_until_done(
 
             if not handshake_done.is_set():
                 return False
-            # Handshake OK — continue serving until child exits.
+            # Handshake OK (UI rendered) — bring up the memory backend now, in the
+            # background, so its heavy import + lifespan happens after render.
+            if agent_loop is not None and agent_loop.backend is not None:
+                backend_start_task = asyncio.create_task(_start_memory_backend())
+            # Continue serving until child exits.
             await proc_done.wait()
             return True
         finally:
+            # Let the background backend start finish before stop() so stop never
+            # races a mid-flight start.
+            if backend_start_task is not None:
+                try:
+                    await backend_start_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             # Fail-safe any pending confirm so a paused dispatch's worker thread
             # is released when the connection drops.
             confirm_broker.cancel_all()

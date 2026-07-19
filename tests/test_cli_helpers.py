@@ -99,3 +99,55 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
     )
     provider = _helpers.make_provider(load_config(p))
     assert isinstance(provider, LiteLLMProvider)
+
+
+# ---------------------------------------------------------------------------
+# check_provider_credentials — fail-fast without importing litellm
+# ---------------------------------------------------------------------------
+
+
+def _write_config(tmp_path: Path, *, api_key: str | None) -> Path:
+    provider: dict = {"apiBase": "http://localhost:9000/v1"}
+    if api_key is not None:
+        provider["apiKey"] = api_key
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+                "providers": {"custom": provider},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_check_provider_credentials_exits_when_no_key(tmp_path: Path) -> None:
+    import typer
+
+    from raven.config.loader import load_config
+
+    with pytest.raises(typer.Exit):
+        _helpers.check_provider_credentials(load_config(_write_config(tmp_path, api_key=None)))
+
+
+def test_check_provider_credentials_passes_with_key(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    _helpers.check_provider_credentials(load_config(_write_config(tmp_path, api_key="sk-x")))  # no raise
+
+
+def test_make_lazy_provider_returns_lazy_without_building(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``make_lazy_provider`` returns a LazyProvider that answers ``get_default_model``
+    from config without building the real (litellm-importing) provider."""
+    from raven.config.loader import load_config
+    from raven.providers.lazy import LazyProvider
+
+    # Stub the real build so prewarm never imports litellm.
+    monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="real"))
+
+    provider = _helpers.make_lazy_provider(load_config(_write_config(tmp_path, api_key="sk-x")))
+
+    assert isinstance(provider, LazyProvider)
+    assert provider.get_default_model() == "my-model"
