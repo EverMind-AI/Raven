@@ -4,9 +4,10 @@ The backend is the host's :class:`MemoryBackend` implementation. Three
 operating modes:
 
 - **embedded** (EM-2, this PR): delegate to ``everos.service`` in
-  the same process. If ``everos`` is not installed (or fails to
-  import — version skew, missing native deps, etc.), the backend
-  degrades to a :class:`_NoOpAdapter` and logs once at construction.
+  the same process. The adapter build (the everos/lancedb import) is
+  deferred to ``start()`` to keep construction off the render path; if
+  ``everos`` is not installed (or fails to import — version skew, missing
+  native deps, etc.), the backend degrades to a :class:`_NoOpAdapter`.
 - **http** (EM-3, next PR): HTTP client over EverOS's
   ``POST /api/v1/memory/{search,add,...}``. Currently shadowed by the
   same no-op adapter so wiring code can already select the mode
@@ -35,6 +36,7 @@ Three architectural invariants worth re-stating:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from types import SimpleNamespace
@@ -486,11 +488,14 @@ class EverosBackend:
         # Adapter selection. Tests inject explicit adapters; production
         # wires through one of the per-mode factories below.
         if adapter is not None:
-            self._adapter: _Adapter = adapter
+            self._adapter: _Adapter | None = adapter
         else:
             self._validate_config()
             if self._mode == "embedded":
-                self._adapter = _try_make_real_adapter()
+                # Defer the heavy everos/lancedb import (~2-3s) to start() so it
+                # runs off the render-blocking path. recall/store degrade to
+                # empty until the adapter is built.
+                self._adapter = None
             else:  # "http" — _validate_config rejected anything else
                 self._adapter = self._make_http_adapter()
 
@@ -530,6 +535,11 @@ class EverosBackend:
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
+        # Build the embedded adapter now (deferred from __init__). The everos /
+        # lancedb import is ~2-3s of sync CPU, so run it in a thread to keep it
+        # off the event loop.
+        if self._mode == "embedded" and self._adapter is None:
+            self._adapter = await asyncio.to_thread(_try_make_real_adapter)
         self._logger.info(
             "EverosBackend.start (mode=%s, adapter=%s)",
             self._mode,
@@ -588,6 +598,8 @@ class EverosBackend:
             )
             return []
         owner_type: _OwnerType = "user" if user_id is not None else "agent"
+        if self._adapter is None:
+            return []  # adapter still building (start() not finished); degrade to no hits
         try:
             data = await self._adapter.search(
                 user_id=user_id,
@@ -632,6 +644,8 @@ class EverosBackend:
         )
         if not payload:
             return
+        if self._adapter is None:
+            return  # adapter still building (start() not finished); drop this turn's store
         n = self._turn_counts.get(session_id, 0) + 1
         self._turn_counts[session_id] = n
         is_final = self._flush_every_turns > 0 and n % self._flush_every_turns == 0

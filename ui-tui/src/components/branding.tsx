@@ -41,6 +41,31 @@ function InlineLoader({ label, t }: { label: string; t: Theme }) {
   )
 }
 
+const STARTUP_MESSAGES = ['summoning raven…', 'building agent loop…', 'loading tools & skills…']
+const STARTUP_LABEL_MS = 900
+
+// Placeholder shown in the intro row while the backend builds the agent loop,
+// before the session.info handshake populates SessionPanel. Wrapped in the same
+// rounded box as SessionPanel so the handoff reads as one region's content
+// changing rather than a block appearing from nowhere.
+export function StartupLoader({ t }: { t: Theme }) {
+  const [step, setStep] = useState(0)
+
+  useEffect(() => {
+    const id = setInterval(() => setStep(n => n + 1), STARTUP_LABEL_MS)
+
+    return () => clearInterval(id)
+  }, [])
+
+  const label = STARTUP_MESSAGES[Math.min(step, STARTUP_MESSAGES.length - 1)] ?? STARTUP_MESSAGES[0]
+
+  return (
+    <Box borderColor={t.color.border} borderStyle="round" marginBottom={1} paddingX={2} paddingY={1}>
+      <InlineLoader label={label} t={t} />
+    </Box>
+  )
+}
+
 export function ArtLines({ lines }: { lines: [string, string][] }) {
   return (
     <>

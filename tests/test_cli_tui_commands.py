@@ -320,6 +320,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
+    ctx["dispatcher"] = fake_dispatcher
     return ctx
 
 
@@ -336,12 +337,35 @@ async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):
     await _run_rpc_server_until_done(fake_sock, "test-token", 0.01, proc_done)
 
 
-async def test_rpc_runner_calls_backend_start_before_serving(rpc_server_deps, monkeypatch) -> None:
-    """``_run_rpc_server_until_done`` must await ``backend.start()`` once before
-    entering the serve loop when ``agent_loop.backend`` is not None."""
-    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+async def _run_until_done_with_handshake(monkeypatch, ctx):
+    """Drive the runner through a successful handshake, then end the session.
 
-    assert rpc_server_deps["start_calls"] == ["start"], "backend.start() must be called exactly once before serving"
+    The memory backend is now started *after* the handshake (off the render
+    path), so tests that assert backend lifecycle must simulate the handshake:
+    we invoke the registered ``system.hello`` handler (which sets
+    ``handshake_done``), let the background start run, then set ``proc_done``.
+    """
+    from raven.cli.tui_commands import _run_rpc_server_until_done
+
+    proc_done = asyncio.Event()
+    fake_sock = MagicMock()
+    runner = asyncio.create_task(_run_rpc_server_until_done(fake_sock, "test-token", 1.0, proc_done))
+    await asyncio.sleep(0.02)  # let the runner register handlers + start serving
+
+    hello = next(c.args[1] for c in ctx["dispatcher"].register.call_args_list if c.args[0] == "system.hello")
+    await hello({"client_version": "0.0.1"})  # sets handshake_done -> triggers background backend start
+    await asyncio.sleep(0.05)  # let the background start run to completion
+
+    proc_done.set()
+    await runner
+
+
+async def test_rpc_runner_starts_backend_after_handshake(rpc_server_deps, monkeypatch) -> None:
+    """``backend.start()`` runs once, in the background after the handshake (off
+    the render path), when ``agent_loop.backend`` is not None."""
+    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
+
+    assert rpc_server_deps["start_calls"] == ["start"], "backend.start() must be called exactly once"
 
 
 async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatch) -> None:
@@ -383,7 +407,7 @@ async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, mo
 
 async def test_rpc_runner_start_and_stop_each_called_once(rpc_server_deps, monkeypatch) -> None:
     """Exactly one start and one stop — no double-start or double-stop."""
-    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
 
     assert len(rpc_server_deps["start_calls"]) == 1
     assert len(rpc_server_deps["stop_calls"]) == 1
@@ -423,7 +447,7 @@ async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(rpc_ser
 
     rpc_server_deps["backend"].start = _start_with_root_handler
 
-    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
 
     assert len(installed_handler) == 1, "spy backend.start() did not run"
     assert installed_handler[0] not in logging.getLogger().handlers, (
@@ -479,7 +503,7 @@ async def test_rpc_runner_activates_fd_redirect_before_backend_start(rpc_server_
         lambda: tmp_path,
     )
 
-    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
 
     assert "redirect_enter" in call_log, "redirect_terminal_fds_to_file must be entered"
     enter_idx = call_log.index("redirect_enter")

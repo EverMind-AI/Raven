@@ -92,13 +92,12 @@ class TestConstruction:
         with pytest.raises(ValueError, match="invalid mode"):
             EverosBackend(_ctx(tmp_path, mode="embeded"))
 
-    def test_embedded_mode_selects_real_or_no_op(self, tmp_path: Path) -> None:
-        """Embedded mode picks the real adapter when everos imports
-        cleanly, else falls back to no-op. Both are valid; we only
-        assert the type is one of the two so the test stays hermetic
-        whether or not everos is installed in the active venv."""
+    def test_embedded_mode_defers_adapter_to_start(self, tmp_path: Path) -> None:
+        """Embedded mode defers the (heavy everos/lancedb) adapter build to
+        start(): at construction the adapter is None, so the ~2-3s import stays
+        off the render-blocking build path. start() then selects real/no-op."""
         b = EverosBackend(_ctx(tmp_path, mode="embedded"))
-        assert isinstance(b._adapter, (_NoOpAdapter, _RealEverosAdapter))
+        assert b._adapter is None
 
     def test_make_backend_factory(self, tmp_path: Path) -> None:
         b = make_backend(_ctx(tmp_path))
@@ -117,6 +116,24 @@ class TestLifecycle:
         await b.stop()
         await b.start()
         await b.stop()
+
+    async def test_start_builds_deferred_embedded_adapter(self, tmp_path: Path) -> None:
+        """start() builds the embedded adapter that __init__ deferred."""
+        b = EverosBackend(_ctx(tmp_path, mode="embedded"))
+        assert b._adapter is None
+        try:
+            await b.start()
+            assert isinstance(b._adapter, (_NoOpAdapter, _RealEverosAdapter))
+        finally:
+            await b.stop()
+
+    async def test_recall_and_store_degrade_before_adapter_built(self, tmp_path: Path) -> None:
+        """Before start() builds the deferred adapter, recall returns empty and
+        store is a no-op (the render-window degrade), not a crash."""
+        b = EverosBackend(_ctx(tmp_path, mode="embedded"))
+        assert b._adapter is None
+        assert await b.recall("hi", user_id="alice", top_k=5) == []
+        await b.store("sess", [{"role": "user", "content": "hi"}])  # must not raise
 
 
 # ---------------------------------------------------------------------------

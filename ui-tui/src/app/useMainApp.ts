@@ -360,10 +360,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   }, [])
 
   const rpc: GatewayRpc = useCallback(
-    async <T extends object = Record<string, unknown>>(
-      method: string,
-      params: Record<string, unknown> = {}
-    ) => {
+    async <T extends object = Record<string, unknown>>(method: string, params: Record<string, unknown> = {}) => {
       try {
         const result = asRpcResult<T>(await gw.request<T>(method, params))
 
