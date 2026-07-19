@@ -118,6 +118,8 @@ Raven again.
 - Start the Raven harness in a terminal-native TUI with `raven` or `raven tui`.
 - Run a one-shot shell task with `raven agent -m "..."`.
 - Configure providers, sandboxing, channels, and memory with `raven onboard`.
+- Enable the MiroThinker deep_research tool with `raven deep-research enable`.
+- Open captured LLM/tool/memory spans with `raven tracing`.
 - Browse built-in and local SkillForge skills with `raven skill list`.
 - Resume, fork, export, or delete previous work with `raven sessions list`.
 - Check proactive memory and scheduled nudges with `raven sentinel status`.
@@ -245,6 +247,14 @@ an honest generalisation number. One command
 (`python -m raven.evolver run --config <yaml>`), fully resumable. Start at
 [raven/evolver/README.md](raven/evolver/README.md).
 
+### 7. Research and Observability in the Harness
+
+Raven now includes two opt-in surfaces for deeper work. `raven deep-research`
+configures the MiroThinker-backed `deep_research` tool so an agent can run a
+multi-source research pass when the task calls for it. `raven tracing` opens a
+local dashboard for captured LLM, tool, and memory spans, making it easier to
+inspect what happened inside a run without changing the agent workflow.
+
 <br>
 <div align="right">
 
@@ -280,6 +290,9 @@ official endorsement unless explicitly approved by EverMind.
 | Configure Raven | `raven onboard` |
 | Run a one-shot shell task | `raven agent -m "..."` |
 | Review providers | `raven provider list` |
+| Configure Deep Research | `raven deep-research enable` |
+| Inspect Deep Research config | `raven deep-research get` |
+| Open tracing dashboard | `raven tracing` |
 | List messaging channels | `raven channels list` |
 | Start the messaging gateway | `raven gateway` |
 | Manage sessions | `raven sessions list` |
@@ -300,6 +313,8 @@ official endorsement unless explicitly approved by EverMind.
 | First-time install and setup | [Quick Install](#quick-install) |
 | Source-based development | [Developer Workflow](#developer-workflow) and [docs/dev.md](docs/dev.md) |
 | Memory and plugin architecture | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
+| Configure Deep Research | `raven deep-research --help` |
+| Inspect tracing and observability | `raven tracing` and [docs/TRACING_STANDARD_API.md](docs/TRACING_STANDARD_API.md) |
 | Sandbox usage and debugging | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
 | Proactivity design | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
 | Benchmark self-evolution | [raven/evolver/README.md](raven/evolver/README.md) |
@@ -333,7 +348,9 @@ Channels / TUI / Gateway
         +--> Memory Engine    EverOS / local skills / SkillForge
         +--> Proactive Engine Sentinel / scheduler / nudge policy
         +--> TokenWise        usage tracking / cache placement / routing
+        +--> Tracing          captured LLM / tool / memory spans
         +--> Eval Engine      task judgement and coordination
+        +--> Evolver          benchmark-driven harness self-evolution
 ```
 
 ### Repo Layout
@@ -349,6 +366,8 @@ raven/
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
 ├── memory_engine/      # EverOS memory, local skills, SkillForge
 ├── token_wise/         # Usage tracking, cache placement, routing
+├── tracing/            # Span capture and local tracing dashboard
+├── evolver/            # Benchmark-driven harness self-evolution
 ├── sandbox/            # Isolated command execution
 ├── security/           # Trust boundaries and network checks
 ├── cli/                # `raven` command line entry point
@@ -356,6 +375,7 @@ raven/
 
 ui-tui/                 # React/Ink native terminal UI
 bridge/                 # WhatsApp TypeScript bridge
+benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
 ```
 
 <br>
@@ -393,6 +413,9 @@ core product surfaces are already in the repository.
 | Sentinel proactivity | Implemented, still evolving |
 | TokenWise strategies | Implemented |
 | SkillForge | Implemented |
+| Deep Research tool | Implemented, opt-in configuration |
+| Tracing dashboard | Implemented |
+| Evolver pipeline | Implemented, benchmark adapters still evolving |
 | Eval engine | Partial |
 
 <br>
