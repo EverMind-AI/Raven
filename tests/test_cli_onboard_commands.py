@@ -1032,6 +1032,13 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
     monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
 
+    import raven.cli._everos_server as everos_server
+
+    async def _fake_ensure_everos_server(*a: object, **kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
+
     onboard_commands._step4_memory(
         skip=False,
         non_interactive=False,

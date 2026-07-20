@@ -143,7 +143,7 @@ def register(app: typer.Typer) -> None:
         # from --config are silently ignored.
         config = load_runtime_config(config, workspace)
 
-        from raven.cli._log_file import redirect_loguru_to_file, redirect_terminal_fds_to_file
+        from raven.cli._log_file import redirect_loguru_to_file
 
         log_cfg = config.gateway.log
         log_path = redirect_loguru_to_file(
@@ -585,12 +585,7 @@ def register(app: typer.Typer) -> None:
                             "memory backend stop failed; continuing shutdown",
                         )
 
-        # everos embedded structlog uses PrintLogger which calls print() -> writes
-        # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
-        # no everos output can corrupt the terminal, covering from before
-        # backend.start() through the end of the gateway run.
-        with redirect_terminal_fds_to_file(log_path):
-            asyncio.run(run())
+        asyncio.run(run())
 
 
 __all__ = ["register"]

@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file, redirect_terminal_fds_to_file
+from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
@@ -595,100 +595,76 @@ async def _run_rpc_server_until_done(
         build_error=build_error,
     )
 
-    from raven.config.paths import get_logs_dir
-
-    # everos embedded structlog uses PrintLogger which calls print() → writes
-    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
-    # no everos output can corrupt the full-screen TUI, starting before
-    # backend.start() (which may trigger lazy warns) through the end of stop().
-    # The Node child already inherited the real terminal fds at Popen time (before
-    # this function ran), so this dup2 does not affect the child's terminal.
-    async def _start_memory_backend() -> None:
-        # Bring up the memory backend off the render path: its everos/lancedb
-        # import (~2-3s) + lifespan must not block the handshake / first render.
-        # recall/store degrade to empty until it is ready.
+    # Start the embedded backend before serving so the EverOS runtime is up
+    # and its index lock is held for the session. No-op for http/no-op backends.
+    if agent_loop is not None and agent_loop.backend is not None:
         try:
             await agent_loop.backend.start()
         except Exception:
             from loguru import logger as _logger
 
-            _logger.exception("tui: memory backend start failed; continuing with degraded memory path")
-        # everos installs a root stdout StreamHandler during start(); strip it now
-        # (after the deferred start) so its records reach the file sink.
-        _strip_tty_stream_handlers()
-
-    with redirect_terminal_fds_to_file(get_logs_dir() / "tui.log"):
-        # Strip any tty handlers installed before serve; the deferred backend
-        # start strips again after it runs.
-        _strip_tty_stream_handlers()
-
-        serve_task = asyncio.create_task(server.serve_forever())
-        backend_start_task: asyncio.Task | None = None
-
-        try:
-            # Wait until EITHER handshake completes OR deadline expires OR child exits.
-            done, pending = await asyncio.wait(
-                {
-                    asyncio.create_task(handshake_done.wait()),
-                    asyncio.create_task(proc_done.wait()),
-                },
-                timeout=handshake_deadline_s,
-                return_when=asyncio.FIRST_COMPLETED,
+            _logger.exception(
+                "tui: memory backend start failed; continuing with degraded memory path",
             )
-            for t in pending:
-                t.cancel()
-            # Drain cancelled tasks to suppress warnings.
-            for t in pending:
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
+    # everos configure_logging installs a root stdout StreamHandler during start();
+    # strip it so everos records flow to the file sink and never reach the terminal.
+    _strip_tty_stream_handlers()
 
-            if not handshake_done.is_set():
-                return False
-            # Handshake OK (UI rendered) — bring up the memory backend now, in the
-            # background, so its heavy import + lifespan happens after render.
-            if agent_loop is not None and agent_loop.backend is not None:
-                backend_start_task = asyncio.create_task(_start_memory_backend())
-            # Continue serving until child exits.
-            await proc_done.wait()
-            return True
-        finally:
-            # Let the background backend start finish before stop() so stop never
-            # races a mid-flight start.
-            if backend_start_task is not None:
-                try:
-                    await backend_start_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            # Fail-safe any pending confirm so a paused dispatch's worker thread
-            # is released when the connection drops.
-            confirm_broker.cancel_all()
-            if agent_loop is not None and agent_loop.cron_service is not None:
-                try:
-                    agent_loop.cron_service.stop()
-                except Exception:
-                    pass
-            if turn_teardown is not None:
-                try:
-                    await turn_teardown()
-                except Exception:
-                    pass
-            # Release the embedded index lock so the next process can start.
-            if agent_loop is not None and agent_loop.backend is not None:
-                try:
-                    await agent_loop.backend.stop()
-                except Exception:
-                    from loguru import logger as _logger
+    serve_task = asyncio.create_task(server.serve_forever())
 
-                    _logger.exception(
-                        "tui: memory backend stop failed; continuing shutdown",
-                    )
-            serve_task.cancel()
+    try:
+        # Wait until EITHER handshake completes OR deadline expires OR child exits.
+        done, pending = await asyncio.wait(
+            {
+                asyncio.create_task(handshake_done.wait()),
+                asyncio.create_task(proc_done.wait()),
+            },
+            timeout=handshake_deadline_s,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+        # Drain cancelled tasks to suppress warnings.
+        for t in pending:
             try:
-                await serve_task
+                await t
             except (asyncio.CancelledError, Exception):
                 pass
+
+        if not handshake_done.is_set():
+            return False
+        # Handshake OK — continue serving until child exits.
+        await proc_done.wait()
+        return True
+    finally:
+        # Fail-safe any pending confirm so a paused dispatch's worker thread
+        # is released when the connection drops.
+        confirm_broker.cancel_all()
+        if agent_loop is not None and agent_loop.cron_service is not None:
+            try:
+                agent_loop.cron_service.stop()
+            except Exception:
+                pass
+        if turn_teardown is not None:
+            try:
+                await turn_teardown()
+            except Exception:
+                pass
+        # Release the embedded index lock so the next process can start.
+        if agent_loop is not None and agent_loop.backend is not None:
+            try:
+                await agent_loop.backend.stop()
+            except Exception:
+                from loguru import logger as _logger
+
+                _logger.exception(
+                    "tui: memory backend stop failed; continuing shutdown",
+                )
+        serve_task.cancel()
+        try:
+            await serve_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 def _spawn_with_rpc_socket(

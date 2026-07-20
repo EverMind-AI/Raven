@@ -228,7 +228,7 @@ async def _run_async(
 ) -> None:
     from loguru import logger as _logger
 
-    from raven.cli._log_file import redirect_loguru_to_file, redirect_terminal_fds_to_file
+    from raven.cli._log_file import redirect_loguru_to_file
 
     log_path = redirect_loguru_to_file("import.log", terminal_level=None)
 
@@ -288,31 +288,27 @@ async def _run_async(
     state = _default_state()
     state.set_total(len(items))
 
-    # everos embedded structlog uses PrintLogger which calls print() -> writes
-    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
-    # no everos output can corrupt the progress bar.
-    with redirect_terminal_fds_to_file(log_path):
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                console=console,
-            ) as progress:
-                task_id = progress.add_task("Importing...", total=len(items))
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Importing...", total=len(items))
 
-                def on_progress(event: ProgressEvent) -> None:
-                    progress.update(
-                        task_id,
-                        advance=1,
-                        description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
-                    )
+            def on_progress(event: ProgressEvent) -> None:
+                progress.update(
+                    task_id,
+                    advance=1,
+                    description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
+                )
 
-                summary = await _build_and_run(items, state, on_progress=on_progress)
-        finally:
-            _logger.remove()
-            _logger.add(sys.stderr)
+            summary = await _build_and_run(items, state, on_progress=on_progress)
+    finally:
+        _logger.remove()
+        _logger.add(sys.stderr)
 
     _print_summary(summary, log_path=log_path)
 

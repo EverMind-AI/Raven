@@ -3313,6 +3313,69 @@ def _step4_memory(
                 )
             )
             return None
+
+    # Verify EverOS server is reachable (auto-starts if needed)
+    import asyncio
+
+    from raven.cli._everos_server import ensure_everos_server
+
+    console.print()
+    console.print(
+        _t(
+            "  [dim]Starting EverOS service...[/dim]",
+            "  [dim]正在启动 EverOS 服务...[/dim]",
+        )
+    )
+    try:
+        asyncio.run(ensure_everos_server())
+        console.print(
+            _t(
+                "  [green]✓ EverOS service is running.[/green]",
+                "  [green]✓ EverOS 服务已启动。[/green]",
+            )
+        )
+    except RuntimeError as exc:
+        console.print(
+            _t(
+                f"  [red]✗ EverOS service failed to start: {exc}[/red]\n"
+                "  [dim]Check: everos installed? Port 18791 free? "
+                "See ~/.raven/logs/everos-server.log[/dim]",
+                f"  [red]✗ EverOS 服务启动失败: {exc}[/red]\n"
+                "  [dim]请检查: everos 是否安装? 端口 18791 是否被占用? "
+                "查看 ~/.raven/logs/everos-server.log[/dim]",
+            )
+        )
+        retry = questionary.select(
+            _t("What to do?", "怎么办?"),
+            choices=[
+                questionary.Choice(_t("Retry", "重试"), value="retry"),
+                questionary.Choice(_t("Skip (memory disabled)", "跳过(记忆禁用)"), value="skip"),
+            ],
+            style=RAVEN_STYLE,
+            qmark=_QMARK,
+        ).ask()
+        if retry == "retry":
+            # Recurse once — the loop in _step4_memory handles further retries
+            try:
+                asyncio.run(ensure_everos_server())
+                console.print(
+                    _t(
+                        "  [green]✓ EverOS service is running.[/green]",
+                        "  [green]✓ EverOS 服务已启动。[/green]",
+                    )
+                )
+            except RuntimeError:
+                console.print(
+                    _t(
+                        "  [red]✗ Still failed. Disabling memory.[/red]",
+                        "  [red]✗ 仍然失败。禁用记忆功能。[/red]",
+                    )
+                )
+                _set_memory_backend(None)
+                return None
+        else:
+            _set_memory_backend(None)
+            return None
     _set_memory_backend("everos")
     return None
 
@@ -3697,13 +3760,7 @@ def _step5_import_body(
 
             return await _build_and_run(items, state, on_progress=on_progress)
 
-    from raven.cli._log_file import redirect_terminal_fds_to_file
-
-    # everos embedded structlog uses PrintLogger which calls print() -> writes
-    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
-    # no everos output can corrupt the progress bar.
-    with redirect_terminal_fds_to_file(log_path):
-        summary = asyncio.run(_do_import())
+    summary = asyncio.run(_do_import())
 
     _print_summary(summary, log_path=log_path)
     return None
