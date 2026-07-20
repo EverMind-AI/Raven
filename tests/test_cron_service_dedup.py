@@ -1,10 +1,9 @@
 """Tests for CronService.add_job dedup layers.
 
-Three layers, applied in order at add time:
+Three identity-based layers, applied in order at add time:
   1. L7 topic_tag dedup — strictest, runs first when caller supplies tag.
   2. Message-equal dedup — byte-identical payload.message + same channel/to.
-  3. Time-window dedup — within 15 min of an existing fire on same channel/to.
-  4. Schedule dedup — same recurring schedule + same channel/to.
+  3. Schedule dedup — same recurring schedule + same channel/to.
 
 L7 is the load-bearing one for the caregiver-style failure: the LLM
 re-asks for the same daily med reminder across the month with slightly
@@ -175,3 +174,20 @@ def test_topic_tag_dedup_runs_before_message_equal(svc):
         topic_tag="meds_morning",
     )
     assert j1.id == j2.id
+
+
+def test_distinct_messages_in_same_time_window_keep_separate(svc):
+    """Nearby reminders with different content are distinct jobs."""
+    first = _add(
+        svc,
+        "prepare the daily brief",
+        CronSchedule(kind="at", at_ms=int(1e15)),
+    )
+    second = _add(
+        svc,
+        "review the presentation",
+        CronSchedule(kind="at", at_ms=int(1e15) + 10 * 60 * 1000),
+    )
+
+    assert first.id != second.id
+    assert len(svc.list_jobs()) == 2
