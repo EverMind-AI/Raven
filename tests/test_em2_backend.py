@@ -1,4 +1,4 @@
-"""EM-2 — EverosBackend embedded mode.
+"""EverosBackend — HTTP-only mode.
 
 Adapter injection: tests build :class:`_FakeAdapter` instances and pass
 them directly into :class:`EverosBackend(ctx, adapter=...)`. This keeps
@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -21,8 +22,6 @@ from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (
     EverosBackend,
-    _NoOpAdapter,
-    _RealEverosAdapter,
     make_backend,
 )
 
@@ -76,7 +75,7 @@ class _FakeAdapter:
 
 def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
     return PluginContext(
-        config={"mode": "embedded", **config},
+        config=config,
         services=ServiceLocator(workspace=tmp_path),
     )
 
@@ -96,19 +95,6 @@ class TestConstruction:
         b = _backend(tmp_path)
         assert isinstance(b, MemoryBackend)
 
-    def test_invalid_mode_raises(self, tmp_path: Path) -> None:
-        """A typo'd mode fails fast at construction rather than silently
-        degrading to a no-op adapter (memory quietly disabled)."""
-        with pytest.raises(ValueError, match="invalid mode"):
-            EverosBackend(_ctx(tmp_path, mode="embeded"))
-
-    def test_embedded_mode_defers_adapter_to_start(self, tmp_path: Path) -> None:
-        """Embedded mode defers the (heavy everos/lancedb) adapter build to
-        start(): at construction the adapter is None, so the ~2-3s import stays
-        off the render-blocking build path. start() then selects real/no-op."""
-        b = EverosBackend(_ctx(tmp_path, mode="embedded"))
-        assert b._adapter is None
-
     def test_make_backend_factory(self, tmp_path: Path) -> None:
         b = make_backend(_ctx(tmp_path))
         assert isinstance(b, EverosBackend)
@@ -127,23 +113,14 @@ class TestLifecycle:
         await b.start()
         await b.stop()
 
-    async def test_start_builds_deferred_embedded_adapter(self, tmp_path: Path) -> None:
-        """start() builds the embedded adapter that __init__ deferred."""
-        b = EverosBackend(_ctx(tmp_path, mode="embedded"))
-        assert b._adapter is None
-        try:
+    async def test_start_calls_ensure_everos_server(self, tmp_path: Path) -> None:
+        b = EverosBackend(_ctx(tmp_path))
+        with patch(
+            "raven.cli._everos_server.ensure_everos_server",
+            new=AsyncMock(),
+        ) as mock_ensure:
             await b.start()
-            assert isinstance(b._adapter, (_NoOpAdapter, _RealEverosAdapter))
-        finally:
-            await b.stop()
-
-    async def test_recall_and_store_degrade_before_adapter_built(self, tmp_path: Path) -> None:
-        """Before start() builds the deferred adapter, recall returns empty and
-        store is a no-op (the render-window degrade), not a crash."""
-        b = EverosBackend(_ctx(tmp_path, mode="embedded"))
-        assert b._adapter is None
-        assert await b.recall("hi", user_id="alice", top_k=5) == []
-        await b.store("sess", [{"role": "user", "content": "hi"}])  # must not raise
+        mock_ensure.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -575,137 +552,3 @@ class TestFeedback:
         await b.feedback({})
         await b.feedback({"kind": "skill_usage", "ids": ["x"]})
         await b.feedback({"arbitrary": object()})
-
-
-class TestRerankDegrade:
-    """``_RealEverosAdapter`` picks the everos search method by track +
-    rerank availability: agent-track HYBRID needs a cross-encoder rerank
-    provider (everos raises without one), so when rerank is unconfigured
-    the adapter degrades the agent track to VECTOR (no rerank). The user
-    track never touches the reranker and stays HYBRID regardless.
-    """
-
-    @staticmethod
-    async def _capture_method(*, rerank_configured: bool, user_id, agent_id):
-        from types import SimpleNamespace
-
-        from everos.memory.search.dto import SearchMethod
-
-        adapter = _RealEverosAdapter()
-        adapter._rerank_configured = rerank_configured
-        captured: dict = {}
-
-        async def _fake_search(req):
-            captured["method"] = req.method
-            return SimpleNamespace(data=None)
-
-        adapter._search_fn = _fake_search
-        await adapter.search(user_id=user_id, agent_id=agent_id, query="q", top_k=5)
-        return captured["method"], SearchMethod
-
-    async def test_agent_degrades_to_vector_without_rerank(self) -> None:
-        method, SearchMethod = await self._capture_method(
-            rerank_configured=False,
-            user_id=None,
-            agent_id="agent-x",
-        )
-        assert method == SearchMethod.VECTOR
-
-    async def test_agent_uses_hybrid_with_rerank(self) -> None:
-        method, SearchMethod = await self._capture_method(
-            rerank_configured=True,
-            user_id=None,
-            agent_id="agent-x",
-        )
-        assert method == SearchMethod.HYBRID
-
-    async def test_user_stays_hybrid_without_rerank(self) -> None:
-        # User track never hits the cross-encoder lane, so no degrade.
-        method, SearchMethod = await self._capture_method(
-            rerank_configured=False,
-            user_id="user-x",
-            agent_id=None,
-        )
-        assert method == SearchMethod.HYBRID
-
-
-# ---------------------------------------------------------------------------
-# LanceDB schema migration
-# ---------------------------------------------------------------------------
-
-
-class TestMigrateLancedbSchemas:
-    """``_migrate_lancedb_schemas`` adds missing columns to existing
-    LanceDB tables so upgrading users don't need to manually clear
-    their index."""
-
-    @staticmethod
-    def _stub_schema(table_name: str, fields: set[str]):
-        class _S:
-            TABLE_NAME = table_name
-            model_fields = {f: None for f in fields}
-
-        return _S
-
-    @staticmethod
-    def _stub_table(columns: set[str]):
-        import pyarrow as pa
-
-        arrow = pa.schema([pa.field(c, pa.utf8()) for c in sorted(columns)])
-        added: list = []
-
-        class _T:
-            async def schema(self):
-                return arrow
-
-            async def add_columns(self, new_schema):
-                added.append(new_schema)
-
-        return _T(), added
-
-    async def test_adds_missing_columns(self) -> None:
-        import logging
-
-        from raven.plugin.memory.everos.backend import _migrate_lancedb_schemas
-
-        table, added = self._stub_table({"id", "text"})
-        schema_cls = self._stub_schema("tbl", {"id", "text", "new_col"})
-
-        async def _noop():
-            return None
-
-        async def _get_table(_name, _schema):
-            return table
-
-        result = await _migrate_lancedb_schemas(
-            logging.getLogger("test"),
-            _schemas=[schema_cls],
-            _get_connection=_noop,
-            _get_table=_get_table,
-        )
-        assert result is True
-        assert len(added) == 1
-        assert "new_col" in added[0].names
-
-    async def test_no_missing_returns_false(self) -> None:
-        import logging
-
-        from raven.plugin.memory.everos.backend import _migrate_lancedb_schemas
-
-        table, added = self._stub_table({"id", "text"})
-        schema_cls = self._stub_schema("tbl", {"id", "text"})
-
-        async def _noop():
-            return None
-
-        async def _get_table(_name, _schema):
-            return table
-
-        result = await _migrate_lancedb_schemas(
-            logging.getLogger("test"),
-            _schemas=[schema_cls],
-            _get_connection=_noop,
-            _get_table=_get_table,
-        )
-        assert result is False
-        assert len(added) == 0

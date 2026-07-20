@@ -1553,7 +1553,8 @@ def test_fresh_bootstrap_seeds_extension_blocks(tmp_env: Path, monkeypatch: pyte
 
     assert data["memory"]["backend"] == "everos"  # schema default seeded
     assert data["memory"]["memoryTopK"] == 5
-    assert data["plugins"]["config"]["everos-memory"]["mode"] == "embedded"
+    assert "mode" not in data["plugins"]["config"]["everos-memory"]
+    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
     assert data["skillForge"]["router"]["hub"]["apiKey"] is None
@@ -1586,7 +1587,7 @@ def test_bootstrap_backfills_preexisting_config(tmp_env: Path, monkeypatch: pyte
     assert data["memory"]["memoryTopK"] == 20
     # Missing blocks / keys backfilled.
     assert data["memory"]["userId"] == "default"
-    assert data["plugins"]["config"]["everos-memory"]["mode"] == "embedded"
+    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
     assert data["skillForge"]["router"]["hub"]["endpoint"] == "https://skillhub.evermind.ai"
 
 

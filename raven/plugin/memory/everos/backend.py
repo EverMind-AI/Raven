@@ -1,23 +1,13 @@
-"""EverosBackend — EM-2 embedded mode (with EM-3 HTTP slot reserved).
+"""EverosBackend — HTTP-only memory backend.
 
-The backend is the host's :class:`MemoryBackend` implementation. Three
-operating modes:
-
-- **embedded** (EM-2, this PR): delegate to ``everos.service`` in
-  the same process. The adapter build (the everos/lancedb import) is
-  deferred to ``start()`` to keep construction off the render path; if
-  ``everos`` is not installed (or fails to import — version skew, missing
-  native deps, etc.), the backend degrades to a :class:`_NoOpAdapter`.
-- **http** (EM-3, next PR): HTTP client over EverOS's
-  ``POST /api/v1/memory/{search,add,...}``. Currently shadowed by the
-  same no-op adapter so wiring code can already select the mode
-  without breaking.
+The backend is the host's :class:`MemoryBackend` implementation,
+delegating to a running EverOS server over HTTP
+(``POST /api/v1/memory/{search,add,...}``).
 
 Constructor accepts an explicit ``adapter`` so tests can inject a
 fake without monkeypatching module-level imports. Production wiring
-goes through :func:`make_backend` → ``EverosBackend(ctx)`` →
-``_try_make_real_adapter`` which is the only code path that touches
-``everos.service``.
+goes through :func:`make_backend` -> ``EverosBackend(ctx)`` ->
+``_make_http_adapter``.
 
 Three architectural invariants worth re-stating:
 
@@ -51,11 +41,6 @@ logger = logging.getLogger("raven.plugin.memory.everos")
 
 _OwnerType = Literal["user", "agent"]
 
-# Documented operating modes (mirrors ``config_schema.mode`` in the
-# plugin manifest). A ``mode`` outside this set is a config typo, not a
-# request for a new adapter — see ``EverosBackend._validate_config``.
-_VALID_MODES: tuple[str, ...] = ("embedded", "http")
-
 _DEFAULT_AGENT_ID: str = "default"
 _DEFAULT_USER_ID: str = "default"
 
@@ -72,11 +57,9 @@ class _Adapter(Protocol):
 
     Two production implementations:
 
-    - :class:`_RealEverosAdapter` — lazy-imports ``everos.service``
-      and calls in-process.
+    - :class:`_HttpEverosAdapter` — HTTP client over EverOS's REST API.
     - :class:`_NoOpAdapter` — returns ``None`` / swallows writes.
-      Used when everos can't be imported, when ``mode != "embedded"``
-      until EM-3 lands, and by tests that don't care about everos.
+      Used by tests that don't care about everos.
     """
 
     async def search(
@@ -110,246 +93,8 @@ class _NoOpAdapter:
         return None
 
 
-class _RealEverosAdapter:
-    """In-process delegation to ``everos.service``. The imports happen
-    in ``__init__`` so a missing / broken everos fails loudly at
-    construction time rather than mysteriously at first ``recall``."""
-
-    def __init__(self) -> None:
-        from everos.config import load_settings
-        from everos.memory.search.dto import SearchMethod, SearchRequest
-        from everos.service.memorize import memorize as _memorize
-        from everos.service.search import search as _search
-
-        self._SearchRequest = SearchRequest
-        self._SearchMethod = SearchMethod
-        self._search_fn = _search
-        self._memorize_fn = _memorize
-        # Agent-track HYBRID routes skills through everos's cross-encoder
-        # lane, which everos refuses (RuntimeError in _validate_components)
-        # when no [rerank] provider is configured. Mirror everos's own
-        # "configured" test (model + base_url) so we can degrade instead
-        # of letting that hard error surface.
-        cfg = load_settings().rerank
-        self._rerank_configured = bool(cfg.model and cfg.base_url)
-        self._degrade_logged = False
-
-    async def search(
-        self,
-        *,
-        user_id: str | None,
-        agent_id: str | None,
-        query: str,
-        top_k: int,
-    ) -> Any:
-        # everos 1.0.0's SearchRequest takes user_id XOR agent_id (the
-        # owner_id / owner_type pair are read-only derived properties);
-        # the backend has already resolved exactly one of these.
-        method = self._SearchMethod.HYBRID
-        # Agent-track HYBRID needs a rerank provider; when none is
-        # configured, degrade to VECTOR (embedding-ranked, single-route,
-        # no cross-encoder) so skills still surface rather than erroring.
-        # User-track HYBRID never touches the reranker, so it is left as-is.
-        if agent_id is not None and not self._rerank_configured:
-            method = self._SearchMethod.VECTOR
-            if not self._degrade_logged:
-                logger.warning(
-                    "rerank not configured; agent-track recall degrades "
-                    "HYBRID -> VECTOR (no cross-encoder rerank). Configure "
-                    "[rerank] (model + base_url) in everos settings to "
-                    "enable skill cross-encoder ranking.",
-                )
-                self._degrade_logged = True
-        req = self._SearchRequest(
-            user_id=user_id,
-            agent_id=agent_id,
-            query=query,
-            top_k=top_k,
-            method=method,
-        )
-        resp = await self._search_fn(req)
-        return resp.data
-
-    async def memorize(
-        self,
-        session_id: str,
-        payload_messages: list[dict[str, Any]],
-        *,
-        is_final: bool = False,
-        app_id: str | None = None,
-        project_id: str | None = None,
-    ) -> None:
-        payload: dict[str, Any] = {
-            "session_id": session_id,
-            "messages": payload_messages,
-        }
-        if app_id is not None:
-            payload["app_id"] = app_id
-        if project_id is not None:
-            payload["project_id"] = project_id
-        await self._memorize_fn(payload, is_final=is_final)
-
-
-def _try_make_real_adapter() -> _Adapter:
-    """Return a real adapter if everos imports cleanly; otherwise a
-    no-op adapter. Failure is logged at WARNING level so a misconfigured
-    deploy is visible without the host crashing."""
-    # everos hard-imports the POSIX ``fcntl`` module at import time. On Windows
-    # that raised ModuleNotFoundError and the whole memory backend silently
-    # degraded to a no-op (mis-logged as "everos not installed"). Install a
-    # Windows fcntl shim first so the bundled backend actually loads.
-    from raven.utils.win_fcntl_shim import install as _install_fcntl_shim
-
-    _install_fcntl_shim()
-    try:
-        return _RealEverosAdapter()
-    except ModuleNotFoundError as e:
-        logger.warning(
-            "everos not installed (%s); EverosBackend embedded mode "
-            "will degrade to no-op until the package is installed.",
-            e,
-        )
-        return _NoOpAdapter()
-    except Exception as e:
-        # Distinct from "not installed": the package imported but a
-        # symbol/submodule failed to resolve (version skew, rename, etc.).
-        # Surfaced louder so a real wiring bug isn't mistaken for an
-        # absent optional dependency.
-        logger.warning(
-            "everos present but failed to initialize (%s); EverosBackend "
-            "embedded mode will degrade to no-op. This is likely a "
-            "version mismatch or wiring bug, not a missing package.",
-            e,
-        )
-        return _NoOpAdapter()
-
-
 # ---------------------------------------------------------------------------
-# Embedded everos runtime — process-shared, refcounted lifespan
-# ---------------------------------------------------------------------------
-#
-# everos creates its schema (sqlite tables, lancedb indexes) and its OME
-# extraction engine in the FastAPI app *lifespan*, not on first service
-# call — so embedded mode must drive that lifespan or store()/recall()
-# hit "no such table: unprocessed_buffer". everos's engine / stores are
-# process-global singletons, so the lifespan is entered once per process
-# and shared by every embedded backend, refcounted so the last stop()
-# tears it down.
-
-_embedded_lifespan_cm: Any = None
-_embedded_lifespan_refs: int = 0
-
-
-async def _migrate_lancedb_schemas(
-    log: logging.Logger,
-    *,
-    _schemas: Any = None,
-    _get_connection: Any = None,
-    _get_table: Any = None,
-) -> bool:
-    """Add missing columns to existing LanceDB tables for forward compatibility.
-
-    Returns True if at least one column was added (caller should retry
-    the lifespan), False when nothing needed migration.
-
-    The underscore-prefixed kwargs exist solely for test injection;
-    production callers never pass them.
-    """
-    # Deferred: optional dependency — everos may not be installed.
-    import pyarrow as pa
-
-    if _schemas is None:
-        from everos.infra.persistence.lancedb import (
-            _BUSINESS_SCHEMAS,
-            get_connection,
-            get_table,
-        )
-
-        _schemas = _BUSINESS_SCHEMAS
-        _get_connection = get_connection
-        _get_table = get_table
-
-    migrated = False
-    await _get_connection()
-    for schema in _schemas:
-        table = await _get_table(schema.TABLE_NAME, schema)
-        arrow_schema = await table.schema()
-        actual = set(arrow_schema.names)
-        expected = set(schema.model_fields.keys())
-        missing = expected - actual
-        if not missing:
-            continue
-        fields = [pa.field(col, pa.utf8(), nullable=True) for col in sorted(missing)]
-        await table.add_columns(pa.schema(fields))
-        log.info(
-            "EverosBackend: migrated LanceDB table %r — added columns %s",
-            schema.TABLE_NAME,
-            sorted(missing),
-        )
-        migrated = True
-    return migrated
-
-
-async def _acquire_embedded_everos(log: logging.Logger) -> None:
-    """Enter the shared everos app lifespan (idempotent + refcounted)."""
-    global _embedded_lifespan_cm, _embedded_lifespan_refs
-    _embedded_lifespan_refs += 1
-    if _embedded_lifespan_cm is not None:
-        return
-    try:
-        from everos.entrypoints.api.app import create_app
-
-        app = create_app()
-        cm = app.router.lifespan_context(app)
-        await cm.__aenter__()
-        _embedded_lifespan_cm = cm
-        log.info("EverosBackend: embedded everos runtime started")
-    except Exception as e:
-        # Deferred: optional dependency — everos may not be installed.
-        schema_mismatch_cls: type | None = None
-        try:
-            from everos.infra.persistence.lancedb import LanceDBSchemaMismatchError
-
-            schema_mismatch_cls = LanceDBSchemaMismatchError
-        except ImportError:
-            pass
-        if schema_mismatch_cls is not None and isinstance(e, schema_mismatch_cls):
-            log.warning("EverosBackend: LanceDB schema drift detected, attempting auto-migration …")
-            try:
-                if await _migrate_lancedb_schemas(log):
-                    app = create_app()
-                    cm = app.router.lifespan_context(app)
-                    await cm.__aenter__()
-                    _embedded_lifespan_cm = cm
-                    log.info("EverosBackend: embedded everos runtime started (after schema migration)")
-                    return
-            except Exception as retry_err:
-                log.warning(
-                    "EverosBackend: auto-migration failed (%s); falling back to degraded mode.",
-                    retry_err,
-                )
-        log.warning(
-            "EverosBackend: embedded everos init failed (%s); store / recall will degrade until it is available.",
-            e,
-        )
-
-
-async def _release_embedded_everos(log: logging.Logger) -> None:
-    """Release one ref; tear the lifespan down when the last one drops."""
-    global _embedded_lifespan_cm, _embedded_lifespan_refs
-    _embedded_lifespan_refs = max(0, _embedded_lifespan_refs - 1)
-    if _embedded_lifespan_refs > 0 or _embedded_lifespan_cm is None:
-        return
-    cm = _embedded_lifespan_cm
-    _embedded_lifespan_cm = None
-    try:
-        await cm.__aexit__(None, None, None)
-    except Exception as e:
-        log.warning("EverosBackend: embedded everos teardown failed (%s)", e)
-
-
-# ---------------------------------------------------------------------------
-# HTTP adapter — EM-3
+# HTTP adapter
 # ---------------------------------------------------------------------------
 
 
@@ -371,7 +116,7 @@ def _jsonify(obj: Any) -> Any:
     return obj
 
 
-# Default timeout — HTTP mode is per-turn, so we keep it tight.
+# Default timeout — per-turn, so we keep it tight.
 _DEFAULT_HTTP_TIMEOUT_S: float = 10.0
 
 
@@ -493,57 +238,26 @@ class EverosBackend:
         self._config = ctx.config
         self._services = ctx.services
         self._logger = ctx.logger
-        self._mode = self._config.get("mode", "embedded")
         self._agent_id: str = self._config.get("agent_id") or _DEFAULT_AGENT_ID
         self._user_id: str = self._config.get("user_id") or _DEFAULT_USER_ID
-        # everos accumulates raw turns and only extracts episodes / cases /
-        # skills on a boundary flush. Flush every N store() calls so short
-        # sessions still build memory (mirrors the EverMe plugin's
-        # flush_every_turns=1 default). 0 disables flushing entirely.
         self._flush_every_turns: int = int(
             self._config.get("flush_every_turns", 1),
         )
         self._turn_counts: dict[str, int] = {}
         self._feedback_noop_logged = False
-        self._embedded_started = False
 
-        # Adapter selection. Tests inject explicit adapters; production
-        # wires through one of the per-mode factories below.
         if adapter is not None:
             self._adapter: _Adapter | None = adapter
         else:
-            self._validate_config()
-            if self._mode == "embedded":
-                # Defer the heavy everos/lancedb import (~2-3s) to start() so it
-                # runs off the render-blocking path. recall/store degrade to
-                # empty until the adapter is built.
-                self._adapter = None
-            else:  # "http" — _validate_config rejected anything else
-                self._adapter = self._make_http_adapter()
-
-    def _validate_config(self) -> None:
-        """Fail fast on a misconfigured plugin config.
-
-        A typo'd ``mode`` (e.g. ``"embeded"``) used to fall through to a
-        silent no-op adapter, leaving the agent running with memory
-        quietly disabled. Validating the documented enum here surfaces
-        the mistake at construction — the registry logs the raised error
-        instead of degrading without a trace.
-        """
-        if self._mode not in _VALID_MODES:
-            raise ValueError(
-                f"EverosBackend: invalid mode {self._mode!r}; expected one of {', '.join(_VALID_MODES)}",
-            )
+            self._adapter = self._make_http_adapter()
 
     def _make_http_adapter(self) -> _Adapter:
         """Construct an :class:`_HttpEverosAdapter` from plugin config.
 
         Pulls ``base_url`` / ``api_key`` / ``timeout_s`` out of
-        ``ctx.config`` with documented defaults. ``base_url`` defaults
-        to the EverOS dev port (1995) so a local-dev workflow with the
-        server running on the same host needs no extra config.
+        ``ctx.config`` with documented defaults.
         """
-        base_url = self._config.get("base_url") or "http://localhost:1995"
+        base_url = self._config.get("base_url") or "http://localhost:18791"
         api_key = self._config.get("api_key")
         timeout_s = float(
             self._config.get("timeout_s", _DEFAULT_HTTP_TIMEOUT_S),
@@ -563,25 +277,17 @@ class EverosBackend:
         if self._mode == "embedded" and self._adapter is None:
             self._adapter = await asyncio.to_thread(_try_make_real_adapter)
         self._logger.info(
-            "EverosBackend.start (mode=%s, adapter=%s)",
-            self._mode,
+            "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
         )
-        # Embedded real adapter: bring up the in-process everos runtime
-        # (schema + OME engine) so store / recall actually work. HTTP and
-        # no-op adapters need no local everos lifespan.
-        if isinstance(self._adapter, _RealEverosAdapter):
-            await _acquire_embedded_everos(self._logger)
-            self._embedded_started = True
+        if isinstance(self._adapter, _HttpEverosAdapter):
+            from raven.cli._everos_server import ensure_everos_server
+
+            base_url = self._config.get("base_url") or "http://localhost:18791"
+            await ensure_everos_server(base_url)
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")
-        if self._embedded_started:
-            await _release_embedded_everos(self._logger)
-            self._embedded_started = False
-        # HTTP adapter owns an httpx client when no client was injected;
-        # closing it here releases the connection pool. Embedded /
-        # no-op adapters expose no aclose so getattr returns None.
         aclose = getattr(self._adapter, "aclose", None)
         if aclose is not None:
             try:
@@ -879,4 +585,4 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     return EverosBackend(ctx)
 
 
-__all__ = ["EverosBackend", "_HttpEverosAdapter", "make_backend"]
+__all__ = ["EverosBackend", "make_backend"]

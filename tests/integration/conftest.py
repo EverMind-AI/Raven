@@ -150,27 +150,14 @@ async def everos_env(
 
     _reset_everos_singletons(monkeypatch)
 
-    # Force a fresh lifespan entry by clearing the refcounted singleton
-    # in Raven's backend module. Without this, a previous test's
-    # _embedded_lifespan_cm survives and _acquire skips re-entry — but
-    # the everos singletons above were already nulled, so the old
-    # lifespan's OME engine is gone.
-    import raven.plugin.memory.everos.backend as _be_mod
-
-    monkeypatch.setattr(_be_mod, "_embedded_lifespan_cm", None)
-    monkeypatch.setattr(_be_mod, "_embedded_lifespan_refs", 0)
-
-    # Bring up the in-process everos runtime via the production path:
-    # EverosBackend.start() drives the (refcounted, process-shared) everos
-    # lifespan that creates schema + the OME engine. L2 tests then call
-    # everos.service directly against this runtime; L3 backends start()
-    # again and just share the same lifespan (refcount > 1).
+    # Bring up the everos runtime via the production path:
+    # EverosBackend.start() ensures the everos server is running.
     from raven.plugin import PluginContext, ServiceLocator
     from raven.plugin.memory.everos.backend import EverosBackend
 
     be = EverosBackend(
         PluginContext(
-            config={"mode": "embedded"},
+            config={},
             services=ServiceLocator(workspace=tmp_path),
         )
     )
