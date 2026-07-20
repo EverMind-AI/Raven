@@ -386,6 +386,12 @@ def register(app: typer.Typer) -> None:
             # Animated spinner is safe to use with prompt_toolkit input handling
             return console.status("[dim]Raven is thinking...[/dim]", spinner="dots")
 
+        from raven.cli._log_file import redirect_loguru_to_file, redirect_terminal_fds_to_file
+
+        # ``--logs`` keeps a live terminal sink; without it everos/raven logs
+        # go to the file only, matching the prior enable/disable("raven") gate.
+        log_path = redirect_loguru_to_file("agent.log", terminal_level="DEBUG" if logs else None)
+
         if message:
             # Single message mode — one USER turn through spine (submit -> lane ->
             # run_turn -> hub -> CliOutlet), with the legacy cli/direct defaults
@@ -461,7 +467,12 @@ def register(app: typer.Typer) -> None:
                                 "memory backend stop failed; continuing shutdown",
                             )
 
-            asyncio.run(run_once())
+            # everos embedded structlog uses PrintLogger which calls print() -> writes
+            # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
+            # no everos output can leak to the terminal, covering from before
+            # backend.start() through the end of the one-shot turn.
+            with redirect_terminal_fds_to_file(log_path):
+                asyncio.run(run_once())
             # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
             # thread, torch) segfault during interpreter finalization. The exit
             # chokepoint in raven.cli.commands.run hard-exits past finalization
@@ -612,7 +623,10 @@ def register(app: typer.Typer) -> None:
                             )
                     warn_about_pending_cli_reminders(cron, config)
 
-            asyncio.run(run_interactive())
+            # Same redirect as the one-shot path, covering backend.start()
+            # through teardown for the interactive REPL.
+            with redirect_terminal_fds_to_file(log_path):
+                asyncio.run(run_interactive())
 
 
 __all__ = ["register"]
