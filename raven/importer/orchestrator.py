@@ -168,25 +168,54 @@ async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
     batch: list[dict[str, Any]] = []
     batch_chars = 0
 
+    async def _flush(*, is_final: bool) -> None:
+        nonlocal batch, batch_chars
+        metadata = {**metadata_base, "is_final": is_final}
+        _log_store_request(session.session_id, batch, metadata, batch_chars)
+        await backend.store(session.session_id, batch, metadata=metadata)
+        logger.debug("store completed: session_id={}", session.session_id)
+        batch = []
+        batch_chars = 0
+
     for msg_dict in all_dicts:
         msg_chars = len(msg_dict["content"])
         if batch and (len(batch) >= _BATCH_MSG_LIMIT or batch_chars + msg_chars > _BATCH_CHAR_LIMIT):
-            await backend.store(
-                session.session_id,
-                batch,
-                metadata={**metadata_base, "is_final": False},
-            )
-            batch = []
-            batch_chars = 0
+            await _flush(is_final=False)
         batch.append(msg_dict)
         batch_chars += msg_chars
 
     if batch:
-        await backend.store(
-            session.session_id,
-            batch,
-            metadata={**metadata_base, "is_final": True},
-        )
+        await _flush(is_final=True)
+
+
+def _log_store_request(
+    session_id: str,
+    batch: list[dict[str, Any]],
+    metadata: dict[str, Any],
+    batch_chars: int,
+) -> None:
+    logger.debug(
+        "store request: session_id={}, metadata={}, messages={}, total_chars={}",
+        session_id,
+        metadata,
+        len(batch),
+        batch_chars,
+    )
+    for i, msg in enumerate(batch):
+        content = msg["content"]
+        if len(content) > 200:
+            content = content[:200] + f"...(truncated, {len(msg['content'])} chars)"
+        entry: dict[str, Any] = {
+            "role": msg["role"],
+            "content": content,
+            "sender_id": msg["sender_id"],
+            "timestamp": msg["timestamp"],
+        }
+        if "tool_calls" in msg:
+            entry["tool_calls"] = msg["tool_calls"]
+        if "tool_call_id" in msg:
+            entry["tool_call_id"] = msg["tool_call_id"]
+        logger.debug("store messages[{}]: {}", i, entry)
 
 
 def _to_store_dict(msg: ImportMessage) -> dict[str, Any]:

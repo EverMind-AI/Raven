@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Optional
 
 import typer
@@ -27,6 +29,15 @@ import_app = typer.Typer(
 )
 
 
+PLATFORM_DISPLAY_NAMES: dict[str, str] = {
+    Platform.CLAUDE_CODE: "Claude Code",
+    Platform.CODEX: "Codex",
+    Platform.KIMICODE: "Kimi Code",
+    Platform.HERMES: "Hermes",
+    Platform.OPENCLAW: "OpenClaw",
+}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -47,13 +58,25 @@ async def _scan_all_platforms(
     *,
     platform_filter: Platform | None = None,
 ) -> list[ScanResult]:
+    from loguru import logger
+
     if scanners is None:
         scanners = _build_scanners()
     if platform_filter:
         scanners = [s for s in scanners if s.platform == platform_filter]
+    logger.info("scan started: {} scanner(s)", len(scanners))
     results: list[ScanResult] = []
     for scanner in scanners:
-        results.extend(await scanner.scan())
+        found = await scanner.scan()
+        logger.info(
+            "scan {}: {} results",
+            scanner.platform.value,
+            len(found),
+        )
+        results.extend(found)
+    mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
+    conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+    logger.info("scan completed: {} results ({} memory_file, {} conversation)", len(results), mem, conv)
     return results
 
 
@@ -124,7 +147,7 @@ def scan_cmd(
 
     if not results:
         console.print("No importable data found.")
-        console.print(f"Supported platforms: {', '.join(p.value for p in Platform)}")
+        console.print(f"Supported platforms: {', '.join(PLATFORM_DISPLAY_NAMES.values())}")
         return
 
     table = Table(title="Cold-Start Import -- Available Sources")
@@ -136,7 +159,7 @@ def scan_cmd(
 
     for r in sorted(results, key=lambda x: (x.platform, x.kind, x.source_key)):
         table.add_row(
-            r.platform.value,
+            PLATFORM_DISPLAY_NAMES.get(r.platform.value, r.platform.value),
             r.kind.value,
             r.source_key,
             str(len(r.file_paths)),
@@ -205,6 +228,10 @@ async def _run_async(
 ) -> None:
     from loguru import logger as _logger
 
+    from raven.cli._log_file import redirect_loguru_to_file, redirect_terminal_fds_to_file
+
+    log_path = redirect_loguru_to_file("import.log", terminal_level=None)
+
     platform_filter = _platform_option(platform)
     all_results = await _scan_all_platforms(platform_filter=platform_filter)
 
@@ -261,29 +288,33 @@ async def _run_async(
     state = _default_state()
     state.set_total(len(items))
 
-    _logger.disable("raven")
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task("Importing...", total=len(items))
+    # everos embedded structlog uses PrintLogger which calls print() -> writes
+    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
+    # no everos output can corrupt the progress bar.
+    with redirect_terminal_fds_to_file(log_path):
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                task_id = progress.add_task("Importing...", total=len(items))
 
-            def on_progress(event: ProgressEvent) -> None:
-                progress.update(
-                    task_id,
-                    advance=1,
-                    description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
-                )
+                def on_progress(event: ProgressEvent) -> None:
+                    progress.update(
+                        task_id,
+                        advance=1,
+                        description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
+                    )
 
-            summary = await _build_and_run(items, state, on_progress=on_progress)
-    finally:
-        _logger.enable("raven")
+                summary = await _build_and_run(items, state, on_progress=on_progress)
+        finally:
+            _logger.remove()
+            _logger.add(sys.stderr)
 
-    _print_summary(summary)
+    _print_summary(summary, log_path=log_path)
 
 
 def _pick_platform(platforms: list[Platform]) -> Platform | None:
@@ -336,7 +367,7 @@ def _require_questionary() -> Any:
         raise typer.Exit(1)
 
 
-def _print_summary(summary: ImportSummary) -> None:
+def _print_summary(summary: ImportSummary, *, log_path: Path | None = None) -> None:
     console.print()
     if summary.failed:
         console.print("[bold yellow]Import Complete (with errors)[/bold yellow]\n")
@@ -352,4 +383,6 @@ def _print_summary(summary: ImportSummary) -> None:
             console.print(f"    {err.platform}/{err.source_key}: {err.error}")
         console.print()
         console.print("Run `raven import run` to retry failed items.")
+    if log_path:
+        console.print(f"  Log: {log_path}")
     console.print()

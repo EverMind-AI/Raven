@@ -2088,17 +2088,17 @@ def _everos_section(section: str) -> dict[str, Any]:
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires both required models (llm and embedding) in the EverOS
-    toml: the seed/schema default sets ``memory.backend="everos"`` before any
-    models exist, so a bare backend check would mis-report a fresh, modelless
-    install as "enabled". Both roles are ``optional: False``; gating on either
-    alone would treat a half-configured setup (e.g. llm written but embedding
-    skipped) as enabled and offer "keep current" over a non-functional memory.
+    "Usable" requires both required models (llm and embedding) with api_key
+    in the EverOS toml. The seed/schema default sets model names but leaves
+    api_key empty, so checking model alone would mis-report a fresh,
+    unconfigured install as "enabled".
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    return bool(_everos_section("llm").get("model") and _everos_section("embedding").get("model"))
+    llm = _everos_section("llm")
+    emb = _everos_section("embedding")
+    return bool(llm.get("model") and llm.get("api_key") and emb.get("model") and emb.get("api_key"))
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -3057,7 +3057,8 @@ def _config_everos_role(
     )
 
     while True:  # role-menu loop — a back-out of the source picker returns here
-        current = _everos_section(section).get("model")
+        sec = _everos_section(section)
+        current = sec.get("model") if sec.get("api_key") else None
         if current:
             choices = [
                 questionary.Choice(_t(f"Keep current: {current}", f"沿用当前:{current}"), value="keep"),
@@ -3394,6 +3395,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
     table.add_row('raven agent -m "hello, world"', _t("ask a one-shot question", "一次性提问"))
     table.add_row("raven channels list", _t("see connected chat channels", "查看已接入的渠道"))
     table.add_row("raven provider list", _t("check your provider config", "检查当前服务商配置"))
+    table.add_row("raven import run", _t("import AI tool history into Raven", "将其他 AI 工具的记忆导入 Raven"))
     console.print(
         Panel(
             table,
@@ -3432,11 +3434,19 @@ def _step5_import(*, skip: bool, non_interactive: bool) -> object:
         )
         return None
 
-    import asyncio
+    if not _memory_enabled():
+        console.print(
+            _t(
+                "  [dim]Skipped — EverOS long-term memory is required for history import.[/dim]",
+                "  [dim]已跳过——历史导入需要先启用 EverOS 长期记忆。[/dim]",
+            )
+        )
+        return None
 
+    import sys
+
+    from raven.cli._log_file import redirect_loguru_to_file
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.import_commands import _run_async, _scan_all_platforms
-    from raven.importer.types import SourceKind
 
     questionary = _require_questionary()
     action = questionary.select(
@@ -3457,21 +3467,245 @@ def _step5_import(*, skip: bool, non_interactive: bool) -> object:
         console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
         return None
 
-    results = asyncio.run(_scan_all_platforms())
-    if not results:
+    # Set up file logging for the entire import lifecycle.
+    # Wrapped in try/finally so logging is restored on any exit path.
+    from loguru import logger as _restore_logger
+
+    log_path = redirect_loguru_to_file("import.log", terminal_level=None)
+    _restore_logger.enable("raven")
+    try:
+        return _step5_import_body(
+            questionary=questionary,
+            log_path=log_path,
+        )
+    finally:
+        _restore_logger.remove()
+        _restore_logger.add(sys.stderr)
+        _restore_logger.disable("raven")
+
+
+def _step5_import_body(
+    *,
+    questionary: Any,
+    log_path: Any,
+) -> object:
+    """Inner body of step 5, runs with file logging active."""
+    import asyncio
+
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.cli.import_commands import (
+        PLATFORM_DISPLAY_NAMES,
+        _build_and_run,
+        _build_scanners,
+        _default_state,
+        _filter_by_tier,
+        _print_summary,
+        _scan_all_platforms,
+    )
+    from raven.importer.orchestrator import ImportSummary, ProgressEvent
+    from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
+
+    # Scan (async, no questionary inside)
+    all_results = asyncio.run(_scan_all_platforms())
+    if not all_results:
         console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
 
-    mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
-    conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
-    console.print(
-        _t(
-            f"  Found {len(results)} importable items ({mem} memory files, {conv} conversations).",
-            f"  找到 {len(results)} 个可导入项({mem} 个记忆文件,{conv} 个对话)。",
-        )
-    )
+    # Platform selection (sync questionary)
 
-    asyncio.run(_run_async(platform=None, tier=None, yes=False))
+    def _platform_label(items: list[ScanResult], name: str) -> str:
+        m = sum(1 for r in items if r.kind == SourceKind.MEMORY_FILE)
+        c = sum(1 for r in items if r.kind == SourceKind.CONVERSATION)
+        if m and c:
+            return _t(
+                f"{name} ({m} memory files, {c} conversations)",
+                f"{name}（{m} 个记忆文件，{c} 个对话）",
+            )
+        if m:
+            return _t(f"{name} ({m} memory files)", f"{name}（{m} 个记忆文件）")
+        return _t(f"{name} ({c} conversations)", f"{name}（{c} 个对话）")
+
+    by_platform: dict[str, list[ScanResult]] = {}
+    for r in all_results:
+        by_platform.setdefault(r.platform.value, []).append(r)
+
+    back_value = "back"
+
+    while True:
+        # -- Platform selection --
+        platform_choices = []
+        for p in Platform:
+            name = PLATFORM_DISPLAY_NAMES.get(p.value, p.value)
+            if p.value in by_platform:
+                platform_choices.append(
+                    questionary.Choice(
+                        _platform_label(by_platform[p.value], name),
+                        value=p.value,
+                    )
+                )
+            else:
+                platform_choices.append(
+                    questionary.Choice(
+                        _t(f"{name} (coming soon)", f"{name}（即将支持）"),
+                        value=f"coming:{p.value}",
+                    )
+                )
+        platform_choices.append(
+            questionary.Choice(
+                _platform_label(all_results, _t("All platforms", "全部平台")),
+                value="all",
+            )
+        )
+        selected_platform = questionary.select(
+            _t("Select platform:", "选择平台:"),
+            choices=platform_choices,
+            style=RAVEN_STYLE,
+            qmark=_QMARK,
+        ).ask()
+        if selected_platform is None:
+            raise typer.Exit(1)
+
+        if selected_platform.startswith("coming:"):
+            coming_name = PLATFORM_DISPLAY_NAMES.get(
+                selected_platform.removeprefix("coming:"),
+                selected_platform.removeprefix("coming:"),
+            )
+            console.print(
+                _t(
+                    f"  [dim]{coming_name} is not yet supported. Stay tuned![/dim]",
+                    f"  [dim]{coming_name} 尚未支持，敬请期待！[/dim]",
+                )
+            )
+            _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+            continue
+
+        if selected_platform == "all":
+            results = all_results
+        else:
+            results = [r for r in all_results if r.platform.value == selected_platform]
+
+        mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
+        conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+        console.print(
+            _t(
+                f"  {len(results)} items selected ({mem} memory files, {conv} conversations).",
+                f"  已选 {len(results)} 项({mem} 个记忆文件,{conv} 个对话)。",
+            )
+        )
+
+        # -- Tier selection --
+        console.print(
+            _t(
+                "\n  [bold #fbe23f]Memory files only[/bold #fbe23f]  "
+                "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
+                "  [bold #fbe23f]Full import[/bold #fbe23f]  "
+                "[dim]Slow (may take hours). Imports memory files + all conversation history. Higher LLM cost.[/dim]",
+                "\n  [bold #fbe23f]仅记忆文件[/bold #fbe23f]  "
+                "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
+                "  [bold #fbe23f]完整导入[/bold #fbe23f]  "
+                "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
+            ),
+            highlight=False,
+        )
+        console.print()
+        tier_choices = []
+        if mem:
+            tier_choices.append(
+                questionary.Choice(
+                    _t(
+                        f"Memory files only ({mem} items, fast)",
+                        f"仅记忆文件({mem} 项,快速)",
+                    ),
+                    value=Tier.MEMORY_FILES,
+                )
+            )
+        tier_choices.append(
+            questionary.Choice(
+                _t(
+                    f"Full import ({mem + conv} items, includes conversations)",
+                    f"完整导入({mem + conv} 项,含对话)",
+                ),
+                value=Tier.FULL,
+            )
+        )
+        tier_choices.append(
+            questionary.Choice(
+                _t("Back", "返回"),
+                value=back_value,
+            )
+        )
+        selected_tier = questionary.select(
+            _t("Select import tier:", "选择导入档位:"),
+            choices=tier_choices,
+            style=RAVEN_STYLE,
+            qmark=_QMARK,
+        ).ask()
+        if selected_tier is None:
+            raise typer.Exit(1)
+        if selected_tier == back_value:
+            _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+            continue
+        break
+
+    # Filter + confirm
+    filtered = _filter_by_tier(results, selected_tier)
+    if not filtered:
+        console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
+        return None
+
+    f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
+    f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
+    if not typer.confirm(
+        _t(
+            f"  About to import {len(filtered)} items ({f_mem} memory files, {f_conv} conversations). Proceed?",
+            f"  即将导入 {len(filtered)} 项({f_mem} 个记忆文件,{f_conv} 个对话)。继续?",
+        ),
+        default=True,
+    ):
+        return None
+
+    # Build items
+    scanners = _build_scanners()
+    scanner_map: dict[str, Scanner] = {s.platform: s for s in scanners}
+    items = [(scanner_map[r.platform], r) for r in filtered if r.platform in scanner_map]
+
+    state = _default_state()
+    state.set_total(len(items))
+
+    # Execute import (async, with Rich progress — no questionary inside)
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+
+    async def _do_import() -> ImportSummary:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task(
+                _t("Importing...", "导入中..."),
+                total=len(items),
+            )
+
+            def on_progress(event: ProgressEvent) -> None:
+                progress.update(
+                    task_id,
+                    advance=1,
+                    description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
+                )
+
+            return await _build_and_run(items, state, on_progress=on_progress)
+
+    from raven.cli._log_file import redirect_terminal_fds_to_file
+
+    # everos embedded structlog uses PrintLogger which calls print() -> writes
+    # directly to fd 1, bypassing stdlib logging entirely. Redirect both fds so
+    # no everos output can corrupt the progress bar.
+    with redirect_terminal_fds_to_file(log_path):
+        summary = asyncio.run(_do_import())
+
+    _print_summary(summary, log_path=log_path)
     return None
 
 

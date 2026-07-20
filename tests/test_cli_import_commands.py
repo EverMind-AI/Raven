@@ -54,7 +54,7 @@ class TestScan:
             result = runner.invoke(import_app, ["scan"])
 
         assert result.exit_code == 0
-        assert "claude_code" in result.stdout
+        assert "Claude Code" in result.stdout
         assert "global-claude-md" in result.stdout
 
     def test_scan_empty(self) -> None:
