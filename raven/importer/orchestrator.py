@@ -118,16 +118,17 @@ async def run_import(
                     )
                 )
         except Exception as e:
-            state.mark_failed(platform, key, str(e))
+            err_msg = repr(e) if not str(e) else str(e)
+            state.mark_failed(platform, key, err_msg)
             failed += 1
-            errors.append(ImportFailure(platform, key, str(e)))
+            errors.append(ImportFailure(platform, key, err_msg))
             logger.warning(
                 "[{}/{}] failed to import {}/{}: {}",
                 i + 1,
                 total,
                 platform,
                 key,
-                e,
+                err_msg,
             )
             if on_progress:
                 on_progress(

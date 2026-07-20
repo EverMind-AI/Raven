@@ -138,12 +138,18 @@ def scan_cmd(
     platform: Optional[str] = typer.Option(None, "--platform", help="Filter to a specific platform"),
 ) -> None:
     """Preview importable data from other AI tools."""
+    from loguru import logger as _logger
+
+    _logger.disable("raven")
     platform_filter = _platform_option(platform)
 
     async def _do() -> list[ScanResult]:
         return await _scan_all_platforms(platform_filter=platform_filter)
 
-    results = asyncio.run(_do())
+    try:
+        results = asyncio.run(_do())
+    finally:
+        _logger.enable("raven")
 
     if not results:
         console.print("No importable data found.")
@@ -182,26 +188,120 @@ def status_cmd(
     output_json: bool = typer.Option(False, "--json", help="Output raw JSON"),
 ) -> None:
     """Show cold-start import progress."""
-    state = _default_state()
-    summary = state.get_summary()
+    import time
+    from collections import Counter
 
-    if summary["total"] == 0 and summary["submitted"] == 0 and summary["failed"] == 0:
+    from rich.progress_bar import ProgressBar
+    from rich.table import Table
+
+    from raven.config.paths import get_logs_dir
+
+    state = _default_state()
+    progress = state.get_progress()
+    entries = progress.get("entries", {})
+    meta = progress.get("meta", {})
+    total = meta.get("total", len(entries))
+
+    if not total and not entries:
         if output_json:
-            console.print(json.dumps(summary))
+            console.print(json.dumps({"total": 0, "submitted": 0, "failed": 0, "skipped": 0, "status": "none"}))
         else:
             console.print("No import in progress. Run `raven import run` to start.")
         return
 
+    # Compute counts
+    status_counts = Counter(v.get("status") for v in entries.values())
+    submitted = status_counts.get("submitted", 0)
+    failed = status_counts.get("failed", 0)
+    done = submitted + failed
+    remaining = max(0, total - done)
+
+    # Per-platform breakdown
+    platform_stats: dict[str, dict[str, int]] = {}
+    failed_items: list[tuple[str, str]] = []
+    timestamps: list[float] = []
+    for key, entry in entries.items():
+        platform = key.split(":", 1)[0] if ":" in key else "unknown"
+        if platform not in platform_stats:
+            platform_stats[platform] = {"submitted": 0, "failed": 0, "total": 0}
+        platform_stats[platform]["total"] += 1
+        platform_stats[platform][entry.get("status", "unknown")] = (
+            platform_stats[platform].get(entry.get("status", "unknown"), 0) + 1
+        )
+        if entry.get("timestamp"):
+            timestamps.append(entry["timestamp"])
+        if entry.get("status") == "failed":
+            failed_items.append((key, entry.get("error", "unknown error")))
+
+    # Timing
+    now = time.time()
+    last_update = max(timestamps) if timestamps else 0
+    first_update = min(timestamps) if timestamps else 0
+
     if output_json:
-        console.print(json.dumps(summary))
+        console.print(
+            json.dumps(
+                {
+                    "total": total,
+                    "submitted": submitted,
+                    "failed": failed,
+                    "remaining": remaining,
+                    "entries": entries,
+                }
+            )
+        )
         return
 
-    console.print("\n[bold]Cold-Start Import Status[/bold]\n")
-    console.print(f"  Total:     {summary['total']}")
-    console.print(f"  Submitted: {summary['submitted']}  [green]✅[/green]")
-    console.print(f"  Failed:    {summary['failed']}")
-    remaining = summary["total"] - summary["submitted"] - summary["failed"]
-    console.print(f"  Remaining: {max(0, remaining)}")
+    # Visual output
+    console.print("\n [bold]Cold-Start Import Status[/bold]\n")
+
+    # Progress bar
+    pct = int(done / total * 100) if total else 0
+    bar = ProgressBar(total=total, completed=done, width=30)
+    console.print(" ", bar, f" {pct}%  {done}/{total}\n")
+
+    # Platform table
+    table = Table(show_header=True, box=None, padding=(0, 2, 0, 0))
+    table.add_column("Platform", style="bold")
+    table.add_column("Submitted", justify="right", style="green")
+    if failed:
+        table.add_column("Failed", justify="right", style="yellow")
+    table.add_column("Remaining", justify="right")
+    table.add_column("Total", justify="right")
+    for plat, stats in sorted(platform_stats.items()):
+        display_name = PLATFORM_DISPLAY_NAMES.get(plat, plat)
+        plat_done = stats.get("submitted", 0) + stats.get("failed", 0)
+        plat_remaining = stats["total"] - plat_done
+        row = [display_name, str(stats.get("submitted", 0))]
+        if failed:
+            row.append(str(stats.get("failed", 0)))
+        row.append(str(plat_remaining))
+        row.append(str(stats["total"]))
+        table.add_row(*row)
+    console.print(table)
+
+    # Timing
+    console.print()
+    if first_update and last_update:
+        duration = int(last_update - first_update)
+        mins, secs = divmod(duration, 60)
+        console.print(f" Duration:  {mins}m {secs}s")
+    if last_update:
+        ago = int(now - last_update)
+        console.print(f" Updated:   {ago}s ago")
+
+    log_path = get_logs_dir() / "import.log"
+    console.print(f" Log:       {log_path}")
+
+    # Failed items
+    if failed_items:
+        console.print()
+        console.print(" [yellow]Failed items:[/yellow]")
+        for key, error in failed_items:
+            console.print(f"   {key}: {error}")
+        console.print()
+        console.print(" Run `raven import run` to retry failed items.")
+
     console.print()
 
 
@@ -308,7 +408,7 @@ async def _run_async(
             summary = await _build_and_run(items, state, on_progress=on_progress)
     finally:
         _logger.remove()
-        _logger.add(sys.stderr)
+        _logger.add(sys.stderr, level="WARNING")
 
     _print_summary(summary, log_path=log_path)
 

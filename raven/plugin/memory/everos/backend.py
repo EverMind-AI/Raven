@@ -117,7 +117,7 @@ def _jsonify(obj: Any) -> Any:
 
 
 # Default timeout — per-turn, so we keep it tight.
-_DEFAULT_HTTP_TIMEOUT_S: float = 10.0
+_DEFAULT_HTTP_TIMEOUT_S: float = 360.0
 
 
 class _HttpEverosAdapter:

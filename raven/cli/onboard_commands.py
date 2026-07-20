@@ -3340,16 +3340,16 @@ def _step4_memory(
                 f"  [red]✗ EverOS service failed to start: {exc}[/red]\n"
                 "  [dim]Check: everos installed? Port 18791 free? "
                 "See ~/.raven/logs/everos-server.log[/dim]",
-                f"  [red]✗ EverOS 服务启动失败: {exc}[/red]\n"
-                "  [dim]请检查: everos 是否安装? 端口 18791 是否被占用? "
+                f"  [red]✗ EverOS 服务启动失败：{exc}[/red]\n"
+                "  [dim]请检查：everos 是否安装？端口 18791 是否被占用？"
                 "查看 ~/.raven/logs/everos-server.log[/dim]",
             )
         )
         retry = questionary.select(
-            _t("What to do?", "怎么办?"),
+            _t("What to do?", "怎么办？"),
             choices=[
                 questionary.Choice(_t("Retry", "重试"), value="retry"),
-                questionary.Choice(_t("Skip (memory disabled)", "跳过(记忆禁用)"), value="skip"),
+                questionary.Choice(_t("Skip (memory disabled)", "跳过（记忆禁用）"), value="skip"),
             ],
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -3492,7 +3492,7 @@ def _step5_import(*, skip: bool, non_interactive: bool) -> object:
         console.print(
             _t(
                 "  [dim]Skipped (non-interactive).[/dim]",
-                "  [dim]已跳过(非交互)。[/dim]",
+                "  [dim]已跳过（非交互）。[/dim]",
             )
         )
         return None
@@ -3515,7 +3515,7 @@ def _step5_import(*, skip: bool, non_interactive: bool) -> object:
     action = questionary.select(
         _t(
             "Would you like to import conversation history from other AI tools? (Claude Code, Codex, etc.)",
-            "是否要从其他 AI 工具(Claude Code、Codex 等)导入对话历史?",
+            "是否要从其他 AI 工具（Claude Code、Codex 等）导入对话历史？",
         ),
         choices=[
             questionary.Choice(_t("Yes", "是"), value="yes"),
@@ -3543,7 +3543,7 @@ def _step5_import(*, skip: bool, non_interactive: bool) -> object:
         )
     finally:
         _restore_logger.remove()
-        _restore_logger.add(sys.stderr)
+        _restore_logger.add(sys.stderr, level="WARNING")
         _restore_logger.disable("raven")
 
 
@@ -3620,7 +3620,7 @@ def _step5_import_body(
             )
         )
         selected_platform = questionary.select(
-            _t("Select platform:", "选择平台:"),
+            _t("Select platform:", "选择平台："),
             choices=platform_choices,
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -3652,7 +3652,7 @@ def _step5_import_body(
         console.print(
             _t(
                 f"  {len(results)} items selected ({mem} memory files, {conv} conversations).",
-                f"  已选 {len(results)} 项({mem} 个记忆文件,{conv} 个对话)。",
+                f"  已选 {len(results)} 项（{mem} 个记忆文件，{conv} 个对话）。",
             )
         )
 
@@ -3677,7 +3677,7 @@ def _step5_import_body(
                 questionary.Choice(
                     _t(
                         f"Memory files only ({mem} items, fast)",
-                        f"仅记忆文件({mem} 项,快速)",
+                        f"仅记忆文件（{mem} 项，快速）",
                     ),
                     value=Tier.MEMORY_FILES,
                 )
@@ -3686,7 +3686,7 @@ def _step5_import_body(
             questionary.Choice(
                 _t(
                     f"Full import ({mem + conv} items, includes conversations)",
-                    f"完整导入({mem + conv} 项,含对话)",
+                    f"完整导入（{mem + conv} 项，含对话）",
                 ),
                 value=Tier.FULL,
             )
@@ -3698,7 +3698,7 @@ def _step5_import_body(
             )
         )
         selected_tier = questionary.select(
-            _t("Select import tier:", "选择导入档位:"),
+            _t("Select import tier:", "选择导入档位："),
             choices=tier_choices,
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -3710,7 +3710,7 @@ def _step5_import_body(
             continue
         break
 
-    # Filter + confirm
+    # Filter
     filtered = _filter_by_tier(results, selected_tier)
     if not filtered:
         console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
@@ -3718,11 +3718,55 @@ def _step5_import_body(
 
     f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
     f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
-    if not typer.confirm(
+
+    # Execution mode choice
+    exec_mode = questionary.select(
+        _t("Select execution mode:", "选择执行方式："),
+        choices=[
+            questionary.Choice(
+                _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
+                value="foreground",
+            ),
+            questionary.Choice(
+                _t(
+                    "Run in background (use raven import status to check progress)",
+                    "后台执行（用 raven import status 查看进度）",
+                ),
+                value="background",
+            ),
+        ],
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if exec_mode is None:
+        raise typer.Exit(1)
+
+    # Summary + confirm
+    platform_display = (
+        PLATFORM_DISPLAY_NAMES.get(selected_platform, selected_platform)
+        if selected_platform != "all"
+        else _t("All platforms", "全部平台")
+    )
+    tier_display = (
+        _t("Memory files only", "仅记忆文件") if selected_tier == Tier.MEMORY_FILES else _t("Full import", "完整导入")
+    )
+    mode_display = _t("Run now", "立即执行") if exec_mode == "foreground" else _t("Background", "后台执行")
+    console.print(
         _t(
-            f"  About to import {len(filtered)} items ({f_mem} memory files, {f_conv} conversations). Proceed?",
-            f"  即将导入 {len(filtered)} 项({f_mem} 个记忆文件,{f_conv} 个对话)。继续?",
-        ),
+            f"\n  About to import:\n"
+            f"    Platform: {platform_display}\n"
+            f"    Tier:     {tier_display}\n"
+            f"    Items:    {len(filtered)} ({f_mem} memory files, {f_conv} conversations)\n"
+            f"    Mode:     {mode_display}",
+            f"\n  即将导入:\n"
+            f"    平台:     {platform_display}\n"
+            f"    档位:     {tier_display}\n"
+            f"    数量:     {len(filtered)} 项（{f_mem} 个记忆文件，{f_conv} 个对话）\n"
+            f"    执行方式: {mode_display}",
+        )
+    )
+    if not typer.confirm(
+        _t("  Start?", "  开始执行？"),
         default=True,
     ):
         return None
@@ -3735,7 +3779,43 @@ def _step5_import_body(
     state = _default_state()
     state.set_total(len(items))
 
-    # Execute import (async, with Rich progress — no questionary inside)
+    if exec_mode == "background":
+        import shutil
+        import subprocess as _sp
+
+        raven_bin = shutil.which("raven")
+        if not raven_bin:
+            console.print(
+                _t(
+                    "  [red]Cannot find 'raven' command. Falling back to foreground execution.[/red]",
+                    "  [red]找不到 'raven' 命令。回退到前台执行。[/red]",
+                )
+            )
+            exec_mode = "foreground"
+        else:
+            platform_flag = selected_platform if selected_platform != "all" else None
+            cmd = [raven_bin, "import", "run", "--tier", selected_tier.value, "--yes"]
+            if platform_flag:
+                cmd.extend(["--platform", platform_flag])
+            _sp.Popen(
+                cmd,
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+                start_new_session=True,
+            )
+            console.print(
+                _t(
+                    f"\n  Import started in background.\n"
+                    f"  Check progress: [#fbe23f]raven import status[/#fbe23f]\n"
+                    f"  Log: {log_path}",
+                    f"\n  导入已在后台启动。\n"
+                    f"  查看进度: [#fbe23f]raven import status[/#fbe23f]\n"
+                    f"  详细日志: {log_path}",
+                )
+            )
+            return None
+
+    # Foreground execution (async, with Rich progress)
     from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
     async def _do_import() -> ImportSummary:
