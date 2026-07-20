@@ -407,9 +407,15 @@ class RoutingConfig(Base):
     models: list[ModelEndpoint] = Field(default_factory=list)
     # knn backend: prebuilt KNN memory (embeddings + per-model rewards/costs)
     memory_path: str = ""
-    k: int = 7
+    k: int = 30  # retrieval breadth: how many nearest neighbours to pull
     lambda_cost: float = 0.0  # score = reward - lambda_cost * cost
     embedding_endpoint: str = ""  # embedding service for the incoming task
+    # knn backend safety gates: leave the default model only with enough evidence.
+    # The pick is scored over the "similar" neighbours (cosine >= min_similarity).
+    min_similarity: float = 0.6  # a neighbour counts as similar at cosine >= this
+    min_similar_neighbors: int = 4  # need >= this many similar neighbours to route
+    min_memory_size: int = 10  # need >= this many memory entries to route at all
+    min_margin: float = 0.0  # only switch if the pick beats the default score by >= this
 
 
 class HeartbeatConfig(Base):

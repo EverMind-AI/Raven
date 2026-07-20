@@ -23,9 +23,14 @@ def test_routing_defaults():
     # New knn fields have inert defaults.
     assert cfg.models == []
     assert cfg.memory_path == ""
-    assert cfg.k == 7
+    assert cfg.k == 30
     assert cfg.lambda_cost == 0.0
     assert cfg.embedding_endpoint == ""
+    # Safety-gate defaults: leave the default model only with enough evidence.
+    assert cfg.min_similarity == 0.6
+    assert cfg.min_similar_neighbors == 4
+    assert cfg.min_memory_size == 10
+    assert cfg.min_margin == 0.0
 
 
 def test_knn_config_construction():

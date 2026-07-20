@@ -46,7 +46,7 @@ def build_model_routing(config, provider):
         from raven.providers.per_model_provider import PerModelProvider
         from raven.routing.knn_router import KNNModelRouter
 
-        router = KNNModelRouter(config.routing)
+        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
         return router, PerModelProvider(config.routing.models, fallback=provider)
 
     from raven.routing.router import ModelRouter
