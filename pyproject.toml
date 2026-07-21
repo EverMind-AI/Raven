@@ -43,6 +43,10 @@ dependencies = [
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
+    # knn model router (routing/knn_router.py) embedding KNN. Currently also a
+    # transitive dep (via lancedb) -- pinning it directly so routing keeps
+    # working if upstream ever drops it.
+    "numpy>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]

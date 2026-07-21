@@ -30,6 +30,39 @@ from raven.utils.helpers import sync_workspace_templates
 console = Console()
 
 
+def build_model_routing(config, provider):
+    """Return ``(router, provider)`` for the configured routing backend.
+
+    - ``knn``: build a :class:`KNNModelRouter` and wrap ``provider`` in a
+      :class:`PerModelProvider` so routed model names reach their endpoints
+      (other models fall back to ``provider`` unchanged).
+    - ``ecoclaw``: build the PinchBench :class:`ModelRouter`.
+    - routing disabled, or ecoclaw with no API key: return ``(None, provider)``.
+    """
+    if not config.routing.enabled:
+        return None, provider
+
+    if config.routing.backend == "knn":
+        from raven.providers.per_model_provider import PerModelProvider
+        from raven.routing.knn_router import KNNModelRouter
+
+        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
+        return router, PerModelProvider(config.routing.models, fallback=provider)
+
+    from raven.routing.router import ModelRouter
+
+    api_key = config.routing.api_key or config.providers.openrouter.api_key or ""
+    if not api_key:
+        console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
+        return None, provider
+
+    from raven.routing.types import RoutingProfileName
+
+    profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
+    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
+    return router, provider
+
+
 _GATEWAY_IM_CHANNELS: tuple[str, ...] = (
     "whatsapp",
     "telegram",
@@ -159,23 +192,8 @@ def register(app: typer.Typer) -> None:
         gateway_channels = _build_gateway_channels(config)
         cron = CronService(cron_store_path, allowed_channels=gateway_channels)
 
-        # Create model router (EcoClaw-style) if enabled
-        router = None
-        if config.routing.enabled:
-            from raven.routing.router import ModelRouter
-
-            _routing_api_key = config.routing.api_key or config.providers.openrouter.api_key or ""
-            if _routing_api_key:
-                from raven.routing.types import RoutingProfileName
-
-                _profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
-                router = ModelRouter(
-                    api_key=_routing_api_key,
-                    profile=_profile,
-                    fallback_model=config.agents.defaults.model,
-                )
-            else:
-                console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
+        # Create model router (and, for the knn backend, wrap the provider).
+        router, provider = build_model_routing(config, provider)
 
         # Build Sentinel stack (enabled iff sentinel.enabled).
         # NudgeInjector serves as the AgentLoop response_modifier;

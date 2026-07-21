@@ -208,3 +208,67 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "cancel_conversation(cid)" in stop_branch
     assert "cancel_by_session(cid)" in stop_branch
     assert "stopped +=" in stop_branch
+
+
+# ---------------------------------------------------------------------------
+# build_model_routing — routing backend selection
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+from raven.cli.gateway_commands import build_model_routing
+from raven.config.schema import ModelEndpoint, RoutingConfig
+from raven.providers.per_model_provider import PerModelProvider
+from raven.routing.knn_router import KNNModelRouter
+from raven.routing.router import ModelRouter
+
+
+class _FakeProvider:
+    def get_default_model(self):
+        return "default-model"
+
+
+def _routing_config_obj(routing):
+    return SimpleNamespace(
+        routing=routing,
+        providers=SimpleNamespace(openrouter=SimpleNamespace(api_key="")),
+        agents=SimpleNamespace(defaults=SimpleNamespace(model="default-model")),
+    )
+
+
+def test_build_routing_disabled_returns_same_provider():
+    prov = _FakeProvider()
+    router, out = build_model_routing(_routing_config_obj(RoutingConfig(enabled=False)), prov)
+    assert router is None
+    assert out is prov
+
+
+def test_build_routing_knn_wraps_provider():
+    routing = RoutingConfig(
+        enabled=True,
+        backend="knn",
+        embedding_endpoint="http://e/embed",
+        models=[
+            ModelEndpoint(model="small", api_base="http://a/v1"),
+            ModelEndpoint(model="large", api_base="http://b/v1"),
+        ],
+    )
+    router, out = build_model_routing(_routing_config_obj(routing), _FakeProvider())
+    assert isinstance(router, KNNModelRouter)
+    assert isinstance(out, PerModelProvider)
+
+
+def test_build_routing_ecoclaw_with_key_keeps_provider():
+    routing = RoutingConfig(enabled=True, backend="ecoclaw", api_key="sk-or-x")
+    prov = _FakeProvider()
+    router, out = build_model_routing(_routing_config_obj(routing), prov)
+    assert isinstance(router, ModelRouter)
+    assert out is prov
+
+
+def test_build_routing_ecoclaw_no_key_disabled():
+    routing = RoutingConfig(enabled=True, backend="ecoclaw", api_key="")
+    prov = _FakeProvider()
+    router, out = build_model_routing(_routing_config_obj(routing), prov)
+    assert router is None
+    assert out is prov
