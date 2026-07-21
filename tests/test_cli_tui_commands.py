@@ -514,3 +514,60 @@ async def test_rpc_runner_activates_fd_redirect_before_backend_start(rpc_server_
     exit_idx = call_log.index("redirect_exit")
     stop_idx = call_log.index("stop")
     assert stop_idx < exit_idx, "redirect must be held THROUGH backend.stop()"
+
+
+# ---------------------------------------------------------------------------
+# log-path notice: surfaced only on abnormal child exit (#131)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "abnormal"),
+    [
+        (0, False),
+        (129, False),
+        (130, False),
+        (143, False),
+        (3, False),
+        (1, True),
+        (137, True),
+        (255, True),
+    ],
+)
+def test_is_abnormal_child_exit(exit_code: int, abnormal: bool) -> None:
+    """Clean (0), the graceful signal codes SIGHUP/SIGINT/SIGTERM (129/130/143)
+    and the handshake path (3) are not abnormal; a hard SIGKILL (137) is."""
+    from raven.cli.tui_commands import _is_abnormal_child_exit
+
+    assert _is_abnormal_child_exit(exit_code) is abnormal
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "should_announce"),
+    [(0, False), (129, False), (130, False), (143, False), (1, True), (137, True)],
+)
+def test_tui_announces_log_path_only_on_abnormal_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, exit_code: int, should_announce: bool
+) -> None:
+    """The log-path notice reaches stderr only on an abnormal child exit; a
+    clean exit (0) or Ctrl+C (130) leaves stderr silent."""
+    from typer.testing import CliRunner
+
+    from raven.cli import tui_commands
+
+    monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: False)
+    monkeypatch.setattr(tui_commands, "find_node", lambda: ("/fake/node", (22, 0, 0)))
+    monkeypatch.setattr(tui_commands, "resolve_dist_entry", lambda: tmp_path / "entry.js")
+    monkeypatch.setattr(tui_commands, "_suppress_noisy_watchers", lambda: None)
+    monkeypatch.setattr(tui_commands, "redirect_loguru_to_file", lambda *a, **k: tmp_path / "tui.log")
+    monkeypatch.setattr(tui_commands, "_diagnose_crash", lambda *a, **k: None)
+    monkeypatch.setattr(tui_commands, "run_subprocess_with_rpc", lambda *a, **k: exit_code)
+
+    result = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, [])
+
+    assert result.exit_code == exit_code
+    if should_announce:
+        assert "TUI logs" in result.stderr
+        assert f"(exit {exit_code})" in result.stderr
+    else:
+        assert "TUI logs" not in result.stderr
