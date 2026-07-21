@@ -15,8 +15,15 @@ from pathlib import Path
 import httpx
 import pytest
 
+from raven.agent.loop import AgentLoop
 from raven.agent.tools import deep_research as dr_mod
-from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool, _extract_output_text
+from raven.agent.tools.deep_research import (
+    DeepResearchManager,
+    DeepResearchOfferTool,
+    DeepResearchTool,
+    _extract_output_text,
+    deep_research_mode,
+)
 from raven.config.schema import DeepResearchToolConfig
 
 ANSWER = (
@@ -297,6 +304,265 @@ async def test_async_report_write_failure_still_delivers_answer(tmp_path: Path, 
 
     assert len(captured) == 1
     assert captured[0].deliver_text == ANSWER  # answer delivered, not a "failed" message
+
+
+# ── offer stand-in on an unconfigured deploy + registration mode ──
+
+
+class _ScriptBroker:
+    """Fake QuestionBroker: returns scripted answers in order, recording the
+    prompts/choices it was shown (so tests can assert what the user saw)."""
+
+    def __init__(self, script: list) -> None:
+        self._script = list(script)
+        self.choices_seen: list[list[str]] = []
+        self.prompts_seen: list[str] = []
+
+    async def await_question(self, cid, *, prompt, choices, default="", timeout_s=600.0):
+        self.prompts_seen.append(prompt)
+        self.choices_seen.append(choices)
+        return self._script.pop(0)
+
+
+def _offer(broker=None, *, cid: str = "cli:direct") -> DeepResearchOfferTool:
+    tool = DeepResearchOfferTool()
+    if broker is not None:
+        tool.set_broker(broker)
+        tool.set_context("cli", "direct", cid)
+    return tool
+
+
+async def test_offer_no_broker_falls_back_to_regular():
+    tool = DeepResearchOfferTool()
+    tool.set_context("cli", "direct", "cli:direct")  # cid set, but no broker
+    assert await tool.execute(query="q") == dr_mod._USE_REGULAR
+
+
+async def test_offer_no_cid_falls_back_to_regular():
+    tool = DeepResearchOfferTool()
+    tool.set_broker(_ScriptBroker([dr_mod._MODE_DEEP]))  # broker set, but no context
+    assert await tool.execute(query="q") == dr_mod._USE_REGULAR
+
+
+async def test_offer_regular_choice_uses_regular():
+    broker = _ScriptBroker([dr_mod._MODE_REGULAR])
+    assert await _offer(broker).execute(query="q") == dr_mod._USE_REGULAR
+    assert len(broker.choices_seen) == 1
+
+
+async def test_offer_freeform_answer_is_regular():
+    broker = _ScriptBroker(["something the user typed"])
+    assert await _offer(broker).execute(query="q") == dr_mod._USE_REGULAR
+
+
+async def test_offer_deep_then_regular_meanwhile():
+    # Deep on an unconfigured deploy never runs the engine. It shows setup steps
+    # via a 2nd broker prompt (seen by the user directly, not model-relayed) and
+    # asks about a regular search meanwhile; "yes" -> regular.
+    broker = _ScriptBroker([dr_mod._MODE_DEEP, dr_mod._MEANWHILE_REGULAR])
+    assert await _offer(broker).execute(query="q") == dr_mod._USE_REGULAR
+    assert len(broker.choices_seen) == 2  # deep/regular, then meanwhile yes/no
+    assert "raven deep-research enable" in broker.prompts_seen[1]  # command shown to the user
+
+
+async def test_offer_deep_then_wait_stops():
+    # "No, I'll set it up" -> tell the model to stop, not answer with regular.
+    broker = _ScriptBroker([dr_mod._MODE_DEEP, dr_mod._MEANWHILE_WAIT])
+    assert await _offer(broker).execute(query="q") == dr_mod._SETUP_STOP
+
+
+async def test_offer_deep_then_freeform_meanwhile_is_regular():
+    # Only an explicit "set it up" waits; a free-form answer to the meanwhile
+    # question falls to regular (symmetric with the first ask), never stuck waiting.
+    broker = _ScriptBroker([dr_mod._MODE_DEEP, "uh, whatever"])
+    assert await _offer(broker).execute(query="q") == dr_mod._USE_REGULAR
+
+
+# ── working tool also asks deep-vs-regular (product: deep is slow + paid) ──
+
+
+async def test_real_tool_regular_choice_skips_engine(tmp_path: Path, monkeypatch):
+    # Even configured, picking regular must NOT hit the engine.
+    def _boom(*_a, **_k):
+        raise AssertionError("engine must not run when the user picks regular")
+
+    monkeypatch.setattr(dr_mod.httpx, "AsyncClient", _boom)
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=tmp_path)
+    tool.set_broker(_ScriptBroker([dr_mod._MODE_REGULAR]))
+    tool.set_context("cli", "direct", "cli:direct")
+    assert await tool.execute(query="q") == dr_mod._USE_REGULAR
+
+
+async def test_real_tool_deep_choice_runs_engine(tmp_path: Path, monkeypatch):
+    _patch(monkeypatch, lambda req: httpx.Response(200, content=_sse(ANSWER)))
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=tmp_path)
+    tool.set_broker(_ScriptBroker([dr_mod._MODE_DEEP]))
+    tool.set_context("cli", "direct", "cli:direct")
+    result = json.loads(await tool.execute(query="q"))
+    assert result["status"] == "ok" and result["content"] == ANSWER
+
+
+async def test_real_tool_no_broker_runs_engine(tmp_path: Path, monkeypatch):
+    # raven agent (no broker): can't ask -> honour the model's choice and run.
+    _patch(monkeypatch, lambda req: httpx.Response(200, content=_sse(ANSWER)))
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=tmp_path)
+    result = json.loads(await tool.execute(query="q"))
+    assert result["status"] == "ok" and result["content"] == ANSWER
+
+
+async def test_real_tool_broker_but_no_context_uses_regular(tmp_path: Path, monkeypatch):
+    # A concurrent turn can be handed a just-promoted real tool before its per-turn
+    # context is wired (broker set, cid empty). It must NOT run the paid engine
+    # unasked -- fall back to regular.
+    def _boom(*_a, **_k):
+        raise AssertionError("engine must not run without the deep/regular ask")
+
+    monkeypatch.setattr(dr_mod.httpx, "AsyncClient", _boom)
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=tmp_path)
+    tool.set_broker(_ScriptBroker([]))  # broker present, but set_context never called -> no cid
+    assert await tool.execute(query="q") == dr_mod._USE_REGULAR
+
+
+async def test_real_tool_run_capped_by_timeout(tmp_path: Path, monkeypatch):
+    # blocking_interaction removes the registry timeout, so execute() must cap the
+    # engine run itself: a hung run resolves to a timeout result, not forever.
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=tmp_path)
+    tool.timeout_seconds = 0.05  # instance override; no broker -> ask is skipped
+
+    async def _hang(_query):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tool, "_run_engine", _hang)
+    result = json.loads(await tool.execute(query="q"))
+    assert result["status"] == "timeout"
+
+
+class _StubProvider:
+    """Minimal provider: AgentLoop construction reads the default model but the
+    turn path is never exercised in these tests."""
+
+    def get_default_model(self) -> str:
+        return "stub-model"
+
+    async def chat_with_retry(self, **kwargs):  # pragma: no cover - never invoked
+        raise NotImplementedError
+
+
+def _offer_loop(tmp_path: Path) -> AgentLoop:
+    """A loop that starts unconfigured, so the offer stand-in is registered."""
+    return AgentLoop(provider=_StubProvider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
+
+
+def test_promote_swaps_offer_for_real_when_key_appears(tmp_path: Path, monkeypatch):
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)
+    # A key now on disk (as if `raven deep-research enable` ran in another process).
+    monkeypatch.setattr(
+        ut,
+        "get_deep_research",
+        lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""},
+    )
+    loop._maybe_promote_deep_research()
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchTool)
+    assert loop.deep_research_manager is not None
+
+
+def test_promote_noop_when_still_unconfigured(tmp_path: Path, monkeypatch):
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    monkeypatch.setattr(
+        ut,
+        "get_deep_research",
+        lambda **_kw: {"api_key": "", "api_base": "", "model": ""},
+    )
+    loop._maybe_promote_deep_research()
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # unchanged
+    assert loop.deep_research_manager is None
+
+
+def test_promote_inherits_gateway_submit_handle(tmp_path: Path, monkeypatch):
+    # A gateway wires the async-delivery handle at startup, before any key exists
+    # (manager is None then). A later promotion must inherit it so a channel keeps
+    # the async path instead of a blocking synchronous run.
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    loop.set_deep_research_submit(lambda _req: None)
+    monkeypatch.setattr(
+        ut,
+        "get_deep_research",
+        lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""},
+    )
+    loop._maybe_promote_deep_research()
+    assert loop.deep_research_manager is not None
+    assert loop.deep_research_manager.can_deliver()  # async delivery wired, not sync fallback
+
+
+def test_promoted_tool_inherits_broker(tmp_path: Path, monkeypatch):
+    # The broker is wired once at startup onto the offer stand-in; a tool built
+    # later by promotion must inherit it, else it skips the ask and runs the paid
+    # engine unprompted -- defeating the whole deep-vs-regular gate.
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    broker = _ScriptBroker([dr_mod._MODE_REGULAR])
+    loop.set_deep_research_broker(broker)  # startup wiring (onto the offer stand-in)
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+    tool = loop.tools.get("deep_research")
+    assert isinstance(tool, DeepResearchTool)
+    assert tool._broker is broker  # inherited -> will ask, not silently run
+
+
+def test_set_deep_research_broker_applies_to_current_tool(tmp_path: Path, monkeypatch):
+    # The immediate-apply path (onto the tool registered right now), independent of
+    # promotion: startup wiring must reach the offer stand-in too.
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    broker = _ScriptBroker([])
+    loop.set_deep_research_broker(broker)
+    assert loop.tools.get("deep_research")._broker is broker
+
+
+def test_promote_survives_unreadable_config(tmp_path: Path, monkeypatch):
+    # A corrupt config.json must not fail the turn: promotion runs every turn in
+    # offer mode, so an unreadable config just skips promotion (the tool stays the
+    # offer stand-in) instead of raising up through _process_message.
+    import raven.config.update_tools as ut
+    from raven.config.loader import ConfigReadError
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+
+    def _boom(**_kw):
+        raise ConfigReadError("bad json")
+
+    monkeypatch.setattr(ut, "get_deep_research", _boom)
+    loop._maybe_promote_deep_research()  # must not raise
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # unchanged
+
+
+def test_both_deep_research_variants_accept_broker():
+    # The CLI double-bind loop over ("ask_user", "deep_research") wires whichever
+    # variant is registered; both ask the user deep-vs-regular, so both take a broker.
+    assert hasattr(DeepResearchOfferTool, "set_broker")
+    assert hasattr(DeepResearchTool, "set_broker")
+
+
+def test_deep_research_mode_two_states(monkeypatch):
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    assert deep_research_mode(DeepResearchToolConfig(api_key="sk")) == "real"
+    assert deep_research_mode(DeepResearchToolConfig()) == "offer"  # unconfigured -> offer
+    # An env key counts as configured: register the working tool.
+    monkeypatch.setenv("MIROTHINKER_API_KEY", "sk-env")
+    assert deep_research_mode(DeepResearchToolConfig()) == "real"
 
 
 def test_extract_output_text_concatenates_message_output_only():

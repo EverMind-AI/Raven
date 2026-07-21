@@ -449,8 +449,9 @@ def register(app: typer.Typer) -> None:
                 # Deep research (channel/async) delivers its finished answer back
                 # via a deliver_text turn; wiring submit here (gateway only) is
                 # what flips the tool from its synchronous path to the async one.
-                if agent.deep_research_manager is not None:
-                    agent.deep_research_manager.set_submit(gw_scheduler.submit)
+                # Goes through the loop so a manager built later by promotion (a
+                # mid-session enable) inherits the handle too, not just this one.
+                agent.set_deep_research_submit(gw_scheduler.submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the
@@ -479,8 +480,12 @@ def register(app: typer.Typer) -> None:
                     await gw_hub.dispatch(_Text(content=body, source=source))
 
                 question_broker = QuestionBroker(send_frame=_question_to_channel)
+                # Wire the broker into the mid-turn askers. deep_research goes
+                # through the loop so a tool built later by promotion (a mid-session
+                # enable) inherits the broker too, not just the startup one.
                 if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
                     ask_tool.set_broker(question_broker)
+                agent.set_deep_research_broker(question_broker)
 
                 # Channel inbound runs through the spine: a permitted
                 # message is submitted as a USER turn. /stop and /restart are

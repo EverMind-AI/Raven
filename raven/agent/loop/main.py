@@ -23,7 +23,12 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.deep_research import DeepResearchManager, DeepResearchTool
+from raven.agent.tools.deep_research import (
+    DeepResearchManager,
+    DeepResearchOfferTool,
+    DeepResearchTool,
+    deep_research_mode,
+)
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
@@ -63,7 +68,7 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, ExecToolConfig
+    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
@@ -74,6 +79,7 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
+    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass
@@ -598,22 +604,23 @@ class AgentLoop:
                         output_subdir=media.output_subdir,
                     )
                 )
-        # Deep research (MiroThinker) is opt-in: a paid, minute-scale HTTP engine
-        # registered only when a key is configured, so an unconfigured deploy
-        # never exposes a tool that errors on first call.
+        # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
+        # never a plain default tool. Two modes: ``real`` (key configured) is the
+        # working tool + async manager; ``offer`` (no key) is a same-named stand-in
+        # that, on a research query, asks the user deep-vs-regular and guides setup.
         self.deep_research_manager: DeepResearchManager | None = None
-        if DeepResearchTool.is_configured(self.deep_research_config):
-            self.deep_research_manager = DeepResearchManager(
-                self.deep_research_config, workspace=self.workspace, proxy=self.web_proxy
-            )
-            self.tools.register(
-                DeepResearchTool(
-                    self.deep_research_config,
-                    workspace=self.workspace,
-                    proxy=self.web_proxy,
-                    manager=self.deep_research_manager,
-                )
-            )
+        # The async-delivery submit handle (gateway-wired, post-construction). Kept
+        # on the loop so a manager built later by promotion inherits it too, rather
+        # than only the startup manager -- see ``set_deep_research_submit``.
+        self._deep_research_submit: Callable[[Any], Any] | None = None
+        # The deep-vs-regular ask broker (transport-wired, post-construction). Kept
+        # on the loop for the same reason: a tool built later by promotion must
+        # inherit it, else it silently skips the ask -- see ``set_deep_research_broker``.
+        self._deep_research_broker: QuestionBroker | None = None
+        if deep_research_mode(self.deep_research_config) == "real":
+            self._register_real_deep_research(self.deep_research_config)
+        else:
+            self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -1125,6 +1132,64 @@ class AgentLoop:
                     pass
                 self._mcp_stack = None
             raise
+
+    def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
+        """Build the working deep_research tool (+ async manager) and register it.
+        Shared by initial registration and mid-session promotion."""
+        self.deep_research_manager = DeepResearchManager(cfg, workspace=self.workspace, proxy=self.web_proxy)
+        # Inherit the gateway's async-delivery handle if it was wired before this
+        # manager existed (i.e. a promotion after startup), so a channel keeps the
+        # async path instead of falling back to a blocking synchronous run.
+        if self._deep_research_submit is not None:
+            self.deep_research_manager.set_submit(self._deep_research_submit)
+        tool = DeepResearchTool(cfg, workspace=self.workspace, proxy=self.web_proxy, manager=self.deep_research_manager)
+        # Inherit the deep-vs-regular ask broker too, else the promoted tool would
+        # silently skip the ask and run the paid engine unprompted.
+        if self._deep_research_broker is not None:
+            tool.set_broker(self._deep_research_broker)
+        self.tools.register(tool)
+
+    def set_deep_research_submit(self, submit: Callable[[Any], Any]) -> None:
+        """Wire the async-delivery submit handle (gateway only). Stored on the loop
+        and applied to the current manager, so a later promotion inherits it too."""
+        self._deep_research_submit = submit
+        if self.deep_research_manager is not None:
+            self.deep_research_manager.set_submit(submit)
+
+    def set_deep_research_broker(self, broker: QuestionBroker) -> None:
+        """Wire the deep-vs-regular ask broker (TUI/gateway). Stored on the loop and
+        applied to the currently-registered deep_research tool, so a tool built
+        later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""
+        self._deep_research_broker = broker
+        if (tool := self.tools.get("deep_research")) is not None and hasattr(tool, "set_broker"):
+            tool.set_broker(broker)
+
+    def _maybe_promote_deep_research(self) -> None:
+        """Swap the offer stand-in for the working tool once a key appears on disk,
+        so a mid-session ``raven deep-research enable`` is picked up on the next
+        turn without a restart. Called from ``run_turn`` before the per-turn tool
+        wiring, so the promoted tool gets this turn's stream callback and routing.
+
+        Re-reads config (the in-memory copy is fixed at startup); a corrupt config
+        must not fail the turn, so a read error just skips promotion. The promoted
+        manager inherits the gateway's async-delivery handle via
+        ``set_deep_research_submit``, so a channel keeps the async path."""
+        if not isinstance(self.tools.get("deep_research"), DeepResearchOfferTool):
+            return
+        from raven.config.loader import ConfigReadError
+        from raven.config.schema import DeepResearchToolConfig
+        from raven.config.update_tools import get_deep_research
+
+        try:
+            cfg = DeepResearchToolConfig(**get_deep_research(redact=False))
+        except ConfigReadError as exc:
+            logger.warning("deep_research: skipping promotion, config unreadable: {}", exc)
+            return
+        if not DeepResearchTool.is_configured(cfg):
+            return
+        self.deep_research_config = cfg
+        self._register_real_deep_research(cfg)
+        logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
 
     def _set_tool_context(
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
@@ -2316,6 +2381,11 @@ class AgentLoop:
                     await emit(Text(content=content))
 
             message_tool.set_send_callback(_route_to_stream)
+
+        # Pick up a mid-session `deep-research enable` before the wiring below, so
+        # a promoted working tool gets THIS turn's stream callback and (in
+        # _process_message) routing context -- not just the next turn's.
+        self._maybe_promote_deep_research()
 
         # deep_research (streaming surfaces only): stream its progress live and
         # deliver its finished answer inline, so the tool returns a compact
