@@ -38,6 +38,10 @@ class ImportState:
         self._path = path or _DEFAULT_PATH
         self._cache: dict[str, Any] | None = None
 
+    @property
+    def cancel_path(self) -> Path:
+        return self._path.parent / "import_cancel"
+
     def is_submitted(self, platform: str, source_key: str) -> bool:
         entry = self._entries().get(f"{platform}:{source_key}")
         return entry is not None and entry.get("status") == "submitted"
@@ -50,7 +54,9 @@ class ImportState:
 
     def set_total(self, total: int) -> None:
         """Record the total number of importable units from a scan."""
-        self._ensure_loaded().setdefault("meta", {})["total"] = total
+        data = self._ensure_loaded()
+        data.setdefault("entries", {})
+        data.setdefault("meta", {})["total"] = total
         self._flush()
 
     def get_summary(self) -> dict[str, int]:

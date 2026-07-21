@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -34,6 +35,7 @@ class ImportSummary:
     skipped: int
     failed: int
     errors: tuple[ImportFailure, ...]
+    cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,7 @@ async def run_import(
     state: ImportState,
     *,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    cancel_path: Path | None = None,
 ) -> ImportSummary:
     """Import pre-filtered scan results into the memory backend.
 
@@ -69,6 +72,10 @@ async def run_import(
     errors: list[ImportFailure] = []
 
     for i, (scanner, result) in enumerate(items):
+        if cancel_path is not None and cancel_path.exists():
+            logger.info("import cancelled by user after {}/{} items", i, total)
+            break
+
         platform = result.platform.value
         key = result.source_key
 
@@ -142,12 +149,14 @@ async def run_import(
                     )
                 )
 
+    cancelled = cancel_path is not None and cancel_path.exists()
     logger.info(
-        "import finished: {} submitted, {} skipped, {} failed (of {} total)",
+        "import finished: {} submitted, {} skipped, {} failed (of {} total){}",
         submitted,
         skipped,
         failed,
         total,
+        " [cancelled]" if cancelled else "",
     )
     return ImportSummary(
         total=total,
@@ -155,6 +164,7 @@ async def run_import(
         skipped=skipped,
         failed=failed,
         errors=tuple(errors),
+        cancelled=cancelled,
     )
 
 
@@ -162,16 +172,12 @@ async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
     if not session.messages:
         return
     all_dicts = [_to_store_dict(m) for m in session.messages]
-    metadata_base: dict[str, Any] = {
-        "app_id": session.app_id,
-        "project_id": session.project_id,
-    }
     batch: list[dict[str, Any]] = []
     batch_chars = 0
 
     async def _flush(*, is_final: bool) -> None:
         nonlocal batch, batch_chars
-        metadata = {**metadata_base, "is_final": is_final}
+        metadata: dict[str, Any] = {"is_final": is_final}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
         await backend.store(session.session_id, batch, metadata=metadata)
         logger.debug("store completed: session_id={}", session.session_id)
@@ -209,7 +215,6 @@ def _log_store_request(
         entry: dict[str, Any] = {
             "role": msg["role"],
             "content": content,
-            "sender_id": msg["sender_id"],
             "timestamp": msg["timestamp"],
         }
         if "tool_calls" in msg:
@@ -223,7 +228,6 @@ def _to_store_dict(msg: ImportMessage) -> dict[str, Any]:
     d: dict[str, Any] = {
         "role": msg.role,
         "content": msg.content,
-        "sender_id": msg.sender_id,
         "timestamp": msg.timestamp,
     }
     if msg.tool_calls:

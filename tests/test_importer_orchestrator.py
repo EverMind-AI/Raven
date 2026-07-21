@@ -322,7 +322,9 @@ class TestMessageConversion:
 
 class TestMetadata:
     @pytest.mark.asyncio
-    async def test_metadata_contains_scope_fields(self, tmp_path: Path) -> None:
+    async def test_metadata_contains_is_final_only(self, tmp_path: Path) -> None:
+        """app_id/project_id are deliberately omitted so EverOS defaults
+        to 'default'/'default', matching the daily recall partition."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         scanner = FakeScanner({"k1": _session(n_msgs=1, app_id="claude_code", project_id="my-proj", session_id="s1")})
@@ -330,8 +332,8 @@ class TestMetadata:
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
         meta = backend.calls[0]["metadata"]
-        assert meta["app_id"] == "claude_code"
-        assert meta["project_id"] == "my-proj"
+        assert "app_id" not in meta
+        assert "project_id" not in meta
         assert meta["is_final"] is True
 
 
@@ -400,4 +402,58 @@ class TestOnProgress:
 
         summary = await run_import([(scanner, _scan_result("a"))], backend, state)
 
+        assert summary.submitted == 1
+
+
+class TestCancel:
+    @pytest.mark.asyncio
+    async def test_cancel_stops_before_next_item(self, tmp_path: Path) -> None:
+        """When cancel file exists before loop starts, no items are processed."""
+        cancel = tmp_path / "import_cancel"
+        cancel.touch()
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="sa"), "b": _session(n_msgs=1, session_id="sb")})
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+
+        summary = await run_import(items, backend, state, cancel_path=cancel)
+
+        assert summary.cancelled is True
+        assert summary.submitted == 0
+        assert summary.total == 2
+        assert backend.calls == []
+
+    @pytest.mark.asyncio
+    async def test_cancel_mid_import(self, tmp_path: Path) -> None:
+        """Cancel file created after first item completes stops before second."""
+        cancel = tmp_path / "import_cancel"
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="sa"), "b": _session(n_msgs=1, session_id="sb")})
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+
+        original_store = backend.store
+
+        async def _store_then_cancel(*args: Any, **kwargs: Any) -> None:
+            await original_store(*args, **kwargs)
+            cancel.touch()
+
+        backend.store = _store_then_cancel
+
+        summary = await run_import(items, backend, state, cancel_path=cancel)
+
+        assert summary.cancelled is True
+        assert summary.submitted == 1
+        assert summary.total == 2
+
+    @pytest.mark.asyncio
+    async def test_no_cancel_path_runs_normally(self, tmp_path: Path) -> None:
+        """Without cancel_path, import runs all items to completion."""
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=1, session_id="sa")})
+
+        summary = await run_import([(scanner, _scan_result("a"))], backend, state)
+
+        assert summary.cancelled is False
         assert summary.submitted == 1
