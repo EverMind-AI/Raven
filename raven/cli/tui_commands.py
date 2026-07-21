@@ -894,6 +894,18 @@ def _print_node_help(out=None) -> None:
     typer.echo(msg, file=out)
 
 
+def _is_abnormal_child_exit(exit_code: int) -> bool:
+    """A child exit worth surfacing to the user: not a clean exit, not one of
+    the signals the parent forwards for a graceful shutdown, and not the
+    RPC-handshake failure path (which reports itself).
+
+    The graceful signal codes mirror ui-tui gracefulExit.ts, which maps SIGHUP
+    to 129 (terminal closed), SIGINT to 130 (Ctrl+C) and SIGTERM to 143
+    (kill / process manager) through one clean-exit path. A hard SIGKILL (137)
+    is left abnormal. ``_RPC_HANDSHAKE_EXIT_CODE`` is 3."""
+    return exit_code not in (0, 129, 130, 143, _RPC_HANDSHAKE_EXIT_CODE)
+
+
 def _diagnose_crash(node_path: str, dist_entry: Path, cwd: Path) -> None:
     """When `tui` child exits non-zero, re-run capturing stderr for diagnosis."""
     try:
@@ -1006,7 +1018,9 @@ def tui(
 
     # Redirect parent loguru to a file so RpcServer / cli.dispatch / etc.
     # logs don't corrupt the Ink reconciler. (Skipped for the no-RPC paths
-    # which exit before Ink renders.)
+    # which exit before Ink renders.) The file is created here at startup and
+    # a normal run/exit only writes INFO lifecycle records, so the path is
+    # surfaced to the user only on an abnormal child exit (see below).
     if not no_rpc:
         _suppress_noisy_watchers()
         log_path = redirect_loguru_to_file(
@@ -1014,7 +1028,6 @@ def tui(
             retention=3,
             record_filter=_drop_watcher_spam,
         )
-        typer.echo(f"📝 TUI logs → {log_path}", err=True)
 
     if dev:
         # tsx watch via local node_modules.
@@ -1073,8 +1086,13 @@ def tui(
             exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=dist_cwd)
         else:
             exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=dist_cwd)
-        if exit_code != 0 and exit_code != 130 and exit_code != _RPC_HANDSHAKE_EXIT_CODE:
+        if _is_abnormal_child_exit(exit_code):
             _diagnose_crash(node_path, dist_entry, dist_cwd)
+
+    # tui.log stays silent on a clean run; surface it only when the child
+    # exited abnormally (see _is_abnormal_child_exit).
+    if not no_rpc and _is_abnormal_child_exit(exit_code):
+        typer.echo(f"📝 TUI logs → {log_path} (exit {exit_code})", err=True)
 
     if check:
         # --check passes when Node was found and child process spawned,
