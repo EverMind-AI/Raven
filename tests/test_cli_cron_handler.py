@@ -362,10 +362,9 @@ async def test_trigger_dynamic_config_reload(
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Spine read-back: a delivering single-target job runs as a CRON turn; the
-# reply is read back from readback_texts for the system event (the submitter
-# cannot pass run_turn's text_sink — the gateway's capturing runner stores it
-# before result() resolves).
+# Spine read-back: a silent job runs as a CRON turn; the reply is read back from
+# readback_texts for the system event (the submitter cannot pass run_turn's
+# text_sink — the gateway's capturing runner stores it before result() resolves).
 # ─────────────────────────────────────────────────────────────────────
 
 
@@ -403,15 +402,51 @@ async def test_spine_path_reads_back_reply_into_system_event(
         wake=wake,
     )
 
-    await handler(_make_job(channel="telegram", to="c1", name="t1"))
+    await handler(_make_job(channel="cli", deliver=False, name="t1"))
 
-    # Single target → rides the hub; no explicit broadcast post.
+    # Silent source is ephemeral; no explicit user delivery occurs.
     fake_hub.post.assert_not_awaited()
     assert captured["req"].origin is Origin.CRON
     assert captured["req"].conversation == "cron:job_t1"
     # Read back into the system event, then popped (no leak in the long-running map).
     system_events.enqueue.assert_called_once()
     assert "reminder done at 17:05" in system_events.enqueue.call_args.args[0].text
+    assert "cron:job_t1" not in readback_texts
+
+
+async def test_delivered_cron_does_not_enqueue_duplicate_heartbeat_event(
+    fake_agent,
+    fake_hub,
+    fake_session_mgr,
+    patch_cron_config,
+):
+    """A user-facing cron reply already rode the hub and must not be resent."""
+    patch_cron_config(["*"])
+    channel_manager = SimpleNamespace(enabled_channels=["telegram"])
+    system_events = MagicMock()
+    wake = MagicMock()
+    readback_texts: dict[str, str] = {}
+
+    class _Handle:
+        async def result(self):
+            readback_texts["cron:job_t1"] = "already delivered reminder"
+            return None
+
+    handler = make_on_cron_job(
+        fake_agent,
+        fake_hub,
+        submit=lambda req: _Handle(),
+        readback_texts=readback_texts,
+        channel_manager=channel_manager,
+        session_manager=fake_session_mgr,
+        system_events=system_events,
+        wake=wake,
+    )
+
+    await handler(_make_job(channel="telegram", to="c1", name="t1"))
+
+    system_events.enqueue.assert_not_called()
+    wake.request_wake_now.assert_not_called()
     assert "cron:job_t1" not in readback_texts
 
 
@@ -442,7 +477,7 @@ async def test_spine_path_no_reply_falls_back_to_no_response(
         wake=wake,
     )
 
-    await handler(_make_job(channel="telegram", to="c1", name="t2"))
+    await handler(_make_job(channel="cli", deliver=False, name="t2"))
 
     system_events.enqueue.assert_called_once()
     assert "(no response)" in system_events.enqueue.call_args.args[0].text
