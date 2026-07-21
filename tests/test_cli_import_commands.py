@@ -171,3 +171,48 @@ class TestRun:
 
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# stop
+# ---------------------------------------------------------------------------
+
+
+class TestStop:
+    def test_stop_creates_cancel_file(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        state.set_total(5)
+        state.mark_submitted("claude_code", "item1")
+        with patch("raven.cli.import_commands._default_state", return_value=state):
+            result = runner.invoke(import_app, ["stop"])
+        assert result.exit_code == 0
+        assert state.cancel_path.exists()
+        assert "cancel" in result.output.lower() or "Cancel" in result.output
+
+    def test_stop_no_import(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        with patch("raven.cli.import_commands._default_state", return_value=state):
+            result = runner.invoke(import_app, ["stop"])
+        assert result.exit_code == 0
+        assert "No import" in result.output
+
+    def test_stop_already_cancelled(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        state.set_total(5)
+        state.cancel_path.touch()
+        with patch("raven.cli.import_commands._default_state", return_value=state):
+            result = runner.invoke(import_app, ["stop"])
+        assert result.exit_code == 0
+        assert "already" in result.output.lower()
+
+
+class TestStatusCancelled:
+    def test_status_shows_cancelled(self, tmp_path: Path) -> None:
+        state = ImportState(path=tmp_path / "state.json")
+        state.set_total(5)
+        state.mark_submitted("claude_code", "item1")
+        state.cancel_path.touch()
+        with patch("raven.cli.import_commands._default_state", return_value=state):
+            result = runner.invoke(import_app, ["status"])
+        assert result.exit_code == 0
+        assert "Cancelled" in result.output or "cancelled" in result.output

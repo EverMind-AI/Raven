@@ -108,6 +108,7 @@ async def _build_and_run(
     state: ImportState,
     *,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    cancel_path: Path | None = None,
 ) -> ImportSummary:
     from raven.config.raven import load_raven_config
 
@@ -123,7 +124,7 @@ async def _build_and_run(
 
     await backend.start()
     try:
-        return await run_import(items, backend, state, on_progress=on_progress)
+        return await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
     finally:
         await backend.stop()
 
@@ -198,7 +199,7 @@ def status_cmd(
 
     state = _default_state()
     progress = state.get_progress()
-    entries = progress.get("entries", {})
+    entries = {k: v for k, v in progress.get("entries", {}).items() if ":" in k}
     meta = progress.get("meta", {})
     total = meta.get("total", len(entries))
 
@@ -258,7 +259,13 @@ def status_cmd(
     # Progress bar
     pct = int(done / total * 100) if total else 0
     bar = ProgressBar(total=total, completed=done, width=30)
-    console.print(" ", bar, f" {pct}%  {done}/{total}\n")
+    console.print(" ", bar, f" {pct}%  {done}/{total}")
+
+    cancel_file = state.cancel_path
+    if cancel_file.exists() and remaining > 0:
+        console.print("  [yellow]Cancelled[/yellow]\n")
+    else:
+        console.print()
 
     # Platform table
     table = Table(show_header=True, box=None, padding=(0, 2, 0, 0))
@@ -288,7 +295,11 @@ def status_cmd(
         console.print(f" Duration:  {mins}m {secs}s")
     if last_update:
         ago = int(now - last_update)
-        console.print(f" Updated:   {ago}s ago")
+        ago_mins, ago_secs = divmod(ago, 60)
+        if ago_mins:
+            console.print(f" Updated:   {ago_mins}m {ago_secs}s ago")
+        else:
+            console.print(f" Updated:   {ago_secs}s ago")
 
     log_path = get_logs_dir() / "import.log"
     console.print(f" Log:       {log_path}")
@@ -303,6 +314,22 @@ def status_cmd(
         console.print(" Run `raven import run` to retry failed items.")
 
     console.print()
+
+
+@import_app.command("stop")
+def stop_cmd() -> None:
+    """Cancel a running background import."""
+    state = _default_state()
+    if not state._path.exists():
+        console.print("No import in progress.")
+        return
+    cancel = state.cancel_path
+    if cancel.exists():
+        console.print("Import is already being cancelled.")
+        return
+    cancel.touch()
+    console.print("Import cancelled. Running item will complete, remaining items skipped.")
+    console.print("Use `raven import status` to view progress.")
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +358,10 @@ async def _run_async(
     from raven.cli._log_file import redirect_loguru_to_file
 
     log_path = redirect_loguru_to_file("import.log", terminal_level=None)
+
+    cancel = _default_state().cancel_path
+    if cancel.exists():
+        cancel.unlink(missing_ok=True)
 
     platform_filter = _platform_option(platform)
     all_results = await _scan_all_platforms(platform_filter=platform_filter)
@@ -405,7 +436,7 @@ async def _run_async(
                     description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
                 )
 
-            summary = await _build_and_run(items, state, on_progress=on_progress)
+            summary = await _build_and_run(items, state, on_progress=on_progress, cancel_path=state.cancel_path)
     finally:
         _logger.remove()
         _logger.add(sys.stderr, level="WARNING")
@@ -465,7 +496,9 @@ def _require_questionary() -> Any:
 
 def _print_summary(summary: ImportSummary, *, log_path: Path | None = None) -> None:
     console.print()
-    if summary.failed:
+    if summary.cancelled:
+        console.print("[bold yellow]Import Cancelled[/bold yellow]\n")
+    elif summary.failed:
         console.print("[bold yellow]Import Complete (with errors)[/bold yellow]\n")
     else:
         console.print("[bold green]Import Complete[/bold green]\n")
@@ -477,6 +510,12 @@ def _print_summary(summary: ImportSummary, *, log_path: Path | None = None) -> N
         console.print()
         for err in summary.errors:
             console.print(f"    {err.platform}/{err.source_key}: {err.error}")
+    if summary.cancelled:
+        remaining = summary.total - summary.submitted - summary.skipped - summary.failed
+        console.print(f"  Remaining: {remaining}")
+        console.print()
+        console.print("Run `raven import run` to continue remaining items.")
+    elif summary.failed:
         console.print()
         console.print("Run `raven import run` to retry failed items.")
     if log_path:
