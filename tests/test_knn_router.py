@@ -12,9 +12,24 @@ from raven.routing.knn_router import KNNModelRouter
 
 # large has higher reward but higher cost across all training tasks.
 ENTRIES = [
-    {"task_name": "a", "embedding": [1.0, 0.0], "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
-    {"task_name": "b", "embedding": [0.0, 1.0], "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
-    {"task_name": "c", "embedding": [1.0, 1.0], "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
+    {
+        "task_name": "a",
+        "embedding": [1.0, 0.0],
+        "rewards": {"small": 30, "large": 60},
+        "costs": {"small": 1, "large": 10},
+    },
+    {
+        "task_name": "b",
+        "embedding": [0.0, 1.0],
+        "rewards": {"small": 30, "large": 60},
+        "costs": {"small": 1, "large": 10},
+    },
+    {
+        "task_name": "c",
+        "embedding": [1.0, 1.0],
+        "rewards": {"small": 30, "large": 60},
+        "costs": {"small": 1, "large": 10},
+    },
 ]
 
 
@@ -24,8 +39,16 @@ def _write_memory(tmp_path, entries=ENTRIES):
     return str(p)
 
 
-def _cfg(memory_path, k=5, lam=0.0, models=("small", "large"),
-         min_similarity=0.0, min_similar_neighbors=1, min_memory_size=1, min_margin=0.0):
+def _cfg(
+    memory_path,
+    k=5,
+    lam=0.0,
+    models=("small", "large"),
+    min_similarity=0.0,
+    min_similar_neighbors=1,
+    min_memory_size=1,
+    min_margin=0.0,
+):
     return RoutingConfig(
         enabled=True,
         backend="knn",
@@ -43,8 +66,18 @@ def _cfg(memory_path, k=5, lam=0.0, models=("small", "large"),
 
 # All neighbours point the same way; a query orthogonal to them has low cosine.
 FAR_ENTRIES = [
-    {"task_name": "a", "embedding": [1.0, 0.0, 0.0], "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
-    {"task_name": "b", "embedding": [1.0, 0.0, 0.0], "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
+    {
+        "task_name": "a",
+        "embedding": [1.0, 0.0, 0.0],
+        "rewards": {"small": 30, "large": 60},
+        "costs": {"small": 1, "large": 10},
+    },
+    {
+        "task_name": "b",
+        "embedding": [1.0, 0.0, 0.0],
+        "rewards": {"small": 30, "large": 60},
+        "costs": {"small": 1, "large": 10},
+    },
 ]
 
 

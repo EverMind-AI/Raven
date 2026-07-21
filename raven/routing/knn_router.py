@@ -83,7 +83,10 @@ class KNNModelRouter:
             logger.warning("KNNModelRouter: configured models absent from memory (skipped): {}", missing_reward)
         logger.info(
             "KNNModelRouter: loaded {} tasks, candidates={}, k={}, lambda={}",
-            len(entries), self._candidates, self._k, self._lambda,
+            len(entries),
+            self._candidates,
+            self._k,
+            self._lambda,
         )
 
     async def _embed(self, prompt: str) -> np.ndarray | None:

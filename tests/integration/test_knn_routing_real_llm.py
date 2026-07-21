@@ -53,16 +53,21 @@ pytestmark = [
 _TASKS = [
     ("simple: answer a short factual question", {CHEAP: 0.95, STRONG: 0.97}, {CHEAP: 0.0002, STRONG: 0.006}),
     ("simple: a one-word fact or basic arithmetic", {CHEAP: 0.95, STRONG: 0.97}, {CHEAP: 0.0002, STRONG: 0.006}),
-    ("hard: multi-step algorithm design with correct code", {CHEAP: 0.40, STRONG: 0.95}, {CHEAP: 0.0003, STRONG: 0.008}),
-    ("hard: subtle mathematical proof or tricky reasoning", {CHEAP: 0.40, STRONG: 0.95}, {CHEAP: 0.0003, STRONG: 0.008}),
+    (
+        "hard: multi-step algorithm design with correct code",
+        {CHEAP: 0.40, STRONG: 0.95},
+        {CHEAP: 0.0003, STRONG: 0.008},
+    ),
+    (
+        "hard: subtle mathematical proof or tricky reasoning",
+        {CHEAP: 0.40, STRONG: 0.95},
+        {CHEAP: 0.0003, STRONG: 0.008},
+    ),
 ]
 
 
 def _build_memory(path: Path) -> None:
-    mem = [
-        {"task_name": t[0], "embedding": _embed_one(t[0]), "rewards": t[1], "costs": t[2]}
-        for t in _TASKS
-    ]
+    mem = [{"task_name": t[0], "embedding": _embed_one(t[0]), "rewards": t[1], "costs": t[2]} for t in _TASKS]
     path.write_text(json.dumps(mem))
 
 
@@ -81,17 +86,23 @@ async def test_knn_routing_end_to_end(tmp_path):
     _build_memory(mem_path)
 
     cfg = RoutingConfig(
-        enabled=True, backend="knn", k=2, lambda_cost=10.0,
-        embedding_endpoint=EMBED_URL, memory_path=str(mem_path),
-        models=[ModelEndpoint(model=CHEAP, api_base=OR_BASE, api_key=key),
-                ModelEndpoint(model=STRONG, api_base=OR_BASE, api_key=key)],
+        enabled=True,
+        backend="knn",
+        k=2,
+        lambda_cost=10.0,
+        embedding_endpoint=EMBED_URL,
+        memory_path=str(mem_path),
+        models=[
+            ModelEndpoint(model=CHEAP, api_base=OR_BASE, api_key=key),
+            ModelEndpoint(model=STRONG, api_base=OR_BASE, api_key=key),
+        ],
         # Tiny hand-built memory: relax the production safety gates.
-        min_similarity=0.0, min_similar_neighbors=1, min_memory_size=1,
+        min_similarity=0.0,
+        min_similar_neighbors=1,
+        min_memory_size=1,
     )
     router = KNNModelRouter(cfg, default_model=CHEAP)
-    provider = PerModelProvider(
-        cfg.models, fallback=CustomProvider(api_key=key, api_base=OR_BASE, default_model=CHEAP)
-    )
+    provider = PerModelProvider(cfg.models, fallback=CustomProvider(api_key=key, api_base=OR_BASE, default_model=CHEAP))
 
     simple = "What is the capital of Japan? Answer in one word."
     hard = "Write a Python function using matrix exponentiation to compute the nth Fibonacci number in O(log n)."
@@ -104,8 +115,12 @@ async def test_knn_routing_end_to_end(tmp_path):
     # Full raven turn: routing fires inside _process_message and the routed
     # model returns a real answer (sandbox / MCP bring-up stubbed out).
     loop = AgentLoop(
-        provider=provider, workspace=tmp_path, router=router,
-        model=CHEAP, max_iterations=6, interactive=False,
+        provider=provider,
+        workspace=tmp_path,
+        router=router,
+        model=CHEAP,
+        max_iterations=6,
+        interactive=False,
     )
 
     async def _noop():
