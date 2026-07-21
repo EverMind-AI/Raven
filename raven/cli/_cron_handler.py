@@ -151,10 +151,11 @@ def make_on_cron_job(
     fires AND Sentinel proactively reminds at 5/22).
 
     ``system_events`` / ``wake`` are optional. When wired (gateway path),
-    each completed or failed cron run enqueues a system event and requests
-    an early heartbeat tick, so the main heartbeat session learns what
-    happened in the isolated ``cron:<job_id>`` session and can decide on
-    follow-ups.
+    a failed cron run or a successful silent run enqueues a system event and
+    requests an early heartbeat tick, so the main heartbeat session learns
+    what happened in the isolated ``cron:<job_id>`` session and can decide on
+    follow-ups. A successful user-facing run is already delivered directly,
+    so it must not be re-enqueued for Heartbeat to deliver a second time.
     Only effective for jobs executed in this process — a CLI test-fire
     runs in its own process and cannot reach the gateway's queue.
     """
@@ -246,9 +247,11 @@ def make_on_cron_job(
         if sentinel_runner is not None:
             _record_cron_dispatch_to_ledger(sentinel_runner, job)
 
-        # Event wake: let the main heartbeat session learn what this isolated cron
-        # run produced (and end its sleep early).
-        if system_events is not None and wake is not None:
+        # Event wake: silent jobs need the main heartbeat session to learn what
+        # this isolated cron run produced. A delivering job already reached the
+        # user through the hub/broadcast path; re-enqueuing its response would let
+        # Heartbeat deliver the same reminder a second time.
+        if system_events is not None and wake is not None and not job.payload.deliver:
             _emit_cron_event(system_events, wake, job, (response or "(no response)").strip(), failed=False)
 
         # Broadcast a multi-target delivering job to every resolved target: the hub
