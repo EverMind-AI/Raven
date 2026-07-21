@@ -3579,17 +3579,14 @@ def _step5_import_body(
     from raven.cli.import_commands import (
         PLATFORM_DISPLAY_NAMES,
         _build_and_run,
-        _build_scanners,
         _default_state,
-        _filter_by_tier,
         _print_summary,
-        _scan_all_platforms,
     )
     from raven.importer.orchestrator import ImportSummary, ProgressEvent
-    from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
+    from raven.importer.scanners import build_scanners, scan_all
+    from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
-    # Scan (async, no questionary inside)
-    all_results = asyncio.run(_scan_all_platforms())
+    all_results = asyncio.run(scan_all())
     if not all_results:
         console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
@@ -3731,7 +3728,7 @@ def _step5_import_body(
         break
 
     # Filter
-    filtered = _filter_by_tier(results, selected_tier)
+    filtered = filter_by_tier(results, selected_tier)
     if not filtered:
         console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
         return None
@@ -3792,7 +3789,7 @@ def _step5_import_body(
         return None
 
     # Build items
-    scanners = _build_scanners()
+    scanners = build_scanners()
     scanner_map: dict[str, Scanner] = {s.platform: s for s in scanners}
     items = [(scanner_map[r.platform], r) for r in filtered if r.platform in scanner_map]
 

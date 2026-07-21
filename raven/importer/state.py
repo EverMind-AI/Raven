@@ -13,7 +13,11 @@ from loguru import logger
 
 from raven.utils.atomic_io import atomic_replace
 
-_DEFAULT_PATH = Path.home() / ".raven" / "import_state.json"
+
+def _default_state_path() -> Path:
+    from raven.config.paths import get_data_dir
+
+    return get_data_dir() / "import_state.json"
 
 
 class ImportState:
@@ -35,7 +39,7 @@ class ImportState:
     """
 
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path or _DEFAULT_PATH
+        self._path = path or _default_state_path()
         self._cache: dict[str, Any] | None = None
 
     @property

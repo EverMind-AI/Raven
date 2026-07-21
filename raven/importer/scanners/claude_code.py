@@ -71,6 +71,10 @@ _SESSION_EPILOGUE = (
 )
 
 
+def _pick(tpl: tuple[str, str], cjk: bool) -> str:
+    return tpl[0] if cjk else tpl[1]
+
+
 # ---------------------------------------------------------------------------
 # Helpers -- content extraction
 # ---------------------------------------------------------------------------
@@ -158,14 +162,12 @@ def _make_intro(filename: str, fm: dict[str, Any], cjk: bool) -> str:
     name = fm.get("name") or Path(filename).stem
 
     key = filename.upper() if filename.upper() == "MEMORY.MD" else meta.get("type")
-    cjk_tpl, en_tpl = _INTRO_TEMPLATES.get(key, _INTRO_TEMPLATES[None])
-    tpl = cjk_tpl if cjk else en_tpl
-    return tpl.format(name=name, filename=filename)
+    tpl = _INTRO_TEMPLATES.get(key, _INTRO_TEMPLATES[None])
+    return _pick(tpl, cjk).format(name=name, filename=filename)
 
 
 def _make_file_end(filename: str, cjk: bool) -> str:
-    tpl = _FILE_END_TEMPLATES[0] if cjk else _FILE_END_TEMPLATES[1]
-    return tpl.format(filename=filename)
+    return _pick(_FILE_END_TEMPLATES, cjk).format(filename=filename)
 
 
 def _split_paragraphs(text: str) -> list[str]:
@@ -451,7 +453,7 @@ class ClaudeCodeScanner:
 
         mtime_ms = int(result.mtime * 1000)
         cjk = is_cjk(body)
-        intro = _GLOBAL_INTRO[0] if cjk else _GLOBAL_INTRO[1]
+        intro = _pick(_GLOBAL_INTRO, cjk)
         file_end = _make_file_end("CLAUDE.md", cjk)
         file_msgs = _build_file_messages(intro, body, file_end, mtime_ms)
 
@@ -467,22 +469,24 @@ class ClaudeCodeScanner:
         base_mtime_ms = int(result.mtime * 1000)
 
         paths = _memory_files_sorted(result.file_paths)
-        readable_count = sum(1 for p in paths if p.is_file())
 
-        first_body = ""
+        parsed: list[tuple[Path, dict[str, Any], str]] = []
         for p in paths:
             try:
-                t = p.read_text(encoding="utf-8", errors="replace")
-                _, b = parse_frontmatter(t)
-                if b.strip():
-                    first_body = b
-                    break
+                text = p.read_text(encoding="utf-8", errors="replace")
             except OSError:
+                logger.warning("Cannot read memory file: {}", p)
                 continue
+            fm, body = parse_frontmatter(text)
+            if body.strip():
+                parsed.append((p, fm, body))
+
+        first_body = parsed[0][2] if parsed else ""
         cjk = is_cjk(first_body)
 
-        preamble_tpl = _SESSION_PREAMBLE[0] if cjk else _SESSION_PREAMBLE[1]
-        epilogue_tpl = _SESSION_EPILOGUE[0] if cjk else _SESSION_EPILOGUE[1]
+        preamble_tpl = _pick(_SESSION_PREAMBLE, cjk)
+        epilogue_tpl = _pick(_SESSION_EPILOGUE, cjk)
+        readable_count = len(parsed)
 
         messages: list[ImportMessage] = [
             ImportMessage(
@@ -494,17 +498,7 @@ class ClaudeCodeScanner:
         ]
 
         ts_offset = 1
-        for path in paths:
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                logger.warning("Cannot read memory file: {}", path)
-                continue
-
-            fm, body = parse_frontmatter(text)
-            if not body.strip():
-                continue
-
+        for path, fm, body in parsed:
             try:
                 file_mtime_ms = int(path.stat().st_mtime * 1000)
             except OSError:

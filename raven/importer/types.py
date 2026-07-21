@@ -85,6 +85,13 @@ class Scanner(Protocol):
         ...
 
 
+def filter_by_tier(results: list[ScanResult], tier: Tier) -> list[ScanResult]:
+    """Filter scan results by the user's chosen import tier."""
+    if tier == Tier.FULL:
+        return results
+    return [r for r in results if r.kind == SourceKind.MEMORY_FILE]
+
+
 __all__ = [
     "ImportMessage",
     "ImportSession",
@@ -93,4 +100,5 @@ __all__ = [
     "Scanner",
     "SourceKind",
     "Tier",
+    "filter_by_tier",
 ]

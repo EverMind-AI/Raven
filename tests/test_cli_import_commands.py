@@ -48,7 +48,7 @@ def _make_scan_results() -> list[ScanResult]:
 class TestScan:
     def test_scan_shows_results(self) -> None:
         with patch(
-            "raven.cli.import_commands._scan_all_platforms",
+            "raven.importer.scanners.scan_all",
             new=AsyncMock(return_value=_make_scan_results()),
         ):
             result = runner.invoke(import_app, ["scan"])
@@ -59,7 +59,7 @@ class TestScan:
 
     def test_scan_empty(self) -> None:
         with patch(
-            "raven.cli.import_commands._scan_all_platforms",
+            "raven.importer.scanners.scan_all",
             new=AsyncMock(return_value=[]),
         ):
             result = runner.invoke(import_app, ["scan"])
@@ -122,7 +122,7 @@ class TestRun:
 
         with (
             patch(
-                "raven.cli.import_commands._scan_all_platforms",
+                "raven.importer.scanners.scan_all",
                 new=AsyncMock(return_value=_make_scan_results()),
             ),
             patch(
@@ -143,7 +143,7 @@ class TestRun:
 
         with (
             patch(
-                "raven.cli.import_commands._scan_all_platforms",
+                "raven.importer.scanners.scan_all",
                 new=AsyncMock(return_value=_make_scan_results()),
             ),
             patch("raven.cli.import_commands._default_state", return_value=state),
@@ -161,7 +161,7 @@ class TestRun:
 
     def test_run_no_sources(self) -> None:
         with patch(
-            "raven.cli.import_commands._scan_all_platforms",
+            "raven.importer.scanners.scan_all",
             new=AsyncMock(return_value=[]),
         ):
             result = runner.invoke(

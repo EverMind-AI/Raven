@@ -18,7 +18,7 @@ from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_ba
 from raven.config.loader import load_config
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.state import ImportState
-from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
+from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
 console = Console()
 
@@ -43,47 +43,8 @@ PLATFORM_DISPLAY_NAMES: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _build_scanners() -> list[Scanner]:
-    from raven.importer.scanners import ClaudeCodeScanner
-
-    return [ClaudeCodeScanner()]
-
-
 def _default_state() -> ImportState:
     return ImportState()
-
-
-async def _scan_all_platforms(
-    scanners: list[Scanner] | None = None,
-    *,
-    platform_filter: Platform | None = None,
-) -> list[ScanResult]:
-    from loguru import logger
-
-    if scanners is None:
-        scanners = _build_scanners()
-    if platform_filter:
-        scanners = [s for s in scanners if s.platform == platform_filter]
-    logger.info("scan started: {} scanner(s)", len(scanners))
-    results: list[ScanResult] = []
-    for scanner in scanners:
-        found = await scanner.scan()
-        logger.info(
-            "scan {}: {} results",
-            scanner.platform.value,
-            len(found),
-        )
-        results.extend(found)
-    mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
-    conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
-    logger.info("scan completed: {} results ({} memory_file, {} conversation)", len(results), mem, conv)
-    return results
-
-
-def _filter_by_tier(results: list[ScanResult], tier: Tier) -> list[ScanResult]:
-    if tier == Tier.FULL:
-        return results
-    return [r for r in results if r.kind == SourceKind.MEMORY_FILE]
 
 
 def _format_size(size_bytes: int) -> str:
@@ -151,7 +112,9 @@ def scan_cmd(
     platform_filter = _platform_option(platform)
 
     async def _do() -> list[ScanResult]:
-        return await _scan_all_platforms(platform_filter=platform_filter)
+        from raven.importer.scanners import scan_all
+
+        return await scan_all(platform_filter=platform_filter)
 
     try:
         results = asyncio.run(_do())
@@ -370,7 +333,9 @@ async def _run_async(
         cancel.unlink(missing_ok=True)
 
     platform_filter = _platform_option(platform)
-    all_results = await _scan_all_platforms(platform_filter=platform_filter)
+    from raven.importer.scanners import scan_all
+
+    all_results = await scan_all(platform_filter=platform_filter)
 
     if not all_results:
         console.print("No importable data found.")
@@ -398,7 +363,7 @@ async def _run_async(
         if selected_tier is None:
             return
 
-    filtered = _filter_by_tier(all_results, selected_tier)
+    filtered = filter_by_tier(all_results, selected_tier)
     if not filtered:
         console.print("No items match the selected tier.")
         return
@@ -414,7 +379,9 @@ async def _run_async(
         if not typer.confirm("Proceed?", default=True):
             return
 
-    scanners = _build_scanners()
+    from raven.importer.scanners import build_scanners
+
+    scanners = build_scanners()
     scanner_map = {s.platform: s for s in scanners}
     items: list[tuple[Scanner, ScanResult]] = []
     for r in filtered:
