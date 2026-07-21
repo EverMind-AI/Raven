@@ -108,10 +108,11 @@ class TestConstruction:
 class TestLifecycle:
     async def test_start_stop_idempotent(self, tmp_path: Path) -> None:
         b = _backend(tmp_path)
-        await b.start()
-        await b.stop()
-        await b.start()
-        await b.stop()
+        with patch("raven.cli._everos_server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+            await b.stop()
+            await b.start()
+            await b.stop()
 
     async def test_start_calls_ensure_everos_server(self, tmp_path: Path) -> None:
         b = EverosBackend(_ctx(tmp_path))

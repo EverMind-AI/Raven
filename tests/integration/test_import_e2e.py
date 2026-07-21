@@ -200,8 +200,8 @@ async def test_full_pipeline_conversation(scanner: ClaudeCodeScanner, tmp_path: 
 
     call = backend.store_calls[0]
     assert call["session_id"] == "import-claude_code-sess-001"
-    assert call["metadata"]["app_id"] == "claude_code"
-    assert call["metadata"]["project_id"] == "test-project"
+    assert "app_id" not in call["metadata"]
+    assert "project_id" not in call["metadata"]
     assert call["metadata"]["is_final"] is True
 
     roles = [m["role"] for m in call["messages"]]
@@ -228,8 +228,8 @@ async def test_full_pipeline_memory_files(scanner: ClaudeCodeScanner, tmp_path: 
 
     call = backend.store_calls[0]
     assert call["session_id"] == "import-claude_code-mem-test-project"
-    assert call["metadata"]["app_id"] == "claude_code"
-    assert call["metadata"]["project_id"] == "test-project"
+    assert "app_id" not in call["metadata"]
+    assert "project_id" not in call["metadata"]
     assert call["metadata"]["is_final"] is True
 
     contents = [m["content"] for m in call["messages"]]
@@ -323,14 +323,14 @@ async def test_message_shape(scanner: ClaudeCodeScanner, tmp_path: Path) -> None
 
     assert user_msg["role"] == "user"
     assert user_msg["content"] == "Hello, help me write a function"
-    assert user_msg["sender_id"] == "user"
+    assert "sender_id" not in user_msg
     assert user_msg["timestamp"] == parse_iso_ts_ms("2026-07-15T10:00:00Z")
     assert "tool_calls" not in user_msg
     assert "tool_call_id" not in user_msg
 
     assert assistant_msg["role"] == "assistant"
     assert assistant_msg["content"] == "Sure, here's a function:"
-    assert assistant_msg["sender_id"] == "assistant"
+    assert "sender_id" not in assistant_msg
     assert assistant_msg["timestamp"] == parse_iso_ts_ms("2026-07-15T10:00:05Z")
     assert assistant_msg["tool_calls"][0]["id"] == "toolu_abc"
     assert assistant_msg["tool_calls"][0]["function"]["name"] == "write_file"

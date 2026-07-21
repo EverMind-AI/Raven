@@ -26,7 +26,6 @@ Three architectural invariants worth re-stating:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from types import SimpleNamespace
@@ -271,11 +270,6 @@ class EverosBackend:
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
-        # Build the embedded adapter now (deferred from __init__). The everos /
-        # lancedb import is ~2-3s of sync CPU, so run it in a thread to keep it
-        # off the event loop.
-        if self._mode == "embedded" and self._adapter is None:
-            self._adapter = await asyncio.to_thread(_try_make_real_adapter)
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
