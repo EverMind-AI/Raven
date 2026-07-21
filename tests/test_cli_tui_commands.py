@@ -455,7 +455,6 @@ async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(rpc_ser
     )
 
 
-
 # ---------------------------------------------------------------------------
 # log-path notice: surfaced only on abnormal child exit (#131)
 # ---------------------------------------------------------------------------
