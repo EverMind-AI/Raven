@@ -9,7 +9,10 @@ agent loop can use either interchangeably.
 Memory schema (JSON list), one entry per training task::
 
     {"task_name": str,
-     "embedding": [float, ...],
+     "text": str,               # task description; embedded at load when
+                                # "embedding" is absent (keeps the file small
+                                # and the vectors consistent with live queries)
+     "embedding": [float, ...], # optional precomputed vector; used as-is if set
      "rewards": {model_name: float, ...},
      "costs":   {model_name: float, ...}}
 
@@ -20,7 +23,9 @@ candidates) yields ``(None, [])`` so the caller falls back to the default model.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import urllib.request
 from pathlib import Path
 
 import httpx
@@ -41,7 +46,6 @@ class KNNModelRouter:
         self._lambda = float(routing_cfg.lambda_cost)
         self._embed_url = routing_cfg.embedding_endpoint
         self._config_models = [m.model for m in routing_cfg.models if m.model]
-        self._default = self._config_models[0] if self._config_models else None
         # Agent's configured default model: the safe home the router only leaves
         # with enough evidence. None -> the "already on default" / margin gates
         # are inert (caller still falls back to its own model on a None return).
@@ -72,9 +76,13 @@ class KNNModelRouter:
             return
 
         self._task_names = [e.get("task_name", "") for e in entries]
-        self._embeddings = _normalize(np.array([e["embedding"] for e in entries], dtype=np.float32))
         self._rewards = [e.get("rewards", {}) for e in entries]
         self._costs = [e.get("costs", {}) for e in entries]
+
+        mat = self._resolve_embeddings(entries, path)
+        if mat is None:
+            return
+        self._embeddings = _normalize(mat)
 
         mem_models = {m for r in self._rewards for m in r}
         self._candidates = [m for m in self._config_models if m in mem_models]
@@ -88,6 +96,60 @@ class KNNModelRouter:
             self._k,
             self._lambda,
         )
+
+    def _resolve_embeddings(self, entries: list[dict], path: str) -> "np.ndarray | None":
+        """Use precomputed ``embedding`` vectors if present; otherwise embed each
+        entry's ``text`` one at a time (batch=1, to match how live queries are
+        embedded) via the configured endpoint, cached next to the memory file."""
+        if all("embedding" in e for e in entries):
+            return np.array([e["embedding"] for e in entries], dtype=np.float32)
+
+        texts = [e.get("text") or e.get("task_name", "") for e in entries]
+        if not self._embed_url:
+            logger.warning("KNNModelRouter: memory has no embeddings and no embedding_endpoint; routing disabled")
+            return None
+
+        cache = self._read_emb_cache(path)
+        missing = [t for t in dict.fromkeys(texts) if t not in cache]
+        try:
+            for t in missing:
+                payload = json.dumps({"texts": [t]}).encode()
+                req = urllib.request.Request(
+                    self._embed_url, data=payload, headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    cache[t] = json.loads(resp.read())["embeddings"][0]
+        except Exception as e:
+            logger.warning("KNNModelRouter: failed to embed memory texts: {}", e)
+            return None
+        if missing:
+            self._write_emb_cache(path, cache)
+            logger.info("KNNModelRouter: embedded {} memory texts at load", len(missing))
+        return np.array([cache[t] for t in texts], dtype=np.float32)
+
+    def _emb_cache_path(self, path: str) -> Path:
+        # Cache in a user dir (not next to the memory file, which may be a
+        # read-only repo asset). Keyed by endpoint + memory path so a different
+        # embedder or memory file gets its own cache.
+        key = hashlib.sha1(f"{self._embed_url}|{Path(path).resolve()}".encode()).hexdigest()[:16]
+        d = Path.home() / ".raven" / "knn_embcache"
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return d / f"{key}.json"
+
+    def _read_emb_cache(self, path: str) -> dict:
+        try:
+            return json.loads(self._emb_cache_path(path).read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_emb_cache(self, path: str, cache: dict) -> None:
+        try:
+            self._emb_cache_path(path).write_text(json.dumps(cache), encoding="utf-8")
+        except Exception:
+            pass  # read-only location: skip caching, re-embed next load
 
     async def _embed(self, prompt: str) -> np.ndarray | None:
         try:
@@ -111,41 +173,51 @@ class KNNModelRouter:
         if q is None:
             return None, []
 
-        sims = self._embeddings @ q
-        top = np.argsort(-sims)[: self._k]
+        # Routing is an optional enhancement: never let a KNN/data error crash
+        # the turn -> any failure degrades to the caller's default model.
+        try:
+            sims = self._embeddings @ q
+            top = np.argsort(-sims)[: self._k]
 
-        # Similar-support gate: the pick is trusted only when enough retrieved
-        # neighbours are actually similar (cosine >= min_similarity). An
-        # off-distribution query (e.g. casual chat) has few similar neighbours
-        # and stays on the default. Scoring uses only these similar neighbours
-        # so far-away tasks do not dilute the reward estimate.
-        similar = [int(i) for i in top if float(sims[i]) >= self._min_similarity]
-        if len(similar) < self._min_similar:
+            # Similar-support gate: the pick is trusted only when enough
+            # retrieved neighbours are actually similar (cosine >=
+            # min_similarity). An off-distribution query (e.g. casual chat) has
+            # few similar neighbours and stays on the default. Scoring uses only
+            # these similar neighbours so far-away tasks do not dilute rewards.
+            similar = [int(i) for i in top if float(sims[i]) >= self._min_similarity]
+            if len(similar) < self._min_similar:
+                return None, []
+
+            scores: dict[str, float] = {}
+            for m in self._candidates:
+                # Average reward and cost over the SAME neighbours (those that
+                # carry this model's reward), so a neighbour missing the model
+                # does not dilute the cost with a zero.
+                pairs = [(self._rewards[i][m], self._costs[i].get(m, 0.0)) for i in similar if m in self._rewards[i]]
+                if not pairs:
+                    continue
+                reward = float(np.mean([r for r, _ in pairs]))
+                cost = float(np.mean([c for _, c in pairs]))
+                scores[m] = reward - self._lambda * cost
+
+            if not scores:
+                return None, []
+
+            ranked = sorted(scores, key=lambda m: scores[m], reverse=True)
+            primary = ranked[0]
+
+            # Already on the default model -> no switch needed.
+            if primary == self._default_model:
+                return None, []
+
+            # Margin gate: only leave the default if the pick beats it clearly.
+            baseline = scores.get(self._default_model)
+            if baseline is not None and scores[primary] - baseline < self._min_margin:
+                return None, []
+
+            fallbacks = ranked[1:]
+            logger.info("KNNModelRouter: routed to {} (scores={})", primary, scores)
+            return primary, fallbacks
+        except Exception as e:
+            logger.warning("KNNModelRouter: routing failed, using default: {}", e)
             return None, []
-
-        scores: dict[str, float] = {}
-        for m in self._candidates:
-            rewards = [self._rewards[i][m] for i in similar if m in self._rewards[i]]
-            if not rewards:
-                continue
-            costs = [self._costs[i].get(m, 0.0) for i in similar]
-            scores[m] = float(np.mean(rewards)) - self._lambda * float(np.mean(costs))
-
-        if not scores:
-            return None, []
-
-        ranked = sorted(scores, key=lambda m: scores[m], reverse=True)
-        primary = ranked[0]
-
-        # Already on the default model -> no switch needed.
-        if primary == self._default_model:
-            return None, []
-
-        # Margin gate: only leave the default if the pick beats it clearly.
-        baseline = scores.get(self._default_model)
-        if baseline is not None and scores[primary] - baseline < self._min_margin:
-            return None, []
-
-        fallbacks = ranked[1:]
-        logger.info("KNNModelRouter: routed to {} (scores={})", primary, scores)
-        return primary, fallbacks

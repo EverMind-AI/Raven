@@ -185,3 +185,59 @@ async def test_switches_when_all_gates_pass(tmp_path, monkeypatch):
     primary, fallbacks = await r.select_model_chain("x")
     assert primary == "large"
     assert fallbacks == ["small"]
+
+
+# Text-based memory (no stored embedding): the router embeds each entry's
+# ``text`` at load via the configured endpoint.
+TEXT_ENTRIES = [
+    {"task_name": "a", "text": "alpha", "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
+    {"task_name": "b", "text": "beta", "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
+    {"task_name": "c", "text": "gamma", "rewards": {"small": 30, "large": 60}, "costs": {"small": 1, "large": 10}},
+]
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_urlopen(text_to_vec):
+    def _open(req, timeout=None):
+        text = json.loads(req.data.decode())["texts"][0]
+        return _FakeResp(json.dumps({"embeddings": [text_to_vec(text)]}).encode())
+
+    return _open
+
+
+@pytest.mark.asyncio
+async def test_text_memory_embeds_at_load(tmp_path, monkeypatch):
+    from raven.routing import knn_router as knn_mod
+
+    vecs = {"alpha": [1.0, 0.0], "beta": [0.0, 1.0], "gamma": [1.0, 1.0]}
+    monkeypatch.setattr(knn_mod.urllib.request, "urlopen", _fake_urlopen(lambda t: vecs[t]))
+
+    r = KNNModelRouter(_cfg(_write_memory(tmp_path, TEXT_ENTRIES)))
+    assert r._embeddings.shape == (3, 2)  # embedded from text at load
+
+    monkeypatch.setattr(r, "_embed", _const_embed([1.0, 0.0]))
+    primary, fallbacks = await r.select_model_chain("do a task")
+    assert primary == "large"
+    assert fallbacks == ["small"]
+
+
+@pytest.mark.asyncio
+async def test_routing_error_falls_back_to_default(tmp_path, monkeypatch):
+    # A wrong-dimension query embedding makes the matmul raise; routing must
+    # degrade to (None, []) rather than propagate the error into the turn.
+    r = KNNModelRouter(_cfg(_write_memory(tmp_path)))  # memory vectors are 2-d
+    monkeypatch.setattr(r, "_embed", _const_embed([1.0, 0.0, 0.0]))  # 3-d query
+    assert await r.select_model_chain("x") == (None, [])

@@ -67,7 +67,9 @@ _TASKS = [
 
 
 def _build_memory(path: Path) -> None:
-    mem = [{"task_name": t[0], "embedding": _embed_one(t[0]), "rewards": t[1], "costs": t[2]} for t in _TASKS]
+    # Text-based memory (the shipped format): the router embeds each entry's
+    # text at load, so this exercises the load-time embedding path end-to-end.
+    mem = [{"task_name": t[0], "text": t[0], "rewards": t[1], "costs": t[2]} for t in _TASKS]
     path.write_text(json.dumps(mem))
 
 
