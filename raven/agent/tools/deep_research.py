@@ -23,6 +23,7 @@ from loguru import logger
 
 from raven.agent.tools.base import Tool
 from raven.config.schema import DeepResearchToolConfig
+from raven.tui_rpc.question_broker import QuestionBroker
 
 DEFAULT_BASE_URL = "https://api.miromind.ai/v1"
 DEFAULT_MODEL = "mirothinker-1-7-deepresearch-mini"
@@ -87,9 +88,11 @@ class DeepResearchTool(Tool):
         "required": ["query"],
     }
 
-    # Registry ceiling: raise well above the default so a legitimate minute-scale
-    # run isn't timer-killed. The inner httpx read timeout (below) stays under
-    # this so the tool, not the ceiling, owns the timeout path.
+    # The tool asks the user deep-vs-regular up front, a human wait that must not
+    # be timer-killed, so it is a blocking_interaction (the registry applies no
+    # timeout). execute() therefore caps the engine run itself with
+    # ``timeout_seconds`` via asyncio.wait_for around _run_engine.
+    blocking_interaction = True
     timeout_seconds = 900.0
     # Idle read timeout between SSE chunks: research streams chunks continuously,
     # so a gap this long means the stream is dead. Well under timeout_seconds.
@@ -113,11 +116,18 @@ class DeepResearchTool(Tool):
         # each other's routing (same reason MessageTool keeps its callback here).
         self._stream_cb: ContextVar[StreamCallback | None] = ContextVar("deep_research_stream_cb", default=None)
         self._routing: ContextVar[_Routing | None] = ContextVar("deep_research_routing", default=None)
+        # Late-bound (transport singleton) so the tool can ask the user
+        # deep-vs-regular before a paid run; None where unavailable (e.g. raven
+        # agent), in which case the run proceeds without asking.
+        self._broker: QuestionBroker | None = None
 
     @staticmethod
     def is_configured(config: DeepResearchToolConfig) -> bool:
         """Whether a key is reachable, so the loop can register the tool opt-in."""
         return bool(config.api_key or os.environ.get("MIROTHINKER_API_KEY"))
+
+    def set_broker(self, broker: QuestionBroker | None) -> None:
+        self._broker = broker
 
     def set_stream_callback(self, cb: StreamCallback | None) -> None:
         """Wire the per-turn stream callback (turn-local). Set only on surfaces
@@ -133,6 +143,19 @@ class DeepResearchTool(Tool):
         return self._config.api_key or os.environ.get("MIROTHINKER_API_KEY", "")
 
     async def execute(self, query: str, **kwargs: Any) -> str:
+        # Deep search is slow + paid: confirm deep-vs-regular before running. No
+        # broker (e.g. raven agent) -> honour the model's choice and run.
+        routing = self._routing.get()
+        if await _ask_search_mode(self._broker, routing.conversation if routing else "") == "regular":
+            return _USE_REGULAR
+        # The ask above is a human wait (blocking_interaction, so the registry does
+        # not time it out); the engine run carries its own total cap here instead.
+        try:
+            return await asyncio.wait_for(self._run_engine(query), timeout=self.timeout_seconds)
+        except asyncio.TimeoutError:
+            return self._result("timeout", content=f"deep_research exceeded {self.timeout_seconds:.0f}s")
+
+    async def _run_engine(self, query: str) -> str:
         key = self._api_key()
         if not key:
             return self._result(
@@ -261,6 +284,124 @@ class DeepResearchTool(Tool):
             },
             ensure_ascii=False,
         )
+
+
+# The deep-vs-regular routing choice, offered whenever the model reaches for
+# deep_research (deep search is slow + paid, so the user decides per query).
+# Deep first (it is the thorough option). The display text is the match key the
+# frontend echoes back verbatim.
+_MODE_DEEP = "Deep search (thorough, a few minutes)"
+_MODE_REGULAR = "Regular web search (quick)"
+_ASK_PROMPT = (
+    "This looks like a research question. Use deep search -- an external engine "
+    "(MiroThinker) that runs broad, multi-source research over a few minutes and "
+    "uses your deep-research quota -- or a regular quick web search?"
+)
+
+# Honest description for the unconfigured stand-in: unlike DeepResearchTool's
+# ("returns a finished answer"), it tells the model the engine is not set up, so
+# the model still reaches for it on research-shaped queries without being misled.
+_OFFER_DESCRIPTION = (
+    "Deep, multi-source web research via an external engine (MiroThinker), NOT "
+    "set up on this deployment. Call this for an open-ended research question; "
+    "the user is then asked to pick deep search (which they can set up) or a "
+    "regular quick search."
+)
+# These offer-path results are phrased as factual status, not imperatives: a
+# well-aligned model treats tool output as data and refuses embedded commands (a
+# strong "do NOT answer / reply with only this" was rejected as a prompt injection
+# in testing). (The older receipt/ack strings below keep mild imperatives.)
+_USE_REGULAR = "deep_research did not run: the user chose a regular web search instead."
+# Shown to the USER directly via the broker prompt below. Command FIRST so it
+# survives the scrollback's truncated tool-call line (cut at ~60 chars); the live
+# picker wraps and shows it all anyway.
+_SETUP_PROMPT = (
+    "Run `raven deep-research enable` to set up deep research (paste a MiroMind API "
+    "key -- it works from your next message, no restart). Do a regular web search "
+    "in the meantime?"
+)
+_MEANWHILE_REGULAR = "Yes, do a regular web search now"
+_MEANWHILE_WAIT = "No, I'll set it up first"
+_SETUP_STOP = (
+    "deep_research did not run: it is not configured and the user chose to set it up "
+    "first (they were shown the `raven deep-research enable` command). They will "
+    "re-ask once it is enabled; no answer is expected now."
+)
+
+
+async def _ask_search_mode(broker: QuestionBroker | None, cid: str) -> str | None:
+    """Ask the user deep-vs-regular for a research query. Returns ``"deep"`` /
+    ``"regular"``, or ``None`` only when there is no broker at all (e.g. raven
+    agent) -- then the caller honours the model's choice. Shared by the working
+    tool and the offer stand-in so both prompt identically; a timeout / unknown
+    answer fail-safes to the cheaper ``regular``.
+
+    A broker but an empty cid means the tool has no conversation context -- e.g. a
+    concurrent turn was handed a just-promoted tool before its per-turn context
+    was wired. We cannot ask there, so we ``regular`` rather than run the paid
+    engine unasked (the promoting turn itself is wired and asks normally)."""
+    if not broker:
+        return None
+    if not cid:
+        return "regular"
+    answer = await broker.await_question(
+        cid, prompt=_ASK_PROMPT, choices=[_MODE_DEEP, _MODE_REGULAR], default=_MODE_REGULAR
+    )
+    return "deep" if answer == _MODE_DEEP else "regular"
+
+
+class DeepResearchOfferTool(Tool):
+    """Stand-in for deep_research on an unconfigured deploy.
+
+    Registered under the same name/parameters as DeepResearchTool so the model
+    reaches for it identically on research-shaped queries, but with an honest
+    description and no key. On call it asks the user deep-vs-regular (same prompt
+    as the working tool); picking deep shows the setup steps -- via a second broker
+    prompt the user sees directly, never relayed by the model -- and asks about a
+    regular search meanwhile. It never runs research itself: once a key is
+    configured the loop swaps in the real tool on the next turn (see
+    ``AgentLoop._maybe_promote_deep_research``). Without a broker (e.g. ``raven
+    agent``) it degrades to the regular tools.
+    """
+
+    name = "deep_research"
+    description = _OFFER_DESCRIPTION
+    parameters = DeepResearchTool.parameters
+    # Broker manages its own fail-safe timeout, so the registry must not wrap it
+    # (same contract as ask_user).
+    blocking_interaction = True
+
+    def __init__(self) -> None:
+        self._broker: QuestionBroker | None = None
+        self._cid: ContextVar[str] = ContextVar("deep_research_offer_cid", default="")
+
+    def set_broker(self, broker: QuestionBroker | None) -> None:
+        self._broker = broker
+
+    def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
+        """Match DeepResearchTool's signature so the loop's ``_set_tool_context``
+        wires it uniformly; the broker keys by the conversation (session_key)."""
+        self._cid.set(session_key)
+
+    async def execute(self, query: str, **kwargs: Any) -> str:
+        cid = self._cid.get()
+        if await _ask_search_mode(self._broker, cid) != "deep":
+            return _USE_REGULAR
+        # Deep chosen, but this stand-in only exists unconfigured. Show the setup
+        # steps via a broker prompt the user sees directly (the model would drop
+        # them) and ask whether to run a regular search meanwhile.
+        answer = await self._broker.await_question(
+            cid, prompt=_SETUP_PROMPT, choices=[_MEANWHILE_REGULAR, _MEANWHILE_WAIT], default=_MEANWHILE_REGULAR
+        )
+        # Only an explicit "I'll set it up" waits; anything else (regular, free-form,
+        # timeout default) falls to a regular search -- symmetric with the first ask.
+        return _SETUP_STOP if answer == _MEANWHILE_WAIT else _USE_REGULAR
+
+
+def deep_research_mode(config: DeepResearchToolConfig) -> str:
+    """Which deep_research variant to register: the working ``real`` tool when a
+    key is set, else the unconfigured ``offer`` stand-in."""
+    return "real" if DeepResearchTool.is_configured(config) else "offer"
 
 
 def _error_message(response: httpx.Response) -> str:

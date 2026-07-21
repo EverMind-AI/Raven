@@ -15,6 +15,8 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.tools.base import Tool
+from raven.agent.tools.deep_research import DeepResearchOfferTool
+from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
 from raven.sandbox import SandboxInitError
 from raven.spine.events import MediaOut as EvMediaOut
@@ -367,6 +369,32 @@ async def test_no_inline_tool_stream_leaves_deep_research_callback_unset(tmp_pat
 
     assert not any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
     assert not any(isinstance(e, EvText) and e.content == "ANSWER-BODY" for e in sink.events)
+
+
+async def test_mid_session_promotion_streams_on_the_promoting_turn(tmp_path, monkeypatch):
+    # Regression guard: promotion must run BEFORE run_turn wires the stream
+    # callback, so a tool promoted on this very turn still streams (progress +
+    # receipt), not just next turn. If promotion moved after the wiring, the
+    # promoted tool would miss the callback and this progress event would vanish.
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = AgentLoop(provider=_dr_stream_provider(), workspace=tmp_path, deep_research_config=DeepResearchToolConfig())
+    _stub_edges(loop)
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)  # starts unconfigured
+
+    import raven.config.update_tools as ut
+
+    monkeypatch.setattr(
+        ut,
+        "get_deep_research",
+        lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""},
+    )
+    # Promote to a streaming fake (not the real HTTP tool) so we observe wiring only.
+    monkeypatch.setattr(loop, "_register_real_deep_research", lambda cfg: loop.tools.register(_FakeDeepResearch()))
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("q"), sink, _drain, stream=True, inline_tool_stream=True)
+
+    assert any(isinstance(e, EvReasoning) and e.content == "searching the web..." for e in sink.events)
 
 
 async def test_inject_message_merged_before_next_iteration(tmp_path):

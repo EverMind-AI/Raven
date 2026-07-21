@@ -518,11 +518,14 @@ async def _run_rpc_server_until_done(
     except RpcError as e:
         build_error = e
 
-    # Late-bind the QuestionBroker into the ask_user tool now that the loop
-    # (and its tool registry) exists; the broker itself was built up-front.
-    if agent_loop is not None and (ask_tool := agent_loop.tools.get("ask_user")) is not None:
-        if hasattr(ask_tool, "set_broker"):
+    # Late-bind the QuestionBroker into the tools that ask the user mid-turn, now
+    # that the loop (and its tool registry) exists; the broker was built up-front.
+    # deep_research goes through the loop so a tool built later by promotion (a
+    # mid-session enable) inherits the broker too, not just the startup one.
+    if agent_loop is not None:
+        if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
+        agent_loop.set_deep_research_broker(question_broker)
 
     def _agent_loop_factory():
         if agent_loop is not None:

@@ -226,7 +226,7 @@ def get_cmd() -> None:
 
 @deep_research_app.command("reset")
 def reset_cmd() -> None:
-    """Clear deep_research config (disables the tool: no key -> not registered)."""
+    """Clear the deep_research key (new sessions start with the setup offer)."""
     from rich.console import Console
 
     console = Console()
@@ -235,4 +235,4 @@ def reset_cmd() -> None:
     except ConfigReadError as exc:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1) from exc
-    console.print("[green]✓[/green] deep_research reset (key cleared; tool will not register)")
+    console.print("[green]✓[/green] deep_research reset (key cleared; new sessions start with the setup offer)")
