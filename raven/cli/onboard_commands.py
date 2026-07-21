@@ -2785,6 +2785,23 @@ def _fetch_multimodal_models(
     return filtered or None
 
 
+def _match_everos_default(example: str, models: list[str]) -> str:
+    """Find the best match for ``example`` in the fetched model list.
+
+    The example (e.g. ``gpt-4.1-mini``) is a bare model name, while
+    ``models`` may carry provider prefixes (``openai/gpt-4.1-mini``).
+    Returns the first model whose id ends with ``/example`` or equals
+    ``example`` exactly; falls back to the bare example string so the
+    autocomplete input is pre-filled even if no exact match exists.
+    """
+    lower = example.lower()
+    suffix = f"/{lower}"
+    for mid in models:
+        if mid.lower() == lower or mid.lower().endswith(suffix):
+            return mid
+    return example
+
+
 def _everos_pick_model(
     *,
     base_url: Optional[str],
@@ -2805,12 +2822,14 @@ def _everos_pick_model(
     if recommendation:
         console.print(f"  [dim]{_t(*recommendation)}[/dim]")
     if models:
+        default_model = _match_everos_default(example, models)
         question = questionary.autocomplete(
             _t(
                 f"Model ({len(models)} available — type to filter):",
                 f"模型(共 {len(models)} 个 — 输入可筛选):",
             ),
             choices=models,
+            default=default_model,
             ignore_case=True,
             match_middle=True,
             placeholder=_back_placeholder(allow_back),
@@ -3459,6 +3478,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
     table.add_row("raven channels list", _t("see connected chat channels", "查看已接入的渠道"))
     table.add_row("raven provider list", _t("check your provider config", "检查当前服务商配置"))
     table.add_row("raven import run", _t("import AI tool history into Raven", "将其他 AI 工具的记忆导入 Raven"))
+    table.add_row("raven --help", _t("see all available commands", "查看所有可用命令"))
     console.print(
         Panel(
             table,
