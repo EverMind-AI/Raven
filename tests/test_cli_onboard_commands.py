@@ -1643,10 +1643,10 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
 # --------------------------------------------------------------------------- step 5 (deep_research)
 
 
-def test_total_steps_is_five() -> None:
-    # Adding the deep_research step bumped the wizard from 4 to 5; the progress
-    # dots + "Step n/N" header derive from this constant.
-    assert onboard_commands._TOTAL_STEPS == 5
+def test_total_steps_is_six() -> None:
+    # deep_research (step 5) + import (step 6) bumped the wizard from 4 to 6;
+    # the progress dots + "Step n/N" header derive from this constant.
+    assert onboard_commands._TOTAL_STEPS == 6
 
 
 def test_step5_skip_or_non_interactive_never_configures(monkeypatch: pytest.MonkeyPatch) -> None:

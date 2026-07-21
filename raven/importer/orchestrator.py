@@ -145,7 +145,7 @@ async def run_import(
                         status="failed",
                         current=i + 1,
                         total=total,
-                        error=str(e),
+                        error=err_msg,
                     )
                 )
 

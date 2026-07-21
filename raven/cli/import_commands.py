@@ -122,7 +122,13 @@ async def _build_and_run(
         )
         raise typer.Exit(1)
 
-    await backend.start()
+    try:
+        await backend.start()
+    except Exception as e:
+        console.print(f"[red]Failed to start EverOS memory server: {e}[/red]")
+        console.print("[dim]Check the server log: ~/.raven/logs/everos-server.log[/dim]")
+        console.print("[dim]Retry: raven import run[/dim]")
+        raise typer.Exit(1)
     try:
         return await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
     finally:

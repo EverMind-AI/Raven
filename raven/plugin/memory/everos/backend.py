@@ -278,7 +278,14 @@ class EverosBackend:
             from raven.cli._everos_server import ensure_everos_server
 
             base_url = self._config.get("base_url") or "http://localhost:18791"
-            await ensure_everos_server(base_url)
+            try:
+                await ensure_everos_server(base_url)
+            except Exception as e:
+                self._logger.error(
+                    "EverosBackend: failed to start EverOS server (%s)",
+                    e,
+                )
+                raise
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")

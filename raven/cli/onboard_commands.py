@@ -44,7 +44,7 @@ from raven.cli._helpers import (
 
 console = Console()
 
-_TOTAL_STEPS = 5
+_TOTAL_STEPS = 6
 
 # Sentinel returned by a screen function to ask the runner to go back one
 # screen; ``None`` from a picker means Ctrl+C (exit).
@@ -3497,7 +3497,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
 
 def _step5_import(*, skip: bool, non_interactive: bool) -> object:
     """Step 5 — optionally import conversation history from other AI tools."""
-    _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+    _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
 
     if skip:
         console.print(
@@ -3659,7 +3659,7 @@ def _step5_import_body(
                     f"  [dim]{coming_name} 尚未支持，敬请期待！[/dim]",
                 )
             )
-            _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
             continue
 
         if selected_platform == "all":
@@ -3726,7 +3726,7 @@ def _step5_import_body(
         if selected_tier is None:
             raise typer.Exit(1)
         if selected_tier == back_value:
-            _step_header(5, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
             continue
         break
 
