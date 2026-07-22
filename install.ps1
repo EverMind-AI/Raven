@@ -202,6 +202,27 @@ function Resolve-RavenWheel {
     return $asset.browser_download_url
 }
 
+function Resolve-RavenConstraints([string]$WheelUrl) {
+    # Derive the locked-constraints URL from the wheel URL (same release dir) so
+    # the constraints always match the wheel being installed -- including when
+    # RAVEN_WHEEL_URL pins an older wheel. Returns a local temp-file path, or
+    # $null when the asset is absent (release predates it) or the download fails,
+    # so the installer degrades to an unconstrained install rather than failing.
+    $url = $env:RAVEN_CONSTRAINTS_URL
+    if (-not $url) {
+        if ($WheelUrl -notmatch "/[^/]+\.whl$") { return $null }
+        $url = $WheelUrl -replace "/[^/]+\.whl$", "/raven-constraints.txt"
+    }
+    $dest = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
+    try {
+        Invoke-WebRequest $url -OutFile $dest
+    } catch {
+        Write-Warn "Could not download locked constraints; installing without version pinning."
+        return $null
+    }
+    return $dest
+}
+
 function Install-Raven([string]$UvPath, [string]$NodePath) {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
     $pyproject = Join-Path $scriptDir "pyproject.toml"
@@ -225,26 +246,36 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
                 Write-Warn "Found node but not npm; skipping TUI bundle build"
             }
         }
+        # Pin to the locked dependency set so an install matches what we test.
+        $constraints = Join-Path ([IO.Path]::GetTempPath()) ("raven-constraints-" + [guid]::NewGuid().ToString("N") + ".txt")
+        & $UvPath export --directory "$scriptDir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
         # Install all channel adapters by default; fall back to base raven if
         # the umbrella extra fails to build on this platform, so one broken
         # channel SDK cannot block the whole install.
         try {
-            & $UvPath tool install --force -e "$scriptDir[channels]"
+            & $UvPath tool install --force -c "$constraints" -e "$scriptDir[channels]"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force -e "$scriptDir"
+            & $UvPath tool install --force -c "$constraints" -e "$scriptDir"
             if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
         }
     } else {
         $wheelUrl = Resolve-RavenWheel
+        $constraints = Resolve-RavenConstraints $wheelUrl
+        if ($constraints) {
+            $cArgs = @("-c", $constraints)
+        } else {
+            Write-Warn "Release has no locked-constraints asset; installing without version pinning."
+            $cArgs = @()
+        }
         Write-Info "  installing $wheelUrl"
         try {
-            & $UvPath tool install --force "raven[channels] @ $wheelUrl"
+            & $UvPath tool install --force @cArgs "raven[channels] @ $wheelUrl"
             if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
         } catch {
             Write-Warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force $wheelUrl
+            & $UvPath tool install --force @cArgs $wheelUrl
             if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
         }
     }

@@ -368,6 +368,17 @@ def test_uv_tool_target_rejects_malformed_target_fields(
         upgrade_commands._uv_tool_target()
 
 
+@pytest.fixture(autouse=True)
+def _stub_constraints_urlretrieve(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The upgrade helper downloads locked constraints via urllib before running
+    # uv. Stub it so helper tests never touch the network; default to failure so
+    # the graceful no-pin path (the pre-constraints command shape) is what the
+    # existing assertions observe. Tests that exercise pinning override this.
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlretrieve", Mock(side_effect=OSError("no network")))
+
+
 def _load_upgrade_helper() -> object:
     namespace: dict[str, object] = {"__name__": "raven_upgrade_helper_test"}
     exec(upgrade_commands._UPGRADE_HELPER_SOURCE, namespace)
@@ -454,6 +465,62 @@ def test_upgrade_helper_catches_uv_execution_errors(
 
     assert status == 1
     assert "access denied" in capsys.readouterr().err
+
+
+def test_upgrade_helper_pins_constraints_when_download_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.request
+
+    downloaded: list[tuple[str, str]] = []
+
+    def fake_urlretrieve(url: str, filename: str) -> tuple[str, None]:
+        downloaded.append((url, filename))
+        return filename, None
+
+    monkeypatch.setattr(urllib.request, "urlretrieve", fake_urlretrieve)
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert len(downloaded) == 1
+    constraints_url, constraints_path = downloaded[0]
+    assert constraints_url == ("https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-constraints.txt")
+    run.assert_called_once_with(
+        [
+            "/usr/bin/uv",
+            "tool",
+            "install",
+            "--force",
+            "-c",
+            constraints_path,
+            f"raven[channels] @ {WHEEL_URL}",
+        ],
+        check=False,
+    )
+
+
+def test_upgrade_helper_skips_constraints_when_download_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The autouse stub makes the constraints download fail; the helper must fall
+    # back to an unpinned install rather than abort.
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    run.assert_called_once_with(
+        ["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],
+        check=False,
+    )
+    assert "upgrading without version pinning" in capsys.readouterr().err
 
 
 def test_upgrade_helper_waits_for_parent_before_running_uv(
