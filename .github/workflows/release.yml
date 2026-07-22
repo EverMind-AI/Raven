@@ -73,6 +73,17 @@ jobs:
           print(f"OK: {whl} ships only entry.js under ui-tui/, no node_modules")
           PY
 
+      # 4b) Export the locked dependency set as a constraints file. The install
+      #     scripts pass this to `uv tool install -c` so a one-click install gets
+      #     the exact versions we lock and test, instead of re-resolving to the
+      #     newest versions allowed by pyproject (which drifts, and can pull a
+      #     source-only build with no wheel on the user's platform). --locked
+      #     fails the release if uv.lock is stale vs pyproject, so we never ship
+      #     constraints that conflict with the wheel's own metadata; --all-extras
+      #     covers the channel SDKs behind raven[channels].
+      - name: Export locked constraints
+        run: uv export --locked --all-extras --no-hashes --no-emit-project -o dist/raven-constraints.txt
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -121,7 +132,7 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            gh release create "$tag" dist/*.whl dist/*.tar.gz \
+            gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
               --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre
           else
             echo "Release $tag already published (id=$id); leaving as-is."

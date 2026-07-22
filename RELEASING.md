@@ -38,7 +38,8 @@ Highlights before publishing. Structure:
 - Version: `X.Y.Z`
 - Tag: `vX.Y.Z`
 - Stability: <public preview patch | public preview minor | ...>   # fill by hand per release type
-- Assets: wheel and source distribution attached to this release
+- Assets: wheel, source distribution, and locked constraints
+  (`raven-constraints.txt`) attached to this release
 
 ## Notes
 - pre-1.0 evolution caveat
@@ -49,10 +50,12 @@ Highlights before publishing. Structure:
 
 ## Flow
 
-1. Bump `version` in `pyproject.toml`; open a PR; merge to `main`.
+1. Bump `version` in `pyproject.toml`, run `uv lock`, then open a PR; merge to `main`.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. CI (`release.yml`) builds the wheel + sdist and creates a **draft** GitHub
-   Release with both attached, titled and prefilled from the template.
+3. CI (`release.yml`) builds the wheel + sdist, exports the locked constraints
+   from `uv.lock` (`uv export --locked`, which fails the release if the lock is
+   stale vs pyproject), and creates a **draft** GitHub Release with all three
+   attached, titled and prefilled from the template.
 4. Fill the summary + Highlights in the draft, then click **Publish**.
    Publishing makes it `/releases/latest`, which `install.sh` serves.
 
@@ -69,3 +72,9 @@ Highlights before publishing. Structure:
   draft: publishing is a deliberate human step.
 - PyPI publishing is not wired up; the supported install path is the GitHub
   Release wheel asset resolved by `install.sh`.
+- `install.sh` / `install.ps1` pass `raven-constraints.txt` to
+  `uv tool install -c`, so a one-click install gets the exact locked versions we
+  test rather than re-resolving to the newest allowed by `pyproject.toml`. A
+  release older than this asset installs without pinning (the scripts degrade
+  gracefully). To lift a pin later, update `uv.lock` and cut a new release; the
+  install scripts need no change.

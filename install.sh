@@ -170,12 +170,15 @@ install_raven() {
         warn "No usable node found; skipping TUI build; raven tui may not work"
       fi
     fi
+    # Pin to the locked dependency set so an install matches what we test.
+    constraints="$(mktemp)"
+    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-project -o "$constraints"
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.
-    if ! uv tool install --force -e "$script_dir[channels]"; then
+    if ! uv tool install --force -c "$constraints" -e "$script_dir[channels]"; then
       warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force -e "$script_dir"
+      uv tool install --force -c "$constraints" -e "$script_dir"
     fi
   else
     # Remote mode: install the latest published release wheel, which bundles
@@ -190,10 +193,30 @@ install_raven() {
         | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
     fi
     [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
+    # Derive the locked-constraints URL from the wheel URL (same release dir) so
+    # the constraints always match the wheel being installed, including when
+    # RAVEN_WHEEL_URL pins an older wheel. Missing asset / download failure ->
+    # install without pinning rather than fail.
+    constraints_url="${RAVEN_CONSTRAINTS_URL:-}"
+    if [ -z "$constraints_url" ]; then
+      case "$wheel_url" in
+        *.whl) constraints_url="${wheel_url%/*}/raven-constraints.txt" ;;
+      esac
+    fi
+    c_args=""
+    if [ -n "$constraints_url" ]; then
+      constraints="$(mktemp)"
+      if curl -fsSL "$constraints_url" -o "$constraints" 2>/dev/null; then
+        c_args="-c $constraints"
+      else
+        warn "Could not download locked constraints; installing without version pinning."
+      fi
+    fi
     info "  installing $wheel_url"
-    if ! uv tool install --force "raven[channels] @ $wheel_url"; then
+    # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
+    if ! uv tool install --force $c_args "raven[channels] @ $wheel_url"; then
       warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force "$wheel_url"
+      uv tool install --force $c_args "$wheel_url"
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.

@@ -110,11 +110,36 @@ def main(argv=None):
         if parent_status != 0:
             return parent_status
 
+    # Pin to the same locked constraints the installer uses. Derive the URL from
+    # the (already trust-checked) wheel URL so the constraints always match the
+    # wheel being installed. Missing asset / download failure -> upgrade without
+    # pinning rather than abort.
+    constraints_path = None
+    constraints_url = wheel_url.rsplit("/", 1)[0] + "/raven-constraints.txt"
+    try:
+        import os
+        import socket
+        import tempfile
+        import urllib.request
+
+        socket.setdefaulttimeout(30)
+        fd, constraints_path = tempfile.mkstemp(prefix="raven-constraints-", suffix=".txt")
+        os.close(fd)
+        urllib.request.urlretrieve(constraints_url, constraints_path)
+    except Exception:
+        print(
+            "Warning: could not download locked constraints; "
+            "upgrading without version pinning.",
+            file=sys.stderr,
+        )
+        constraints_path = None
+
     def install(requirement):
-        return subprocess.run(
-            [uv_path, "tool", "install", "--force", requirement],
-            check=False,
-        ).returncode
+        command = [uv_path, "tool", "install", "--force"]
+        if constraints_path:
+            command += ["-c", constraints_path]
+        command.append(requirement)
+        return subprocess.run(command, check=False).returncode
 
     try:
         channel_status = install(f"raven[channels] @ {wheel_url}")
