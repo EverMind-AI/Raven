@@ -409,7 +409,7 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 `HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research) that also seeds the
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds the
 Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:

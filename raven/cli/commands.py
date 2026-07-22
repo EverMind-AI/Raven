@@ -18,6 +18,7 @@ group. The actual implementations live in per-feature modules:
     - ``sandbox``  → ``raven/cli/sandbox_commands.py``
     - ``sentinel`` → ``raven/cli/sentinel_commands.py``
     - ``sessions`` → ``raven/cli/session_commands.py``
+    - ``import``   → ``raven/cli/import_commands.py``
     - ``skill``    → ``raven/cli/skill_commands.py``
 
 Shared helpers used across multiple command modules live in
@@ -140,6 +141,10 @@ app.add_typer(tui_app, name="tui")
 from raven.cli.session_commands import session_app
 
 app.add_typer(session_app, name="sessions")
+
+from raven.cli.import_commands import import_app
+
+app.add_typer(import_app, name="import")
 
 
 def run() -> None:
