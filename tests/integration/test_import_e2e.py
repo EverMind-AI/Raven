@@ -200,8 +200,6 @@ async def test_full_pipeline_conversation(scanner: ClaudeCodeScanner, tmp_path: 
 
     call = backend.store_calls[0]
     assert call["session_id"] == "import-claude_code-sess-001"
-    assert "app_id" not in call["metadata"]
-    assert "project_id" not in call["metadata"]
     assert call["metadata"]["is_final"] is True
 
     roles = [m["role"] for m in call["messages"]]
@@ -228,8 +226,6 @@ async def test_full_pipeline_memory_files(scanner: ClaudeCodeScanner, tmp_path: 
 
     call = backend.store_calls[0]
     assert call["session_id"] == "import-claude_code-mem-test-project"
-    assert "app_id" not in call["metadata"]
-    assert "project_id" not in call["metadata"]
     assert call["metadata"]["is_final"] is True
 
     contents = [m["content"] for m in call["messages"]]

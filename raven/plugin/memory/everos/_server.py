@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import shutil
 import subprocess
+from pathlib import Path
 from urllib.parse import urlparse
 
 from loguru import logger
 
-from raven.config.paths import get_logs_dir
+from raven.config.paths import get_data_dir, get_logs_dir
 
 _POLL_INTERVAL = 0.5
 
@@ -31,21 +33,46 @@ def _probe_health(base_url: str) -> bool:
         return False
 
 
-def _start_server(port: str) -> None:
+def _lock_path() -> Path:
+    return get_data_dir() / "everos-server.lock"
+
+
+def _start_server_if_unlocked(port: str) -> bool:
+    """Try to acquire the startup lock and launch the server.
+
+    Returns True if this process launched the server (or the lock was
+    already held by another launcher), False should never happen in
+    practice.  The non-blocking flock ensures only one process spawns
+    the server; others skip straight to the health-poll loop.
+    """
     everos = shutil.which("everos")
     if not everos:
         raise RuntimeError("everos not found. Please install the everos CLI.")
 
-    log_path = get_logs_dir() / "everos-server.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a") as log_file:
-        subprocess.Popen(
-            [everos, "server", "start", "--port", port],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    logger.info("started everos server on port {} (log: {})", port, log_path)
+    lock_file = _lock_path()
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = open(lock_file, "w")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.debug("everos server startup lock held by another process; skipping spawn")
+        return False
+
+    try:
+        log_path = get_logs_dir() / "everos-server.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as log_file:
+            subprocess.Popen(
+                [everos, "server", "start", "--port", port],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        logger.info("started everos server on port {} (log: {})", port, log_path)
+        return True
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
 
 
 async def ensure_everos_server(
@@ -58,7 +85,7 @@ async def ensure_everos_server(
         return
 
     port = _extract_port(base_url)
-    await asyncio.to_thread(_start_server, port)
+    await asyncio.to_thread(_start_server_if_unlocked, port)
 
     elapsed = 0.0
     while elapsed < timeout:

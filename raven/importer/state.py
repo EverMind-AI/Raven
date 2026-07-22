@@ -113,7 +113,7 @@ class ImportState:
         except (json.JSONDecodeError, ValueError):
             backup = self._path.with_suffix(".json.corrupt")
             logger.warning(
-                "Corrupt import state at %s -- backing up to %s",
+                "Corrupt import state at {} -- backing up to {}",
                 self._path,
                 backup,
             )

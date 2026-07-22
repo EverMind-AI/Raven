@@ -64,13 +64,11 @@ def _msg(
 
 def _session(
     n_msgs: int = 3,
-    app_id: str = "test_app",
-    project_id: str = "proj",
     session_id: str = "sess-1",
     content: str = "hello",
 ) -> ImportSession:
     msgs = tuple(_msg(content=f"{content}-{i}", ts=1000 + i) for i in range(n_msgs))
-    return ImportSession(app_id=app_id, project_id=project_id, session_id=session_id, messages=msgs)
+    return ImportSession(session_id=session_id, messages=msgs)
 
 
 def _scan_result(key: str = "k1", platform: Platform = Platform.CLAUDE_CODE) -> ScanResult:
@@ -267,7 +265,7 @@ class TestBatching:
     async def test_empty_session_no_store(self, tmp_path: Path) -> None:
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        empty = ImportSession(app_id="a", project_id="p", session_id="s", messages=())
+        empty = ImportSession(session_id="s", messages=())
         scanner = FakeScanner({"k1": empty})
 
         summary = await run_import([(scanner, _scan_result("k1"))], backend, state)
@@ -284,7 +282,7 @@ class TestMessageConversion:
         backend = FakeBackend()
         tc = ({"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}},)
         msg = _msg(role="assistant", content="thinking", tool_calls=tc, sender="assistant")
-        session = ImportSession(app_id="a", project_id="p", session_id="s", messages=(msg,))
+        session = ImportSession(session_id="s", messages=(msg,))
         scanner = FakeScanner({"k1": session})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
@@ -297,7 +295,7 @@ class TestMessageConversion:
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         msg = _msg(role="tool", content="result", tool_call_id="call_1")
-        session = ImportSession(app_id="a", project_id="p", session_id="s", messages=(msg,))
+        session = ImportSession(session_id="s", messages=(msg,))
         scanner = FakeScanner({"k1": session})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
@@ -310,7 +308,7 @@ class TestMessageConversion:
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         msg = _msg(role="user", content="hi")
-        session = ImportSession(app_id="a", project_id="p", session_id="s", messages=(msg,))
+        session = ImportSession(session_id="s", messages=(msg,))
         scanner = FakeScanner({"k1": session})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
@@ -327,7 +325,7 @@ class TestMetadata:
         to 'default'/'default', matching the daily recall partition."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        scanner = FakeScanner({"k1": _session(n_msgs=1, app_id="claude_code", project_id="my-proj", session_id="s1")})
+        scanner = FakeScanner({"k1": _session(n_msgs=1, session_id="s1")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 

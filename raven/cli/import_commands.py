@@ -162,7 +162,6 @@ def status_cmd(
     from collections import Counter
 
     from rich.progress_bar import ProgressBar
-    from rich.table import Table
 
     from raven.config.paths import get_logs_dir
 

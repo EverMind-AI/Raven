@@ -115,8 +115,8 @@ def _jsonify(obj: Any) -> Any:
     return obj
 
 
-# Default timeout — per-turn, so we keep it tight.
-_DEFAULT_HTTP_TIMEOUT_S: float = 360.0
+_DEFAULT_HTTP_TIMEOUT_S: float = 60.0
+_MEMORIZE_TIMEOUT_S: float = 360.0
 
 
 class _HttpEverosAdapter:
@@ -203,7 +203,7 @@ class _HttpEverosAdapter:
         if project_id is not None:
             body["project_id"] = project_id
         url = f"{self._base_url}/api/v1/memory/add"
-        r = await self._client.post(url, json=body, headers=self._headers())
+        r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
         r.raise_for_status()
         if is_final:
             flush_body: dict[str, Any] = {"session_id": session_id}
@@ -216,6 +216,7 @@ class _HttpEverosAdapter:
                 flush_url,
                 json=flush_body,
                 headers=self._headers(),
+                timeout=_MEMORIZE_TIMEOUT_S,
             )
             fr.raise_for_status()
 
@@ -275,7 +276,7 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
-            from raven.cli._everos_server import ensure_everos_server
+            from raven.plugin.memory.everos._server import ensure_everos_server
 
             base_url = self._config.get("base_url") or "http://localhost:18791"
             try:

@@ -1,4 +1,4 @@
-"""Tests for raven.cli._everos_server."""
+"""Tests for raven.plugin.memory.everos._server."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from raven.cli._everos_server import ensure_everos_server
+from raven.plugin.memory.everos._server import ensure_everos_server
 
 
 class TestEnsureEverosServer:
@@ -16,7 +16,7 @@ class TestEnsureEverosServer:
         mock_response.status_code = 200
 
         with patch(
-            "raven.cli._everos_server._probe_health",
+            "raven.plugin.memory.everos._server._probe_health",
             return_value=True,
         ):
             await ensure_everos_server("http://localhost:18791")
@@ -32,14 +32,14 @@ class TestEnsureEverosServer:
 
         with (
             patch(
-                "raven.cli._everos_server._probe_health",
+                "raven.plugin.memory.everos._server._probe_health",
                 side_effect=probe_side_effect,
             ),
             patch(
-                "raven.cli._everos_server._start_server",
+                "raven.plugin.memory.everos._server._start_server_if_unlocked",
             ) as mock_start,
             patch(
-                "raven.cli._everos_server.get_logs_dir",
+                "raven.plugin.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
         ):
@@ -51,14 +51,14 @@ class TestEnsureEverosServer:
     async def test_timeout_raises(self, tmp_path) -> None:
         with (
             patch(
-                "raven.cli._everos_server._probe_health",
+                "raven.plugin.memory.everos._server._probe_health",
                 return_value=False,
             ),
             patch(
-                "raven.cli._everos_server._start_server",
+                "raven.plugin.memory.everos._server._start_server_if_unlocked",
             ),
             patch(
-                "raven.cli._everos_server.get_logs_dir",
+                "raven.plugin.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
             pytest.raises(RuntimeError, match="EverOS server failed to start"),
@@ -66,7 +66,7 @@ class TestEnsureEverosServer:
             await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
     def test_port_extraction(self) -> None:
-        from raven.cli._everos_server import _extract_port
+        from raven.plugin.memory.everos._server import _extract_port
 
         assert _extract_port("http://localhost:18791") == "18791"
         assert _extract_port("http://127.0.0.1:9999") == "9999"

@@ -148,8 +148,6 @@ class TestReadConversation:
         _write_jsonl(proj / "s1.jsonl", [_event("user", "Q"), _event("assistant", "A")])
         r = [r for r in await scanner.scan() if r.kind == SourceKind.CONVERSATION][0]
         session = await scanner.read(r)
-        assert session.app_id == "claude_code"
-        assert session.project_id == "proj"
         assert len(session.messages) == 2
         assert session.messages[0].role == "user"
         assert session.messages[1].role == "assistant"
@@ -377,7 +375,6 @@ class TestReadMemory:
         _write_md(mem / "arch.md", "---\nname: architecture\nmetadata:\n  type: reference\n---\nLayer 1\n\nLayer 2")
         r = [r for r in await scanner.scan() if "memory" in r.source_key][0]
         session = await scanner.read(r)
-        assert session.project_id == "proj"
         bodies = [m.content for m in session.messages]
         assert "Layer 1" in bodies
         assert "Layer 2" in bodies

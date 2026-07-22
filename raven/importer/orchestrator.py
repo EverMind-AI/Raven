@@ -100,6 +100,12 @@ async def run_import(
                 )
             continue
 
+        # NOTE: checkpoint is per source unit, not per batch. A multi-batch
+        # session that fails mid-way will re-send already-accepted batches
+        # on retry.  EverOS dedup is by session_id so duplicates are safe
+        # (redundant extraction, no data loss).  Per-batch checkpoint is
+        # deferred until full-conversation import is common enough to
+        # justify the added state complexity.
         logger.info("[{}/{}] importing {}/{}", i + 1, total, platform, key)
         try:
             session = await scanner.read(result)

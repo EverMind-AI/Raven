@@ -208,14 +208,6 @@ def _memory_files_sorted(paths: tuple[Path, ...]) -> list[Path]:
     return index + rest
 
 
-def _project_dir_from_path(file_path: Path, projects_dir: Path) -> str:
-    try:
-        rel = file_path.relative_to(projects_dir)
-        return rel.parts[0] if rel.parts else "unknown"
-    except ValueError:
-        return "unknown"
-
-
 # ---------------------------------------------------------------------------
 # Scanner
 # ---------------------------------------------------------------------------
@@ -346,7 +338,6 @@ class ClaudeCodeScanner:
 
     def _read_conversation(self, result: ScanResult) -> ImportSession:
         path = result.file_paths[0]
-        proj_id = _project_dir_from_path(path, self._projects_dir)
 
         messages: list[ImportMessage] = []
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -362,8 +353,6 @@ class ClaudeCodeScanner:
                 self._extract_event(ev, messages)
 
         return ImportSession(
-            app_id=_APP_ID,
-            project_id=proj_id,
             session_id=f"import-{_APP_ID}-{result.source_key}",
             messages=tuple(messages),
         )
@@ -445,11 +434,7 @@ class ClaudeCodeScanner:
         _, body = parse_frontmatter(text)
 
         if not body.strip():
-            return ImportSession(
-                app_id=_APP_ID,
-                project_id="global",
-                session_id=f"import-{_APP_ID}-global",
-            )
+            return ImportSession(session_id=f"import-{_APP_ID}-global")
 
         mtime_ms = int(result.mtime * 1000)
         cjk = is_cjk(body)
@@ -458,8 +443,6 @@ class ClaudeCodeScanner:
         file_msgs = _build_file_messages(intro, body, file_end, mtime_ms)
 
         return ImportSession(
-            app_id=_APP_ID,
-            project_id="global",
             session_id=f"import-{_APP_ID}-global",
             messages=tuple(file_msgs),
         )
@@ -521,8 +504,6 @@ class ClaudeCodeScanner:
         )
 
         return ImportSession(
-            app_id=_APP_ID,
-            project_id=proj_name,
             session_id=f"import-{_APP_ID}-mem-{proj_name}",
             messages=tuple(messages),
         )

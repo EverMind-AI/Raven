@@ -595,21 +595,6 @@ async def _run_rpc_server_until_done(
         build_error=build_error,
     )
 
-    # Start the embedded backend before serving so the EverOS runtime is up
-    # and its index lock is held for the session. No-op for http/no-op backends.
-    if agent_loop is not None and agent_loop.backend is not None:
-        try:
-            await agent_loop.backend.start()
-        except Exception:
-            from loguru import logger as _logger
-
-            _logger.exception(
-                "tui: memory backend start failed; continuing with degraded memory path",
-            )
-    # everos configure_logging installs a root stdout StreamHandler during start();
-    # strip it so everos records flow to the file sink and never reach the terminal.
-    _strip_tty_stream_handlers()
-
     serve_task = asyncio.create_task(server.serve_forever())
 
     try:
@@ -633,7 +618,23 @@ async def _run_rpc_server_until_done(
 
         if not handshake_done.is_set():
             return False
-        # Handshake OK — continue serving until child exits.
+        # Handshake OK — start memory backend in background (may spawn
+        # EverOS server, up to 30s) so it doesn't block first render.
+        if agent_loop is not None and agent_loop.backend is not None:
+
+            async def _start_backend() -> None:
+                try:
+                    await agent_loop.backend.start()  # type: ignore[union-attr]
+                except Exception:
+                    from loguru import logger as _logger
+
+                    _logger.exception(
+                        "tui: memory backend start failed; continuing with degraded memory path",
+                    )
+                _strip_tty_stream_handlers()
+
+            asyncio.create_task(_start_backend())
+
         await proc_done.wait()
         return True
     finally:

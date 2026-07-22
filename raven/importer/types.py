@@ -52,8 +52,6 @@ class ImportMessage:
 class ImportSession:
     """A complete importable unit ready for store()."""
 
-    app_id: str
-    project_id: str
     session_id: str
     messages: tuple[ImportMessage, ...] = ()
 

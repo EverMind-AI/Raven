@@ -13,7 +13,7 @@ Steps (mirrors ``my_docs/temp/onboard-flow.mermaid``):
      rerank/multimodal optional)
   5. deep_research tool (optional; MiroThinker key + model)
   6. Cold-start import from other AI tools (optional)
-  6. Done
+  7. Done
 
 All writes go through the ``update_providers`` / ``update_channels`` /
 ``update`` / ``update_everos`` ops libraries — this module owns the UX layer,
@@ -3336,7 +3336,7 @@ def _step4_memory(
     # Verify EverOS server is reachable (auto-starts if needed)
     import asyncio
 
-    from raven.cli._everos_server import ensure_everos_server
+    from raven.plugin.memory.everos._server import ensure_everos_server
 
     console.print()
     console.print(

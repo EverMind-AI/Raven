@@ -102,28 +102,23 @@ class TestImportMessage:
 
 class TestImportSession:
     def test_required_fields(self) -> None:
-        sess = ImportSession(
-            app_id="claude_code",
-            project_id="proj",
-            session_id="s1",
-        )
-        assert sess.app_id == "claude_code"
+        sess = ImportSession(session_id="s1")
         assert sess.session_id == "s1"
 
     def test_messages_default_empty(self) -> None:
-        sess = ImportSession(app_id="a", project_id="p", session_id="s")
+        sess = ImportSession(session_id="s")
         assert sess.messages == ()
 
     def test_messages_are_tuple(self) -> None:
         msg = ImportMessage(role="user", content="hi", timestamp=0, sender_id="u")
-        sess = ImportSession(app_id="a", project_id="p", session_id="s", messages=(msg,))
+        sess = ImportSession(session_id="s", messages=(msg,))
         assert isinstance(sess.messages, tuple)
         assert len(sess.messages) == 1
 
     def test_frozen(self) -> None:
-        sess = ImportSession(app_id="a", project_id="p", session_id="s")
+        sess = ImportSession(session_id="s")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            sess.app_id = "b"  # type: ignore[misc]
+            sess.session_id = "b"  # type: ignore[misc]
 
 
 class TestScanResult:
@@ -178,7 +173,7 @@ class _CompleteScanner:
         return []
 
     async def read(self, result: ScanResult) -> ImportSession:
-        return ImportSession(app_id="a", project_id="p", session_id="s")
+        return ImportSession(session_id="s")
 
 
 class _IncompleteScanner:
