@@ -57,6 +57,16 @@ jobs:
           uv build --wheel
           uv build --sdist
 
+      # Export the exact dependency set from uv.lock so install.sh can pin a
+      # fresh install to it (--constraint). The wheel only carries loose ranges,
+      # so without this a curl|sh install resolves whatever upstream published
+      # latest, drifting off the versions CI actually tested.
+      - name: Export locked dependency constraints
+        run: |
+          uv export --frozen --no-emit-project --no-dev --all-extras --no-hashes \
+            --format requirements-txt -o dist/requirements.txt
+          test -s dist/requirements.txt  # fail fast if the export is empty
+
       # 4) Sanity gate: the wheel MUST contain the bundle and MUST NOT carry
       #    node_modules or ui-tui sources (keeps the wheel lean and the smoke honest).
       - name: Verify wheel contents
@@ -121,7 +131,7 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            gh release create "$tag" dist/*.whl dist/*.tar.gz \
+            gh release create "$tag" dist/*.whl dist/*.tar.gz dist/requirements.txt \
               --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre
           else
             echo "Release $tag already published (id=$id); leaving as-is."

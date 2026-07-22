@@ -182,18 +182,41 @@ install_raven() {
     # the prebuilt ui-tui/dist/entry.js (built by CI). We deliberately do NOT
     # install from git here -- the TUI bundle is a gitignored build artifact,
     # so a git install would yield a raven whose `raven tui` cannot start.
-    # Override RAVEN_WHEEL_URL to pin a specific wheel.
+    # Override RAVEN_WHEEL_URL to pin a specific wheel (and RAVEN_CONSTRAINT_URL
+    # to pin its dependency set).
     wheel_url="${RAVEN_WHEEL_URL:-}"
+    constraint_url="${RAVEN_CONSTRAINT_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/raven/releases/latest" 2>/dev/null \
-        | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      release_json="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/raven/releases/latest" 2>/dev/null || true)"
+      wheel_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      # The release ships a requirements.txt exported from CI's uv.lock. Pinning
+      # against it stops a fresh install from resolving newer, untested upstream
+      # versions (the wheel only carries loose ranges, so without this the deps
+      # drift the moment upstream publishes a new release).
+      [ -n "$constraint_url" ] || constraint_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/requirements\.txt' | head -n1)"
     fi
     [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
+
+    # Download the constraint set if the release provides one; older releases
+    # without it simply install unpinned (backward compatible).
+    constraint_arg=""
+    if [ -n "$constraint_url" ]; then
+      con_file="$(mktemp)"
+      if curl -fsSL "$constraint_url" -o "$con_file" 2>/dev/null; then
+        info "  pinning dependencies from $constraint_url"
+        constraint_arg="--constraint $con_file"
+      else
+        warn "Could not download the dependency lock; installing without version pins."
+      fi
+    fi
+
     info "  installing $wheel_url"
-    if ! uv tool install --force "raven[channels] @ $wheel_url"; then
+    # shellcheck disable=SC2086 # $constraint_arg must word-split into 0 or 2 args.
+    if ! uv tool install --force $constraint_arg "raven[channels] @ $wheel_url"; then
       warn "Channel dependencies failed to install; installed base raven only. Some channels stay unavailable (see: raven channels list)."
-      uv tool install --force "$wheel_url"
+      # shellcheck disable=SC2086
+      uv tool install --force $constraint_arg "$wheel_url"
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.
