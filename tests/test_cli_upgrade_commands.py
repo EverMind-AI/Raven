@@ -488,9 +488,7 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
     assert status == 0
     assert len(downloaded) == 1
     constraints_url, constraints_path = downloaded[0]
-    assert constraints_url == (
-        "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-constraints.txt"
-    )
+    assert constraints_url == ("https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-constraints.txt")
     run.assert_called_once_with(
         [
             "/usr/bin/uv",
