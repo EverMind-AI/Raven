@@ -169,6 +169,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 feat(cli): rename cron show/remove to get/delete
 fix(channels): default allow_from to ['*'] instead of deny-all
 refactor(cli): replace --cron-expr with --cron and --every-seconds with --every
+feat(importer): add EverOS HTTP backend
 ```
 
 ❌ Bad:
