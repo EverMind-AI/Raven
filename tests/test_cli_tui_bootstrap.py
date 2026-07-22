@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 import sys
 from pathlib import Path
@@ -185,6 +186,62 @@ def test_find_node_discovers_windows_private_runtime(monkeypatch, tmp_path):
 
     assert node_path == str(node)
     assert version == (22, 20, 0)
+
+
+def test_find_node_skips_below_min_and_scans_all_path(monkeypatch, tmp_path):
+    """A stale < 22 node earlier on PATH must not shadow a newer node later on
+    PATH: find_node enumerates every PATH entry and returns the first that
+    meets the minimum, rather than shutil.which's single first hit."""
+    if sys.platform == "win32":
+        pytest.skip("uses POSIX fake node executables")
+
+    from raven.cli import tui_commands
+
+    def make_node(d: Path, ver: str) -> Path:
+        d.mkdir(parents=True)
+        p = d / "node"
+        p.write_text(f"#!/bin/sh\necho v{ver}\n", encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IXUSR)
+        return p
+
+    old = make_node(tmp_path / "old", "20.20.1")  # earlier on PATH
+    new = make_node(tmp_path / "new", "26.5.0")  # later on PATH
+
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "no-runtime"))
+    monkeypatch.setenv("PATH", f"{old.parent}{os.pathsep}{new.parent}")
+
+    node_path, version = tui_commands.find_node()
+
+    assert node_path == str(new)
+    assert version == (26, 5, 0)
+
+
+def test_find_node_reports_below_min_when_nothing_qualifies(monkeypatch, tmp_path):
+    """When only a < 22 node exists, find_node returns it (not None) so the
+    caller can report the real version ('found 20.20.1, need >= 22') instead
+    of a bare 'not found'."""
+    if sys.platform == "win32":
+        pytest.skip("uses a POSIX fake node executable")
+
+    from raven.cli import tui_commands
+
+    old_dir = tmp_path / "old"
+    old_dir.mkdir()
+    old = old_dir / "node"
+    old.write_text("#!/bin/sh\necho v20.20.1\n", encoding="utf-8")
+    old.chmod(old.stat().st_mode | stat.S_IXUSR)
+
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "no-runtime"))
+    monkeypatch.setenv("PATH", str(old_dir))
+
+    node_path, version = tui_commands.find_node()
+
+    assert node_path == str(old)
+    assert version == (20, 20, 1)
 
 
 def test_dev_npx_derived_from_node_path(monkeypatch, tmp_path):

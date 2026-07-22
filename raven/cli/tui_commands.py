@@ -88,9 +88,20 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             else:
                 candidates.append(str(Path(venv) / "bin" / "node"))
 
-        # Priority 3: PATH
-        if path_node := shutil.which("node"):
-            candidates.append(path_node)
+        # Priority 3: PATH — enumerate EVERY node on PATH, not just the first.
+        # shutil.which returns only the first hit, so a stale < 22 node earlier
+        # on PATH (e.g. an old /usr/local/bin/node or a version-manager shim)
+        # would otherwise shadow a newer one later on PATH (e.g. a Homebrew
+        # node 26). The version filter below then picks the first usable one.
+        exe = "node.exe" if os.name == "nt" else "node"
+        seen_path: set[str] = set()
+        for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+            if not path_dir:
+                continue
+            cand = os.path.join(path_dir, exe)
+            if cand not in seen_path and os.path.isfile(cand):
+                seen_path.add(cand)
+                candidates.append(cand)
 
         # Priority 4: Raven-managed private runtime installed by the one-line
         # installer into ~/.raven/runtime/. This is the zero-config fallback so
@@ -113,6 +124,11 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
                     candidates.append(str(direct))
                 candidates.extend(str(p) for p in sorted(runtime_root.glob("node-*/bin/node")))
 
+    # Return the first candidate that meets the minimum, in priority order.
+    # Track the highest below-minimum candidate seen so that when nothing
+    # qualifies the caller can still report the real version ("found 20.20.1,
+    # need >= 22") instead of a bare "not found".
+    best_below_min: Optional[Tuple[str, Tuple[int, int, int]]] = None
     for node_path in candidates:
         if not Path(node_path).exists():
             continue
@@ -128,11 +144,14 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             if not match:
                 continue
             version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            return (node_path, version)
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             continue
+        if version >= _MIN_NODE_VERSION:
+            return (node_path, version)
+        if best_below_min is None or version > best_below_min[1]:
+            best_below_min = (node_path, version)
 
-    return (None, None)
+    return best_below_min if best_below_min is not None else (None, None)
 
 
 def run_subprocess(
