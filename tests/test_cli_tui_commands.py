@@ -456,67 +456,6 @@ async def test_rpc_runner_strips_root_stdout_handler_after_backend_start(rpc_ser
 
 
 # ---------------------------------------------------------------------------
-# fd-level stdout/stderr redirect spans the serve region
-# ---------------------------------------------------------------------------
-
-
-async def test_rpc_runner_activates_fd_redirect_before_backend_start(rpc_server_deps, monkeypatch, tmp_path) -> None:
-    """``_run_rpc_server_until_done`` must activate redirect_terminal_fds_to_file
-    before calling backend.start() so that everos structlog PrintLogger output
-    during start and serve lands in the log file, not on the terminal.
-
-    Spies on the CM entry/exit and on start/stop to assert ordering:
-    redirect_enter < start ... stop < redirect_exit (held through the finally).
-    """
-    import contextlib
-
-    call_log: list[str] = []
-
-    original_start = rpc_server_deps["backend"].start
-    original_stop = rpc_server_deps["backend"].stop
-
-    async def _spy_start():
-        call_log.append("start")
-        await original_start()
-
-    async def _spy_stop():
-        call_log.append("stop")
-        await original_stop()
-
-    rpc_server_deps["backend"].start = _spy_start
-    rpc_server_deps["backend"].stop = _spy_stop
-
-    @contextlib.contextmanager
-    def _spy_redirect(path):
-        call_log.append("redirect_enter")
-        try:
-            yield
-        finally:
-            call_log.append("redirect_exit")
-
-    monkeypatch.setattr(
-        "raven.cli.tui_commands.redirect_terminal_fds_to_file",
-        _spy_redirect,
-    )
-    monkeypatch.setattr(
-        "raven.config.paths.get_logs_dir",
-        lambda: tmp_path,
-    )
-
-    await _run_until_done_with_handshake(monkeypatch, rpc_server_deps)
-
-    assert "redirect_enter" in call_log, "redirect_terminal_fds_to_file must be entered"
-    enter_idx = call_log.index("redirect_enter")
-    start_idx = call_log.index("start")
-    assert enter_idx < start_idx, "redirect must be activated BEFORE backend.start()"
-
-    assert "redirect_exit" in call_log, "redirect_terminal_fds_to_file must be exited (restored)"
-    exit_idx = call_log.index("redirect_exit")
-    stop_idx = call_log.index("stop")
-    assert stop_idx < exit_idx, "redirect must be held THROUGH backend.stop()"
-
-
-# ---------------------------------------------------------------------------
 # log-path notice: surfaced only on abnormal child exit (#131)
 # ---------------------------------------------------------------------------
 

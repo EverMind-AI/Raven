@@ -165,7 +165,7 @@ class _Backend:
     async def feedback(self, signals):
         pass
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):

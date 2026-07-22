@@ -273,8 +273,7 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     # plugins.config is never empty — it carries the everos-memory identity
     # wiring (snake_case, verbatim pass-through to the plugin factory).
     assert data["plugins"]["config"]["everos-memory"] == {
-        "mode": "embedded",
-        "base_url": "http://localhost:1995",
+        "base_url": "http://localhost:18791",
         "user_id": "default",
         "agent_id": "default",
     }

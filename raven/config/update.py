@@ -282,8 +282,7 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     plugins.setdefault("config", {}).setdefault(
         "everos-memory",
         {
-            "mode": "embedded",
-            "base_url": "http://localhost:1995",
+            "base_url": "http://localhost:18791",
             "user_id": mem.user_id,
             "agent_id": mem.agent_id,
         },

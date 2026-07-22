@@ -23,10 +23,5 @@ factory = "raven.plugin.memory.everos.tools:make_understand_media_tool"
 # ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)``
 # verbatim; full schema validation will land alongside EM-2.
 [plugin.config_schema]
-mode          = { type = "string", enum = ["embedded", "http"], default = "embedded" }
-base_url      = { type = "string", default = "http://localhost:1995" }
-recall_method = { type = "string", enum = ["keyword", "vector", "hybrid"], default = "hybrid" }
-# Pre-configured, stable agent identity: owner of the agent track (cases /
-# skills accrue under it across sessions). Bare id, matched verbatim
-# against the ``agent_id`` the host passes to recall.
-agent_id      = { type = "string", default = "agent:default" }
+base_url  = { type = "string", default = "http://localhost:18791" }
+agent_id  = { type = "string", default = "agent:default" }

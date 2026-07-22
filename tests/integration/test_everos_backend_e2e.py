@@ -24,7 +24,7 @@ import pytest
 
 from raven.memory_engine import Memory
 from raven.plugin import PluginContext, ServiceLocator
-from raven.plugin.memory.everos.backend import EverosBackend, _RealEverosAdapter
+from raven.plugin.memory.everos.backend import EverosBackend, _HttpEverosAdapter
 
 pytestmark = pytest.mark.real_llm
 
@@ -32,13 +32,11 @@ pytestmark = pytest.mark.real_llm
 def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
     be = EverosBackend(
         PluginContext(
-            config={"mode": "embedded", "agent_id": agent_id},
+            config={"agent_id": agent_id},
             services=ServiceLocator(workspace=tmp_path),
         )
     )
-    # Embedded mode must resolve the real adapter now that everos is
-    # installed — if it degraded to no-op the e2e would be meaningless.
-    assert isinstance(be._adapter, _RealEverosAdapter), "embedded backend did not bind the real everos adapter"
+    assert isinstance(be._adapter, _HttpEverosAdapter), "backend did not bind the HTTP adapter"
     return be
 
 

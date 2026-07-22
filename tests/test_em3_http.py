@@ -288,7 +288,7 @@ class TestEndpointNormalization:
 
 
 # ---------------------------------------------------------------------------
-# EverosBackend in mode="http" wires the HTTP adapter end-to-end
+# EverosBackend wires the HTTP adapter end-to-end
 # ---------------------------------------------------------------------------
 
 
@@ -304,7 +304,6 @@ class TestBackendHttpMode:
         b = EverosBackend(
             _ctx(
                 tmp_path,
-                mode="http",
                 base_url="http://x:9000",
             )
         )
@@ -312,15 +311,14 @@ class TestBackendHttpMode:
         assert b._adapter._base_url == "http://x:9000"
 
     def test_base_url_default(self, tmp_path: Path) -> None:
-        b = EverosBackend(_ctx(tmp_path, mode="http"))
+        b = EverosBackend(_ctx(tmp_path))
         assert isinstance(b._adapter, _HttpEverosAdapter)
-        assert b._adapter._base_url == "http://localhost:1995"
+        assert b._adapter._base_url == "http://localhost:18791"
 
     def test_api_key_threaded_through(self, tmp_path: Path) -> None:
         b = EverosBackend(
             _ctx(
                 tmp_path,
-                mode="http",
                 api_key="my-key",
             )
         )
@@ -360,7 +358,7 @@ class TestBackendHttpMode:
 
         # Build the backend with the explicit adapter
         b = EverosBackend(
-            _ctx(tmp_path, mode="http"),
+            _ctx(tmp_path),
             adapter=adapter,
         )
         hits = await b.recall("git", agent_id="agent:default", top_k=5)
@@ -377,7 +375,7 @@ class TestBackendHttpMode:
         self,
         tmp_path: Path,
     ) -> None:
-        b = EverosBackend(_ctx(tmp_path, mode="http"))
+        b = EverosBackend(_ctx(tmp_path))
         # Get a handle to the adapter to verify close happens
         adapter = b._adapter
         assert isinstance(adapter, _HttpEverosAdapter)

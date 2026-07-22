@@ -34,7 +34,7 @@ class _FakeBackend:
     async def feedback(self, signals) -> None:
         pass
 
-    async def store(self, session_id, messages) -> None:
+    async def store(self, session_id, messages, *, metadata=None) -> None:
         pass
 
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):

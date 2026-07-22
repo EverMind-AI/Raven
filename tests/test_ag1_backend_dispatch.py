@@ -51,7 +51,7 @@ class _FakeBackend:
     async def recall(self, query, *, user_id=None, agent_id=None, top_k):
         return []
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         self.store_calls.append(
             {
                 "session_id": session_id,

@@ -127,6 +127,8 @@ class MemoryBackend(Protocol):
         self,
         session_id: str,
         messages: list[dict[str, Any]],
+        *,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """Persist a session slice.
 
@@ -135,6 +137,12 @@ class MemoryBackend(Protocol):
         produces, so adapters don't need a conversion step. Backends
         that want to chunk / deduplicate / extract are free to; the
         Protocol is fire-and-forget per call.
+
+        ``metadata`` is an optional dict for caller-supplied context
+        that does not fit the message list.  Callers may pass
+        backend-specific fields such as ``app_id``, ``project_id``,
+        or ``is_final``; normal AgentLoop turns leave it ``None``.
+        Backends that do not consume metadata ignore it silently.
 
         Raises on transport / auth errors so AgentLoop can surface
         them; the host does **not** silently swallow store failures.

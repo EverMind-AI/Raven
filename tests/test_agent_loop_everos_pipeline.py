@@ -98,7 +98,7 @@ class _FakeBackend:
             ]
         return []
 
-    async def store(self, session_id, messages):
+    async def store(self, session_id, messages, *, metadata=None):
         self.store_calls.append({"session_id": session_id, "messages": messages})
         if self.store_raises is not None:
             raise self.store_raises

@@ -130,7 +130,7 @@ class TestActivationAndFactory:
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
-            config={"mode": "embedded"},
+            config={},
             services=ServiceLocator(workspace=tmp_path),
         )
         # @runtime_checkable Protocol: isinstance returns True iff all
@@ -145,12 +145,16 @@ class TestActivationAndFactory:
 
 @pytest.fixture
 def backend(tmp_path: Path):
+    from raven.plugin.memory.everos.backend import _NoOpAdapter
+
     reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
-    return reg.build_memory_backend(
+    be = reg.build_memory_backend(
         "everos",
-        config={"mode": "embedded"},
+        config={},
         services=ServiceLocator(workspace=tmp_path),
     )
+    be._adapter = _NoOpAdapter()
+    return be
 
 
 class TestStubBehavior:
@@ -184,20 +188,25 @@ class TestStubBehavior:
 
 
 class TestConfigPassthrough:
-    def test_mode_default_embedded(self, tmp_path: Path) -> None:
+    def test_default_constructs_http_adapter(self, tmp_path: Path) -> None:
+        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
+
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
             config={},
             services=ServiceLocator(workspace=tmp_path),
         )
-        assert backend._mode == "embedded"
+        assert isinstance(backend._adapter, _HttpEverosAdapter)
 
-    def test_mode_http_via_config(self, tmp_path: Path) -> None:
+    def test_base_url_passed_through(self, tmp_path: Path) -> None:
+        from raven.plugin.memory.everos.backend import _HttpEverosAdapter
+
         reg = assemble_plugin_registry(bundled_dir=_BUNDLED)
         backend = reg.build_memory_backend(
             "everos",
-            config={"mode": "http"},
+            config={"base_url": "http://custom:9000"},
             services=ServiceLocator(workspace=tmp_path),
         )
-        assert backend._mode == "http"
+        assert isinstance(backend._adapter, _HttpEverosAdapter)
+        assert backend._adapter._base_url == "http://custom:9000"
