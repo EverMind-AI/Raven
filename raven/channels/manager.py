@@ -40,7 +40,7 @@ def _missing_dep_hint(modname: str) -> str:
     if editable:
         return f"Run: uv sync --extra channel-{modname}"
     if sys.platform == "win32":
-        return "Re-run the installer to add channels: irm https://raven.evermind.ai/install.ps1 | iex"
+        return "Re-run the installer to add channels: irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex"
     return "Re-run the installer to add channels: curl -fsSL https://raven.evermind.ai/install.sh | bash"
 
 

@@ -73,6 +73,13 @@ Run this in PowerShell:
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
+On **Windows PowerShell 5.1** (the version built into Windows) that command
+fails with `Permanent Redirect`. Use the direct URL instead:
+
+```powershell
+irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
+```
+
 ### After installation
 
 The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.

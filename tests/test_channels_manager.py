@@ -154,7 +154,7 @@ def test_hint_package_not_found_points_to_installer(monkeypatch):
 
 @pytest.mark.parametrize(
     "platform, marker",
-    [("win32", "install.ps1"), ("darwin", "install.sh"), ("linux", "install.sh")],
+    [("win32", "raw.githubusercontent.com"), ("darwin", "install.sh"), ("linux", "install.sh")],
 )
 def test_hint_installer_matches_os(monkeypatch, platform, marker):
     """Wheel install picks the installer for the running OS (irm vs curl)."""
@@ -168,7 +168,7 @@ def test_hint_installer_matches_os(monkeypatch, platform, marker):
     [
         (_EDITABLE_JSON, "linux", "uv sync --extra channel-feishu"),
         (_WHEEL_JSON, "linux", "install.sh"),
-        (_WHEEL_JSON, "win32", "install.ps1"),
+        (_WHEEL_JSON, "win32", "raw.githubusercontent.com"),
     ],
     ids=["editable", "wheel-unix", "wheel-win"],
 )
