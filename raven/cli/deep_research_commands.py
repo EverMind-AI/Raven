@@ -92,7 +92,7 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
     """
     warnings = warnings if warnings is not None else []
     from raven.cli._styles import RAVEN_STYLE
-    from raven.cli.onboard_commands import _QMARK, _prompt_api_key, _require_questionary, _t, console
+    from raven.cli.onboard_commands import _BACK, _QMARK, _prompt_api_key, _require_questionary, _t, console
 
     if non_interactive:
         warnings.append("deep_research: skipped (non-interactive; pass --key to configure)")
@@ -142,7 +142,13 @@ def configure_deep_research(*, non_interactive: bool = False, warnings: Optional
     )
 
     while True:
-        key = _prompt_api_key("deep_research")
+        key = _prompt_api_key(
+            "deep_research",
+            allow_back=True,
+            back_label=_t("empty ↵ to cancel", "留空回车取消"),
+        )
+        if key is _BACK:
+            return False  # empty submit cancels configuration
         res = _validate_key(key, current["api_base"])
         if res["ok"]:
             break
