@@ -76,6 +76,13 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
+在 **Windows PowerShell 5.1**（Windows 自带的默认版本）下，上面的命令会报
+`Permanent Redirect`，请改用直连地址：
+
+```powershell
+irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
+```
+
 ### 安装完成后
 
 安装器会处理全部依赖：uv、Python 3.12、Node.js 22 和 Raven。
