@@ -183,6 +183,47 @@ def test_configure_validation_fail_then_cancel(tmp_path: Path, monkeypatch):
     assert configure_deep_research(non_interactive=False, warnings=[]) is False  # cancelled, nothing written
 
 
+def test_configure_key_empty_submit_cancels(tmp_path: Path, monkeypatch):
+    """Empty submit at the key prompt (``_prompt_api_key`` returns ``_BACK``)
+    cancels configuration: returns False and writes nothing -- the missing
+    pre-key cancel path that used to force a Ctrl+C / whole-process exit."""
+    import raven.cli.onboard_commands as ob
+
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(ut, "get_config_path", lambda: p)
+    monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(["configure"]))
+
+    captured: dict = {}
+
+    def _fake_prompt(*a, **k):
+        captured.update(k)
+        return ob._BACK
+
+    monkeypatch.setattr(ob, "_prompt_api_key", _fake_prompt)
+
+    assert configure_deep_research(non_interactive=False, warnings=[]) is False
+    assert not p.exists() or "deepResearch" not in json.loads(p.read_text()).get("tools", {})
+    # the prompt is asked with a cancel-worded hint, not the default "go back"
+    assert captured.get("allow_back") is True
+    assert captured.get("back_label")
+
+
+def test_configure_reconfigure_key_empty_submit_cancels(tmp_path: Path, monkeypatch):
+    """Reconfigure path (already configured): empty submit at the key prompt
+    cancels and leaves the existing key untouched, instead of exiting raven --
+    the ``raven deep-research enable`` -> Reconfigure repro."""
+    import raven.cli.onboard_commands as ob
+
+    p = tmp_path / "config.json"
+    monkeypatch.setattr(ut, "get_config_path", lambda: p)
+    ut.set_deep_research({"api_key": "sk-old", "model": "m"}, config_path=p)
+    monkeypatch.setattr(ob, "_require_questionary", lambda: _FakeQuestionary(["reconfigure"]))
+    monkeypatch.setattr(ob, "_prompt_api_key", lambda *a, **k: ob._BACK)
+
+    assert configure_deep_research(non_interactive=False, warnings=[]) is False
+    assert json.loads(p.read_text())["tools"]["deepResearch"]["apiKey"] == "sk-old"  # unchanged
+
+
 def test_configure_validation_retry_then_ok(tmp_path: Path, monkeypatch):
     calls = {"n": 0}
 

@@ -373,16 +373,18 @@ def _validate_provider_name(name: str) -> str:
     return candidate
 
 
-def _back_placeholder(allow_back: bool) -> Any:
-    """A faint in-field placeholder telling the user an empty submit rewinds.
+def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
+    """A faint in-field placeholder telling the user what an empty submit does.
 
     Rendered greyed inside the input (via prompt_toolkit's ``placeholder``),
     it disappears the moment they type and leaves nothing behind once the
-    prompt is answered. Returns ``None`` when back isn't offered.
+    prompt is answered. Returns ``None`` when back isn't offered. ``label``
+    overrides the default "go back" wording for prompts where an empty submit
+    means something else (e.g. cancelling rather than rewinding a step).
     """
     if not allow_back:
         return None
-    return [("fg:#6c6c6c italic", _t("empty ↵ to go back", "留空回车返回上一步"))]
+    return [("fg:#6c6c6c italic", label or _t("empty ↵ to go back", "留空回车返回上一步"))]
 
 
 def _field_placeholder(allow_back: bool, required: bool) -> Any:
@@ -453,18 +455,19 @@ def _select_provider() -> Optional[str]:
     return picked  # None on Ctrl+C
 
 
-def _prompt_api_key(provider: str, *, allow_back: bool = False) -> Any:
+def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Optional[str] = None) -> Any:
     """Ask for an API key (hidden input). Returns ``_BACK`` on empty submit
-    when ``allow_back`` is set, else the key string."""
+    when ``allow_back`` is set, else the key string. ``back_label`` overrides
+    the empty-submit hint for callers where it cancels rather than rewinds."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
     def _validate(v: str) -> Any:
         if allow_back and v == "":
-            return True  # empty is the back signal, not an error
+            return True  # a truly-empty submit is the back/cancel signal
         return (
             True
-            if len(v) >= 8
+            if len(v.strip()) >= 8
             else _t(
                 "API key looks off (empty or too short) — please re-enter (≥ 8 chars).",
                 "API Key 看起来不对(过短或为空),请重新输入(至少 8 位)。",
@@ -474,7 +477,7 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False) -> Any:
     key = questionary.password(
         _t("Paste your API key:", "粘贴你的 API Key:"),
         validate=_validate,
-        placeholder=_back_placeholder(allow_back),
+        placeholder=_back_placeholder(allow_back, back_label),
         style=RAVEN_STYLE,
         qmark=_QMARK,
     ).ask()

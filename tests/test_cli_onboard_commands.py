@@ -666,6 +666,55 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     assert data["agents"]["defaults"]["model"] == "claude-haiku-4-5"
 
 
+def _capture_password_validate(monkeypatch: pytest.MonkeyPatch, answer: str) -> dict[str, Any]:
+    """Stub ``questionary.password`` to record the ``validate`` callable the
+    prompt installs and return ``answer`` from ``.ask()``."""
+    import questionary
+
+    captured: dict[str, Any] = {}
+
+    class _FakeQuestion:
+        def ask(self) -> Any:
+            return answer
+
+    def _fake_password(message: Any, *, validate: Any = None, **kwargs: Any) -> Any:
+        captured["validate"] = validate
+        return _FakeQuestion()
+
+    monkeypatch.setattr(questionary, "password", _fake_password)
+    return captured
+
+
+def test_prompt_api_key_validator_rejects_whitespace_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An all-whitespace (or empty) key must fail the field validator (which
+    re-prompts) rather than pass the raw length check, strip to empty, and hit
+    ``typer.Exit`` (which quit raven with no message)."""
+    captured = _capture_password_validate(monkeypatch, "sk-realkey123")
+
+    key = onboard_commands._prompt_api_key("deep_research")
+    assert key == "sk-realkey123"
+
+    validate = captured["validate"]
+    assert validate("        ") is not True
+    assert validate("") is not True
+    assert validate("sk-12345678") is True
+
+
+def test_prompt_api_key_empty_is_back_but_whitespace_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With ``allow_back``, only a truly-empty submit is the back/cancel signal;
+    a whitespace-only entry is still rejected as an invalid key (re-prompt), not
+    silently treated as back."""
+    captured = _capture_password_validate(monkeypatch, "")
+
+    result = onboard_commands._prompt_api_key("deep_research", allow_back=True)
+    assert result is onboard_commands._BACK
+
+    validate = captured["validate"]
+    assert validate("") is True  # truly-empty submit rewinds/cancels
+    assert validate("        ") is not True  # whitespace rejected, not back
+    assert validate("sk-12345678") is True
+
+
 def test_format_model_for_provider_prefix_rules() -> None:
     """Provider's ``litellm_prefix`` is applied unless model_id already has one."""
     from raven.providers.registry import find_by_name
