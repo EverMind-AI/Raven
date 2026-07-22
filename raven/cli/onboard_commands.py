@@ -3230,6 +3230,22 @@ def _step4_memory(
     """
     _step_header(4, _t("EverOS long-term memory", "EverOS 长期记忆"))
 
+    import sys
+
+    if sys.platform == "win32":
+        console.print(
+            _t(
+                "  [yellow]⚠ EverOS memory engine does not support native Windows.[/yellow]\n"
+                "  [dim]Run Raven inside WSL for full memory support.[/dim]\n"
+                "  [dim]Skipping memory configuration.[/dim]",
+                "  [yellow]⚠ EverOS 记忆引擎暂不支持 Windows 原生环境。[/yellow]\n"
+                "  [dim]在 WSL 中运行 Raven 可获得完整记忆支持。[/dim]\n"
+                "  [dim]已跳过记忆配置。[/dim]",
+            )
+        )
+        _set_memory_backend(None)
+        return None
+
     if skip or non_interactive:
         # Never configured the required models here → disable backend-driven
         # memory so runtime doesn't activate EverOS without an llm/embedding.

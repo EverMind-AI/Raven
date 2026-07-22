@@ -276,6 +276,19 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
+            import sys
+
+            if sys.platform == "win32":
+                from rich.console import Console
+
+                Console(stderr=True).print(
+                    "[yellow]EverOS memory is not available on native Windows.[/yellow]\n"
+                    "[dim]Run Raven inside WSL for full memory support, "
+                    "or run `raven onboard` to reconfigure.[/dim]"
+                )
+                self._adapter = _NoOpAdapter()
+                return
+
             from raven.plugin.memory.everos._server import ensure_everos_server
 
             base_url = self._config.get("base_url") or "http://localhost:18791"
