@@ -203,6 +203,7 @@ class ErrorEventPayload(_Strict):
     code: int
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
+    detail: str | None = None
 
 
 class ErrorEvent(_Strict):

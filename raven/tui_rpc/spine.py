@@ -182,11 +182,11 @@ class TuiOutlet:
             {"type": "message.complete", "payload": {"turn_id": turn_id, "usage": usage}},
         )
 
-    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str) -> None:
-        await self._emitter.emit(
-            conversation_id,
-            {"type": "error", "payload": {"code": code, "message": message, "reason": reason}},
-        )
+    async def emit_error(self, conversation_id: str, code: int, message: str, reason: str, detail: str = "") -> None:
+        payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
+        if detail:
+            payload["detail"] = detail
+        await self._emitter.emit(conversation_id, {"type": "error", "payload": payload})
 
 
 def _make_tui_sink(
@@ -237,7 +237,13 @@ def _make_tui_sink(
             # A cancelled turn's error is emitted by turn.cancel, not here, to
             # avoid a double error event.
             if not event.cancelled:
-                await outlet.emit_error(event.conversation_id, _TURN_FAILED_CODE, "turn_failed", "internal")
+                await outlet.emit_error(
+                    event.conversation_id,
+                    _TURN_FAILED_CODE,
+                    "turn_failed",
+                    "internal",
+                    event.error or "",
+                )
             return
         if isinstance(event, TurnStarted):
             # message.start is emitted by turn.send (it owns the turn_id).

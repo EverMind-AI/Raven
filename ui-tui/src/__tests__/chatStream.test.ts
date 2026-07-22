@@ -312,6 +312,28 @@ describe('createChatStream — cancel preserves streamed content', () => {
     expect(assistant!.text).toContain('[interrupted]')
   })
 
+  it('appends the failure detail to the error line when present', async () => {
+    const sysCalls: string[] = []
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: () => {},
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: m => sysCalls.push(m)
+    })
+    await stream.attach()
+    patchUiState({ busy: true })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', detail: "No module named 'orjson'" }
+    })
+
+    expect(sysCalls).toContain("error: turn_failed (code=-32099): No module named 'orjson'")
+  })
+
   it('keeps the streamed partial in the transcript on a local forceReset', async () => {
     const appended: Msg[] = []
     const fake = makeFakeRpc()
