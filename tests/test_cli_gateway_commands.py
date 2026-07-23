@@ -218,12 +218,15 @@ from types import SimpleNamespace
 
 from raven.cli.gateway_commands import build_model_routing
 from raven.config.schema import ModelEndpoint, RoutingConfig
+from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
 from raven.routing.knn_router import KNNModelRouter
 from raven.routing.router import ModelRouter
 
 
 class _FakeProvider:
+    generation = GenerationSettings()
+
     def get_default_model(self):
         return "default-model"
 

@@ -135,6 +135,7 @@ def make_provider(config: Config):
         temperature=defaults.temperature,
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
+        timeout=defaults.llm_call_timeout,
     )
     return provider
 
@@ -155,6 +156,7 @@ def make_lazy_provider(config: Config):
             temperature=defaults.temperature,
             max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
+            timeout=defaults.llm_call_timeout,
         ),
     )
     provider.prewarm()

@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import time
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -1295,27 +1295,36 @@ class AgentLoop:
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
 
-        async for delta in self.provider.chat_stream(
-            messages=messages,
-            tools=tools,
-            model=model,
-        ):
-            reasoning_delta = getattr(delta, "reasoning_content", None)
-            if reasoning_delta:
-                reasoning_buf.append(reasoning_delta)
-                if on_reasoning_delta is not None:
-                    await on_reasoning_delta(reasoning_delta)
-            if delta.content:
-                content_buf.append(delta.content)
-                if on_token_delta is not None:
-                    await on_token_delta(delta.content)
-            if delta.tool_call_delta:
-                _merge_tool_call_fragments(
-                    tool_call_slots,
-                    delta.tool_call_delta,
-                )
-            if delta.usage is not None:
-                final_usage = delta.usage
+        # aclosing() guarantees the async generator (and its underlying stream)
+        # is closed when a TimeoutError from the per-chunk idle cap unwinds the
+        # loop, so a stalled stream terminates with a structured error instead
+        # of hanging or leaking the connection. The stream path has no retry
+        # (see docstring), so the error surfaces as the turn's response.
+        try:
+            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+                async for delta in stream:
+                    reasoning_delta = getattr(delta, "reasoning_content", None)
+                    if reasoning_delta:
+                        reasoning_buf.append(reasoning_delta)
+                        if on_reasoning_delta is not None:
+                            await on_reasoning_delta(reasoning_delta)
+                    if delta.content:
+                        content_buf.append(delta.content)
+                        if on_token_delta is not None:
+                            await on_token_delta(delta.content)
+                    if delta.tool_call_delta:
+                        _merge_tool_call_fragments(
+                            tool_call_slots,
+                            delta.tool_call_delta,
+                        )
+                    if delta.usage is not None:
+                        final_usage = delta.usage
+        except TimeoutError:
+            return LLMResponse(
+                content="".join(content_buf),
+                finish_reason="error",
+                error_classification=self.provider.classify_error(TimeoutError()),
+            )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
         finish_reason = "tool_calls" if tool_calls else "stop"
