@@ -96,6 +96,11 @@ def _can_probe() -> bool:
         return False
     if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
         return False
+    # GNU screen neither answers OSC 11 nor swallows the query, so the probe
+    # bytes echo as visible garbage; tmux defaults to TERM=screen-256color and
+    # can't answer a bare query either. Both fall back to COLORFGBG/dark.
+    if os.environ.get("TERM", "").startswith("screen"):
+        return False
     try:
         return sys.stdin.isatty() and sys.stdout.isatty()
     except (ValueError, OSError):

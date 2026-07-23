@@ -137,6 +137,16 @@ def test_no_probe_under_ci(monkeypatch):
     assert _REAL_CAN_PROBE() is False
 
 
+def test_no_probe_under_screen(monkeypatch):
+    # GNU screen echoes the OSC 11 query as visible garbage; default tmux is
+    # TERM=screen-256color and can't answer a bare query. Skip the probe.
+    monkeypatch.setattr(_theme.os, "name", "posix")
+    monkeypatch.setattr(_theme.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(_theme.sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "screen-256color")
+    assert _REAL_CAN_PROBE() is False
+
+
 # --- dark byte-for-byte parity (D2: dark rendering unchanged) -----------------
 
 
