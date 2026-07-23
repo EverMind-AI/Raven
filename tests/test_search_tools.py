@@ -6,12 +6,15 @@ pure-Python fallback (forced by patching shutil.which to return None).
 
 from __future__ import annotations
 
+import asyncio
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 
 from raven.agent.tools.file_search import FindTool, GrepTool
+from raven.agent.tools.registry import ToolRegistry
 
 
 @pytest.fixture
@@ -145,3 +148,48 @@ async def test_find_sorted_by_recency(tree: Path):
     out = await tool.execute(pattern="*.py")
     lines = out.splitlines()
     assert lines[0].endswith("util.py")
+
+
+async def test_find_does_not_block_the_event_loop(tree: Path, monkeypatch):
+    original_glob = Path.glob
+
+    def slow_glob(path: Path, pattern: str):
+        time.sleep(0.5)
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", slow_glob)
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+
+    started = time.monotonic()
+    search = asyncio.create_task(tool.execute(pattern="*.py"))
+    await asyncio.sleep(0.02)
+    event_loop_delay = time.monotonic() - started
+    result = await search
+
+    assert event_loop_delay < 0.25
+    assert "src/app.py" in result
+
+
+async def test_find_registry_timeout_can_fire_during_slow_glob(tree: Path, monkeypatch):
+    original_glob = Path.glob
+
+    def slow_glob(path: Path, pattern: str):
+        time.sleep(0.5)
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", slow_glob)
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    tool.timeout_seconds = 0.05
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    started = time.monotonic()
+    result = await registry.execute("find", {"pattern": "*.py"})
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.25
+    assert "timed out after" in result
+
+
+def test_find_declares_a_bounded_timeout():
+    assert FindTool.timeout_seconds == 30.0
