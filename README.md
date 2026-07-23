@@ -450,10 +450,6 @@ If Raven is the kind of agent harness you want to exist, star the repo. It
 helps more builders of self-improving agents discover the project and gives the
 EverMind ecosystem a stronger signal to keep investing in open agents.
 
-### GitHub Stars
-
-[![GitHub Stars](https://img.shields.io/github/stars/EverMind-AI/Raven?style=for-the-badge)](https://github.com/EverMind-AI/Raven)
-
 ### Star History
 
 <a href="https://www.star-history.com/?repos=EverMind-AI%2FRaven&type=date&legend=top-left">
