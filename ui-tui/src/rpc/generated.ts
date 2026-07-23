@@ -359,6 +359,7 @@ export interface ErrorEvent {
     code: number;
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
+    detail?: string;
   };
 }
 /**

@@ -244,6 +244,26 @@ async def test_outlet_emit_complete_and_error_shapes():
     ]
 
 
+async def test_outlet_emit_error_includes_detail_when_present():
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "No module named 'orjson'")
+    assert emitter.emitted == [
+        (
+            "tui:c1",
+            {
+                "type": "error",
+                "payload": {
+                    "code": -32099,
+                    "message": "turn_failed",
+                    "reason": "internal",
+                    "detail": "No module named 'orjson'",
+                },
+            },
+        ),
+    ]
+
+
 # --- build_tui: real Scheduler + DeliveryHub + TuiOutlet, only the edges faked ---
 # (faking the spine path would make the ordering / deadlock tests pass trivially;
 #  message.complete-after-token and the empty-turn finalize only hold on the real
