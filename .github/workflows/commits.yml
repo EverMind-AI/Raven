@@ -2,6 +2,7 @@ name: Commit lint
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -59,6 +60,13 @@ jobs:
           fi
           npx commitlint --from "$BASE" --to HEAD --config commitlint.config.cjs
           PYTHONPATH=. python3 scripts/check_commit_messages.py "$BASE..HEAD"
+
+      - name: Validate prospective squash header
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s (#%s)\n' "$PR_TITLE" "$PR_NUMBER" | npx commitlint --config commitlint.config.cjs
 
   repository-files:
     name: repository files

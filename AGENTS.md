@@ -137,7 +137,7 @@ self.logger = logger.bind(channel=self.name)
 
 **scope** — a top-level subpackage of `raven/`. See the `Repo layout` section of `README.md` for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
 
-**subject** — lowercase start; ≤ 72 chars; no trailing period; English.
+**subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 
 **footer** (optional):
 - `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public;
@@ -149,7 +149,7 @@ No other languages anywhere in the message — not just the subject; body and fo
 
 | Part | Rule |
 |---|---|
-| subject | English, lowercase start, ≤ 72 chars, no period |
+| subject | English, lowercase start, no period; whole header ≤ 100 chars |
 | body | **All English**; when citing a non-English plan / discussion, **translate** it, don't paste |
 | punctuation | **ASCII-only** — not just no full-width punctuation (`：`,`，`,`。`,`「」`,`""` …) but also no em-dash `—`, curly quotes, or ellipsis `…` (all non-ASCII, all rejected by CI); no `§`-numbering, no non-English path names; the latin part of a §N.M anchor is fine |
 | trailer | `Co-authored-by: ...` is ASCII by format |
@@ -231,7 +231,7 @@ feat(importer): add EverOS HTTP backend
 
 After pushing a new feature branch, **proactively ask** whether to open the PR with `gh pr create` — don't leave the user to do it in the web UI.
 
-**Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Title length may relax to ≤ 90 chars** (the 72 limit is for `git log --oneline` wrapping; web-UI titles don't wrap) — but shorter is better.
+**Title:** same Conventional-Commits grammar as commits (`<type>(<scope>): <subject>`), subject reflecting the PR's overall goal, not any single commit. **Length:** the title plus the ` (#NN)` GitHub appends on squash must keep the header ≤ 100 chars — CI validates the title as that prospective squash header, so a title that passes will not fail commit-lint after merge. Shorter is better.
 
 **Description must be all English** (same as §3.1.1): no other languages / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist).
 
