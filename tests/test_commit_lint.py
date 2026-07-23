@@ -5,7 +5,6 @@ from pathlib import Path
 
 from scripts import check_commit_file
 from scripts.commit_lint import (
-    CommitLintConfig,
     check_commit_message,
     check_pr_body,
     check_pr_title,
@@ -41,12 +40,12 @@ def test_rejects_uppercase_subject_and_trailing_period() -> None:
     assert "subject must not end with punctuation" in result.errors
 
 
-def test_rejects_subject_over_commit_limit() -> None:
-    subject = "a" * 73
-    result = check_commit_message(f"docs: {subject}")
+def test_python_checker_does_not_enforce_length() -> None:
+    # Length is owned solely by commitlint (header-max-length); the Python
+    # checker must not re-impose a subject-length cap of its own.
+    result = check_commit_message("docs: " + "a" * 200)
 
-    assert not result.ok
-    assert "subject must be 72 characters or fewer" in result.errors
+    assert result.ok
 
 
 def test_rejects_fixup_and_merge_subjects() -> None:
@@ -59,19 +58,9 @@ def test_rejects_fixup_and_merge_subjects() -> None:
     assert "merge commits are not allowed in PR ranges" in merge.errors
 
 
-def test_pr_title_allows_longer_subject_limit() -> None:
-    subject = "add launch-ready readme and contributor checks"
-    result = check_pr_title(f"docs: {subject}", CommitLintConfig(pr_title_subject_limit=90))
-
-    assert result.ok
-
-
-def test_pr_title_rejects_subject_over_pr_limit() -> None:
-    subject = "a" * 91
-    result = check_pr_title(f"docs: {subject}", CommitLintConfig(pr_title_subject_limit=90))
-
-    assert not result.ok
-    assert "subject must be 90 characters or fewer" in result.errors
+def test_pr_title_matches_commit_message_rules() -> None:
+    assert check_pr_title("docs(readme): sharpen launch positioning").ok
+    assert not check_pr_title("update README").ok
 
 
 def test_pr_body_accepts_ascii_markdown() -> None:

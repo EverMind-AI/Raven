@@ -20,12 +20,6 @@ HEADER_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[a-z0-9_*.-]+)\))?: (?P
 
 
 @dataclass(frozen=True)
-class CommitLintConfig:
-    subject_limit: int = 72
-    pr_title_subject_limit: int = 90
-
-
-@dataclass(frozen=True)
 class LintResult:
     errors: list[str]
 
@@ -34,12 +28,12 @@ class LintResult:
         return not self.errors
 
 
-def check_commit_message(message: str, config: CommitLintConfig | None = None) -> LintResult:
-    return _check_message(message, subject_limit=(config or CommitLintConfig()).subject_limit)
+def check_commit_message(message: str) -> LintResult:
+    return _check_message(message)
 
 
-def check_pr_title(title: str, config: CommitLintConfig | None = None) -> LintResult:
-    return _check_message(title, subject_limit=(config or CommitLintConfig()).pr_title_subject_limit)
+def check_pr_title(title: str) -> LintResult:
+    return _check_message(title)
 
 
 def check_pr_body(body: str) -> LintResult:
@@ -54,7 +48,7 @@ def check_pr_body(body: str) -> LintResult:
     return LintResult(errors)
 
 
-def _check_message(message: str, *, subject_limit: int) -> LintResult:
+def _check_message(message: str) -> LintResult:
     errors: list[str] = []
     text = message.strip()
     header = text.splitlines()[0] if text else ""
@@ -80,9 +74,6 @@ def _check_message(message: str, *, subject_limit: int) -> LintResult:
 
     if commit_type not in ALLOWED_TYPES:
         errors.append(f"type must be one of: {', '.join(sorted(ALLOWED_TYPES))}")
-
-    if len(subject) > subject_limit:
-        errors.append(f"subject must be {subject_limit} characters or fewer")
 
     first_alpha = next((ch for ch in subject if ch.isalpha()), "")
     if first_alpha and not first_alpha.islower():
