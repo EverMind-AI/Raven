@@ -1,19 +1,17 @@
 """Raven backends.
 
-Phase 4b reduced this from three in-process backends (Planner / Agent /
-Sentinel) to **only ``RavenAgentBackend``**, rewritten to drive the
-agent via the Phase 3 subprocess driver. The other two modes raise
-``NotImplementedError`` with a pointer to MIGRATION_STATUS.md.
+Two live modes:
 
-Why agent-only:
+- ``--mode agent`` (``RavenAgentBackend``): Phase 4b subprocess port —
+  one ``raven agent --message ...`` subprocess per sample. The
+  **F1=0.382 datapoint** in the baseline FINDINGS-summary.
+- ``--mode sentinel`` (``RavenSentinelBackend``): in-process
+  ``ProactivePlanner.decide()`` over ``driver.to_planner_context(sample)``
+  — the native L3 decision channel (historical F1≈0.135). Restored for
+  prompt-vs-architecture ablations; no prompt template is consumed.
 
-- Pbench ``--mode agent`` is the **F1=0.382 datapoint** — the strongest
-  evidence for "tool-loop architecture beats single-prompt cron" in the
-  baseline FINDINGS-summary.
-- ``--mode planner`` (F1≈0.135) and ``--mode sentinel`` (F1≈0.135) would
-  require either an in-process Sentinel pipeline (defeats the subprocess
-  contract) or a new ``raven planner decide --json`` CLI surface.
-  Both are deferred until a concrete need appears.
+``--mode planner`` remains a stub (would need a ``raven planner decide
+--json`` CLI surface).
 """
 
 from __future__ import annotations
@@ -25,6 +23,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 from ..agents import get_agent_config
 from ..backend import AgentBackend, AgentOutcome, Sample
@@ -67,6 +67,8 @@ class RavenAgentBackend(AgentBackend):
         self.max_iterations = int(overrides.get("max_iterations") or agent_cfg.get("max_iterations") or 10)
         self.agent_timeout_s = int(overrides.get("agent_timeout_s") or agent_cfg.get("agent_timeout_s") or 180)
         self._raven_repo = _resolve_raven_repo()
+        raven_config = overrides.get("raven_config") or agent_cfg.get("raven_config")
+        self._raven_config = Path(raven_config).expanduser().resolve() if raven_config else None
         # Model is captured only for the ``meta`` field on the outcome —
         # the subprocess uses whatever model raven is configured for.
         self._model = overrides.get("model") or agent_cfg.get("model") or "subprocess"
@@ -108,6 +110,7 @@ class RavenAgentBackend(AgentBackend):
         raven_driver = RavenDriver(
             raven_repo=self._raven_repo,
             workspace=workspace,
+            config=self._raven_config,
             timeout_seconds=float(self.agent_timeout_s),
         )
 
@@ -146,8 +149,114 @@ class RavenAgentBackend(AgentBackend):
         )
 
 
+class RavenSentinelBackend(AgentBackend):
+    """Structured backend: drives ``ProactivePlanner.decide()`` in-process.
+
+    The driver supplies a ``PlannerContext`` via ``to_planner_context(sample)``;
+    the Planner makes one LLM call and returns a skip/nudge/spawn decision.
+    No prompt template is consumed — the Planner uses its own internal
+    system prompt, so ``--prompts-dir`` has no effect in this mode.
+
+    In-process ``raven`` import mirrors the driver's own structured hook
+    (``drivers/pbench.py::to_planner_context`` already imports raven types);
+    the subprocess contract applies to ``raven_driver``, not this backend.
+    """
+
+    name = "raven"
+
+    def __init__(self, overrides: dict[str, Any] | None = None):
+        overrides = overrides or {}
+        agent_cfg = get_agent_config("raven")
+        raven_config = overrides.get("raven_config") or agent_cfg.get("raven_config")
+        config_path = (
+            Path(raven_config).expanduser().resolve() if raven_config else Path.home() / ".raven" / "config.json"
+        )
+        if not raven_config:
+            logger.warning(
+                "RavenSentinelBackend: no --raven-config given — falling back to "
+                "the LIVE {} (results depend on this machine's config; pass "
+                "--raven-config for reproducible runs)",
+                config_path,
+            )
+        import json
+
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        defaults = cfg.get("agents", {}).get("defaults", {})
+        providers_cfg = cfg.get("providers", {})
+        model = overrides.get("model") or defaults.get("model") or ""
+
+        if model.startswith("openrouter/"):
+            api_base = "https://openrouter.ai/api/v1"
+            api_key = providers_cfg.get("openrouter", {}).get("apiKey") or "no-key"
+            self._model = model[len("openrouter/") :]
+        elif defaults.get("provider") == "custom" or model.startswith("custom/"):
+            custom = providers_cfg.get("custom", {})
+            api_base = custom.get("apiBase") or "http://localhost:8000/v1"
+            api_key = custom.get("apiKey") or "no-key"
+            self._model = model.removeprefix("custom/")
+        else:
+            raise ValueError(
+                f"RavenSentinelBackend cannot resolve an OpenAI-compatible "
+                f"endpoint for model {model!r} in {config_path}. Supported: "
+                "openrouter/<model>, or provider 'custom' with apiBase set."
+            )
+
+        from raven.proactive_engine.sentinel.planner import ProactivePlanner
+        from raven.providers.custom_provider import CustomProvider
+
+        provider = CustomProvider(api_key=api_key, api_base=api_base, default_model=self._model)
+        self._planner = ProactivePlanner(provider, self._model)
+
+    async def run_one(
+        self,
+        sample: Sample,
+        driver,
+        *,
+        session_id: str,
+        ctx: dict[str, Any] | None = None,
+    ) -> AgentOutcome:
+        to_ctx = getattr(driver, "to_planner_context", None)
+        if to_ctx is None:
+            return AgentOutcome(
+                status="exception",
+                elapsed_s=0.0,
+                error=f"driver '{driver.name}' does not support Sentinel (missing to_planner_context)",
+            )
+        planner_ctx = to_ctx(sample)
+        started = time.monotonic()
+        decision = await self._planner.decide(planner_ctx)
+        elapsed = round(time.monotonic() - started, 2)
+
+        reason = decision.reason or ""
+        if reason.startswith("llm_error"):
+            return AgentOutcome(
+                status="exception",
+                elapsed_s=elapsed,
+                error=reason,
+                meta={"model": self._model},
+            )
+        # "model did not call planner_decision tool" is the structured-mode
+        # analogue of a parse failure: keep the row, flag parse_ok=False.
+        parse_ok = reason != "model did not call planner_decision tool"
+        should_help = decision.action in ("nudge", "nudge_inject", "nudge_defer", "spawn_agent")
+        return AgentOutcome(
+            status="ok",
+            elapsed_s=elapsed,
+            text=None,
+            decision={
+                "parse_ok": parse_ok,
+                "should_help": should_help,
+                "proposed_task": decision.spawn_task or decision.nudge_message,
+                "reason": reason,
+                "sentinel_action": decision.action,
+                "sentinel_route": "planner_direct",
+            },
+            meta={"model": self._model, "proactivity_score": decision.proactivity_score},
+        )
+
+
 class _DeferredRavenBackend(AgentBackend):
-    """Stub for the Planner / Sentinel modes — not ported in Phase 4b."""
+    """Stub for the Planner mode — not ported in Phase 4b."""
 
     name = "raven"
 
@@ -167,10 +276,8 @@ class _DeferredRavenBackend(AgentBackend):
             elapsed_s=0.0,
             error=(
                 f"raven --mode {self._mode} is not available in the "
-                "subprocess-driven port. Phase 4b only ported --mode agent "
-                "(the F1=0.382 pbench datapoint). Use --mode agent, or run "
-                "the original in-process eval against the pre-refactor "
-                "raven checkout for Planner/Sentinel-only numbers."
+                "subprocess-driven port. Use --mode agent (Phase 4b port) "
+                "or --mode sentinel (in-process ProactivePlanner)."
             ),
         )
 
@@ -182,7 +289,9 @@ def make_raven_backend(
     mode = (mode or "agent").lower()
     if mode == "agent":
         return RavenAgentBackend(overrides=overrides)
-    if mode in ("planner", "sentinel"):
+    if mode == "sentinel":
+        return RavenSentinelBackend(overrides=overrides)
+    if mode == "planner":
         return _DeferredRavenBackend(mode, overrides=overrides)
     raise ValueError(f"Unknown raven mode '{mode}'. Use planner | agent | sentinel.")
 
