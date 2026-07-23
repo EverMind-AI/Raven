@@ -251,6 +251,10 @@ class AgentDefaults(Base):
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
+    # Per-call wall-clock cap (seconds) for every LLM request (main loop and
+    # sub-agents). Bounds a stalled backend that trickles bytes without ever
+    # finishing, which an httpx per-read timeout never catches.
+    llm_call_timeout: int = 600
     max_tool_iterations: int = 40
     # Cap on subagent VMs running at once (excess spawns queue). ge=1: a
     # 0/negative cap would deadlock every subagent (Semaphore(0)).

@@ -30,6 +30,12 @@ class PerModelProvider(LLMProvider):
             if m.model
         }
         self._default = next(iter(self._by_model), None) or fallback.get_default_model()
+        # Per-model sub-providers are built here without generation settings;
+        # inherit the fallback's (already configured from AgentDefaults) and push
+        # them down so routed calls honor temperature / max_tokens / timeout.
+        self.generation = fallback.generation
+        for sub in self._by_model.values():
+            sub.generation = self.generation
 
     def _pick(self, model: str | None) -> LLMProvider:
         return self._by_model.get(model or "", self._fallback)

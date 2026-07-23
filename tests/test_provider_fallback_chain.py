@@ -175,6 +175,46 @@ async def test_chain_exhausted_returns_last_error():
     assert provider.calls == ["primary"] * 4 + ["backup"] * 4
 
 
+def test_builtin_timeout_error_classified_as_retryable_network():
+    # asyncio.wait_for raises the builtin TimeoutError, whose class name
+    # ("timeouterror") and empty str() match neither the network name set nor
+    # the substring probes. Without the isinstance check it falls to "unknown"
+    # (not retryable), silently defeating the timeout's retry/fallback intent.
+    c = LLMProvider.classify_error(TimeoutError())
+    assert c.category == "network"
+    assert c.retryable is True
+    assert c.should_fallback is True
+
+
+class _TimeoutThenOkProvider(LLMProvider):
+    """Raises TimeoutError for the first ``fail_times`` calls, then succeeds."""
+
+    def __init__(self, fail_times: int):
+        super().__init__(api_key="test")
+        self._remaining = fail_times
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        self.calls += 1
+        if self._remaining > 0:
+            self._remaining -= 1
+            raise TimeoutError
+        return LLMResponse(content="ok", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "default-model"
+
+
+@pytest.mark.asyncio
+async def test_chat_timeout_is_retried_then_succeeds():
+    provider = _TimeoutThenOkProvider(fail_times=2)
+    provider._CHAT_RETRY_DELAYS = (0, 0, 0)
+    resp = await provider.chat_with_retry(messages=[], model="m1")
+    assert resp.finish_reason == "stop"
+    assert resp.content == "ok"
+    assert provider.calls == 3  # two timeouts retried, third succeeds
+
+
 @pytest.mark.asyncio
 async def test_should_fallback_classification():
     # Structured classifier (string path): transient + capacity/availability

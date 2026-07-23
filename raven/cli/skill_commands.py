@@ -55,7 +55,7 @@ def skill_list(
     table = Table(title=f"Skills ({len(metas)})")
     table.add_column("Name", style="cyan")
     table.add_column("Source", style="green")
-    table.add_column("Description", style="white", overflow="fold")
+    table.add_column("Description", overflow="fold")
     for m in metas:
         desc = (m.description or "")[:120]
         table.add_row(m.name, m.source, desc)
