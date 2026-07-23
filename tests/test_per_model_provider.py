@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.schema import ModelEndpoint
+from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
 
 
@@ -43,6 +44,19 @@ def test_get_default_model_is_first_configured():
 def test_default_falls_back_when_no_models():
     p = PerModelProvider([], fallback=_fallback())
     assert p.get_default_model() == "fallback-model"
+
+
+def test_generation_propagates_to_sub_providers():
+    # Sub-providers are built without generation settings; they must inherit the
+    # fallback's (configured from AgentDefaults) so routed calls honor
+    # timeout / temperature / max_tokens instead of the dataclass defaults.
+    fb = _fallback()
+    fb.generation = GenerationSettings(timeout=42.0, temperature=0.2, max_tokens=111)
+    eps = [ModelEndpoint(model="small", api_base="http://a/v1", api_key="KA")]
+    p = PerModelProvider(eps, fallback=fb)
+    assert p.generation is fb.generation
+    assert p._by_model["small"].generation is fb.generation
+    assert p._by_model["small"].generation.timeout == 42.0
 
 
 @pytest.mark.asyncio

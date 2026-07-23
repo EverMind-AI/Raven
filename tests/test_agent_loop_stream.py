@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import LLMResponse, StreamDelta
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
 
 
 class _FakeProvider:
@@ -215,6 +215,34 @@ async def test_llm_call_stream_passes_messages_tools_model_to_provider() -> None
 # ---------------------------------------------------------------------------
 # Default LLMResponse shape (no chunks)
 # ---------------------------------------------------------------------------
+
+
+async def test_llm_call_stream_timeout_returns_structured_error() -> None:
+    """A mid-stream stall (TimeoutError from the per-chunk idle cap) terminates
+    with a structured, retryable error response instead of propagating and
+    crashing the turn. Already-streamed content is preserved on the response."""
+
+    class _TimeoutStreamProvider:
+        classify_error = LLMProvider.classify_error
+
+        async def chat_stream(self, **_kwargs: Any):
+            yield StreamDelta(content="partial")
+            raise TimeoutError
+
+    call = _bind_helper(_TimeoutStreamProvider())
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "network"
+    assert response.error_classification.retryable is True
+    assert response.content == "partial"
+    assert seen == ["partial"]
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:

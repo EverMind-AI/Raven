@@ -107,6 +107,7 @@ class GenerationSettings:
     temperature: float = 0.7
     max_tokens: int = 4096
     reasoning_effort: str | None = None
+    timeout: float = 600.0
 
 
 class LLMProvider(ABC):
@@ -355,11 +356,17 @@ class LLMProvider(ABC):
         ):
             return ErrorClassification("server", retryable=True, should_fallback=True)
 
-        # Timeout / connection → retry + fallback.
-        if {"timeout", "apitimeouterror", "apiconnectionerror"} & names or has(
-            "timeout",
-            "timed out",
-            "connection",
+        # Timeout / connection → retry + fallback. isinstance covers the builtin
+        # TimeoutError raised by asyncio.wait_for (its class name "timeouterror"
+        # and empty str() match neither the name set nor the substrings below).
+        if (
+            isinstance(exc, TimeoutError)
+            or {"timeout", "apitimeouterror", "apiconnectionerror"} & names
+            or has(
+                "timeout",
+                "timed out",
+                "connection",
+            )
         ):
             return ErrorClassification("network", retryable=True, should_fallback=True)
 

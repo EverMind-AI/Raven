@@ -1,5 +1,6 @@
 """LiteLLM provider implementation for multi-provider support."""
 
+import asyncio
 import hashlib
 import os
 import secrets
@@ -291,12 +292,11 @@ class LiteLLMProvider(LLMProvider):
             "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
             "max_tokens": max_tokens,
             "temperature": temperature,
-            # Hard cap on a single LLM call to prevent the agent from hanging
-            # when an upstream endpoint half-closes or never sends FIN. LiteLLM's
-            # default is 6000s — too long for an interactive agent loop. 600s
-            # covers slow reasoning-heavy generations while still failing fast
-            # on stuck connections, so chat_with_retry can retry or give up.
-            "timeout": 600,
+            # Per-read httpx cap forwarded to the underlying client. This alone
+            # cannot bound a backend that trickles bytes forever (the read timer
+            # resets on every chunk), so the awaited call is also wrapped in an
+            # asyncio.wait_for wall-clock cap below.
+            "timeout": self.generation.timeout,
         }
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
@@ -327,7 +327,7 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         try:
-            response = await acompletion(**kwargs)
+            response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
             return self._parse_response(response)
         except Exception as e:
             # Return error as content for graceful handling, but classify the
@@ -379,6 +379,7 @@ class LiteLLMProvider(LLMProvider):
             # when usage is explicitly requested; without it the stream carries
             # no token counts and downstream cost / context tracking sees zero.
             "stream_options": {"include_usage": True},
+            "timeout": self.generation.timeout,
         }
 
         self._apply_model_overrides(model, kwargs)
@@ -398,11 +399,26 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        response = await acompletion(**kwargs)
-        async for chunk in response:
-            delta = self._normalize_stream_chunk(chunk)
-            if delta is not None:
-                yield delta
+        response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
+        # Per-chunk idle cap: the timer resets on every chunk, so a long but
+        # steadily-progressing generation is fine while a mid-stream stall (no
+        # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
+        # aclose() in finally closes the underlying HTTP stream deterministically
+        # on that timeout, mirroring the `async with` cleanup on the other paths.
+        stream = response.__aiter__()
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                except StopAsyncIteration:
+                    break
+                delta = self._normalize_stream_chunk(chunk)
+                if delta is not None:
+                    yield delta
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
     def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
         """Normalize a raw provider chunk into a StreamDelta.
