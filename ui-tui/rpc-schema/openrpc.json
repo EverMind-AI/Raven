@@ -1646,7 +1646,8 @@
               "reason": {
                 "type": "string",
                 "enum": ["cancelled_by_client", "internal"]
-              }
+              },
+              "detail": { "type": "string" }
             }
           }
         }

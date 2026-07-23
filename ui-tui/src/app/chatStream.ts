@@ -208,16 +208,19 @@ const onError = (
   sys?: (msg: string) => void,
   appendMessage?: (msg: Msg) => void
 ): void => {
-  const { reason, message, code } = ev.payload
+  const { reason, message, code, detail } = ev.payload
   state.turnId = null
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
     return
   }
   // Non-cancellation error: surface a sys note, idle the turn, and reset
-  // the live anchor so the user can submit again.
+  // the live anchor so the user can submit again. Append the real failure
+  // detail (e.g. the underlying exception) when present, so a generic
+  // `turn_failed` code is not the only thing the user sees.
   if (sys) {
-    sys(`error: ${message} (code=${code})`)
+    const extra = detail ? `: ${detail.split('\n')[0].slice(0, 200)}` : ''
+    sys(`error: ${message} (code=${code})${extra}`)
   }
   turnController.recordError()
   patchUiState({ busy: false, status: `error: ${message.slice(0, 80)}` })
