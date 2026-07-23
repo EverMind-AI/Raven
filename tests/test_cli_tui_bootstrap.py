@@ -176,7 +176,7 @@ def test_find_node_discovers_windows_private_runtime(monkeypatch, tmp_path):
     node.write_text("#!/bin/sh\necho v22.20.0\n", encoding="utf-8")
     node.chmod(node.stat().st_mode | stat.S_IXUSR)
 
-    monkeypatch.setattr(tui_commands.sys, "platform", "win32")
+    monkeypatch.setattr(tui_commands, "_is_windows", lambda: True)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
     monkeypatch.delenv("RAVEN_NODE", raising=False)
     monkeypatch.delenv("VIRTUAL_ENV", raising=False)

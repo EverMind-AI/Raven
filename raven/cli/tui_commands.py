@@ -68,6 +68,13 @@ def _stdout_isatty() -> bool:
     return sys.stdout.isatty()
 
 
+def _is_windows() -> bool:
+    """Whether the host is Windows. A seam so tests can exercise the Windows
+    runtime-layout branch by patching this, instead of patching os.name — the
+    latter makes pathlib instantiate an unusable WindowsPath on POSIX hosts."""
+    return os.name == "nt"
+
+
 def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     """Find a usable node executable (>= 22).
 
@@ -83,7 +90,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
     else:
         # Priority 2: active venv
         if venv := os.environ.get("VIRTUAL_ENV"):
-            if os.name == "nt":
+            if _is_windows():
                 candidates.append(str(Path(venv) / "Scripts" / "node.exe"))
             else:
                 candidates.append(str(Path(venv) / "bin" / "node"))
@@ -93,7 +100,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # on PATH (e.g. an old /usr/local/bin/node or a version-manager shim)
         # would otherwise shadow a newer one later on PATH (e.g. a Homebrew
         # node 26). The version filter below then picks the first usable one.
-        exe = "node.exe" if os.name == "nt" else "node"
+        exe = "node.exe" if _is_windows() else "node"
         seen_path: set[str] = set()
         for path_dir in os.environ.get("PATH", "").split(os.pathsep):
             if not path_dir:
@@ -113,7 +120,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
         # (node-v22.x.y-win-x64/node.exe) — install.ps1 provisions the latter.
         runtime_root = Path(os.environ.get("RAVEN_HOME", Path.home() / ".raven")) / "runtime"
         if runtime_root.is_dir():
-            if os.name == "nt":
+            if _is_windows():
                 direct = runtime_root / "node" / "node.exe"
                 if direct.exists():
                     candidates.append(str(direct))
