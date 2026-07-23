@@ -803,7 +803,7 @@ def cron_config_get(
     if not selected:
         table = Table(title="cron config (effective values)", show_lines=False)
         table.add_column("key", style="cyan")
-        table.add_column("value", style="white")
+        table.add_column("value")
         for k, handler in _KEY_HANDLERS.items():
             value = getattr(config.cron, k)
             table.add_row(k, handler["display"](value))

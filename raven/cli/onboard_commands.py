@@ -42,7 +42,29 @@ from raven.cli._helpers import (
     send_probe,
 )
 
-console = Console()
+
+class _ThemedConsole(Console):
+    """Console that applies the light/dark theme on its first render.
+
+    Theming is deferred to the first ``print`` (never at import) so plain
+    ``raven ...`` commands don't detect or probe the terminal. Because every
+    onboard render goes through ``print`` on this instance, there is no
+    "push the theme before rendering" ordering constraint and no dependence on
+    which entry point (wizard, ``raven deep-research enable``, ...) ran first.
+    """
+
+    _themed: bool = False
+
+    def print(self, *args: Any, **kwargs: Any) -> None:
+        if not self._themed:
+            from raven.cli._theme import build_rich_theme, detect_scheme
+
+            self.push_theme(build_rich_theme(detect_scheme()))
+            self._themed = True
+        super().print(*args, **kwargs)
+
+
+console = _ThemedConsole()
 
 _TOTAL_STEPS = 6
 
@@ -110,10 +132,10 @@ _CURATED_PROVIDERS: list[dict[str, Any]] = [
 ]
 
 _QUESTIONARY_INSTALL_HINT = (
-    "[red]Missing dependency:[/red] [#fbe23f]questionary[/#fbe23f] is required for "
+    "[red]Missing dependency:[/red] [accent]questionary[/accent] is required for "
     "interactive onboarding.\n"
-    "Install it with: [#fbe23f]uv add 'questionary>=2.0,<3.0'[/#fbe23f]\n"
-    "Or re-run with [#fbe23f]--non-interactive[/#fbe23f] plus the relevant flags."
+    "Install it with: [accent]uv add 'questionary>=2.0,<3.0'[/accent]\n"
+    "Or re-run with [accent]--non-interactive[/accent] plus the relevant flags."
 )
 
 
@@ -186,11 +208,11 @@ def _pick_language() -> None:
     console.print()
     console.print(
         Panel(
-            "[bold white]Let's set up Raven — first, choose your language.[/bold white]\n"
+            "[heading]Let's set up Raven — first, choose your language.[/heading]\n"
             "[dim]开始配置 Raven — 请先选择语言。[/dim]",
-            title="[bold #fbe23f]Raven setup[/bold #fbe23f]",
+            title="[bold][accent]Raven setup[/accent][/bold]",
             title_align="left",
-            border_style="#c8a900",
+            border_style="border",
             padding=(1, 2),
         )
     )
@@ -219,16 +241,16 @@ def _pick_language() -> None:
 
 def _step_header(n: int, title: str) -> None:
     # Progress dots: filled for done/current steps, hollow for upcoming ones.
-    dots = " ".join("[#fbe23f]●[/#fbe23f]" if i <= n else "[grey37]○[/grey37]" for i in range(1, _TOTAL_STEPS + 1))
+    dots = " ".join("[accent]●[/accent]" if i <= n else "[grey37]○[/grey37]" for i in range(1, _TOTAL_STEPS + 1))
     console.print()
     console.print(
         Panel(
-            f"[bold white]{title}[/bold white]",
-            title=f"[bold #fbe23f]{_t('Step', '步骤')} {n}/{_TOTAL_STEPS}[/bold #fbe23f]",
+            f"[heading]{title}[/heading]",
+            title=f"[bold][accent]{_t('Step', '步骤')} {n}/{_TOTAL_STEPS}[/accent][/bold]",
             title_align="left",
             subtitle=dots,
             subtitle_align="right",
-            border_style="#c8a900",
+            border_style="border",
             padding=(0, 2),
         )
     )
@@ -243,7 +265,7 @@ def _check_tty_or_die(non_interactive: bool) -> None:
         console.print(
             "[red]Non-interactive terminal detected.[/red]\n"
             "Re-run with: "
-            "[#fbe23f]raven onboard --non-interactive --provider <name> --api-key <key>[/#fbe23f]"
+            "[accent]raven onboard --non-interactive --provider <name> --api-key <key>[/accent]"
         )
         raise typer.Exit(2)
 
@@ -302,9 +324,9 @@ def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) ->
             console.print("[dim]Existing config detected; --yes set, proceeding with overwrite.[/dim]")
             return
         console.print(
-            "[red]Existing config detected.[/red] Pass [#fbe23f]--reset[/#fbe23f] (or "
-            "[#fbe23f]--yes[/#fbe23f]) to overwrite, or edit in place with "
-            "[#fbe23f]raven provider set[/#fbe23f] / [#fbe23f]raven channels enable[/#fbe23f]."
+            "[red]Existing config detected.[/red] Pass [accent]--reset[/accent] (or "
+            "[accent]--yes[/accent]) to overwrite, or edit in place with "
+            "[accent]raven provider set[/accent] / [accent]raven channels enable[/accent]."
         )
         raise typer.Exit(2)
     # Interactive: fall through to the wizard (per-step "Keep current" handles
@@ -589,8 +611,8 @@ def _run_oauth_login(provider: str) -> bool:
         raise typer.Exit(1)
     console.print(
         _t(
-            f"  [#fbe23f]Starting OAuth login for {spec.label}…[/#fbe23f]\n",
-            f"  [#fbe23f]正在为 {spec.label} 启动 OAuth 登录…[/#fbe23f]\n",
+            f"  [accent]Starting OAuth login for {spec.label}…[/accent]\n",
+            f"  [accent]正在为 {spec.label} 启动 OAuth 登录…[/accent]\n",
         )
     )
     console.print(
@@ -961,8 +983,8 @@ def _configure_one_provider(
         if flag_provider:
             console.print(
                 _t(
-                    f"  [dim]Provider:[/dim] [#fbe23f]{_provider_label(provider)}[/#fbe23f]",
-                    f"  [dim]服务商:[/dim] [#fbe23f]{_provider_label(provider)}[/#fbe23f]",
+                    f"  [dim]Provider:[/dim] [accent]{_provider_label(provider)}[/accent]",
+                    f"  [dim]服务商:[/dim] [accent]{_provider_label(provider)}[/accent]",
                 )
             )
 
@@ -1031,8 +1053,8 @@ def _collect_credentials(
         if non_interactive:
             console.print(
                 "[red]OAuth providers require an interactive browser flow.[/red]\n"
-                "Run [#fbe23f]raven provider login "
-                f"{provider.replace('_', '-')}[/#fbe23f] separately, then re-run "
+                "Run [accent]raven provider login "
+                f"{provider.replace('_', '-')}[/accent] separately, then re-run "
                 "onboard."
             )
             raise typer.Exit(2)
@@ -1981,7 +2003,7 @@ def _step3_channel(*, channel: Optional[str], skip: bool, non_interactive: bool)
             console.print(
                 f"[red]--channel {channel} given but non-interactive mode can't "
                 "prompt for credential fields.[/red]\n"
-                f"Run [#fbe23f]raven channels enable {channel} --<field> <value> ...[/#fbe23f] "
+                f"Run [accent]raven channels enable {channel} --<field> <value> ...[/accent] "
                 "after onboard finishes."
             )
             raise typer.Exit(2)
@@ -3068,10 +3090,10 @@ def _config_everos_role(
     # (parens/numbers/words) and make an informational hint read like an error.
     console.print(
         _t(
-            f"  [bold #fbe23f]{label_en}[/bold #fbe23f]"
+            f"  [bold][accent]{label_en}[/accent][/bold]"
             + (f" [dim]({tag})[/dim]" if optional else "")
             + f"\n  [dim]{purpose_en}[/dim]",
-            f"  [bold #fbe23f]{label_zh}[/bold #fbe23f]"
+            f"  [bold][accent]{label_zh}[/accent][/bold]"
             + (f" [dim]({tag})[/dim]" if optional else "")
             + f"\n  [dim]{purpose_zh}[/dim]",
         ),
@@ -3442,8 +3464,8 @@ def _print_next_steps(*, warnings: list[str]) -> None:
                 + f"{', '.join(warnings)}\n"
                 + _t(
                     "[dim]Fix them before relying on the related features "
-                    "(re-run [/dim][#fbe23f]raven onboard[/#fbe23f][dim] to reconfigure).[/dim]",
-                    "[dim]在依赖相关功能前请先修复(重新运行 [/dim][#fbe23f]raven onboard[/#fbe23f][dim] 重新配置)。[/dim]",
+                    "(re-run [/dim][accent]raven onboard[/accent][dim] to reconfigure).[/dim]",
+                    "[dim]在依赖相关功能前请先修复(重新运行 [/dim][accent]raven onboard[/accent][dim] 重新配置)。[/dim]",
                 ),
                 border_style="yellow",
                 padding=(1, 2),
@@ -3489,7 +3511,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
     )
 
     table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
-    table.add_column(style="#fbe23f", no_wrap=True)
+    table.add_column(style="accent", no_wrap=True)
     table.add_column(style="dim")
     table.add_row("raven", _t("launch the native TUI (default)", "启动原生 TUI(默认)"))
     table.add_row("raven gateway", _t("run the gateway (serve channels)", "运行网关(对接渠道)"))
@@ -3503,7 +3525,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
             table,
             title=f"[bold]{_t('Get started', '开始使用')}[/bold]",
             title_align="left",
-            border_style="#c8a900",
+            border_style="border",
             padding=(1, 2),
         )
     )
@@ -3695,13 +3717,13 @@ def _step5_import_body(
         # -- Tier selection --
         console.print(
             _t(
-                "\n  [bold #fbe23f]Memory files only[/bold #fbe23f]  "
+                "\n  [bold][accent]Memory files only[/accent][/bold]  "
                 "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
-                "  [bold #fbe23f]Full import[/bold #fbe23f]  "
+                "  [bold][accent]Full import[/accent][/bold]  "
                 "[dim]Slow (may take hours). Imports memory files + all conversation history. Higher LLM cost.[/dim]",
-                "\n  [bold #fbe23f]仅记忆文件[/bold #fbe23f]  "
+                "\n  [bold][accent]仅记忆文件[/accent][/bold]  "
                 "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
-                "  [bold #fbe23f]完整导入[/bold #fbe23f]  "
+                "  [bold][accent]完整导入[/accent][/bold]  "
                 "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
             ),
             highlight=False,
@@ -3842,11 +3864,9 @@ def _step5_import_body(
             console.print(
                 _t(
                     f"\n  Import started in background.\n"
-                    f"  Check progress: [#fbe23f]raven import status[/#fbe23f]\n"
+                    f"  Check progress: [accent]raven import status[/accent]\n"
                     f"  Log: {log_path}",
-                    f"\n  导入已在后台启动。\n"
-                    f"  查看进度: [#fbe23f]raven import status[/#fbe23f]\n"
-                    f"  详细日志: {log_path}",
+                    f"\n  导入已在后台启动。\n  查看进度: [accent]raven import status[/accent]\n  详细日志: {log_path}",
                 )
             )
             return None
@@ -3994,20 +4014,20 @@ def _run_wizard_body(
     console.print(
         Panel(
             _t(
-                "[bold #fbe23f]✨ Welcome to the Raven setup wizard[/bold #fbe23f]\n\n"
+                "[bold][accent]✨ Welcome to the Raven setup wizard[/accent][/bold]\n\n"
                 "[dim]We'll configure, in order:[/dim]\n"
-                "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] Run location      "
-                "[#fbe23f]③[/#fbe23f] Chat channel      [#fbe23f]④[/#fbe23f] Long-term memory      "
-                "[#fbe23f]⑤[/#fbe23f] Deep research      [#fbe23f]⑥[/#fbe23f] Import history\n\n"
+                "  [accent]①[/accent] LLM      [accent]②[/accent] Run location      "
+                "[accent]③[/accent] Chat channel      [accent]④[/accent] Long-term memory      "
+                "[accent]⑤[/accent] Deep research      [accent]⑥[/accent] Import history\n\n"
                 "[dim]↑↓ select · Enter confirm · Ctrl+C quit anytime — anything already written is kept.[/dim]",
-                "[bold #fbe23f]✨ 欢迎使用 Raven 配置向导[/bold #fbe23f]\n\n"
+                "[bold][accent]✨ 欢迎使用 Raven 配置向导[/accent][/bold]\n\n"
                 "[dim]我们将依次配置:[/dim]\n"
-                "  [#fbe23f]①[/#fbe23f] LLM      [#fbe23f]②[/#fbe23f] 运行位置      "
-                "[#fbe23f]③[/#fbe23f] 聊天渠道      [#fbe23f]④[/#fbe23f] 长期记忆      "
-                "[#fbe23f]⑤[/#fbe23f] 深度研究      [#fbe23f]⑥[/#fbe23f] 历史导入\n\n"
+                "  [accent]①[/accent] LLM      [accent]②[/accent] 运行位置      "
+                "[accent]③[/accent] 聊天渠道      [accent]④[/accent] 长期记忆      "
+                "[accent]⑤[/accent] 深度研究      [accent]⑥[/accent] 历史导入\n\n"
                 "[dim]↑↓ 选择 · Enter 确认 · 随时 Ctrl+C 退出 — 已写入的配置会保留。[/dim]",
             ),
-            border_style="#c8a900",
+            border_style="border",
             padding=(1, 2),
         )
     )
