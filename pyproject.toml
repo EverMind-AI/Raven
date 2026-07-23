@@ -27,7 +27,7 @@ dependencies = [
     "croniter>=6.0.0,<7.0.0",
     "pyyaml>=6.0",
     "prompt-toolkit>=3.0.0",
-    "json-repair>=0.30.0",
+    "json-repair>=0.60.1",
     # everos token-aware truncation (text.py). Currently also a
     # transitive dep of litellm — pinning it directly so the everos
     # extractor keeps working if upstream ever drops it.
@@ -41,7 +41,7 @@ dependencies = [
     # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
     "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
-    "mcp>=1.27.0",
+    "mcp>=1.28.1",
     "orjson>=3.11.6,<4.0",
     # knn model router (routing/knn_router.py) embedding KNN. Currently also a
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
@@ -63,7 +63,7 @@ channel-discord = ["websockets>=16.0,<17.0"]
 channel-whatsapp = []
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
-    "mistune>=3.0.0,<4.0.0",
+    "mistune>=3.3.0,<4.0.0",
     "nh3>=0.2.17,<1.0.0",
 ]
 channel-feishu = ["lark-oapi>=1.5.0,<2.0.0"]
@@ -99,7 +99,7 @@ tools = [
     "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
 retrieval = [
-    "torch>=2.0.0",
+    "torch>=2.13.0",
     "transformers>=4.45.0",
 ]
 sandbox = [
@@ -264,7 +264,7 @@ markers = [
 
 [dependency-groups]
 dev = [
-    "json-repair>=0.59.5",
+    "json-repair>=0.60.1",
     "oauth-cli-kit>=0.1.6",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
