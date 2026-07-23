@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -45,9 +46,15 @@ class CustomProvider(LLMProvider):
         if tools:
             kwargs.update(tools=tools, tool_choice=tool_choice or "auto")
         try:
-            return self._parse(await self._client.chat.completions.create(**kwargs))
+            return self._parse(
+                await asyncio.wait_for(self._client.chat.completions.create(**kwargs), self.generation.timeout)
+            )
         except Exception as e:
-            return LLMResponse(content=f"Error: {e}", finish_reason="error")
+            return LLMResponse(
+                content=f"Error: {e}",
+                finish_reason="error",
+                error_classification=self.classify_error(e),
+            )
 
     def _parse(self, response: Any) -> LLMResponse:
         choice = response.choices[0]

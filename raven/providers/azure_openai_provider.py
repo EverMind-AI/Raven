@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 from urllib.parse import urljoin
@@ -146,8 +147,10 @@ class AzureOpenAIProvider(LLMProvider):
         )
 
         try:
-            async with httpx.AsyncClient(timeout=60.0, verify=True) as client:
-                response = await client.post(url, headers=headers, json=payload)
+            async with httpx.AsyncClient(timeout=self.generation.timeout, verify=True) as client:
+                response = await asyncio.wait_for(
+                    client.post(url, headers=headers, json=payload), self.generation.timeout
+                )
                 if response.status_code != 200:
                     return LLMResponse(
                         content=f"Azure OpenAI API Error {response.status_code}: {response.text}",
@@ -161,6 +164,7 @@ class AzureOpenAIProvider(LLMProvider):
             return LLMResponse(
                 content=f"Error calling Azure OpenAI: {repr(e)}",
                 finish_reason="error",
+                error_classification=self.classify_error(e),
             )
 
     def _parse_response(self, response: dict[str, Any]) -> LLMResponse:

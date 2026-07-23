@@ -68,14 +68,19 @@ class OpenAICodexProvider(LLMProvider):
 
         url = DEFAULT_CODEX_URL
 
+        timeout = self.generation.timeout
         try:
             try:
-                content, tool_calls, finish_reason = await _request_codex(url, headers, body, verify=True)
+                content, tool_calls, finish_reason = await _request_codex(
+                    url, headers, body, verify=True, timeout=timeout
+                )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
-                content, tool_calls, finish_reason = await _request_codex(url, headers, body, verify=False)
+                content, tool_calls, finish_reason = await _request_codex(
+                    url, headers, body, verify=False, timeout=timeout
+                )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
@@ -85,6 +90,7 @@ class OpenAICodexProvider(LLMProvider):
             return LLMResponse(
                 content=f"Error calling Codex: {str(e)}",
                 finish_reason="error",
+                error_classification=self.classify_error(e),
             )
 
     def get_default_model(self) -> str:
@@ -114,13 +120,14 @@ async def _request_codex(
     headers: dict[str, str],
     body: dict[str, Any],
     verify: bool,
+    timeout: float,
 ) -> tuple[str, list[ToolCallRequest], str]:
-    async with httpx.AsyncClient(timeout=60.0, verify=verify) as client:
+    async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()
                 raise RuntimeError(_friendly_error(response.status_code, text.decode("utf-8", "ignore")))
-            return await _consume_sse(response)
+            return await _consume_sse(response, timeout)
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -236,9 +243,17 @@ def _prompt_cache_key(messages: list[dict[str, Any]]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def _iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], None]:
+async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[dict[str, Any], None]:
     buffer: list[str] = []
-    async for line in response.aiter_lines():
+    # Per-event idle cap: aiter_lines resets httpx's read timer on every byte,
+    # so a trickle/keepalive stall never trips it. wait_for on each line bounds
+    # the silence between SSE lines without penalizing a long, progressing run.
+    lines = response.aiter_lines()
+    while True:
+        try:
+            line = await asyncio.wait_for(lines.__anext__(), timeout)
+        except StopAsyncIteration:
+            break
         if line == "":
             if buffer:
                 data_lines = [ln[5:].strip() for ln in buffer if ln.startswith("data:")]
@@ -256,13 +271,13 @@ async def _iter_sse(response: httpx.Response) -> AsyncGenerator[dict[str, Any], 
         buffer.append(line)
 
 
-async def _consume_sse(response: httpx.Response) -> tuple[str, list[ToolCallRequest], str]:
+async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, list[ToolCallRequest], str]:
     content = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
     finish_reason = "stop"
 
-    async for event in _iter_sse(response):
+    async for event in _iter_sse(response, timeout):
         event_type = event.get("type")
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
