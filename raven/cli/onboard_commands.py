@@ -1254,6 +1254,52 @@ def _resolve_model_with_test(
         return chosen  # ok / continue
 
 
+def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
+    """Choose a model for an already-authenticated provider without re-login."""
+    if non_interactive:
+        return False
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.providers.registry import find_by_name
+
+    choices = [
+        questionary.Choice(_provider_label(name), value=name)
+        for name in _configured_providers()
+        if find_by_name(name) is not None
+    ]
+    if not choices:
+        return False
+    provider = questionary.select(
+        _t("Choose the provider for the default model:", "选择默认模型对应的服务商:"),
+        choices=choices,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if not provider:
+        raise typer.Exit(1)
+    spec = find_by_name(provider)
+    ok, _status, model_ids = _verify_provider(provider)
+    if not ok:
+        return False
+    chosen = _pick_model(
+        spec,
+        current_model=None,
+        model_ids=model_ids,
+        user_provided_model=None,
+        non_interactive=False,
+    )
+    _persist_default_model(chosen)
+    result = _run_test_probe(
+        provider,
+        non_interactive=False,
+        warnings=[],
+        is_oauth=spec.is_oauth,
+    )
+    if result == "reauth":
+        return _run_oauth_login(provider)
+    return result in {"ok", "continue"}
+
+
 # ---------------------------------------------------------------------------
 # Step 1 — multi-provider entry (existing-config branch: done / add / edit)
 # ---------------------------------------------------------------------------
@@ -1386,6 +1432,7 @@ def _step1_provider(
             ),
             choices=[
                 questionary.Choice(_t("Done, continue", "完成,继续"), value="done"),
+                questionary.Choice(_t("Choose default model", "选择默认模型"), value="model"),
                 questionary.Choice(_t("Add another provider", "新增一个服务商"), value="add"),
                 questionary.Choice(_t("Edit / remove a provider", "编辑 / 移除服务商"), value="edit"),
             ],
@@ -1406,6 +1453,15 @@ def _step1_provider(
                 )
                 continue
             return None
+        if action == "model":
+            if _configure_existing_provider_model(non_interactive=False):
+                continue
+            console.print(
+                _t(
+                    "  [yellow]Could not configure a default model. Choose a provider and try again.[/yellow]",
+                    "  [yellow]无法配置默认模型,请重新选择服务商。[/yellow]",
+                )
+            )
         if action == "add":
             _configure_one_provider(
                 provider=None,
