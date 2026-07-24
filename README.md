@@ -452,7 +452,13 @@ EverMind ecosystem a stronger signal to keep investing in open agents.
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=EverMind-AI/raven&type=Date)](https://www.star-history.com/#EverMind-AI/raven&Date)
+<a href="https://www.star-history.com/?repos=EverMind-AI%2FRaven&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&theme=dark&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
+ </picture>
+</a>
 
 <br>
 <div align="right">
