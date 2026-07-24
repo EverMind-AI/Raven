@@ -25,6 +25,7 @@ from raven.config.raven import (
     ContextConfig,
     HubSourceConfig,
     MemoryConfig,
+    SkillForgeConfig,
     SkillForgeRouterConfig,
 )
 from raven.context_engine import ContextAssembler
@@ -81,6 +82,8 @@ def _build_engine(
     backend=None,
     hub_endpoint: str | None = None,
     memory_config: MemoryConfig | None = None,
+    model: str = "stub",
+    skill_forge_config: SkillForgeConfig | None = None,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
@@ -88,11 +91,12 @@ def _build_engine(
         config=ContextConfig(),
         builder=builder,
         provider=_StubProvider(),
-        model="stub",
+        model=model,
         context_window_tokens=8192,
         get_tool_definitions=_stub_get_defs,
         backend=backend,
         memory_config=memory_config or MemoryConfig(),
+        skill_forge_config=skill_forge_config,
         skill_forge_router_config=SkillForgeRouterConfig(
             hub=HubSourceConfig(endpoint=hub_endpoint),
         ),
@@ -102,8 +106,12 @@ def _build_engine(
 
 
 def _router_sources(engine: ContextAssembler):
-    skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+    skills = _skills_builder(engine)
     return [type(s) for s in skills._router._sources], skills._router._sources
+
+
+def _skills_builder(engine: ContextAssembler) -> SkillsSegmentBuilder:
+    return next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
 
 
 def _memory_builder(engine: ContextAssembler) -> MemorySegmentBuilder:
@@ -123,6 +131,26 @@ class TestFactory:
         engine = _build_engine(tmp_path, backend=None)
         assert isinstance(engine, ContextAssembler)
         assert _memory_builder(engine)._backend is None
+
+    def test_skill_forge_llms_inherit_agent_model(self, tmp_path: Path) -> None:
+        engine = _build_engine(
+            tmp_path,
+            model="minimax/minimax-m3",
+            skill_forge_config=SkillForgeConfig(),
+        )
+        skills = _skills_builder(engine)
+        assert skills._rewriter._model == "minimax/minimax-m3"
+        assert skills._gate._model == "minimax/minimax-m3"
+
+    def test_gate_model_override_takes_priority(self, tmp_path: Path) -> None:
+        engine = _build_engine(
+            tmp_path,
+            model="minimax/minimax-m3",
+            skill_forge_config=SkillForgeConfig(llm_gate_model="anthropic/claude-sonnet-4-5"),
+        )
+        skills = _skills_builder(engine)
+        assert skills._rewriter._model == "minimax/minimax-m3"
+        assert skills._gate._model == "anthropic/claude-sonnet-4-5"
 
 
 # ---------------------------------------------------------------------------
