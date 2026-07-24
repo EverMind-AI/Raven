@@ -297,6 +297,48 @@ class TestExecToolWithMockExecutor:
         assert "blocked" in result
         assert len(executor.calls) == 0
 
+    # Host GUI automation (osascript / `open -a|-b`) is NOT a product default —
+    # it is opt-in via extra_deny_patterns (the proactivity-eval harness sets it
+    # because it runs the agent un-sandboxed on the operator's machine).
+    _GUI_DENY = [r"\bosascript\b", r"\bopen\s+-[ab]\b"]
+
+    async def test_extra_deny_patterns_block_host_gui_automation(self, tmp_path):
+        """With extra_deny_patterns set, osascript / `open -a|-b` are blocked
+        (non-sandboxed path), while opening a file and benign commands run."""
+        from raven.agent.tools.shell import ExecTool
+
+        async def run(cmd):
+            return await ExecTool(
+                executor=DirectMockExecutor(),
+                working_dir=str(tmp_path),
+                extra_deny_patterns=self._GUI_DENY,
+            ).execute(cmd)
+
+        for cmd in (
+            "osascript -e 'tell application \"Music\" to play'",
+            "open -a Music",
+            "open -b com.apple.Music",
+        ):
+            assert "blocked" in await run(cmd), f"should block: {cmd}"
+
+        for cmd in ("open notes.txt", "echo hi", "ls -la"):
+            assert "blocked" not in await run(cmd), f"should allow: {cmd}"
+
+        # Known accepted collateral: the security-broad ``\bosascript\b`` also
+        # trips when 'osascript' is a mere argument. Pinned so a future narrowing
+        # to command-position is a deliberate change, not an accident.
+        assert "blocked" in await run("grep osascript /var/log/system.log")
+
+    async def test_gui_automation_not_blocked_by_product_default(self, tmp_path):
+        """Product default (no extra_deny_patterns): osascript is NOT blocked —
+        the GUI-automation block is eval-scoped, not shipped behaviour."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute("osascript -e x")
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
     async def test_path_append_sandboxed_injects_export(self, tmp_path):
         """path_append with sandboxed executor: wraps command with export PATH."""
         from raven.agent.tools.shell import ExecTool

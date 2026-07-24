@@ -26,6 +26,7 @@ class ExecTool(Tool):
         restrict_to_workspace: bool = False,
         path_append: str = "",
         executor: SandboxExecutor | None = None,
+        extra_deny_patterns: list[str] | None = None,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -40,6 +41,13 @@ class ExecTool(Tool):
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",  # fork bomb
         ]
+        # Operator-configurable extras (tools.exec.extra_deny_patterns), appended
+        # to the built-in defaults; empty by default so product behaviour is
+        # unchanged. The proactivity-eval harness sets these to block host GUI
+        # automation (osascript / `open -a|-b`) because it runs the agent
+        # un-sandboxed on the operator's machine — not a product default.
+        if extra_deny_patterns:
+            self.deny_patterns = self.deny_patterns + list(extra_deny_patterns)
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
