@@ -67,10 +67,12 @@ class QueryRewriter:
         self,
         provider: "LLMProvider",
         *,
+        model: str | None = None,
         max_tokens: int = 8192,
         temperature: float = 0.3,
     ) -> None:
         self._provider = provider
+        self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
 
@@ -85,6 +87,7 @@ class QueryRewriter:
             resp = await asyncio.wait_for(
                 self._provider.chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
+                    model=self._model or None,
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 ),
