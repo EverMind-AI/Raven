@@ -124,6 +124,18 @@ _CURATED_PROVIDERS: list[dict[str, Any]] = [
         "is_oauth": True,
     },
     {
+        "name": "minimax_global",
+        "label": "MiniMax Global (OAuth)",
+        "label_zh": "MiniMax Global(OAuth 登录)",
+        "is_oauth": True,
+    },
+    {
+        "name": "minimax_cn",
+        "label": "MiniMax CN (OAuth)",
+        "label_zh": "MiniMax CN(OAuth 登录)",
+        "is_oauth": True,
+    },
+    {
         "name": "custom",
         "label": "Other (OpenAI-compatible endpoint)",
         "label_zh": "其他(OpenAI 兼容端点)",
@@ -284,10 +296,10 @@ def _load_raw_config() -> dict[str, Any]:
 
 
 def _configured_providers() -> list[str]:
-    """Names of providers that currently have an api_key set on disk."""
-    data = _load_raw_config()
-    providers = data.get("providers") or {}
-    return [name for name, p in providers.items() if isinstance(p, dict) and p.get("apiKey")]
+    """Names of providers with a usable API key or OAuth token."""
+    from raven.config.update_providers import list_providers
+
+    return [row["name"] for row in list_providers() if row["configured"]]
 
 
 def _is_config_populated() -> bool:
@@ -298,9 +310,11 @@ def _is_config_populated() -> bool:
     not enough to talk to a model.
     """
     data = _load_raw_config()
-    providers = data.get("providers") or {}
-    has_provider = any(isinstance(p, dict) and p.get("apiKey") for p in providers.values())
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
+    configured = _configured_providers()
+    model_prefix = str(model or "").split("/", 1)[0].replace("-", "_")
+    has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
+    has_provider = has_non_minimax_provider or model_prefix in configured
     return bool(has_provider and model)
 
 
@@ -731,6 +745,11 @@ def _format_model_for_provider(spec: Any, model_id: str) -> str:
     """Apply ``spec.litellm_prefix`` to a raw ``/v1/models`` id when needed."""
     if not model_id:
         return model_id
+    if spec.name in {"minimax_global", "minimax_cn"}:
+        public_prefix = spec.name.replace("_", "-")
+        if model_id.startswith(f"{public_prefix}/"):
+            return model_id
+        return f"{public_prefix}/{model_id.split('/')[-1]}"
     prefix = getattr(spec, "litellm_prefix", "") or ""
     if not prefix:
         return model_id
@@ -880,7 +899,14 @@ def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) ->
     return chosen
 
 
-def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str], allow_repick: bool = True) -> str:
+def _run_test_probe(
+    provider: str,
+    *,
+    non_interactive: bool,
+    warnings: list[str],
+    allow_repick: bool = True,
+    is_oauth: bool = False,
+) -> str:
     """Send a one-shot test message; on failure offer recovery options.
 
     Returns one of ``"ok"`` / ``"continue"`` / ``"repick"`` / ``"rekey"`` /
@@ -910,17 +936,23 @@ def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]
         options = [(_t("Retry", "重试"), "retry")]
         if allow_repick:
             options.append((_t("Re-pick model", "重新选模型"), "repick"))
+        options.append(
+            (_t("Sign in again", "重新登录"), "reauth") if is_oauth else (_t("Re-enter key", "重新填 Key"), "rekey")
+        )
         options += [
-            (_t("Re-enter key", "重新填 Key"), "rekey"),
             (_t("Switch provider", "更换服务商"), "switch"),
             (_t("Continue anyway", "仍然继续"), "continue"),
         ]
         choice = _failure_choice(options, non_interactive=non_interactive)
         if choice == "retry":
             return _run_test_probe(
-                provider, non_interactive=non_interactive, warnings=warnings, allow_repick=allow_repick
+                provider,
+                non_interactive=non_interactive,
+                warnings=warnings,
+                allow_repick=allow_repick,
+                is_oauth=is_oauth,
             )
-        if choice in ("repick", "rekey", "switch"):
+        if choice in ("repick", "rekey", "reauth", "switch"):
             return choice
         warnings.append("provider test message")
         return "continue"
@@ -1141,7 +1173,11 @@ def _resolve_model_with_test(
                 [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
                 if status == "network_error"
                 else [
-                    (_t("Re-enter key", "重新填 Key"), "rekey"),
+                    (
+                        (_t("Sign in again", "重新登录"), "reauth")
+                        if spec.is_oauth
+                        else (_t("Re-enter key", "重新填 Key"), "rekey")
+                    ),
                     (_t("Switch provider", "更换服务商"), "switch"),
                     (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
@@ -1152,6 +1188,10 @@ def _resolve_model_with_test(
             if choice == "rekey" and not non_interactive:
                 _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
                 continue
+            if choice == "reauth" and not non_interactive:
+                if _run_oauth_login(spec.name):
+                    continue
+                return None
             if choice == "switch":
                 return None
             warnings.append("provider connectivity")
@@ -1187,12 +1227,23 @@ def _resolve_model_with_test(
         _persist_default_model(chosen)
         if skip_test:
             return chosen
-        result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
+        result = _run_test_probe(
+            spec.name,
+            non_interactive=non_interactive,
+            warnings=warnings,
+            is_oauth=spec.is_oauth,
+        )
         if result == "switch":
             return None
         if result == "rekey":
             _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
             # Re-test the same model with the new key (picker defaults to it).
+            current = chosen
+            user_model_flag = None
+            continue
+        if result == "reauth":
+            if not _run_oauth_login(spec.name):
+                return None
             current = chosen
             user_model_flag = None
             continue

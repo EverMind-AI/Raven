@@ -774,10 +774,25 @@ def test_registry_default_models_present() -> None:
         "deepseek",
         "github_copilot",
         "openai_codex",
+        "minimax_global",
+        "minimax_cn",
     ):
         spec = find_by_name(name)
         assert spec is not None, f"missing provider in registry: {name}"
         assert spec.default_model, f"{name} has empty default_model"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("minimax_global", "MiniMax-M3", "minimax-global/MiniMax-M3"),
+        ("minimax_cn", "MiniMax-M3", "minimax-cn/MiniMax-M3"),
+    ],
+)
+def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model: str, expected: str) -> None:
+    from raven.providers.registry import find_by_name
+
+    assert onboard_commands._format_model_for_provider(find_by_name(provider), model) == expected
 
 
 # --------------------------------------------------------------------------- fixtures (5-step)
@@ -817,6 +832,30 @@ def test_is_config_populated_requires_provider_and_model(tmp_env: Path) -> None:
     if not data.get("agents", {}).get("defaults", {}).get("model"):
         assert onboard_commands._is_config_populated() is False
     set_default_model("openai/gpt-4o-mini")
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_accepts_minimax_oauth_token(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config.update import set_default_model
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+    set_default_model("minimax-global/MiniMax-M3")
+
+    assert "minimax_global" in onboard_commands._configured_providers()
     assert onboard_commands._is_config_populated() is True
 
 

@@ -31,15 +31,17 @@ EXPECTED_PROVIDER_NAMES = {
     "dashscope",
     "moonshot",
     "minimax",
+    "minimax_global",
+    "minimax_cn",
     "vllm",
     "ollama",
     "groq",
 }
 
 
-def test_registry_has_exactly_19_providers() -> None:
-    assert len(PROVIDERS) == 19
-    assert len(EXPECTED_PROVIDER_NAMES) == 19
+def test_registry_has_exactly_21_providers() -> None:
+    assert len(PROVIDERS) == 21
+    assert len(EXPECTED_PROVIDER_NAMES) == 21
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -62,6 +64,8 @@ _SEEDED_DIRECT_PROVIDERS = [
     "zhipu",
     "dashscope",
     "groq",
+    "minimax_global",
+    "minimax_cn",
 ]
 
 
@@ -78,7 +82,9 @@ def _concrete_provider_subclasses() -> set[type]:
     import raven.providers.azure_openai_provider  # noqa: F401
     import raven.providers.custom_provider  # noqa: F401
     import raven.providers.litellm_provider  # noqa: F401
+    import raven.providers.minimax_oauth_provider  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
+    import raven.providers.per_model_provider  # noqa: F401
 
     seen: set[type] = set()
     stack = list(LLMProvider.__subclasses__())
@@ -92,20 +98,22 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_four_concrete_backend_classes() -> None:
-    # Only 3 are runtime-dispatched via cli/_helpers.py `_get_provider`
-    # (LiteLLM / AzureOpenAI / OpenAICodex); CustomProvider is legacy and not
-    # wired. This asserts class existence only, not the dispatch wiring.
+def test_exactly_six_concrete_backend_classes() -> None:
+    # This asserts class existence only, not the dispatch wiring.
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.custom_provider import CustomProvider
     from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
+    from raven.providers.per_model_provider import PerModelProvider
 
     expected = {
         LiteLLMProvider,
         AzureOpenAIProvider,
         OpenAICodexProvider,
         CustomProvider,
+        MiniMaxOAuthProvider,
+        PerModelProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:

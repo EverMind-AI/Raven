@@ -101,7 +101,7 @@ raven
 ```
 
 Raven 支持 OpenRouter、OpenAI、Anthropic、Gemini、DeepSeek、GitHub Copilot、
-OpenAI Codex OAuth，以及自定义 OpenAI-compatible endpoints。
+OpenAI Codex OAuth、MiniMax Global/CN OAuth，以及自定义 OpenAI-compatible endpoints。
 
 如果配置失败，或者 provider 还没有准备好，运行：
 

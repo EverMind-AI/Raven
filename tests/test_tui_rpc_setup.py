@@ -68,6 +68,58 @@ async def test_setup_status_provider_auto_returns_false(fake_home: Path) -> None
     assert result == {"provider_configured": False}
 
 
+async def test_setup_status_minimax_oauth_token_returns_true(
+    fake_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    cfg_dir = fake_home / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"provider": "auto", "model": "minimax-global/MiniMax-M3"}}})
+    )
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+
+    assert await setup_status({}) == {"provider_configured": True}
+
+
+async def test_setup_status_ignores_minimax_token_for_other_model(
+    fake_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    cfg_dir = fake_home / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"provider": "auto", "model": "anthropic/claude-sonnet-4-5"}}})
+    )
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+
+    assert await setup_status({}) == {"provider_configured": False}
+
+
 async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()

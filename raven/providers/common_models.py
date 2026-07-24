@@ -75,6 +75,16 @@ COMMON_MODELS: dict[str, list[str]] = {
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
     ],
+    "minimax_global": [
+        "minimax-global/MiniMax-M3",
+        "minimax-global/MiniMax-M2.7",
+        "minimax-global/MiniMax-M2.7-highspeed",
+    ],
+    "minimax_cn": [
+        "minimax-cn/MiniMax-M3",
+        "minimax-cn/MiniMax-M2.7",
+        "minimax-cn/MiniMax-M2.7-highspeed",
+    ],
     "zhipu": [
         "zai/glm-5.2",
         "zai/glm-5.1",

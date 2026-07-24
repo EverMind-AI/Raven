@@ -99,7 +99,7 @@ raven
 ```
 
 Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
-OpenAI Codex OAuth, and custom OpenAI-compatible endpoints.
+OpenAI Codex OAuth, MiniMax Global/CN OAuth, and custom OpenAI-compatible endpoints.
 
 If setup fails or a provider is not ready, run:
 
