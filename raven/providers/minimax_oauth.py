@@ -79,6 +79,17 @@ def _validated_url(value: str, expected_url: str, field: str) -> str:
     return value
 
 
+def _resource_url(value: object, config: MiniMaxOAuthConfig) -> str:
+    raw = str(value or config.default_resource_url).rstrip("/")
+    validated = _validated_url(raw, config.default_resource_url, "resource URL")
+    path = urlparse(validated).path.rstrip("/")
+    if path in {"", "/"}:
+        return config.default_resource_url
+    if path.endswith("/anthropic"):
+        return f"{validated}/v1"
+    return validated
+
+
 def token_path(region: str) -> Path:
     config = oauth_config(region)
     base_dir = os.environ.get(OAUTH_STORAGE_DIR_ENV)
@@ -108,7 +119,7 @@ def load_token(region: str) -> MiniMaxOAuthToken | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         config = oauth_config(region)
-        resource_url = _validated_url(str(data["resource_url"]), config.default_resource_url, "resource URL")
+        resource_url = _resource_url(data["resource_url"], config)
         return MiniMaxOAuthToken(
             access=str(data["access"]),
             refresh=str(data["refresh"]),
@@ -194,11 +205,7 @@ def _request_refresh(
         expires = _normalize_expiry(payload.get("expired_in"))
         if expires <= int(time.time() * 1000):
             raise RuntimeError("MiniMax refresh returned an invalid expiry")
-        resource_url = _validated_url(
-            str(payload.get("resource_url") or config.default_resource_url),
-            config.default_resource_url,
-            "resource URL",
-        )
+        resource_url = _resource_url(payload.get("resource_url"), config)
         return MiniMaxOAuthToken(
             access=str(payload["access_token"]),
             refresh=str(payload.get("refresh_token") or refresh_token),
@@ -308,11 +315,7 @@ def _login_locked(
             token_response.raise_for_status()
             if status != "success" or not payload.get("access_token") or not payload.get("refresh_token"):
                 raise RuntimeError("MiniMax authorization failed or returned incomplete credentials")
-            resource_url = _validated_url(
-                str(payload.get("resource_url") or config.default_resource_url),
-                config.default_resource_url,
-                "resource URL",
-            )
+            resource_url = _resource_url(payload.get("resource_url"), config)
             token = MiniMaxOAuthToken(
                 access=str(payload["access_token"]),
                 refresh=str(payload["refresh_token"]),

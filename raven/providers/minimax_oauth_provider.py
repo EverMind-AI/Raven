@@ -11,12 +11,17 @@ from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.minimax_oauth import get_token, oauth_config
 
 
+def _litellm_api_base(resource_url: str) -> str:
+    base = resource_url.rstrip("/")
+    return base[:-3] if base.endswith("/v1") else base
+
+
 class MiniMaxOAuthProvider(LiteLLMProvider):
     def __init__(self, region: str, default_model: str):
         self.region = region
         config = oauth_config(region)
         super().__init__(
-            api_base=config.default_resource_url,
+            api_base=_litellm_api_base(config.default_resource_url),
             default_model=default_model,
             provider_name=config.provider,
         )
@@ -24,7 +29,7 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
     async def _prepare_token(self) -> None:
         token = await asyncio.to_thread(get_token, self.region)
         self.api_key = token.access
-        self.api_base = token.resource_url
+        self.api_base = _litellm_api_base(token.resource_url)
         self.extra_headers = {
             "x-api-key": token.access,
             "Authorization": f"Bearer {token.access}",

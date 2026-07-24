@@ -200,6 +200,12 @@ def test_expiry_normalizes_duration_epoch_seconds_and_epoch_milliseconds() -> No
     assert _normalize_expiry(2_100_000_000_000, now_ms) == 2_100_000_000_000
 
 
+def test_resource_url_root_falls_back_to_anthropic_v1() -> None:
+    from raven.providers.minimax_oauth import _resource_url, oauth_config
+
+    assert _resource_url("https://api.minimax.io", oauth_config("global")) == ("https://api.minimax.io/anthropic/v1")
+
+
 def test_global_and_cn_tokens_use_distinct_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
     global_token = MiniMaxOAuthToken("global-a", "global-r", 4_000_000_000_000, "https://api.minimax.io/anthropic/v1")
@@ -243,7 +249,7 @@ async def test_provider_refreshes_and_injects_headers(monkeypatch: pytest.Monkey
     assert response.content == "ok"
     assert seen["model"] == "anthropic/MiniMax-M3"
     assert seen["api_key"] == "access"
-    assert seen["api_base"] == "https://api.minimax.io/anthropic/v1"
+    assert seen["api_base"] == "https://api.minimax.io/anthropic"
     assert seen["extra_headers"] == {
         "x-api-key": "access",
         "Authorization": "Bearer access",
