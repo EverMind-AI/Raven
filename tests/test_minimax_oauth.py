@@ -42,7 +42,7 @@ def test_login_device_flow_persists_complete_token(token_file: Path) -> None:
             return httpx.Response(
                 200,
                 json={
-                    "verification_uri": "https://account.minimax.io/device",
+                    "verification_uri": "https://platform.minimax.io/oauth-authorize",
                     "user_code": "ABCD",
                     "expired_in": int(time.time() * 1000) + 60_000,
                     "interval": 2_000,
@@ -79,7 +79,7 @@ def test_login_rejects_state_mismatch(token_file: Path) -> None:
         return httpx.Response(
             200,
             json={
-                "verification_uri": "https://account.minimax.io/device",
+                "verification_uri": "https://platform.minimax.io/oauth-authorize",
                 "user_code": "ABCD",
                 "expired_in": int(time.time() * 1000) + 60_000,
                 "interval": 2_000,
@@ -99,7 +99,7 @@ def test_login_rejects_success_without_refresh_token(token_file: Path) -> None:
             return httpx.Response(
                 200,
                 json={
-                    "verification_uri": "https://account.minimax.io/device",
+                    "verification_uri": "https://platform.minimax.io/oauth-authorize",
                     "user_code": "ABCD",
                     "expired_in": int(time.time() * 1000) + 60_000,
                     "interval": 2_000,

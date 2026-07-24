@@ -31,6 +31,7 @@ class MiniMaxOAuthConfig:
     provider: str
     auth_base_url: str
     default_resource_url: str
+    verification_url: str
 
 
 @dataclass(frozen=True)
@@ -46,11 +47,13 @@ CONFIGS = {
         provider="minimax_global",
         auth_base_url="https://account.minimax.io",
         default_resource_url="https://api.minimax.io/anthropic/v1",
+        verification_url="https://platform.minimax.io",
     ),
     "cn": MiniMaxOAuthConfig(
         provider="minimax_cn",
         auth_base_url="https://account.minimaxi.com",
         default_resource_url="https://api.minimaxi.com/anthropic/v1",
+        verification_url="https://platform.minimaxi.com",
     ),
 }
 
@@ -269,7 +272,7 @@ def _login_locked(
         interval_ms = max(2000, int(device.get("interval") or 5000))
         if not verification_uri or not user_code or deadline <= int(time.time() * 1000):
             raise RuntimeError("MiniMax device authorization returned an invalid response")
-        verification_uri = _validated_url(verification_uri, config.auth_base_url, "verification URL")
+        verification_uri = _validated_url(verification_uri, config.verification_url, "verification URL")
 
         print_fn(f"Open {verification_uri}")
         print_fn(f"Enter code: {user_code}")
