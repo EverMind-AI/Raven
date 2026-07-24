@@ -489,6 +489,10 @@ class ExecToolConfig(Base):
 
     timeout: int = 60
     path_append: str = ""
+    # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
+    # defaults. Empty by default. Operators (or eval harnesses running the agent
+    # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
+    extra_deny_patterns: list[str] = Field(default_factory=list)
 
 
 class MediaToolConfig(Base):

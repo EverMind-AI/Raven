@@ -26,7 +26,7 @@ from loguru import logger
 
 from ..backend import Sample
 from ..driver import BenchmarkDriver
-from ..longrun_adapters import AgentAdapter, build_adapter
+from ..longrun_adapters import AgentAdapter, _raven_soft_dnd_only, build_adapter
 from ..user_simulator import SimContext, UserSimulator
 
 _DATA_DIR_ENV = "LONGRUN_DATA_DIR"
@@ -202,6 +202,21 @@ class LongRunDriver(BenchmarkDriver):
             persona=persona,
             fake_now=_day_start_datetime(persona, 0),
             trajectory_path=trajectory_path,
+        )
+        # Stamp the run mode as the first trajectory row so the artifact is
+        # self-describing (the scorer copies ``soft_dnd`` into the scorecard).
+        # ``soft_dnd`` marks the #2 contrast run where raven's hard DND
+        # enforcement was suppressed; only meaningful for raven, always False
+        # for hermes/openclaw.
+        self._log_event(
+            state,
+            "run_meta",
+            {
+                "system": system,
+                "persona": persona["id"],
+                "day_limit": day_limit,
+                "soft_dnd": bool(_raven_soft_dnd_only()) if system == "raven" else False,
+            },
         )
         totals = {"actions": 0, "nudges": 0}
 

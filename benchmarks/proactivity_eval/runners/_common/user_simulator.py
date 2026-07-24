@@ -355,6 +355,13 @@ class UserSimulator:
                     + f"- depth: {intent.get('depth', 'single_turn')}\n"
                     + f"- expected_followups: {intent.get('expected_followups', 0)}\n"
                     + (f"- reveals_new_fact: {intent['reveals_new_fact']}\n" if intent.get("reveals_new_fact") else "")
+                    + (
+                        "- 约束：这是 set_reminder 意图。消息中请求的提醒时刻必须带明确钟点，"
+                        "且晚于当前模拟时间至少 5 分钟——不要说“现在正好是时间”或要求当下/已过去的时刻"
+                        "（提醒的意义是未来触达）。\n"
+                        if intent.get("kind") == "set_reminder"
+                        else ""
+                    )
                     + "\n请生成 user 的首条消息（只输出一句话/一段话，不带引号）。"
                 ),
             },
@@ -367,6 +374,11 @@ class UserSimulator:
                 max_tokens=self.max_tokens,
             )
             content = (resp.content or "").strip()
+            # Provider errors come back as content (finish_reason="error"),
+            # NOT as exceptions — silently sending them as "user messages"
+            # poisons the whole trajectory. Fail fast instead.
+            if getattr(resp, "finish_reason", "") == "error" or content.startswith("Error calling LLM"):
+                raise RuntimeError(f"simulator LLM error during materialize_intent: {content[:300]}")
             # Strip common wrappers if LLM added ``` or quotes
             if content.startswith('"') and content.endswith('"'):
                 content = content[1:-1]
@@ -374,6 +386,10 @@ class UserSimulator:
                 content = content.strip("`").strip()
             return content or f"[materialize failed for intent: {intent.get('topic', '?')}]"
         except Exception as exc:
+            # The fail-fast raise above must propagate — a placeholder
+            # string sent as a "user message" poisons the trajectory.
+            if isinstance(exc, RuntimeError) and str(exc).startswith("simulator LLM error"):
+                raise
             logger.warning("materialize_intent failed: {}: {}", type(exc).__name__, exc)
             return f"[materialize error: {intent.get('topic', '?')}]"
 

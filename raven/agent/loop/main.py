@@ -580,6 +580,7 @@ class AgentLoop:
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
+                extra_deny_patterns=self.exec_config.extra_deny_patterns,
             )
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
