@@ -2012,7 +2012,12 @@ class AgentLoop:
                 usage_sink["cost_usd"] = usage_snapshot.estimated_cost_usd
                 usage_sink["context_max"] = context_max
                 usage_sink["context_used"] = context_used
-                usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0
+                # context_max is a real provider window when resolve_context_window()
+                # succeeds, but otherwise a guessed default (self.context_window_tokens)
+                # that can be smaller than the model's true window. Clamp so the gauge
+                # never reports past full: an unresolved model must not render as
+                # "over budget" while the request is still well within its real limit.
+                usage_sink["context_percent"] = min(100, round(100 * context_used / context_max)) if context_max else 0
 
             # Context-window overflow recovery: the structured classifier flags
             # should_compress (a smaller window won't help, but eliding the bulk

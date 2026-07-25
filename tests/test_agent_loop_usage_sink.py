@@ -336,3 +336,31 @@ def test_refresh_context_window_on_an_openrouter_model_never_touches_the_network
 
     assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
     assert counter["calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_usage_sink_context_percent_clamps_when_window_is_a_guess(workspace):
+    """Usage past the configured fallback window must not render past 100%.
+
+    ``stub`` never resolves via resolve_context_window(), so context_max here is
+    the configured (guessed) default. Real usage can legitimately exceed that
+    guess while staying under the model's true, unresolved window, so the
+    reported percent must clamp rather than imply an impossible over-budget bar.
+    """
+    provider = UsageProvider("stub", prompt_tokens=6000, completion_tokens=2000)
+    agent = _make_agent(workspace, provider, model="stub", window=1000)
+    sink: dict = {}
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+        usage_sink=sink,
+    )
+
+    assert sink["context_max"] == 1000
+    assert sink["context_used"] == 8000
+    assert sink["context_percent"] == 100
