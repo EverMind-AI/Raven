@@ -39,6 +39,7 @@ from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods
+from raven.tui_rpc.methods.shell_exec import register_shell_methods
 from raven.tui_rpc.methods.slash_routing import register_slash_routing_methods
 from raven.tui_rpc.methods.system import register_system_methods
 from raven.tui_rpc.methods.terminal import register_terminal_methods
@@ -144,6 +145,10 @@ def register_aligned_methods_except_system(
     # Register it only when this gateway owns an interactive approval broker.
     if approval_broker is not None:
         register_approval_methods(dispatcher, approval_broker=approval_broker)
+    # shell.exec — the `!`-prefixed bang-shell escape (useSubmission.ts's
+    # shellExec/interpolate). Independent of the slash pipeline above: it
+    # carries no session_id and always runs on the host (#171).
+    register_shell_methods(dispatcher)
     # turn.{send,subscribe,unsubscribe,cancel}. The handlers
     # need a SubscriptionEmitter to push streaming events; when the caller
     # has not built one (demo runner / production path pre-wire) we skip
@@ -184,6 +189,7 @@ __all__ = [
     "register_terminal_methods",
     "register_stub_methods",
     "register_model_methods",
+    "register_shell_methods",
     "register_slash_routing_methods",
     "register_turn_methods",
     "register_approval_methods",
