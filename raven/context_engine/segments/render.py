@@ -104,12 +104,20 @@ def _resolved_model_id() -> str:
         return ""
 
 
-def identity_text(workspace: Path, model: str | None = None) -> str:
+def identity_text(workspace: Path, model: str | None = None, *, has_memory_backend: bool = False) -> str:
     """Segment 1 — the core identity / runtime block.
 
     ``model`` is the resolved routed model id (full ``provider/model``
     form) told to the model so it never guesses its own identity from
     pretraining. ``None`` (the default) resolves it lazily from config.
+
+    ``has_memory_backend`` reflects whether a :class:`MemoryBackend` plugin
+    (e.g. EverOS) is wired. The plain workspace episodic log
+    (``user_memory/episodic/episodes.md``) is written only by the host's
+    legacy consolidator; a plugin backend keeps episodes in its own store
+    and surfaces them through per-turn recall into ``# Memory`` instead, so
+    pointing the agent at the workspace file there would send it to grep
+    something that stays empty.
     """
     workspace_path = str(workspace.expanduser().resolve())
     system = platform.system()
@@ -129,6 +137,17 @@ def identity_text(workspace: Path, model: str | None = None) -> str:
 - Use file tools when they are simpler or more reliable than shell commands.
 """
 
+    if has_memory_backend:
+        episodic_line = (
+            "- Episodic memory: handled by the active memory backend, not a workspace file. "
+            "Relevant past episodes are recalled automatically each turn into the `# Memory` section."
+        )
+    else:
+        episodic_line = (
+            f"- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). "
+            "Each entry starts with [YYYY-MM-DD HH:MM]."
+        )
+
     return f"""# Raven 🐦‍⬛
 
 You are Raven, a helpful AI assistant.
@@ -139,7 +158,7 @@ You are Raven, a helpful AI assistant.
 ## Workspace
 Your workspace is at: {workspace_path}
 - User profile: {workspace_path}/user_memory/profile/user.md (preferences, identity, project context)
-- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+{episodic_line}
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}

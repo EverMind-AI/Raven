@@ -114,7 +114,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace),
+        IdentitySegmentBuilder(workspace, backend),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,

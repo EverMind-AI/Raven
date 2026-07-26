@@ -12,6 +12,7 @@ from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.helpers import build_assistant_message
 
 if TYPE_CHECKING:
+    from raven.memory_engine.backend import MemoryBackend
     from raven.providers.base import LLMProvider
 
 
@@ -36,8 +37,10 @@ class ContextBuilder:
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
+        backend: "MemoryBackend | None" = None,
     ):
         self.workspace = workspace
+        self._backend = backend
         self.memory = MemoryStore(workspace)
         self.skills = LocalSkillCatalog(
             workspace,
@@ -177,14 +180,15 @@ Skills with available="false" need dependencies installed first - you can try in
     def _get_identity(self) -> str:
         """Get the core identity section.
 
-        Delegates to the request path's renderer so the estimation prompt
-        (this class) and the real per-turn prompt can never drift apart.
-        Imported lazily: ``context_engine`` imports this module back via
-        its factory, so a module-level import would be circular.
+        Delegates to the shared :func:`render.identity_text` (also used by
+        the live :class:`IdentitySegmentBuilder` path) so the estimation
+        prompt (this class) and the real per-turn prompt can never drift
+        apart. Imported lazily: ``context_engine`` imports this module back
+        via its factory, so a module-level import would be circular.
         """
         from raven.context_engine.segments import render
 
-        return render.identity_text(self.workspace)
+        return render.identity_text(self.workspace, has_memory_backend=self._backend is not None)
 
     def _build_runtime_context(self, channel: str | None, chat_id: str | None) -> str:
         """Build untrusted runtime metadata block for injection before the user message."""

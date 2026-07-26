@@ -445,6 +445,7 @@ class AgentLoop:
             skill_forge_config=skill_forge_config,
             llm_provider=provider,
             now_fn=now_fn,
+            backend=backend,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Tool names to omit from the registry — applied after default-tool

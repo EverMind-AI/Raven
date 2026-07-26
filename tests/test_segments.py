@@ -81,6 +81,21 @@ class TestIdentityBootstrap:
         legacy = ContextBuilder(workspace=tmp_path)._get_identity()
         assert seg.text == legacy
 
+    async def test_identity_with_backend_omits_stale_episodic_path(self, tmp_path: Path) -> None:
+        # A wired MemoryBackend (e.g. EverOS) keeps episodes in its own
+        # store; the workspace episodes.md file stays empty, so the
+        # identity block must not point the agent at it.
+        backend = _Backend([])
+        seg = await IdentitySegmentBuilder(tmp_path, backend).build(_ctx(tmp_path))
+        assert "user_memory/episodic/episodes.md" not in seg.text
+        assert "# Memory" in seg.text
+
+    async def test_identity_with_backend_matches_legacy_builder(self, tmp_path: Path) -> None:
+        backend = _Backend([])
+        seg = await IdentitySegmentBuilder(tmp_path, backend).build(_ctx(tmp_path))
+        legacy = ContextBuilder(workspace=tmp_path, backend=backend)._get_identity()
+        assert seg.text == legacy
+
     async def test_bootstrap_none_when_no_files(self, tmp_path: Path) -> None:
         seg = await BootstrapSegmentBuilder(tmp_path).build(_ctx(tmp_path))
         assert seg is None
