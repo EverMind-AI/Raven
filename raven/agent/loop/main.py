@@ -23,6 +23,7 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.base import ToolResult
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -1433,6 +1434,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
@@ -1482,6 +1484,11 @@ class AgentLoop:
                 self.max_iterations,
                 effective_model,
             )
+
+            # Mark the episode boundary (one per model call) so an outlet can
+            # group this call's reasoning + text + tools into a single step.
+            if on_episode_start is not None:
+                await on_episode_start(iteration - 1)
 
             # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
             # iteration's LLM call. Media-carrying injects keep their file
@@ -1601,24 +1608,38 @@ class AgentLoop:
                     # second emit here would double it.
                     emit_tool_event = on_tool_event is not None and tool_call.name != "message"
                     if emit_tool_event:
+                        _tool = self.tools.get(tool_call.name)
                         await on_tool_event(
                             "start",
                             {
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                # Tool-authored call label; None -> UI derives one.
+                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    result_str = str(result)
-                    preview = result_str.replace("\n", " ")[:200]
+                    # Split the model-facing text from the optional human-facing
+                    # display: the model always gets model_text; the UI preview
+                    # prefers display_text when the tool supplied one.
+                    if isinstance(result, ToolResult):
+                        model_text = result.model_text
+                        display_src = result.display_text or result.model_text
+                    else:
+                        model_text = str(result)
+                        display_src = model_text
+                    # The log stays one line; the UI event keeps newlines so a
+                    # tool that reports several items (e.g. ask_user's
+                    # question -> answer pairs) renders one row each.
+                    preview = display_src[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
                         duration_ms,
-                        preview,
+                        preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
                         await on_tool_event(
@@ -1626,13 +1647,13 @@ class AgentLoop:
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
-                                "truncated": len(result_str) > 200,
+                                "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
+                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(result):
+                    if _is_hard_tool_failure(model_text):
                         if tool_call.name == loop_fail_tool:
                             loop_fail_streak += 1
                         else:
@@ -1872,6 +1893,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2109,6 +2131,7 @@ class AgentLoop:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
+            on_episode_start=on_episode_start,
             usage_sink=usage_sink,
             drain=drain,
         )
@@ -2282,6 +2305,7 @@ class AgentLoop:
         """
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
+            EpisodeStart,
             MediaOut,
             Notice,
             NoticeKind,
@@ -2329,6 +2353,9 @@ class AgentLoop:
             if text:
                 await emit(Reasoning(content=text))
 
+        async def on_episode(index: int) -> None:
+            await emit(EpisodeStart(index=index))
+
         async def on_tool(phase: str, info: dict[str, Any]) -> None:
             if phase == "start":
                 await emit(
@@ -2337,6 +2364,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        display=info.get("display"),
                     )
                 )
             else:
@@ -2439,6 +2467,7 @@ class AgentLoop:
                 on_token_delta=on_token if stream else None,
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
+                on_episode_start=on_episode if stream else None,
                 usage_sink=usage_sink,
                 origin=req.origin,
                 drain=drain,

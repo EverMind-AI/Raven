@@ -1,7 +1,23 @@
 """Base class for agent tools."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass
+class ToolResult:
+    """A tool's output split into the model-facing text and an optional
+    human-facing display string.
+
+    ``execute`` may return a bare ``str`` (model text only — the UI falls back
+    to a generic preview of it) or this, when the tool wants a cleaner
+    transcript rendering than what it feeds the model. ``display_text`` must be
+    built from the tool's own execution data, not by re-parsing ``model_text``.
+    """
+
+    model_text: str
+    display_text: str | None = None
 
 
 class Tool(ABC):
@@ -52,7 +68,7 @@ class Tool(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> "str | ToolResult":
         """
         Execute the tool with given parameters.
 
@@ -60,9 +76,20 @@ class Tool(ABC):
             **kwargs: Tool-specific parameters.
 
         Returns:
-            String result of the tool execution.
+            The model-facing result as a ``str``, or a :class:`ToolResult` when
+            the tool wants a distinct human-facing display string.
         """
         pass
+
+    def display_call(self, args: dict[str, Any]) -> str | None:
+        """Human-facing one-line summary of a call to this tool.
+
+        ``None`` (the default) lets the UI derive a generic summary from the
+        arguments. Override only when a tool wants a cleaner label than the
+        generic one (e.g. ask_user showing just its question, not the raw
+        arguments blob).
+        """
+        return None
 
     def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
         """Apply safe schema-driven casts before validation."""

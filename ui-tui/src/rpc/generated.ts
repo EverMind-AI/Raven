@@ -25,6 +25,7 @@ export type JsonValue = string | number | boolean | null | unknown[] | {};
  */
 export type TurnEvent =
   | MessageStartEvent
+  | EpisodeStartEvent
   | TokenDeltaEvent
   | ThinkingDeltaEvent
   | ToolStartEvent
@@ -283,6 +284,16 @@ export interface MessageStartEvent {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "EpisodeStartEvent".
+ */
+export interface EpisodeStartEvent {
+  type: 'episode.start';
+  payload: {
+    index: number;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "TokenDeltaEvent".
  */
 export interface TokenDeltaEvent {
@@ -313,6 +324,7 @@ export interface ToolStartEvent {
     arguments: {
       [k: string]: JsonValue;
     };
+    display?: string | null;
   };
 }
 /**

@@ -7,7 +7,7 @@ import { Box, Text } from '@hermes/ink'
 
 import type { Theme } from '../theme.js'
 
-import { compactPreview } from '../lib/text.js'
+import { clipToWidth } from '../lib/text.js'
 
 export const QUEUE_WINDOW = 3
 
@@ -26,19 +26,20 @@ export function QueuedMessages({ cols, queueEditIdx, queued, t }: QueuedMessages
   }
 
   const q = getQueueWindow(queued.length, queueEditIdx)
+  const room = Math.max(16, cols - 10)
 
+  // A dim left rail, sitting right above the composer: the position already says
+  // "waiting to be sent", so the block needs no header word. Every other glyph in
+  // the transcript is taken — `❯` is a user message, `·` + `├`/`└` is a tool call,
+  // `▸` is a fold — so a rail is the one shape that cannot be misread as those.
+  //
+  // Rows are plain <Text>: this panel shares the bottom pane with absolutely
+  // positioned overlays, where block-level children garbled the frame.
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={t.color.muted} dimColor>
-        {`queued (${queued.length})${
-          queueEditIdx !== null ? ` · editing ${queueEditIdx + 1} · Ctrl+X delete · Esc cancel` : ''
-        }`}
-      </Text>
-
       {q.showLead && (
-        <Text color={t.color.muted} dimColor>
-          {' '}
-          …
+        <Text color={t.color.muted} dim>
+          {'│ ⋮'}
         </Text>
       )}
 
@@ -47,15 +48,28 @@ export function QueuedMessages({ cols, queueEditIdx, queued, t }: QueuedMessages
         const active = queueEditIdx === idx
 
         return (
-          <Text color={active ? t.color.accent : t.color.muted} dimColor key={`${idx}-${item.slice(0, 16)}`}>
-            {active ? '▸' : ' '} {idx + 1}. {compactPreview(item, Math.max(16, cols - 10))}
+          <Text key={`${idx}-${item.slice(0, 16)}`} wrap="truncate-end">
+            {/* The edited row swaps the rail for a caret and lights up. */}
+            <Text color={active ? t.color.accent : t.color.muted} dim={!active}>
+              {active ? '▸ ' : '│ '}
+            </Text>
+            {/* Queued text is the user's own words: full-weight so it stays
+                readable against the dim rail. */}
+            <Text color={active ? t.color.accent : t.color.text}>{clipToWidth(item, room)}</Text>
           </Text>
         )
       })}
 
       {q.showTail && (
-        <Text color={t.color.muted} dimColor>
-          {'  '}…and {queued.length - q.end} more
+        <Text color={t.color.muted} dim>
+          {'│ …and '}
+          {queued.length - q.end} more
+        </Text>
+      )}
+
+      {queueEditIdx !== null && (
+        <Text color={t.color.statusFg} dim>
+          {'  Ctrl+X delete · Esc cancel'}
         </Text>
       )}
     </Box>

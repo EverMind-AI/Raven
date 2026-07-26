@@ -132,6 +132,10 @@ export interface UiState {
   status: string
   statusBar: StatusBarMode
   streaming: boolean
+  // Transcript rendering mode. 'legacy' = the flat thinking/tool panels;
+  // 'episodes' = one collapsible line per model call. Default legacy until the
+  // episodes path is complete; switch via config display.transcript.
+  transcript: 'episodes' | 'legacy'
   theme: Theme
   usage: Usage
 }

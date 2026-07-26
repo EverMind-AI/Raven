@@ -4,7 +4,7 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import type { SessionInterruptResponse, SubagentEventPayload } from '../gatewayTypes.js'
-import type { ActiveTool, ActivityItem, Msg, SubagentProgress, TodoItem } from '../types.js'
+import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import {
   REASONING_PULSE_MS,
@@ -14,7 +14,7 @@ import {
   STREAM_TYPING_BATCH_MS
 } from '../config/timing.js'
 import { appendToolShelfMessage, isToolShelfMessage } from '../lib/liveProgress.js'
-import { hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
+import { hasMeaningfulReasoning, hasReasoningTag, splitReasoning } from '../lib/reasoning.js'
 import {
   boundedLiveRenderText,
   buildToolTrailLine,
@@ -47,6 +47,23 @@ const diffSegmentBody = (msg: Msg): null | string => {
 }
 
 const hasDetails = (msg: Msg): boolean => Boolean(msg.thinking || msg.tools?.length || msg.toolTokens)
+
+// Count added/removed lines in a unified diff, ignoring the +++/--- file
+// headers and @@ hunk markers. Drives the "edited foo.ts (+12 -3)" label.
+const diffStat = (diff: string): { added: number; removed: number } => {
+  let added = 0
+  let removed = 0
+
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      added++
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      removed++
+    }
+  }
+
+  return { added, removed }
+}
 
 const isTodoStatus = (status: unknown): status is TodoItem['status'] =>
   status === 'pending' || status === 'in_progress' || status === 'completed' || status === 'cancelled'
@@ -119,6 +136,9 @@ const clear = (t: Timer): null => {
 
 class TurnController {
   bufRef = ''
+  episodeIndex = -1
+  episodes: Episode[] = []
+  private lastEpisodeStartMs = 0
   interrupted = false
   lastStatusNote = ''
   persistedToolLabels = new Set<string>()
@@ -178,8 +198,11 @@ class TurnController {
     this.bufRef = ''
     this.pendingSegmentTools = []
     this.segmentMessages = []
+    this.episodes = []
+    this.lastEpisodeStartMs = 0
 
     patchTurnState({
+      episodes: [],
       streamPendingTools: [],
       streamSegments: [],
       streaming: '',
@@ -208,6 +231,13 @@ class TurnController {
     const segments = this.segmentMessages
     const partial = this.bufRef.trimStart()
     const tools = this.pendingSegmentTools
+    // Capture the accrued episodes before idle() drops them, so an interrupt in
+    // episodes mode commits the same collapsed one-message view as a normal
+    // completion instead of dumping the raw, fully-expanded segment stream.
+    const episodesMode = getUiState().transcript === 'episodes'
+    const workEpisodes = episodesMode
+      ? this.episodes.filter(ep => ep.tools.length > 0 || hasMeaningfulReasoning(ep.reasoning ?? ''))
+      : []
 
     // Drain streaming/segment state off the nanostore before writing the
     // preserved snapshot to the transcript — otherwise each flushed segment
@@ -218,6 +248,23 @@ class TurnController {
     patchTurnState({ activity: [], outcome: '' })
 
     if (!appendMessage) {
+      return
+    }
+
+    const interruptedText = partial ? `${partial}\n\n*[interrupted]*` : '*[interrupted]*'
+
+    // Episodes mode: never dump the raw expanded segments. Commit the accrued
+    // steps as one collapsed episodes message (mirrors recordMessageComplete);
+    // with nothing accrued yet, fall back to the bare interrupted indicator.
+    if (episodesMode) {
+      if (workEpisodes.length) {
+        appendMessage({ kind: 'episodes', role: 'assistant', text: interruptedText, episodes: workEpisodes })
+      } else if (partial) {
+        appendMessage({ role: 'assistant', text: interruptedText })
+      } else if (!reentrant) {
+        sys?.('interrupted')
+      }
+
       return
     }
 
@@ -232,7 +279,7 @@ class TurnController {
     if (partial || tools.length) {
       appendMessage({
         role: 'assistant',
-        text: partial ? `${partial}\n\n*[interrupted]*` : '*[interrupted]*',
+        text: interruptedText,
         ...(tools.length && { tools })
       })
     } else if (!reentrant) {
@@ -326,6 +373,14 @@ class TurnController {
 
     if (split.text || hasDetails(msg)) {
       this.pushSegment(msg)
+    }
+
+    if (split.text) {
+      const ep = this.currentEpisode()
+
+      if (ep) {
+        ep.narration = (ep.narration ?? '') + split.text
+      }
     }
 
     this.pendingSegmentTools = []
@@ -458,6 +513,7 @@ class TurnController {
 
   recordMessageComplete(payload: { rendered?: string; reasoning?: string; text?: string }) {
     this.closeReasoningSegment()
+    this.stampLastEpisodeDuration()
 
     // Ink renders markdown via <Md>; the gateway's Rich-rendered ANSI
     // (`payload.rendered`) is for terminals that can't.  Prioritising
@@ -513,14 +569,34 @@ class TurnController {
 
     // Archive prepended so the trail msg anchors under the user prompt,
     // not between thinking/tools and final assistant text.
-    const finalMessages: Msg[] = [
-      ...archiveDoneTodos(),
-      ...segments,
-      ...(hasDetails(finalDetails) ? [finalDetails] : [])
-    ]
+    const finalMessages: Msg[] = [...archiveDoneTodos()]
 
-    if (finalText) {
-      finalMessages.push({ role: 'assistant', text: finalText })
+    if (getUiState().transcript === 'episodes') {
+      // Episodes mode: collapse the whole turn's steps into one message. A step
+      // counts when it ran tools or genuinely reasoned; the stop call (no tools)
+      // is left out so its text isn't duplicated below the steps.
+      const workEpisodes = this.episodes.filter(ep => ep.tools.length > 0 || hasMeaningfulReasoning(ep.reasoning ?? ''))
+
+      if (workEpisodes.length) {
+        finalMessages.push({ kind: 'episodes', role: 'assistant', text: finalText, episodes: workEpisodes })
+      } else if (segments.length || hasDetails(finalDetails)) {
+        // No episode boundaries arrived (e.g. an older gateway that doesn't emit
+        // episode.start) but the turn did run tools/reasoning — fall back to the
+        // legacy trail so that history isn't silently lost.
+        finalMessages.push(...segments, ...(hasDetails(finalDetails) ? [finalDetails] : []))
+
+        if (finalText) {
+          finalMessages.push({ role: 'assistant', text: finalText })
+        }
+      } else if (finalText) {
+        finalMessages.push({ role: 'assistant', text: finalText })
+      }
+    } else {
+      finalMessages.push(...segments, ...(hasDetails(finalDetails) ? [finalDetails] : []))
+
+      if (finalText) {
+        finalMessages.push({ role: 'assistant', text: finalText })
+      }
     }
 
     const wasInterrupted = this.interrupted
@@ -558,6 +634,15 @@ class TurnController {
     this.pruneTransient()
     this.endReasoningPhase()
 
+    // First visible token of this step ends its thinking phase: stamp the span so
+    // the reasoning row freezes there instead of counting for the whole turn.
+    const ep = this.currentEpisode()
+
+    if (ep && ep.reasoningMs == null && ep.tools.length === 0 && this.lastEpisodeStartMs) {
+      ep.reasoningMs = Date.now() - this.lastEpisodeStartMs
+      this.publishEpisodes()
+    }
+
     // Always accumulate the raw text delta.  The pre-#16391 path replaced
     // the entire buffer with `rendered` (an *incremental* Rich ANSI
     // fragment), which on every tick discarded everything streamed so far
@@ -568,6 +653,54 @@ class TurnController {
     if (getUiState().streaming) {
       this.scheduleStreaming()
     }
+  }
+
+  // Boundary marker: the backend has started a new model call. Opens a fresh
+  // episode bucket that subsequent reasoning / narration / tools accrue into
+  // (episodes-mode rendering); harmless in legacy mode.
+  recordEpisodeStart(index: number) {
+    // Fully inert in legacy mode: opening no episode means no accrual, no
+    // publishEpisodes churn, and the legacy render path is untouched.
+    if (this.interrupted || getUiState().transcript !== 'episodes') {
+      return
+    }
+
+    const now = Date.now()
+    const prev = this.episodes.at(-1)
+
+    // A new call ends the previous episode: stamp its wall-clock duration.
+    if (prev && this.lastEpisodeStartMs) {
+      prev.durationMs = now - this.lastEpisodeStartMs
+    }
+
+    this.lastEpisodeStartMs = now
+    this.episodeIndex = index
+    this.episodes = [...this.episodes, { index, startedAt: now, reasoning: '', narration: '', tools: [] }]
+    this.publishEpisodes()
+  }
+
+  // Stamp the final episode's duration at turn end (no next episode to do it).
+  private stampLastEpisodeDuration() {
+    const last = this.episodes.at(-1)
+
+    if (last && this.lastEpisodeStartMs) {
+      last.durationMs = Date.now() - this.lastEpisodeStartMs
+
+      // A tool-less step never stamped reasoningMs at a first tool; its whole
+      // wall time is thinking.
+      if (last.reasoningMs == null) {
+        last.reasoningMs = last.durationMs
+      }
+    }
+  }
+
+  private currentEpisode(): Episode | undefined {
+    return this.episodes.at(-1)
+  }
+
+  private publishEpisodes() {
+    // Deep-ish copy so React sees new refs for the mutated current episode/tool.
+    patchTurnState({ episodes: this.episodes.map(ep => ({ ...ep, tools: ep.tools.map(t => ({ ...t })) })) })
   }
 
   recordReasoningAvailable(text: string) {
@@ -604,6 +737,16 @@ class TurnController {
       this.reasoningText = this.reasoningText.slice(-60_000)
     }
 
+    const ep = this.currentEpisode()
+
+    if (ep) {
+      ep.reasoning = (ep.reasoning ?? '') + text
+
+      if (ep.reasoning.length > 20_000) {
+        ep.reasoning = ep.reasoning.slice(-16_000)
+      }
+    }
+
     this.scheduleReasoning()
     this.syncReasoningSegment()
     this.pulseReasoningStreaming()
@@ -624,9 +767,48 @@ class TurnController {
     this.recordTodos(todos)
     const line = this.completeTool(toolId, fallbackName, error, summary, duration)
 
+    this.finalizeEpisodeTool(toolId, error, summary, duration)
     this.pendingSegmentTools = [...this.pendingSegmentTools, line]
     this.flushPendingToolsIntoLastSegment()
     this.publishToolState()
+  }
+
+  private finalizeEpisodeTool(toolId: string, error?: string, summary?: string, duration?: number, diff?: string) {
+    // No episodes open (legacy mode / no episode.start) => nothing to finalize
+    // and no publish, keeping legacy turns free of episode-store churn.
+    if (!this.episodes.length) {
+      return
+    }
+
+    for (const ep of this.episodes) {
+      const et = ep.tools.find(tool => tool.id === toolId)
+
+      if (et) {
+        et.ok = !error
+        et.done = true
+        et.resultPreview = (error || summary || '').slice(0, 200) || undefined
+        // Fall back to the client-measured span: the typed RPC path does not
+        // carry a duration, and leaving it unset made the row's live timer keep
+        // ticking after the step had moved on.
+        et.durationMs =
+          duration != null
+            ? Math.round(duration * 1000)
+            : et.startedAt
+              ? Math.max(0, Date.now() - et.startedAt)
+              : undefined
+
+        if (diff) {
+          et.diff = diff
+          const stat = diffStat(diff)
+          et.added = stat.added
+          et.removed = stat.removed
+        }
+
+        break
+      }
+    }
+
+    this.publishEpisodes()
   }
 
   recordInlineDiffToolComplete(
@@ -642,6 +824,7 @@ class TurnController {
 
     this.flushStreamingSegment()
     this.pushInlineDiffSegment(diffText, [this.completeTool(toolId, fallbackName, error, '', duration)])
+    this.finalizeEpisodeTool(toolId, error, '', duration, diffText)
     this.publishToolState()
   }
 
@@ -718,6 +901,18 @@ class TurnController {
     this.toolTokenAcc += sample ? estimateTokensRough(sample) : 0
     this.activeTools = [...this.activeTools, { context, id: toolId, name, startedAt: Date.now() }]
 
+    const ep = this.currentEpisode()
+
+    if (ep) {
+      // First tool of the step: the elapsed so far is the thinking time.
+      if (ep.tools.length === 0 && this.lastEpisodeStartMs) {
+        ep.reasoningMs = Date.now() - this.lastEpisodeStartMs
+      }
+
+      ep.tools.push({ id: toolId, name, summary: context, ok: true, done: false, startedAt: Date.now() })
+      this.publishEpisodes()
+    }
+
     patchTurnState({ toolTokens: this.toolTokenAcc, tools: this.activeTools })
   }
 
@@ -726,6 +921,7 @@ class TurnController {
     this.clearStatusTimer()
     this.idle()
     this.bufRef = ''
+    this.episodeIndex = -1
     this.interrupted = false
     this.lastStatusNote = ''
     this.activeReasoningText = ''
@@ -755,6 +951,11 @@ class TurnController {
         reasoning: this.reasoningText,
         reasoningTokens: estimateTokensRough(this.reasoningText)
       })
+      // Episodes mode: push the growing reasoning so the running step streams
+      // its thought live instead of only revealing it once the step completes.
+      if (getUiState().transcript === 'episodes') {
+        this.publishEpisodes()
+      }
     }, STREAM_BATCH_MS)
   }
 

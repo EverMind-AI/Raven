@@ -19,6 +19,7 @@ from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
 from raven.sandbox import SandboxInitError
+from raven.spine.events import EpisodeStart as EvEpisodeStart
 from raven.spine.events import MediaOut as EvMediaOut
 from raven.spine.events import Notice as EvNotice
 from raven.spine.events import NoticeKind, ToolPhase
@@ -227,8 +228,10 @@ async def test_run_streams_then_dissolves_main_response(tmp_path):
 
     outcome = await loop.run_turn(_req("hi"), sink, _drain)
 
-    assert [type(e).__name__ for e in sink.events] == ["StreamDelta", "StreamDelta"]
-    assert [e.delta for e in sink.events] == ["Hel", "lo"]
+    # The turn opens with an episode boundary, then the two streamed deltas.
+    assert isinstance(sink.events[0], EvEpisodeStart) and sink.events[0].index == 0
+    deltas = [e for e in sink.events if isinstance(e, EvStreamDelta)]
+    assert [e.delta for e in deltas] == ["Hel", "lo"]
     assert not any(isinstance(e, EvText) for e in sink.events)  # dissolved, no double
     assert outcome.usage.total_tokens == 5
     assert outcome.explicit_reply is True
@@ -245,7 +248,9 @@ async def test_run_emits_reasoning_then_stream(tmp_path):
 
     await loop.run_turn(_req("hi"), sink, _drain)
 
-    assert isinstance(sink.events[0], EvReasoning) and sink.events[0].content == "think"
+    assert isinstance(sink.events[0], EvEpisodeStart)
+    reasoning = next(e for e in sink.events if isinstance(e, EvReasoning))
+    assert reasoning.content == "think"
     assert any(isinstance(e, EvStreamDelta) and e.delta == "answer" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)
 
@@ -286,6 +291,38 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
+
+
+async def test_run_emits_one_episode_start_per_model_call(tmp_path):
+    # Episode boundary: run() emits one EpisodeStart per model call, 0-based and
+    # increasing. This turn has two calls (a tool-call iteration, then a stop
+    # iteration), so indices are [0, 1], and the first boundary precedes the
+    # first tool event of that call.
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t1", "function": {"name": "faketool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_FakeTool())
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    episodes = [e for e in sink.events if isinstance(e, EvEpisodeStart)]
+    assert [e.index for e in episodes] == [0, 1]
+    first_ep = next(i for i, e in enumerate(sink.events) if isinstance(e, EvEpisodeStart))
+    first_tool = next(i for i, e in enumerate(sink.events) if isinstance(e, EvToolEvent))
+    assert first_ep < first_tool
 
 
 # ── deep_research inline streaming: run_turn's _route_deep_research (2a) ──
