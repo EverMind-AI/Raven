@@ -48,7 +48,6 @@ Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来�
 - [架构](#架构)
 - [开发工作流](#开发工作流)
 - [当前状态](#当前状态)
-- [Star 支持](#star-支持)
 - [EverMind 生态](#evermind-生态)
 - [参与贡献](#参与贡献)
 
@@ -422,29 +421,6 @@ Raven 仍处于 pre-alpha，变化会很快。API 可能调整，但核心产品
 | Tracing dashboard | 已实现 |
 | Evolver pipeline | 已实现，benchmark adapters 持续演进 |
 | Eval engine | 部分完成 |
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
-
-## Star 支持
-
-如果 Raven 是你希望存在的 Agent Harness，请 Star 这个仓库。它会帮助更多
-self-improving agent builders 发现项目，也会给 EverMind 生态一个更强的信号，
-继续投入开源 Agent。
-
-### Star 趋势
-
-<a href="https://www.star-history.com/?repos=EverMind-AI%2FRaven&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&theme=dark&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
- </picture>
-</a>
 
 <br>
 <div align="right">

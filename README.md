@@ -45,7 +45,6 @@ task needs deeper investigation.
 - [Architecture](#architecture)
 - [Developer Workflow](#developer-workflow)
 - [Status](#status)
-- [Star Us](#star-us)
 - [EverMind Ecosystem](#evermind-ecosystem)
 - [Contributing](#contributing)
 
@@ -436,29 +435,6 @@ core product surfaces are already in the repository.
 | Tracing dashboard | Implemented |
 | Evolver pipeline | Implemented, benchmark adapters still evolving |
 | Eval engine | Partial |
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
-
-## Star Us
-
-If Raven is the kind of agent harness you want to exist, star the repo. It
-helps more builders of self-improving agents discover the project and gives the
-EverMind ecosystem a stronger signal to keep investing in open agents.
-
-### Star History
-
-<a href="https://www.star-history.com/?repos=EverMind-AI%2FRaven&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&theme=dark&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EverMind-AI/Raven&type=date&legend=top-left&sealed_token=JtMAA1-LVID_EVBGWQFdVW7mwqmqOZX_CZOni27lunmJitTZvKKSHw22IhQvf-L6TcX0IiwnlFz75mCpVbwvnG-s8zYfGsickSwhmM2eZou5a4nlLTYBXjF2F932uRrttRiHCb84TaKUWeP-T_jWqLvgtk7tly3HKFmgmkywVnQFUOiRBZE2COsHL320" />
- </picture>
-</a>
 
 <br>
 <div align="right">
