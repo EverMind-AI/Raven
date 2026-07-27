@@ -1037,6 +1037,30 @@ def test_is_config_populated_accepts_selected_api_key_provider(tmp_env: Path) ->
     assert onboard_commands._is_config_populated() is True
 
 
+def test_is_config_populated_uses_single_config_snapshot(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An atomic replace cannot mix provider routing from two config reads."""
+    snapshot = {
+        "agents": {"defaults": {"model": "openai/gpt-4o-mini"}},
+        "providers": {"openai": {"apiKey": "snapshot-key"}},
+    }
+    reads: list[Path] = []
+
+    def _read_once(path: Path):
+        reads.append(path)
+        if len(reads) > 1:
+            raise AssertionError("startup gate read the config more than once")
+        return snapshot
+
+    monkeypatch.setattr("raven.config.loader.read_raw_or_raise", _read_once)
+    monkeypatch.setattr("raven.config.update_providers.read_raw_or_raise", _read_once)
+
+    assert onboard_commands._is_config_populated(tmp_env) is True
+    assert reads == [tmp_env]
+
+
 def test_is_config_populated_rejects_forced_unconfigured_provider(tmp_env: Path) -> None:
     """A forced provider must have its own usable credentials."""
     from raven.config.update_providers import set_provider_fields

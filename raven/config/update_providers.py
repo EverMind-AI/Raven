@@ -548,7 +548,11 @@ def provider_field_specs(name: str) -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
+def list_providers(
+    *,
+    config_path: Path | None = None,
+    raw_providers: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Reflect every provider declared on ``ProvidersConfig`` + current status.
 
     Returns one dict per provider:
@@ -561,8 +565,12 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     - ``api_key_redacted``   ``****set****`` / ``(empty)`` / ``(not needed for local)``
     - ``api_base``           current value (or ``None`` if untouched)
     """
-    path = config_path or get_config_path()
-    data = read_raw_or_raise(path)
+    if raw_providers is None:
+        path = config_path or get_config_path()
+        data = read_raw_or_raise(path)
+        raw_providers = data.get("providers") or {}
+    else:
+        data = {"providers": raw_providers}
 
     out: list[dict[str, Any]] = []
     for fname in _listable_provider_names(data):

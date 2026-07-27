@@ -249,6 +249,27 @@ def test_list_reports_every_provider_with_correct_status(cfg_path: Path) -> None
     assert len(rows) >= 18
 
 
+def test_list_uses_supplied_provider_snapshot_without_rereading(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unexpected_read(_path: Path):
+        raise AssertionError("provider snapshot must prevent a second config read")
+
+    monkeypatch.setattr("raven.config.update_providers.read_raw_or_raise", _unexpected_read)
+
+    rows = {
+        row["name"]: row
+        for row in list_providers(
+            config_path=cfg_path,
+            raw_providers={"openai": {"apiKey": "snapshot-key"}},
+        )
+    }
+
+    assert rows["openai"]["configured"] is True
+    assert rows["anthropic"]["configured"] is False
+
+
 @pytest.mark.parametrize(
     "contents",
     [

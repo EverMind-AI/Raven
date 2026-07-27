@@ -370,7 +370,13 @@ def _is_config_populated(config_path: Path | None = None) -> bool:
         }
     )
     selected_provider = routing_config.get_provider_name(model)
-    provider_status = {provider["name"]: provider["configured"] for provider in list_providers(config_path=config_path)}
+    provider_status = {
+        provider["name"]: provider["configured"]
+        for provider in list_providers(
+            config_path=config_path,
+            raw_providers=data.get("providers") or {},
+        )
+    }
     return bool(selected_provider and provider_status.get(selected_provider, False))
 
 
