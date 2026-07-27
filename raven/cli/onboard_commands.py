@@ -30,6 +30,7 @@ already written.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import typer
@@ -326,7 +327,7 @@ def _check_tty_or_die(non_interactive: bool) -> None:
         raise typer.Exit(2)
 
 
-def _load_raw_config() -> dict[str, Any]:
+def _load_raw_config(config_path: Path | None = None) -> dict[str, Any]:
     """Return the parsed on-disk config, or ``{}`` if absent/empty.
 
     A present-but-unparseable config raises ConfigReadError (surfaced cleanly by
@@ -336,7 +337,7 @@ def _load_raw_config() -> dict[str, Any]:
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
-    return read_raw_or_raise(get_config_path()) or {}
+    return read_raw_or_raise(config_path or get_config_path()) or {}
 
 
 def _configured_providers() -> list[str]:
@@ -346,7 +347,7 @@ def _configured_providers() -> list[str]:
     return [row["name"] for row in list_providers() if row["configured"]]
 
 
-def _is_config_populated() -> bool:
+def _is_config_populated(config_path: Path | None = None) -> bool:
     """True iff the selected provider is configured and a default model is set.
 
     "Populated" for the startup gate means the required step (Step 1) is
@@ -358,7 +359,7 @@ def _is_config_populated() -> bool:
     from raven.config.schema import Config
     from raven.config.update_providers import list_providers
 
-    data = _load_raw_config()
+    data = _load_raw_config(config_path)
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
     if not model:
         return False
@@ -369,7 +370,7 @@ def _is_config_populated() -> bool:
         }
     )
     selected_provider = routing_config.get_provider_name(model)
-    provider_status = {provider["name"]: provider["configured"] for provider in list_providers()}
+    provider_status = {provider["name"]: provider["configured"] for provider in list_providers(config_path=config_path)}
     return bool(selected_provider and provider_status.get(selected_provider, False))
 
 
@@ -4692,7 +4693,11 @@ def _run_wizard_body(
 # ---------------------------------------------------------------------------
 
 
-def ensure_configured_or_onboard(*, non_interactive: bool = False) -> bool:
+def ensure_configured_or_onboard(
+    *,
+    non_interactive: bool = False,
+    config_path: Path | None = None,
+) -> bool:
     """Run the wizard when the required config (provider + model) is missing.
 
     Returns ``True`` if config was already complete (caller proceeds straight
@@ -4700,8 +4705,12 @@ def ensure_configured_or_onboard(*, non_interactive: bool = False) -> bool:
     a non-interactive context with missing config, the wizard's TTY check
     will raise — callers on non-TTY paths must guard before invoking.
     """
-    if _is_config_populated():
+    if _is_config_populated(config_path):
         return True
+    if config_path is not None:
+        from raven.config.loader import set_config_path
+
+        set_config_path(config_path)
     run_wizard(non_interactive=non_interactive)
     return False
 

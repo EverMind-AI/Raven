@@ -31,6 +31,15 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     # Clear any process-wide config-path override a prior test left set, so
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
     monkeypatch.setattr("raven.config.loader._current_config_path", None)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "OAUTH_CLI_KIT_TOKEN_PATH",
+        str(tmp_path / "oauth-cli-kit" / "codex.json"),
+    )
+    monkeypatch.setenv(
+        "GITHUB_COPILOT_TOKEN_DIR",
+        str(tmp_path / "litellm" / "github_copilot"),
+    )
     return tmp_path
 
 

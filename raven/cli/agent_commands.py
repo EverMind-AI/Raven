@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from pathlib import Path
 
 import typer
 from prompt_toolkit import PromptSession
@@ -220,10 +221,17 @@ def register(app: typer.Typer) -> None:
         # fail loudly later rather than block on prompts.
         from raven.cli.onboard_commands import _is_config_populated
 
-        if message is None and _stdout_isatty() and not _is_config_populated():
+        startup_config_path = Path(config).expanduser().resolve() if config else None
+        config_target_exists = startup_config_path is None or startup_config_path.exists()
+        if (
+            message is None
+            and _stdout_isatty()
+            and config_target_exists
+            and not _is_config_populated(startup_config_path)
+        ):
             from raven.cli.onboard_commands import ensure_configured_or_onboard
 
-            ensure_configured_or_onboard()
+            ensure_configured_or_onboard(config_path=startup_config_path)
 
         from loguru import logger
 
@@ -240,10 +248,9 @@ def register(app: typer.Typer) -> None:
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.session.manager import SessionManager, new_chat_id
 
-        # load_runtime_config must run FIRST: it calls set_config_path() so
-        # that subsequent load_raven_config() reads from --config, not the
-        # default ~/.raven/config.json. Otherwise skill_forge / sentinel
-        # from --config are silently ignored.
+        # The startup gate above reads the same explicit path without changing
+        # global loader state. load_runtime_config now sets that state before
+        # all remaining config consumers run.
         config = load_runtime_config(config, workspace)
         ec_config = load_raven_config()
         sentinel_cfg = ec_config.sentinel

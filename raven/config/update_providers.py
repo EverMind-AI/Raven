@@ -5,13 +5,12 @@ points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
 providers section is forbidden -- see plan rule.
 
-OAuth providers have a separate
-auth path via ``provider_commands._LOGIN_HANDLERS`` and store tokens via
-``oauth_cli_kit``, not in ``config.json``. ``set_provider_fields`` refuses
-to write ``api_key`` for those providers; callers must invoke
-``provider login`` for that. ``reset_provider`` handles both cases:
-schema-default rewrite for config fields, plus unlinking the
-``oauth_cli_kit`` token file when the provider has ``is_oauth=True``.
+OAuth providers have separate auth paths via
+``provider_commands._LOGIN_HANDLERS`` and keep credentials outside
+``config.json``. ``set_provider_fields`` refuses to write ``api_key`` for
+those providers; callers must invoke ``provider login`` for that.
+``reset_provider`` rewrites the schema defaults and removes the provider's
+external credentials.
 """
 
 from __future__ import annotations
@@ -447,31 +446,72 @@ def _oauth_token_path(provider_name: str) -> Path:
     return base_dir / "auth" / filename
 
 
-def _oauth_token_is_usable(provider_name: str) -> bool:
-    """Return whether a supported OAuth token is structurally loadable.
+def _github_copilot_token_is_usable() -> bool:
+    """Match LiteLLM 1.85's offline GitHub Copilot credential semantics.
 
-    This is deliberately offline: startup must not refresh a token or make a
-    network request.  ``oauth_cli_kit`` currently owns the OpenAI Codex token;
-    GitHub Copilot authentication is managed independently by LiteLLM, so its
-    state cannot be inferred from this token directory.
+    An unexpired cached API key is immediately usable. A stored GitHub access
+    token is refresh-capable, so the normal request path can exchange it for an
+    API key. The environment variable names and default files mirror
+    ``litellm.llms.github_copilot.authenticator.Authenticator`` without
+    instantiating it (its constructor creates directories).
     """
+    import time
+
+    token_dir = Path(
+        os.environ.get(
+            "GITHUB_COPILOT_TOKEN_DIR",
+            str(Path.home() / ".config" / "litellm" / "github_copilot"),
+        )
+    )
+    access_path = token_dir / os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token")
+    api_key_path = token_dir / os.environ.get("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
+    try:
+        if access_path.is_file() and access_path.read_text(encoding="utf-8").strip():
+            return True
+        if not api_key_path.is_file():
+            return False
+        payload = json.loads(api_key_path.read_text(encoding="utf-8"))
+        token = payload.get("token") if isinstance(payload, dict) else None
+        expires_at = payload.get("expires_at") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token.strip() or isinstance(expires_at, bool):
+            return False
+        return float(expires_at) > time.time()
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _oauth_token_is_usable(provider_name: str) -> bool:
+    """Return whether the provider's stored OAuth credentials are usable.
+
+    This check never refreshes credentials or makes a network request. Codex
+    loading delegates to oauth-cli-kit's storage contract, including its
+    cache-miss import from ``~/.codex/auth.json``. An expired Codex access
+    token remains usable when it has a refresh token because the real request
+    path refreshes it; ``account_id`` is mandatory because Raven sends it as a
+    request header.
+    """
+    if provider_name == "github_copilot":
+        return _github_copilot_token_is_usable()
     if provider_name != "openai_codex":
         return False
     try:
-        path = _oauth_token_path(provider_name)
-        if not path.is_file():
-            return False
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        from oauth_cli_kit import OPENAI_CODEX_PROVIDER
+        from oauth_cli_kit.storage import FileTokenStorage
+
+        token = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename).load()
+    except Exception:
         return False
-    if not isinstance(payload, dict):
+    if token is None:
         return False
-    access = payload.get("access")
-    refresh = payload.get("refresh")
-    expires = payload.get("expires")
+    access = token.access
+    refresh = token.refresh
+    account_id = token.account_id
+    expires = token.expires
     if not isinstance(access, str) or not access.strip():
         return False
     if not isinstance(refresh, str) or not refresh.strip():
+        return False
+    if not isinstance(account_id, str) or not account_id.strip():
         return False
     if isinstance(expires, bool):
         return False

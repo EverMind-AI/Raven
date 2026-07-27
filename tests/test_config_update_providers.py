@@ -268,6 +268,7 @@ def test_list_rejects_unusable_oauth_token(
 ) -> None:
     token_file = tmp_path / "codex.json"
     token_file.write_text(contents, encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
 
     rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
@@ -283,10 +284,11 @@ def test_list_accepts_structurally_usable_oauth_token(
 ) -> None:
     token_file = tmp_path / "codex.json"
     token_file.write_text(
-        '{"access":"secret-access","refresh":"secret-refresh","expires":4102444800}',
+        '{"access":"secret-access","refresh":"secret-refresh","expires":4102444800000,"account_id":"secret-account"}',
         encoding="utf-8",
     )
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "copilot-missing"))
 
     rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
 
@@ -294,6 +296,60 @@ def test_list_accepts_structurally_usable_oauth_token(
     assert rows["openai_codex"]["api_key_redacted"] == "OAuth token"
     assert "secret-access" not in repr(rows)
     assert "secret-refresh" not in repr(rows)
+    assert "secret-account" not in repr(rows)
+    assert rows["github_copilot"]["configured"] is False
+
+
+def test_list_reports_github_copilot_access_token(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_dir = tmp_path / "copilot"
+    token_dir.mkdir()
+    (token_dir / "access-token").write_text("github-access", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["github_copilot"]["configured"] is True
+    assert "github-access" not in repr(rows)
+
+
+def test_list_reports_unexpired_github_copilot_api_key(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_dir = tmp_path / "copilot"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        '{"token":"copilot-api-key","expires_at":4102444800}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["github_copilot"]["configured"] is True
+    assert "copilot-api-key" not in repr(rows)
+
+
+def test_list_rejects_expired_github_copilot_api_key(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_dir = tmp_path / "copilot"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        '{"token":"expired-key","expires_at":1}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
     assert rows["github_copilot"]["configured"] is False
 
 

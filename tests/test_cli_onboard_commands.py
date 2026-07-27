@@ -862,10 +862,11 @@ def _seed_oauth_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     from raven.config.update import set_default_model
 
     token_file = tmp_path / "openai_codex.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
     set_default_model("openai_codex/gpt-5")
     token_file.write_text(
-        '{"access":"test-token","refresh":"test-refresh","expires":4102444800}',
+        '{"access":"test-token","refresh":"test-refresh","expires":4102444800000,"account_id":"test-account"}',
         encoding="utf-8",
     )
 
@@ -919,6 +920,7 @@ def test_is_config_populated_accepts_oauth_provider(
 ) -> None:
     """An OAuth token outside config.json satisfies the provider gate."""
     token_file = tmp_path / "openai_codex.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
     from raven.config.update import set_default_model
 
@@ -940,6 +942,92 @@ def test_is_config_populated_rejects_unrelated_oauth_credentials(
     set_default_model("anthropic/claude-sonnet-4-5")
 
     assert onboard_commands._is_config_populated() is False
+
+
+def test_is_config_populated_rejects_oauth_token_without_account_id(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config.update import set_default_model
+
+    token_file = tmp_path / "codex.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5")
+    token_file.write_text(
+        '{"access":"token","refresh":"refresh","expires":4102444800000}',
+        encoding="utf-8",
+    )
+
+    assert onboard_commands._is_config_populated() is False
+
+
+def test_is_config_populated_imports_valid_codex_cli_credentials(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate uses oauth-cli-kit's cache-miss import from ~/.codex."""
+    from raven.config.update import set_default_model
+
+    token_file = tmp_path / "oauth-cache" / "codex.json"
+    codex_auth = tmp_path / ".codex" / "auth.json"
+    codex_auth.parent.mkdir()
+    codex_auth.write_text(
+        json.dumps(
+            {
+                "tokens": {
+                    "access_token": "legacy-access",
+                    "refresh_token": "legacy-refresh",
+                    "account_id": "legacy-account",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5")
+
+    assert onboard_commands._is_config_populated() is True
+    assert json.loads(token_file.read_text())["account_id"] == "legacy-account"
+
+
+def test_is_config_populated_accepts_expired_refreshable_codex_token(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Expired access is accepted when the real request path can refresh it."""
+    from raven.config.update import set_default_model
+
+    token_file = tmp_path / "codex.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5")
+    token_file.write_text(
+        '{"access":"token","refresh":"refresh","expires":1,"account_id":"account"}',
+        encoding="utf-8",
+    )
+
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_accepts_github_copilot_access_token(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config.update import set_default_model
+
+    token_dir = tmp_path / "copilot"
+    token_dir.mkdir()
+    (token_dir / "access-token").write_text("github-access", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+    set_default_model("github_copilot/gpt-4o")
+
+    assert onboard_commands._is_config_populated() is True
 
 
 def test_is_config_populated_accepts_selected_api_key_provider(tmp_env: Path) -> None:
@@ -1047,6 +1135,75 @@ def test_agent_gate_skips_when_oauth_populated(
     runner.invoke(app, ["agent"])
 
     assert gate_called == []
+
+
+def test_agent_gate_uses_valid_oauth_custom_config(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`agent --config` gates against the same file the runtime will load."""
+    from raven.cli import agent_commands
+    from raven.config.update import set_default_model
+
+    custom_config = tmp_path / "custom-valid.json"
+    token_file = tmp_path / "codex.json"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5", config_path=custom_config)
+    token_file.write_text(
+        '{"access":"token","refresh":"refresh","expires":4102444800000,"account_id":"account"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+    gate_called: list[bool] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "ensure_configured_or_onboard",
+        lambda **_: gate_called.append(True),
+    )
+    runtime_paths: list[str | None] = []
+
+    def _runtime(config, workspace):
+        runtime_paths.append(config)
+        raise typer.Exit(0)
+
+    monkeypatch.setattr(agent_commands, "load_runtime_config", _runtime)
+
+    result = runner.invoke(app, ["agent", "--config", str(custom_config)])
+
+    assert result.exit_code == 0
+    assert gate_called == []
+    assert runtime_paths == [str(custom_config)]
+
+
+def test_agent_gate_rejects_invalid_custom_config_despite_valid_default(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid default config cannot bypass an invalid `--config` target."""
+    from raven.cli import agent_commands
+
+    _seed_provider()
+    custom_config = tmp_path / "custom-invalid.json"
+    custom_config.write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+    seen_paths: list[Path | None] = []
+
+    def _gate(**kwargs):
+        seen_paths.append(kwargs.get("config_path"))
+        raise typer.Exit(0)
+
+    monkeypatch.setattr(onboard_commands, "ensure_configured_or_onboard", _gate)
+
+    result = runner.invoke(app, ["agent", "--config", str(custom_config)])
+
+    assert result.exit_code == 0
+    assert seen_paths == [custom_config.resolve()]
 
 
 def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
