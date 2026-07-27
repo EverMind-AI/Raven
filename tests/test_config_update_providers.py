@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from raven.config.update_providers import (
+    _oauth_token_path,
     add_provider_model,
     get_provider_config,
     list_providers,
@@ -246,6 +247,74 @@ def test_list_reports_every_provider_with_correct_status(cfg_path: Path) -> None
     assert by_name["ollama_chat"]["api_key_redacted"] == "(not needed for local)"
 
     assert len(rows) >= 18
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "",
+        "not-json",
+        "{}",
+        '{"access":"token","expires":4102444800}',
+        '{"access":"token","refresh":"refresh","expires":true}',
+        '{"access":"token","refresh":"refresh","expires":"never"}',
+    ],
+)
+def test_list_rejects_unusable_oauth_token(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    contents: str,
+) -> None:
+    token_file = tmp_path / "codex.json"
+    token_file.write_text(contents, encoding="utf-8")
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["openai_codex"]["configured"] is False
+    assert "token" not in repr(rows["openai_codex"]).lower()
+
+
+def test_list_accepts_structurally_usable_oauth_token(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_file = tmp_path / "codex.json"
+    token_file.write_text(
+        '{"access":"secret-access","refresh":"secret-refresh","expires":4102444800}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["openai_codex"]["configured"] is True
+    assert rows["openai_codex"]["api_key_redacted"] == "OAuth token"
+    assert "secret-access" not in repr(rows)
+    assert "secret-refresh" not in repr(rows)
+    assert rows["github_copilot"]["configured"] is False
+
+
+def test_list_rejects_oauth_token_directory(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token_path = tmp_path / "codex.json"
+    token_path.mkdir()
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["openai_codex"]["configured"] is False
+
+
+def test_codex_default_token_filename_matches_oauth_cli_kit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
+
+    assert _oauth_token_path("openai_codex").name == "codex.json"
 
 
 # ---------------------------------------------------------------------------

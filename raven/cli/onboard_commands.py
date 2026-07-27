@@ -347,24 +347,30 @@ def _configured_providers() -> list[str]:
 
 
 def _is_config_populated() -> bool:
-    """True iff at least one provider is configured AND a default model is set.
+    """True iff the selected provider is configured and a default model is set.
 
     "Populated" for the startup gate means the required step (Step 1) is
     satisfied: provider credentials plus ``agents.defaults.model``. OAuth
     providers keep their credentials outside ``config.json``, so use the
-    provider ops layer's shared configuration check instead of looking only
-    for inline API keys. Either credentials or a model alone is not enough to
-    talk to a model.
+    provider ops layer's shared configuration check. Credentials for an
+    unrelated provider must not satisfy the gate.
     """
-    from raven.providers.registry import split_model_id
+    from raven.config.schema import Config
+    from raven.config.update_providers import list_providers
 
     data = _load_raw_config()
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
-    configured = _configured_providers()
-    model_prefix, _ = split_model_id(str(model or ""))
-    has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
-    has_provider = has_non_minimax_provider or model_prefix in configured
-    return bool(has_provider and model)
+    if not model:
+        return False
+    routing_config = Config.model_validate(
+        {
+            "agents": data.get("agents") or {},
+            "providers": data.get("providers") or {},
+        }
+    )
+    selected_provider = routing_config.get_provider_name(model)
+    provider_status = {provider["name"]: provider["configured"] for provider in list_providers()}
+    return bool(selected_provider and provider_status.get(selected_provider, False))
 
 
 def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) -> None:

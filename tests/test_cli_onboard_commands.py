@@ -928,6 +928,40 @@ def test_is_config_populated_accepts_oauth_provider(
     assert onboard_commands._is_config_populated() is True
 
 
+def test_is_config_populated_rejects_unrelated_oauth_credentials(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Codex token cannot satisfy a model routed to Anthropic."""
+    from raven.config.update import set_default_model
+
+    _seed_oauth_provider(tmp_path, monkeypatch)
+    set_default_model("anthropic/claude-sonnet-4-5")
+
+    assert onboard_commands._is_config_populated() is False
+
+
+def test_is_config_populated_accepts_selected_api_key_provider(tmp_env: Path) -> None:
+    """An API key still satisfies the gate when its provider owns the model."""
+    _seed_provider(provider="gemini", key="gemini-key", model="gemini/gemini-2.5-flash")
+
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_rejects_forced_unconfigured_provider(tmp_env: Path) -> None:
+    """A forced provider must have its own usable credentials."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openai", {"api_key": "sk-openai"})
+    data = json.loads(tmp_env.read_text())
+    data.setdefault("agents", {}).setdefault("defaults", {})
+    data["agents"]["defaults"].update({"model": "openai/gpt-4o-mini", "provider": "anthropic"})
+    tmp_env.write_text(json.dumps(data), encoding="utf-8")
+
+    assert onboard_commands._is_config_populated() is False
+
+
 def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate returns True (no wizard) when config is already complete."""
     _seed_provider()

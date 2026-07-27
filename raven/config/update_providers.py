@@ -429,14 +429,56 @@ def _oauth_token_path(provider_name: str) -> Path:
     so tests can point at ``tmp_path`` without touching real user data.
     """
     override = os.environ.get("OAUTH_CLI_KIT_TOKEN_PATH")
-    if override:
+    if provider_name == "openai_codex" and override:
         return Path(override)
+    filename = "codex.json" if provider_name == "openai_codex" else f"{provider_name}.json"
+    if provider_name == "openai_codex":
+        try:
+            from oauth_cli_kit import OPENAI_CODEX_PROVIDER
+
+            filename = OPENAI_CODEX_PROVIDER.token_filename
+        except (ImportError, AttributeError):
+            pass
     try:
         from platformdirs import user_data_dir
     except ImportError:
-        return Path.home() / ".local" / "share" / "oauth-cli-kit" / "auth" / f"{provider_name}.json"
+        return Path.home() / ".local" / "share" / "oauth-cli-kit" / "auth" / filename
     base_dir = Path(user_data_dir("oauth-cli-kit", appauthor=False))
-    return base_dir / "auth" / f"{provider_name}.json"
+    return base_dir / "auth" / filename
+
+
+def _oauth_token_is_usable(provider_name: str) -> bool:
+    """Return whether a supported OAuth token is structurally loadable.
+
+    This is deliberately offline: startup must not refresh a token or make a
+    network request.  ``oauth_cli_kit`` currently owns the OpenAI Codex token;
+    GitHub Copilot authentication is managed independently by LiteLLM, so its
+    state cannot be inferred from this token directory.
+    """
+    if provider_name != "openai_codex":
+        return False
+    try:
+        path = _oauth_token_path(provider_name)
+        if not path.is_file():
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    access = payload.get("access")
+    refresh = payload.get("refresh")
+    expires = payload.get("expires")
+    if not isinstance(access, str) or not access.strip():
+        return False
+    if not isinstance(refresh, str) or not refresh.strip():
+        return False
+    if isinstance(expires, bool):
+        return False
+    try:
+        return int(expires) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +557,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
 
                 configured = load_token("global" if fname == "minimax_global" else "cn") is not None
             else:
-                configured = _oauth_token_path(fname).exists()
+                configured = _oauth_token_is_usable(fname)
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             configured = bool(api_base) or bool(api_key)
