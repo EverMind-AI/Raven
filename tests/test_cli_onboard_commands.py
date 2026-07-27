@@ -899,6 +899,23 @@ def test_is_config_populated_accepts_minimax_oauth_token(
     assert onboard_commands._is_config_populated() is True
 
 
+def test_is_config_populated_accepts_oauth_provider(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An OAuth token outside config.json satisfies the provider gate."""
+    from raven.config.update import set_default_model
+
+    token_file = tmp_path / "openai_codex.json"
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5")
+
+    assert onboard_commands._is_config_populated() is False
+    token_file.write_text("{}", encoding="utf-8")
+    assert onboard_commands._is_config_populated() is True
+
+
 def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate returns True (no wizard) when config is already complete."""
     _seed_provider()

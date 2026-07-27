@@ -347,11 +347,14 @@ def _configured_providers() -> list[str]:
 
 
 def _is_config_populated() -> bool:
-    """True iff at least one provider has a key AND a default model is set.
+    """True iff at least one provider is configured AND a default model is set.
 
     "Populated" for the startup gate means the required step (Step 1) is
-    satisfied: a provider key plus ``agents.defaults.model``. Either alone is
-    not enough to talk to a model.
+    satisfied: provider credentials plus ``agents.defaults.model``. OAuth
+    providers keep their credentials outside ``config.json``, so use the
+    provider ops layer's shared configuration check instead of looking only
+    for inline API keys. Either credentials or a model alone is not enough to
+    talk to a model.
     """
     from raven.providers.registry import split_model_id
 
