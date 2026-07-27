@@ -912,7 +912,10 @@ def test_is_config_populated_accepts_oauth_provider(
     set_default_model("openai_codex/gpt-5")
 
     assert onboard_commands._is_config_populated() is False
-    token_file.write_text("{}", encoding="utf-8")
+    token_file.write_text(
+        '{"access":"test-token","refresh":"test-refresh","expires":4102444800}',
+        encoding="utf-8",
+    )
     assert onboard_commands._is_config_populated() is True
 
 
