@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.cli.update_notice import update_notice
 from raven.config.loader import load_config
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
@@ -135,7 +136,7 @@ def _default_session_info(
     zero usage, ``lazy=True``); version is always real (cached at module load).
     """
     model_id = config.agents.defaults.model
-    return {
+    info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
         "provider": config.agents.defaults.provider,
@@ -148,6 +149,16 @@ def _default_session_info(
         "cwd": os.getcwd(),
         "mcp_servers": [],
     }
+
+    # Nudge the status bar to run `raven upgrade` when the cached latest release
+    # is newer. Reading the cache is pure/fast; the cache is refreshed once per
+    # launch from the `raven tui` entrypoint (see cli/tui_commands.py), so a
+    # freshly published release shows up on the next launch.
+    notice = update_notice(_RAVEN_VERSION)
+    if notice is not None:
+        info["update_behind"], info["update_command"] = notice
+
+    return info
 
 
 def _get_or_build_manager(config: "Config") -> SessionManager:
