@@ -857,6 +857,19 @@ def _seed_provider(provider: str = "openai", key: str = "sk-seed", model: str = 
     set_default_model(model)
 
 
+def _seed_oauth_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write a default OAuth model and a representative external token."""
+    from raven.config.update import set_default_model
+
+    token_file = tmp_path / "openai_codex.json"
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    set_default_model("openai_codex/gpt-5")
+    token_file.write_text(
+        '{"access":"test-token","refresh":"test-refresh","expires":4102444800}',
+        encoding="utf-8",
+    )
+
+
 # --------------------------------------------------------------------------- gate
 
 
@@ -905,17 +918,13 @@ def test_is_config_populated_accepts_oauth_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An OAuth token outside config.json satisfies the provider gate."""
-    from raven.config.update import set_default_model
-
     token_file = tmp_path / "openai_codex.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
-    set_default_model("openai_codex/gpt-5")
+    from raven.config.update import set_default_model
 
+    set_default_model("openai_codex/gpt-5")
     assert onboard_commands._is_config_populated() is False
-    token_file.write_text(
-        '{"access":"test-token","refresh":"test-refresh","expires":4102444800}',
-        encoding="utf-8",
-    )
+    _seed_oauth_provider(tmp_path, monkeypatch)
     assert onboard_commands._is_config_populated() is True
 
 
@@ -977,6 +986,32 @@ def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("raven.cli._helpers.load_runtime_config", _boom)
     runner.invoke(app, ["agent"])
     # Populated → _is_config_populated() True → gate body never runs.
+    assert gate_called == []
+
+
+def test_agent_gate_skips_when_oauth_populated(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`raven agent` does not onboard an authenticated OAuth-only setup."""
+    from raven.cli import agent_commands
+
+    _seed_oauth_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+    gate_called: list[bool] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "ensure_configured_or_onboard",
+        lambda **_: gate_called.append(True),
+    )
+    monkeypatch.setattr(
+        "raven.cli._helpers.load_runtime_config",
+        lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
+    )
+
+    runner.invoke(app, ["agent"])
+
     assert gate_called == []
 
 
@@ -1050,6 +1085,29 @@ def test_tui_gate_skips_check_flag(tmp_env: Path, monkeypatch: pytest.MonkeyPatc
     # Stub find_node so --check exits fast without a real Node child.
     monkeypatch.setattr(tui_commands, "find_node", lambda: (None, None))
     runner.invoke(app, ["tui", "--check"])
+    assert gate_called == []
+
+
+def test_tui_gate_skips_when_oauth_populated(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`raven tui` does not onboard an authenticated OAuth-only setup."""
+    from raven.cli import tui_commands
+
+    _seed_oauth_provider(tmp_path, monkeypatch)
+    monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: True)
+    gate_called: list[bool] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "ensure_configured_or_onboard",
+        lambda **_: gate_called.append(True),
+    )
+    monkeypatch.setattr(tui_commands, "find_node", lambda: (None, None))
+
+    runner.invoke(app, ["tui"])
+
     assert gate_called == []
 
 
