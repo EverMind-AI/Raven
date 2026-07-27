@@ -473,9 +473,14 @@ def _github_copilot_token_is_usable() -> bool:
         payload = json.loads(api_key_path.read_text(encoding="utf-8"))
         token = payload.get("token") if isinstance(payload, dict) else None
         expires_at = payload.get("expires_at") if isinstance(payload, dict) else None
-        if not isinstance(token, str) or not token.strip() or isinstance(expires_at, bool):
+        if (
+            not isinstance(token, str)
+            or not token.strip()
+            or isinstance(expires_at, bool)
+            or not isinstance(expires_at, (int, float))
+        ):
             return False
-        return float(expires_at) > time.time()
+        return expires_at > time.time()
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         return False
 

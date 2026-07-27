@@ -353,6 +353,25 @@ def test_list_rejects_expired_github_copilot_api_key(
     assert rows["github_copilot"]["configured"] is False
 
 
+def test_list_rejects_string_expiry_github_copilot_api_key(
+    cfg_path: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM compares expires_at numerically and rejects JSON strings."""
+    token_dir = tmp_path / "copilot"
+    token_dir.mkdir()
+    (token_dir / "api-key.json").write_text(
+        '{"token":"typed-wrong","expires_at":"4102444800"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(token_dir))
+
+    rows = {row["name"]: row for row in list_providers(config_path=cfg_path)}
+
+    assert rows["github_copilot"]["configured"] is False
+
+
 def test_list_rejects_oauth_token_directory(
     cfg_path: Path,
     tmp_path: Path,
