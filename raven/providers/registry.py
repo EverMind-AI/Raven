@@ -358,6 +358,28 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
     ),
+    ProviderSpec(
+        name="minimax_global",
+        keywords=("minimax-global",),
+        env_key="",
+        display_name="MiniMax Global (OAuth)",
+        litellm_prefix="anthropic",
+        skip_prefixes=("anthropic/",),
+        default_api_base="https://api.minimax.io/anthropic/v1",
+        is_oauth=True,
+        default_model="minimax-global/MiniMax-M3",
+    ),
+    ProviderSpec(
+        name="minimax_cn",
+        keywords=("minimax-cn",),
+        env_key="",
+        display_name="MiniMax CN (OAuth)",
+        litellm_prefix="anthropic",
+        skip_prefixes=("anthropic/",),
+        default_api_base="https://api.minimaxi.com/anthropic/v1",
+        is_oauth=True,
+        default_model="minimax-cn/MiniMax-M3",
+    ),
     # === Local deployment (matched by config key, NOT by api_base) =========
     # vLLM / any OpenAI-compatible local server.
     # Detected when config key is "vllm" (provider_name="vllm").

@@ -378,6 +378,8 @@ class ProvidersConfig(Base):
     gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
+    minimax_global: ProviderConfig = Field(default_factory=ProviderConfig)
+    minimax_cn: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
     ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow

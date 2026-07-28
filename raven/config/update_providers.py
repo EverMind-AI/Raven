@@ -5,7 +5,7 @@ points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
 providers section is forbidden -- see plan rule.
 
-OAuth providers (``openai_codex`` / ``github_copilot``) have a separate
+OAuth providers have a separate
 auth path via ``provider_commands._LOGIN_HANDLERS`` and store tokens via
 ``oauth_cli_kit``, not in ``config.json``. ``set_provider_fields`` refuses
 to write ``api_key`` for those providers; callers must invoke
@@ -357,7 +357,12 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
 
         if is_oauth:
-            configured = _oauth_token_path(fname).exists()
+            if fname in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import load_token
+
+                configured = load_token("global" if fname == "minimax_global" else "cn") is not None
+            else:
+                configured = _oauth_token_path(fname).exists()
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             configured = bool(api_base) or bool(api_key)
@@ -515,13 +520,17 @@ def reset_provider(
     _write_atomic(path, data)
 
     if spec.is_oauth:
-        token_path = _oauth_token_path(name)
         try:
-            token_path.unlink(missing_ok=True)
+            if name in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import delete_token
+
+                delete_token("global" if name == "minimax_global" else "cn")
+            else:
+                _oauth_token_path(name).unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                "update_providers: failed to unlink OAuth token {}: {}",
-                token_path,
+                "update_providers: failed to unlink OAuth token for {}: {}",
+                name,
                 exc,
             )
 
@@ -621,8 +630,8 @@ def test_provider(
 
     Behavior:
 
-    1. Look up the provider's ``api_key`` (or OAuth access token via
-       ``oauth_cli_kit.get_token()`` for OAuth providers) and ``api_base``
+    1. Look up the provider's ``api_key`` or provider-specific OAuth access
+       token and ``api_base``
        (falling back to ``ProviderSpec.default_api_base`` when unset).
     2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}``.
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``). Unknown codes
@@ -652,7 +661,15 @@ def test_provider(
 
     if spec.is_oauth:
         try:
-            from oauth_cli_kit import get_token
+            if spec.name in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import get_token
+
+                token = get_token("global" if spec.name == "minimax_global" else "cn")
+                api_base = token.resource_url
+            else:
+                from oauth_cli_kit import get_token
+
+                token = get_token()
         except ImportError:
             return {
                 "ok": False,
@@ -661,10 +678,8 @@ def test_provider(
                 "http_status": None,
                 "models_count": None,
                 "model_ids": None,
-                "error": "oauth_cli_kit not installed",
+                "error": "OAuth support is not installed",
             }
-        try:
-            token = get_token()
         except Exception as exc:
             return {
                 "ok": False,
@@ -714,6 +729,8 @@ def test_provider(
         url = api_base.rstrip("/") + "/v1/models"
 
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if spec.name in {"minimax_global", "minimax_cn"} and api_key:
+        headers["x-api-key"] = api_key
 
     start = time.monotonic()
     client_kwargs: dict[str, Any] = {"timeout": timeout_s}

@@ -3,7 +3,7 @@
 Lifecycle commands:
 
 - ``provider login <name>`` — interactive OAuth login for OAuth-based
-  providers (openai-codex, github-copilot)
+  providers (OpenAI Codex, GitHub Copilot, MiniMax Global/CN)
 
 Config subcommands:
 
@@ -54,7 +54,7 @@ def _register_login(name: str):
 
 @provider_app.command("login")
 def provider_login(
-    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
+    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'minimax-global')"),
 ):
     """Authenticate with an OAuth provider."""
     from raven.providers.registry import PROVIDERS
@@ -121,6 +121,39 @@ def _login_github_copilot() -> None:
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1)
+
+
+def _login_minimax(region: str, label: str) -> None:
+    from raven.providers.minimax_oauth import login
+
+    console.print("[cyan]Starting MiniMax device flow...[/cyan]\n")
+    try:
+        token = login(
+            region,
+            print_fn=lambda message: console.print(message),
+            open_browser=(
+                bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+                if sys.platform.startswith("linux")
+                else True
+            ),
+        )
+    except Exception as exc:
+        console.print(f"[red]Authentication error: {exc}[/red]")
+        raise typer.Exit(1)
+    if not token.access:
+        console.print("[red]Authentication failed[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Authenticated with {label}[/green]")
+
+
+@_register_login("minimax_global")
+def _login_minimax_global() -> None:
+    _login_minimax("global", "MiniMax Global")
+
+
+@_register_login("minimax_cn")
+def _login_minimax_cn() -> None:
+    _login_minimax("cn", "MiniMax CN")
 
 
 def _help_requested(extra_args: list[str]) -> bool:
@@ -396,7 +429,7 @@ def _register_config_commands(app: typer.Typer) -> None:
     ):
         """Restore a provider to schema defaults. Key preserved, values reset.
 
-        For OAuth providers (openai-codex, github-copilot) the on-disk token
+        For OAuth providers the on-disk token
         file written by ``oauth_cli_kit`` is also deleted, so the user is
         effectively logged out and must re-run ``provider login`` to use it.
         """
