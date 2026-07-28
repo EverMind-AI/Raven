@@ -53,6 +53,15 @@ def test_provider_names_are_unique() -> None:
     assert len(names) == len(set(names))
 
 
+def test_registry_and_schema_declare_the_same_providers() -> None:
+    # A provider needs both a ProviderSpec (env keys, prefixes, detection) and a
+    # ProvidersConfig field (where its credentials live). Miss either half and it
+    # is unconfigurable or unreachable, with nothing else failing.
+    from raven.config.schema import ProvidersConfig
+
+    assert {spec.name for spec in PROVIDERS} == set(ProvidersConfig.model_fields)
+
+
 # Direct providers seeded in the model picker (issue #100). Each must expose a
 # non-empty default_model drawn from its curated shortlist, so the onboarding
 # fallback and the picker stay in sync and no provider defaults to empty.
