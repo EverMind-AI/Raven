@@ -1,53 +1,81 @@
 """Startup update nudge for the TUI status bar.
 
 The status bar's right slot shows an "update available" hint in place of the
-cwd/branch label when the session init bundle carries ``update_behind`` /
+cwd/branch label when the session init bundle carries ``update_available`` /
 ``update_command`` (see ``ui-tui/src/components/appChrome.tsx``); this module
 is what fills those in.
 
 The live check hits the GitHub releases API, which is too slow to run on the
-session-create hot path, so we keep a small cache in ``~/.raven`` and refresh
-it in a daemon thread at most once a day. A launch therefore shows the notice
-based on the *cached* latest version; the first launch after a release lands
-refreshes the cache and the notice appears on the next launch. Any network or
-parse failure is swallowed -- an update nudge must never break startup.
+session-create hot path, so we keep a small cache in the runtime cache dir and
+refresh it in a daemon thread at most once a day. A launch therefore shows the
+notice based on the *cached* latest version; the first launch after a release
+lands refreshes the cache and the notice appears on the next launch. Any
+network or parse failure is swallowed -- an update nudge must never break
+startup.
+
+Set ``RAVEN_NO_UPDATE_CHECK=1`` to opt out of both the fetch and the hint.
 """
 
 from __future__ import annotations
 
 import json
-import re
-import threading
+import os
 import time
 from pathlib import Path
 
-_CACHE_PATH = Path.home() / ".raven" / "update_check.json"
+_CACHE_NAME = "update_check.json"
 _REFRESH_TTL_SECONDS = 24 * 60 * 60
 _UPGRADE_COMMAND = "raven upgrade"
-_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+_OPT_OUT_ENV = "RAVEN_NO_UPDATE_CHECK"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _cache_path() -> Path:
+    # Resolved per call, not at import: get_cache_dir() follows the active
+    # config path, which set_config_path() can move after this module loads.
+    from raven.config import paths
+
+    return paths.get_cache_dir() / _CACHE_NAME
+
+
+def _disabled() -> bool:
+    return os.environ.get(_OPT_OUT_ENV, "").strip().lower() in _TRUTHY
 
 
 def _version_key(value: str) -> tuple[int, int, int] | None:
-    match = _VERSION_RE.match(value.strip())
-    if match is None:
+    """Parse ``1.2.3`` / ``v1.2.3`` leniently, ``None`` when unparseable.
+
+    ``upgrade_commands._version_key`` is the single source of truth for the
+    grammar; it raises for anything it cannot read, which here just means
+    "show no notice".
+    """
+    from raven.cli.upgrade_commands import UpgradeError
+    from raven.cli.upgrade_commands import _version_key as strict_key
+
+    try:
+        return strict_key(value.strip())
+    except (UpgradeError, AttributeError):
         return None
-    return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 
 def _read_cache() -> dict | None:
     try:
-        return json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+        parsed = json.loads(_cache_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
+    # A hand-edited cache can be valid JSON and still not an object; without
+    # this guard the .get() below raises and takes `raven tui` down with it.
+    return parsed if isinstance(parsed, dict) else None
 
-def _write_cache(latest_version: str, *, now: float) -> None:
+
+def _write_cache(latest_version: str | None, *, now: float) -> None:
+    payload: dict[str, object] = {"checked_at": now}
+    if latest_version is not None:
+        payload["latest_version"] = latest_version
     try:
-        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _CACHE_PATH.write_text(
-            json.dumps({"checked_at": now, "latest_version": latest_version}),
-            encoding="utf-8",
-        )
+        path = _cache_path()
+        path.write_text(json.dumps(payload), encoding="utf-8")
     except OSError:
         pass
 
@@ -55,14 +83,20 @@ def _write_cache(latest_version: str, *, now: float) -> None:
 def _refresh() -> None:
     # Imported lazily: the GitHub client pulls in httpx, which we keep off the
     # session-create hot path (this runs in a daemon thread).
+    cache = _read_cache() or {}
+    previous = cache.get("latest_version")
+    keep = previous if isinstance(previous, str) else None
+
     try:
         from raven.cli.upgrade_commands import _fetch_latest_release
 
         release = _fetch_latest_release()
         _write_cache(release.version, now=time.time())
     except Exception:
-        # Network error, rate limit, parse failure -- try again next TTL.
-        pass
+        # Offline, rate-limited, or the latest release is a draft/prerelease.
+        # Stamp checked_at anyway so we back off for a full TTL instead of
+        # refetching on every launch, and keep whatever version we had.
+        _write_cache(keep, now=time.time())
 
 
 def maybe_refresh_async() -> None:
@@ -72,31 +106,59 @@ def maybe_refresh_async() -> None:
     older than the TTL, so a normal launch touches the network at most once a
     day and never blocks.
     """
+    if _disabled():
+        return
+
     cache = _read_cache()
     if cache is not None:
         checked_at = cache.get("checked_at")
         if isinstance(checked_at, (int, float)) and (time.time() - checked_at) < _REFRESH_TTL_SECONDS:
             return
+
+    import threading
+
     threading.Thread(target=_refresh, daemon=True).start()
 
 
-def update_notice(current_version: str) -> tuple[int, str] | None:
-    """Return ``(behind, command)`` when the cached latest release is newer.
+def _upgrade_command_works() -> bool:
+    """Whether ``raven upgrade`` can actually do anything on this install.
 
-    ``behind`` is a positive flag (the status bar shows a version-agnostic
-    "Update available", not a count). Returns ``None`` when up to date, when
-    the cache is absent, or when either version is unparseable.
+    It refuses to run for editable and non-uv-tool installs, so nudging those
+    users points them at a command that always exits 1.
     """
+    try:
+        from raven.cli.upgrade_commands import _is_uv_tool_install
+
+        return _is_uv_tool_install()
+    except Exception:
+        # A malformed uv receipt raises UpgradeError; treat unknown as "no".
+        return False
+
+
+def update_notice(current_version: str) -> tuple[bool, str] | None:
+    """Return ``(available, command)`` when the cached latest release is newer.
+
+    Returns ``None`` when up to date, when the cache is absent or unreadable,
+    when either version is unparseable, or when ``raven upgrade`` would fail on
+    this install anyway.
+    """
+    if _disabled():
+        return None
+
     cache = _read_cache()
     if not cache:
         return None
+
     latest = cache.get("latest_version")
     if not isinstance(latest, str):
         return None
+
     latest_key = _version_key(latest)
     current_key = _version_key(current_version)
-    if latest_key is None or current_key is None:
+    if latest_key is None or current_key is None or latest_key <= current_key:
         return None
-    if latest_key > current_key:
-        return 1, _UPGRADE_COMMAND
-    return None
+
+    if not _upgrade_command_works():
+        return None
+
+    return True, _UPGRADE_COMMAND

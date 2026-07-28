@@ -391,7 +391,7 @@ const StatusRulePane = memo(function StatusRulePane({
         cols={composer.cols}
         cwdLabel={status.cwdLabel}
         model={ui.info?.model ?? ''}
-        updateAvailable={Boolean(ui.info?.update_behind && ui.info.update_behind > 0)}
+        updateAvailable={Boolean(ui.info?.update_available)}
         updateCommand={ui.info?.update_command || 'raven upgrade'}
         modelFast={ui.info?.fast || ui.info?.service_tier === 'priority'}
         modelReasoningEffort={ui.info?.reasoning_effort}

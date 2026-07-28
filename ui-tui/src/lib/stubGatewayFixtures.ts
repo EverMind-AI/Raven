@@ -28,8 +28,7 @@ export const STUB_SESSION_INFO: SessionInfo = {
   model: 'claude-sonnet-4-6',
   skills: {},
   tools: {},
-  // Raven Agent fork: independent version line, "X commits behind" semantic n/a.
-  update_behind: null
+  update_available: null
 }
 
 export const STUB_SESSION_LIST_ITEM: SessionListItem = {

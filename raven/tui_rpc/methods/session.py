@@ -156,7 +156,7 @@ def _default_session_info(
     # freshly published release shows up on the next launch.
     notice = update_notice(_RAVEN_VERSION)
     if notice is not None:
-        info["update_behind"], info["update_command"] = notice
+        info["update_available"], info["update_command"] = notice
 
     return info
 

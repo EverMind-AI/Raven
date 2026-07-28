@@ -31,7 +31,7 @@ describe('SessionPanel', () => {
       model: 'anthropic/claude-sonnet-4-6',
       skills: {},
       tools: {},
-      update_behind: 1,
+      update_available: true,
       update_command: 'raven upgrade'
     }
     const { lastFrame } = render(<SessionPanel info={info} maxCols={80} sid="test" t={DEFAULT_THEME} />)
