@@ -305,9 +305,14 @@ def _make_benchmark_provider(model: str, api_key: str, api_base: str, provider_n
     from raven.providers.base import GenerationSettings
     from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
+    resolved_base = api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None)
+    if not resolved_base:
+        # Without a base LiteLLM falls back to api.openai.com, so a missing
+        # RAVEN_BENCH_* endpoint would silently benchmark a third party.
+        raise ValueError(f"no api_base for provider {provider_name!r}; set OPENAI_BASE_URL or pass --api-base")
     provider = LiteLLMProvider(
         api_key=api_key,
-        api_base=api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None),
+        api_base=resolved_base,
         default_model=model,
         provider_name=provider_name,
         extra_headers=session_affinity_headers(),

@@ -25,6 +25,11 @@ def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
     spec, so the endpoint's own ``api_base`` / ``api_key`` are carried per call
     and several endpoints coexist in one process.
     """
+    if not endpoint.api_base:
+        # Without an explicit base LiteLLM falls back to OPENAI_BASE_URL (or
+        # api.openai.com), silently shipping the prompt and this endpoint's key
+        # to a third party. Routing config must name the endpoint it routes to.
+        raise ValueError(f"routing.models entry for {endpoint.model!r} has no api_base")
     return LiteLLMProvider(
         api_key=endpoint.api_key,
         api_base=endpoint.api_base,

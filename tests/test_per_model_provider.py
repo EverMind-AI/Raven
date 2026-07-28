@@ -92,6 +92,13 @@ def test_sub_providers_go_through_litellm():
     assert all(isinstance(sub, LiteLLMProvider) for sub in p._by_model.values())
 
 
+def test_endpoint_without_api_base_is_rejected():
+    # ModelEndpoint.api_base defaults to "", and LiteLLM would then fall back to
+    # api.openai.com and ship this endpoint's key there. Fail loudly instead.
+    with pytest.raises(ValueError, match="api_base"):
+        PerModelProvider([ModelEndpoint(model="m1")], fallback=_fallback())
+
+
 @pytest.mark.asyncio
 async def test_model_name_keeps_its_own_provider_prefix(monkeypatch):
     # A routed model may itself be prefixed (e.g. "anthropic/claude-x"). The
