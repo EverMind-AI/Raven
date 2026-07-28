@@ -53,6 +53,25 @@ def test_preferred_gateway_without_credentials_is_skipped() -> None:
     assert cfg.get_provider_name() == "openai"
 
 
+def test_gateway_shortlist_models_stay_on_the_gateway() -> None:
+    # OpenRouter ids name the upstream vendor ("anthropic/..."); without the
+    # gateway prefix a picked model silently leaves OpenRouter for that vendor.
+    from raven.providers.common_models import common_models_for
+
+    cfg = _config(anthropic={"apiKey": "K-ANT"}, openrouter={"apiKey": "sk-or-K"})
+    for model in common_models_for("openrouter"):
+        cfg.agents.defaults.model = model
+        assert cfg.get_provider_name() == "openrouter", model
+
+
+def test_a_config_written_before_the_zai_rename_still_resolves() -> None:
+    cfg = _config(zhipu={"apiKey": "K-ZAI"})
+    cfg.agents.defaults.model = "zai/glm-4.6"
+
+    assert cfg.get_provider_name() == "zai"
+    assert cfg.get_api_key() == "K-ZAI"
+
+
 def test_forced_provider_outranks_the_preferred_gateway() -> None:
     cfg = _config(openai={"apiKey": "K-OPENAI"}, openrouter={"apiKey": "sk-or-K"})
     cfg.agents.defaults.model = "gpt-4o"
