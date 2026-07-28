@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+pytest.importorskip("dingtalk_stream")
+
 from dingtalk_stream import AckMessage
 
 from raven.channels.adapters.dingtalk import parsing as p

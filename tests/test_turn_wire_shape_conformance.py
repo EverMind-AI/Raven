@@ -85,7 +85,9 @@ async def test_message_complete_payload_has_turn_id_and_usage_only() -> None:
     class _StubAgent:
         tools: dict = {}
 
-        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None):
+        async def run_turn(
+            self, req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None, text_sink=None
+        ):
             from raven.spine import Text, TurnOutcome, Usage
 
             await emit(Text(content="stub content (must not appear on wire)", source=req.source))

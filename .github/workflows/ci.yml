@@ -46,8 +46,8 @@ jobs:
           fi
           uv run pre-commit run --from-ref "$BASE" --to-ref HEAD
 
-  python:
-    name: python checks
+  lint-python:
+    name: python lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,8 +67,34 @@ jobs:
       - name: Focused Python lint
         run: make lint-python
 
-      - name: Focused Python tests
-        run: make test-python
+  unit:
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+
+      - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
+        run: uv run --all-extras pytest -q
 
   windows-upgrade:
     name: Windows self-upgrade

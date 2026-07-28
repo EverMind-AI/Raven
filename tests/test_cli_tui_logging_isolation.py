@@ -65,6 +65,14 @@ def _isolate_logging(tmp_path, monkeypatch):
     saved_named_handlers = {name: list(logging.getLogger(name).handlers) for name in _KNOWN_TTY_LEAKING_LOGGERS}
     saved_disable = logging.root.manager.disable
 
+    # litellm's stderr handlers are global and installed once at litellm import; a
+    # prior test that called redirect_loguru_to_file may have stripped them. Ensure
+    # the precondition (a stderr handler exists to be stripped) holds regardless of
+    # suite order — the finally-block restores the snapshot, dropping what we add.
+    for name in _KNOWN_TTY_LEAKING_LOGGERS:
+        if not _tty_stream_handlers(name):
+            logging.getLogger(name).addHandler(logging.StreamHandler(sys.stderr))
+
     try:
         yield
     finally:
