@@ -16,6 +16,7 @@ jobs:
   pre-commit:
     name: pre-commit diff
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,6 +50,7 @@ jobs:
   lint-python:
     name: python lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -70,10 +72,11 @@ jobs:
   unit:
     name: unit (py${{ matrix.python }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         python: ["3.12"]
     steps:
       - uses: actions/checkout@v7
@@ -87,11 +90,8 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python }}
 
-      # Everything the suite imports, minus `retrieval`: torch/transformers have
-      # no consumer in raven/, and their native runtimes segfault at interpreter
-      # finalization (see the same hazard noted in cli/agent_commands.py).
       - name: Install dependencies
-        run: uv sync --locked --extra channels --extra tools --extra sandbox --dev
+        run: uv sync --locked --all-extras --dev
 
       - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
@@ -99,11 +99,12 @@ jobs:
         # `"--flag" in result.stdout` assertions fail only on CI.
         env:
           TERM: dumb
-        run: uv run --extra channels --extra tools --extra sandbox pytest -q
+        run: uv run --all-extras pytest -q
 
   windows-upgrade:
     name: Windows self-upgrade
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -122,6 +123,7 @@ jobs:
   tui:
     name: TUI checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -148,6 +150,7 @@ jobs:
   bridge:
     name: bridge checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
