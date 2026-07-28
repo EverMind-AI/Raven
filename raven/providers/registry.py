@@ -54,7 +54,7 @@ class ProviderSpec:
     # OAuth-based providers (e.g., OpenAI Codex) don't use API keys
     is_oauth: bool = False  # if True, uses OAuth flow instead of API key
 
-    # Direct providers bypass LiteLLM entirely (e.g., CustomProvider)
+    # Direct providers bypass LiteLLM entirely (e.g., Azure OpenAI)
     is_direct: bool = False
 
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
@@ -73,7 +73,7 @@ class ProviderSpec:
 # ---------------------------------------------------------------------------
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
-    # === Custom (direct OpenAI-compatible endpoint, bypasses LiteLLM) ======
+    # === Custom (any OpenAI-compatible endpoint, via LiteLLM) ==============
     ProviderSpec(
         name="custom",
         keywords=(),
@@ -81,9 +81,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         display_name="Custom",
         # Route through LiteLLM as a generic OpenAI-compatible gateway: the
         # `openai/` prefix + configured api_base reach any OpenAI-compatible
-        # endpoint, and LiteLLM gives streaming / retry / tool-calling that the
-        # old direct CustomProvider lacked. Matched only via an explicit
-        # `provider: custom` selection (keywords empty).
+        # endpoint, with LiteLLM providing streaming / retry / tool-calling.
+        # Matched only via an explicit `provider: custom` selection (keywords
+        # empty).
         litellm_prefix="openai",
         is_gateway=True,
         default_api_base="http://localhost:8000/v1",
