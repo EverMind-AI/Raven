@@ -46,7 +46,7 @@ lint-bridge:
 test: test-python test-tui
 
 test-python:
-	uv run --extra channels --extra tools --extra sandbox pytest -q
+	uv run --all-extras pytest -q
 
 test-tui:
 	npm test --prefix ui-tui
