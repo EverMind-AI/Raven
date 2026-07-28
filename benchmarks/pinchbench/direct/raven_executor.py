@@ -303,22 +303,15 @@ def _session_to_openclaw_transcript(
 def _make_benchmark_provider(model: str, api_key: str, api_base: str, provider_name: str):
     """Create the benchmark LLM provider."""
     from raven.providers.base import GenerationSettings
-    from raven.providers.custom_provider import CustomProvider
-    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
-    if provider_name == "custom":
-        provider = CustomProvider(
-            api_key=api_key,
-            api_base=api_base,
-            default_model=model,
-        )
-    else:
-        provider = LiteLLMProvider(
-            api_key=api_key,
-            api_base=api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None),
-            default_model=model,
-            provider_name=provider_name,
-        )
+    provider = LiteLLMProvider(
+        api_key=api_key,
+        api_base=api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None),
+        default_model=model,
+        provider_name=provider_name,
+        extra_headers=session_affinity_headers(),
+    )
     provider.generation = GenerationSettings(
         temperature=0.7,
         max_tokens=8192,

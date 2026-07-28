@@ -5,6 +5,7 @@ import hashlib
 import os
 import secrets
 import string
+import uuid
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
@@ -53,6 +54,15 @@ _OPENROUTER_ATTRIBUTION: dict[str, str] = {
 def _short_tool_id() -> str:
     """Generate a 9-char alphanumeric ID compatible with all providers (incl. Mistral)."""
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
+
+
+def session_affinity_headers() -> dict[str, str]:
+    """Headers pinning one caller to one backend replica.
+
+    Self-hosted OpenAI-compatible backends (vLLM and friends) route by this
+    header, so a stable value per provider instance keeps prefix-cache hits warm.
+    """
+    return {"x-session-affinity": uuid.uuid4().hex}
 
 
 class LiteLLMProvider(LLMProvider):
