@@ -1,7 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -276,6 +276,11 @@ class AgentDefaults(Base):
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
+    # Per-model request-parameter overrides, keyed by a substring of the model
+    # name: {"kimi-k2.5": {"temperature": 1.0}}. Some models reject the usual
+    # defaults, and hard-coding those quirks in the registry left users unable to
+    # adjust them. Entries here win over the registry's built-in defaults.
+    model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
     @property

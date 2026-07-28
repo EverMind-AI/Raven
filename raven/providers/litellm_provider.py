@@ -83,6 +83,7 @@ class LiteLLMProvider(LLMProvider):
         provider_name: str | None = None,
         disable_auto_cache_control: bool = False,
         extra_body: dict[str, Any] | None = None,
+        model_overrides: dict[str, dict[str, Any]] | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -95,6 +96,8 @@ class LiteLLMProvider(LLMProvider):
         # Common use: OpenRouter routing affinity to keep prompt-cache hits warm,
         #   extra_body={"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
         self.extra_body = extra_body or {}
+        # User-configured per-model parameter overrides; win over the registry's.
+        self.model_overrides = model_overrides or {}
 
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -198,8 +201,12 @@ class LiteLLMProvider(LLMProvider):
         return new_messages, new_tools
 
     def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
-        """Apply model-specific parameter overrides from the registry."""
+        """Apply model-specific parameter overrides, config first then registry."""
         model_lower = model.lower()
+        for pattern, overrides in self.model_overrides.items():
+            if pattern.lower() in model_lower:
+                kwargs.update(overrides)
+                return
         spec = find_by_model(model)
         if spec:
             for pattern, overrides in spec.model_overrides:
