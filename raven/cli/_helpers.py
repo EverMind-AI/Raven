@@ -103,6 +103,13 @@ def make_provider(config: Config):
 
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
         provider = OpenAICodexProvider(default_model=model)
+    elif provider_name in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
+
+        provider = MiniMaxOAuthProvider(
+            region="global" if provider_name == "minimax_global" else "cn",
+            default_model=model,
+        )
     elif provider_name == "azure_openai":
         provider = AzureOpenAIProvider(
             api_key=p.api_key,
