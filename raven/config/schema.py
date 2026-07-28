@@ -248,6 +248,11 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+    # Preferred gateway for auto-detection: route bare model names through this
+    # provider (e.g. "openrouter") instead of matching the model's own vendor.
+    # Unlike `provider`, this is a soft preference -- an explicit
+    # "<provider>/<model>" prefix still wins, so single models can go direct.
+    gateway: str = ""
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
@@ -659,6 +664,13 @@ class Config(BaseSettings):
             if p and model_prefix and normalized_prefix == spec.name:
                 if spec.is_oauth or spec.is_local or p.api_key:
                     return p, spec.name
+
+        # Preferred gateway: claims every model the prefix loop above did not.
+        preferred = self.agents.defaults.gateway
+        if preferred:
+            p = getattr(self.providers, preferred, None)
+            if p and p.api_key:
+                return p, preferred
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
