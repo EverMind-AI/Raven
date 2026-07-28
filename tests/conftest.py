@@ -9,6 +9,27 @@ from __future__ import annotations
 import pytest
 
 
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Hard-exit past interpreter finalization when lancedb's runtime is live.
+
+    Tests that build the agent loop leave lancedb's Rust/tokio daemon thread
+    running with no shutdown hook, and finalizing the interpreter around it
+    segfaults (exit 139) after a fully green run. The CLI guards its own exit
+    the same way; see raven.cli._exit for the analysis.
+    """
+    from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
+
+    if not lancedb_finalization_hazard():
+        return
+    session = getattr(config, "_raven_exitstatus", 0)
+    flush_and_hard_exit(int(session))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
