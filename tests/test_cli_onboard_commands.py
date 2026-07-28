@@ -164,6 +164,36 @@ def test_onboard_help_lists_all_flags() -> None:
         assert flag in out, f"missing flag in help: {flag}"
 
 
+# --------------------------------------------------------------------------- curated provider list
+
+
+def test_curated_providers_all_exist_in_registry() -> None:
+    from raven.providers.registry import find_by_name
+
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert find_by_name(entry["name"]) is not None, f"unknown provider: {entry['name']}"
+
+
+def test_curated_providers_cover_the_seeded_picker_providers() -> None:
+    """Every provider seeded in the model picker must be pickable in the wizard.
+
+    The two lists drifted apart once already: zhipu / dashscope / groq carried a
+    curated shortlist and a default_model, yet the wizard offered no way to
+    choose them short of --provider or "Other".
+    """
+    from tests.test_provider_catalog import _SEEDED_DIRECT_PROVIDERS
+
+    curated = {entry["name"] for entry in onboard_commands._CURATED_PROVIDERS}
+    assert set(_SEEDED_DIRECT_PROVIDERS) <= curated
+
+
+def test_curated_providers_do_not_restate_registry_flags() -> None:
+    # is_oauth lives on the ProviderSpec; a copy here would be a second source
+    # of truth that silently goes stale.
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert "is_oauth" not in entry
+
+
 # --------------------------------------------------------------------------- non-interactive happy path
 
 
