@@ -245,7 +245,10 @@ def test_concurrent_writers_lose_no_turns(tmp_path: Path):
     """Two processes saving the same session: both turn blocks land,
     each block's messages contiguous (tool_call/result adjacency)."""
     key = "tui:race01"
-    procs = [multiprocessing.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
+    # spawn, not the Linux default fork: pytest leaves the parent multi-threaded,
+    # and forking from there segfaults the interpreter at exit.
+    ctx = multiprocessing.get_context("spawn")
+    procs = [ctx.Process(target=_turn_worker, args=(str(tmp_path), key, w)) for w in range(2)]
     for p in procs:
         p.start()
     for p in procs:

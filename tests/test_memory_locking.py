@@ -5,9 +5,10 @@ MemoryConsolidator + SentinelMemoryWriter.
 
 from __future__ import annotations
 
+import multiprocessing
 import sys
 import time
-from multiprocessing import Process, Value
+from multiprocessing import Value
 from pathlib import Path
 
 import pytest
@@ -72,9 +73,12 @@ def test_lock_serializes_across_processes(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     store.write_long_term("init\n")
 
-    ready = Value("i", 0)
-    done = Value("i", 0)
-    p = Process(
+    # spawn, not the Linux default fork: pytest leaves the parent multi-threaded,
+    # and forking from there segfaults the interpreter at exit.
+    ctx = multiprocessing.get_context("spawn")
+    ready = ctx.Value("i", 0)
+    done = ctx.Value("i", 0)
+    p = ctx.Process(
         target=_worker_acquire_and_hold,
         args=(str(tmp_path), 0.3, ready, done),
     )

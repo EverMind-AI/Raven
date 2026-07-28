@@ -6,6 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
+pytest.importorskip("wecom_aibot_sdk")
+
 from raven.channels.adapters.wecom.channel import WecomChannel
 
 

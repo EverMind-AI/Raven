@@ -27,6 +27,9 @@ from raven.tui_rpc.methods.model import (
 @pytest.fixture
 def fake_home(monkeypatch, tmp_path) -> Path:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # Clear any process-wide config-path override a prior test left set, so
+    # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
+    monkeypatch.setattr("raven.config.loader._current_config_path", None)
     return tmp_path
 
 

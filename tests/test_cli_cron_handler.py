@@ -498,7 +498,7 @@ async def test_repl_assembly_cron_renders_once_via_clioutlet_not_broadcast(fake_
     patch_cron_config(["*"])
 
     class _CronEchoLoop:
-        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
+        async def run_turn(self, req, emit, drain, *, stream, inline_tool_stream=False) -> TurnOutcome:
             await emit(Text(content=f"cron-reply<{req.conversation}>", source=req.source))
             return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 

@@ -41,8 +41,10 @@ from raven.token_wise.cache_optimizer import CacheOptimizer
 from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker
 
-KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
+pytestmark = pytest.mark.real_llm
+
+KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
+REPORT_PATH = Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 TURNS = 6
 COST_GUARD_USD = 0.50
