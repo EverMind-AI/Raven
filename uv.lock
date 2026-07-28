@@ -3342,6 +3342,9 @@ dev = [
 eval = [
     { name = "huggingface-hub" },
 ]
+pet = [
+    { name = "pillow" },
+]
 retrieval = [
     { name = "torch" },
     { name = "transformers" },
@@ -3360,6 +3363,7 @@ dev = [
     { name = "json-repair" },
     { name = "oauth-cli-kit" },
     { name = "pexpect" },
+    { name = "pillow" },
     { name = "pip-audit" },
     { name = "pre-commit" },
     { name = "pyte" },
@@ -3391,6 +3395,7 @@ requires-dist = [
     { name = "oauth-cli-kit", specifier = ">=0.1.6,<1.0.0" },
     { name = "oauth-cli-kit", marker = "extra == 'tools'", specifier = ">=0.1.6,<1.0.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0" },
+    { name = "pillow", marker = "extra == 'pet'", specifier = ">=11.0,<13.0" },
     { name = "portalocker", specifier = ">=3.2.0" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pycryptodome", marker = "extra == 'channel-weixin'", specifier = ">=3.20.0" },
@@ -3433,13 +3438,14 @@ requires-dist = [
     { name = "websockets", marker = "extra == 'channel-discord'", specifier = ">=16.0,<17.0" },
     { name = "wecom-aibot-sdk-python", marker = "extra == 'channel-wecom'", specifier = ">=0.1.5" },
 ]
-provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "channel-whatsapp", "channel-matrix", "channel-feishu", "channel-wecom", "channel-mochat", "channel-qq", "channel-dingtalk", "channel-email", "channel-weixin", "channels", "tools", "retrieval", "sandbox", "dev", "eval"]
+provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "channel-whatsapp", "channel-matrix", "channel-feishu", "channel-wecom", "channel-mochat", "channel-qq", "channel-dingtalk", "channel-email", "channel-weixin", "channels", "tools", "retrieval", "sandbox", "dev", "eval", "pet"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "json-repair", specifier = ">=0.59.5" },
     { name = "oauth-cli-kit", specifier = ">=0.1.6" },
     { name = "pexpect", specifier = ">=4.9" },
+    { name = "pillow", specifier = ">=11.0,<13.0" },
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pyte", specifier = ">=0.8" },
