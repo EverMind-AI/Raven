@@ -92,6 +92,19 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     cfg = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(
+        "OAUTH_CLI_KIT_TOKEN_PATH",
+        str(tmp_path / "oauth-cli-kit" / "codex.json"),
+    )
+    monkeypatch.setenv(
+        "GITHUB_COPILOT_TOKEN_DIR",
+        str(tmp_path / "github-copilot"),
+    )
+    monkeypatch.setenv(
+        "MINIMAX_OAUTH_TOKEN_DIR",
+        str(tmp_path / "minimax-oauth"),
+    )
     set_config_path(cfg)
     monkeypatch.setattr(
         "raven.config.paths.get_workspace_path",
