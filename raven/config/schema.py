@@ -373,7 +373,14 @@ class GeminiProviderConfig(ProviderConfig):
 
 
 class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
+    """Configuration for LLM providers.
+
+    Fields below are the providers Raven carries metadata for. Any other key is
+    kept as-is and served through :meth:`get`, so a provider LiteLLM supports but
+    Raven has no spec for still works from config alone.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
@@ -396,6 +403,24 @@ class ProvidersConfig(Base):
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
+
+    def get(self, name: str) -> ProviderConfig | None:
+        """Return one provider's config, declared field or extra key alike."""
+        declared = self.__dict__.get(name)
+        if isinstance(declared, ProviderConfig):
+            return declared
+        extra = (self.model_extra or {}).get(name)
+        if isinstance(extra, ProviderConfig):
+            return extra
+        if isinstance(extra, dict):
+            return ProviderConfig.model_validate(extra)
+        return None
+
+    def configured_names(self) -> list[str]:
+        """Names of providers holding credentials, declared fields and extras."""
+        names = [n for n in type(self).model_fields if self.get(n) and self.get(n).api_key]
+        names += [n for n in (self.model_extra or {}) if (c := self.get(n)) and c.api_key]
+        return names
 
 
 class ModelEndpoint(Base):
@@ -633,7 +658,8 @@ class Config(BaseSettings):
         resolution never mutates the raw config.
         """
         media = self.tools.media.model_copy(deep=True)
-        or_key = self.providers.openrouter.api_key
+        openrouter = self.providers.get("openrouter")
+        or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
@@ -665,10 +691,17 @@ class Config(BaseSettings):
                 if spec.is_oauth or spec.is_local or p.api_key:
                     return p, spec.name
 
+        # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
+        # the vendor, so credentials under that name are enough to reach it.
+        if normalized_prefix:
+            passthrough = self.providers.get(normalized_prefix)
+            if passthrough and passthrough.api_key:
+                return passthrough, normalized_prefix
+
         # Preferred gateway: claims every model the prefix loop above did not.
         preferred = self.agents.defaults.gateway
         if preferred:
-            p = getattr(self.providers, preferred, None)
+            p = self.providers.get(preferred)
             if p and p.api_key:
                 return p, preferred
 

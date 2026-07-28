@@ -16,6 +16,18 @@ from dataclasses import dataclass
 from typing import Any
 
 
+def provider_section(providers: Any, name: str) -> Any:
+    """Return one provider's config off a ProvidersConfig.
+
+    Goes through ``ProvidersConfig.get`` so extras (providers with no spec)
+    resolve too, while tolerating the plain namespaces tests stub in.
+    """
+    getter = getattr(providers, "get", None)
+    if callable(getter):
+        return getter(name)
+    return getattr(providers, name, None)
+
+
 @dataclass(frozen=True)
 class ProviderSpec:
     """One LLM provider's metadata. See PROVIDERS below for real examples.

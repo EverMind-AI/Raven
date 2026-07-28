@@ -117,6 +117,7 @@ class LiteLLMProvider(LLMProvider):
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
         if not spec:
+            self._setup_env_from_litellm(api_key, model)
             return
         if not spec.env_key:
             # OAuth/provider-only specs (for example: openai_codex)
@@ -136,6 +137,20 @@ class LiteLLMProvider(LLMProvider):
             resolved = env_val.replace("{api_key}", api_key)
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
+
+    @staticmethod
+    def _setup_env_from_litellm(api_key: str, model: str) -> None:
+        """Bridge the key for a provider Raven carries no spec for.
+
+        LiteLLM already knows which variable each vendor reads, so a prefixed
+        model name is enough to place the key without a hand-written spec.
+        """
+        try:
+            env_keys = litellm.validate_environment(model=model).get("missing_keys") or []
+        except Exception:
+            return
+        for env_name in env_keys:
+            os.environ.setdefault(env_name, api_key)
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
