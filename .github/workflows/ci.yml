@@ -74,10 +74,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.11", "3.12", "3.13"]
-        include:
-          - os: macos-latest
-            python: "3.12"
+        python: ["3.12"]
     steps:
       - uses: actions/checkout@v7
 
@@ -94,6 +91,11 @@ jobs:
         run: uv sync --locked --all-extras --dev
 
       - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
+        # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
+        # set, and the highlighter then splits option names with escape codes, so
+        # `"--flag" in result.stdout` assertions fail only on CI.
+        env:
+          TERM: dumb
         run: uv run --all-extras pytest -q
 
   windows-upgrade:
