@@ -34,8 +34,10 @@ from raven.config.raven import TokenWiseConfig
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.token_wise.registry import StrategyRegistry
 
-KEY_FILE = Path(__file__).resolve().parent.parent / "raven" / "key.env"
-REPORT_PATH = Path(__file__).resolve().parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
+pytestmark = pytest.mark.real_llm
+
+KEY_FILE = Path(__file__).resolve().parent.parent.parent / "raven" / "key.env"
+REPORT_PATH = Path(__file__).resolve().parent.parent.parent / "raven" / "token_wise" / "EXPERIMENT_REPORT.md"
 MODEL = "anthropic/claude-sonnet-4-5"
 TURNS = 6
 COST_GUARD_USD = 0.50  # hard cap; abort if we go over

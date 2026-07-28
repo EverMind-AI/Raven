@@ -195,8 +195,8 @@ class TestTwoTrackConcurrency:
         self,
         builder: ContextBuilder,
     ) -> None:
-        slow_source = _StubSource("local", hits=[], delay_s=0.10)
-        slow_backend = _StubBackend(recall_response=[], delay_s=0.10)
+        slow_source = _StubSource("local", hits=[], delay_s=0.20)
+        slow_backend = _StubBackend(recall_response=[], delay_s=0.20)
         eng = _engine(
             builder,
             router=SkillForgeRouter([slow_source]),
@@ -210,8 +210,8 @@ class TestTwoTrackConcurrency:
             turn=_turn(),
         )
         elapsed = time.monotonic() - t0
-        # Serial would be ~0.20 s. Concurrent ~0.10 s. Loose bound 0.15.
-        assert elapsed < 0.15
+        # Serial would be ~0.40 s. Concurrent ~0.20 s. Loose bound 0.30.
+        assert elapsed < 0.30
 
     async def test_track_ids_passed_to_recall(
         self,

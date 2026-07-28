@@ -119,7 +119,7 @@ def _seed_topic_fires(
 
 
 def _run(updater: AttentionUpdater):
-    return asyncio.get_event_loop().run_until_complete(updater.update())
+    return asyncio.run(updater.update())
 
 
 # ===========================================================================

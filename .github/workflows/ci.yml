@@ -46,8 +46,8 @@ jobs:
           fi
           uv run pre-commit run --from-ref "$BASE" --to-ref HEAD
 
-  python:
-    name: python checks
+  lint-python:
+    name: python lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -67,8 +67,39 @@ jobs:
       - name: Focused Python lint
         run: make lint-python
 
-      - name: Focused Python tests
-        run: make test-python
+  unit:
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python }}
+
+      # Everything the suite imports, minus `retrieval`: torch/transformers have
+      # no consumer in raven/, and their native runtimes segfault at interpreter
+      # finalization (see the same hazard noted in cli/agent_commands.py).
+      - name: Install dependencies
+        run: uv sync --locked --extra channels --extra tools --extra sandbox --dev
+
+      - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
+        # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
+        # set, and the highlighter then splits option names with escape codes, so
+        # `"--flag" in result.stdout` assertions fail only on CI.
+        env:
+          TERM: dumb
+        run: uv run --extra channels --extra tools --extra sandbox pytest -q
 
   windows-upgrade:
     name: Windows self-upgrade
@@ -83,7 +114,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Test real uv self-upgrade
-        run: uvx --python 3.12 --from "pytest>=8,<10" pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
+        # pytest-asyncio is needed even though this file has no async test: the
+        # isolated interpreter still reads the project's pytest config, whose
+        # --strict-config turns the then-unknown asyncio_mode into a hard error.
+        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
   tui:
     name: TUI checks

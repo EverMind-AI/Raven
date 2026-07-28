@@ -9,6 +9,34 @@ from __future__ import annotations
 import pytest
 
 
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """On CI, hard-exit past interpreter finalization once the run is over.
+
+    Native runtimes pulled in by the suite (lancedb's Rust/tokio thread, asyncio
+    subprocess transports finalized during GC) segfault Py_FinalizeEx on Linux,
+    turning a fully green run into exit 139. raven.cli._exit guards the CLI the
+    same way; the pytest process needs its own guard because it finalizes with
+    those runtimes live.
+
+    Local runs keep normal semantics so nothing masks an exit-time error, and
+    the recorded status is preserved either way -- a failing run still exits
+    non-zero.
+    """
+    import os
+
+    if not os.environ.get("CI"):
+        return
+
+    from raven.cli._exit import flush_and_hard_exit
+
+    flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
