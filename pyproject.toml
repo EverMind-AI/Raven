@@ -98,13 +98,9 @@ tools = [
     "readability-lxml>=0.8.4,<1.0.0",
     "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
-retrieval = [
-    "torch>=2.0.0",
-    "transformers>=4.45.0",
-]
 sandbox = [
-    "boxlite==0.9.5",
     "anyio>=4.0",
+    "boxlite==0.9.5 ; sys_platform != 'win32'",
 ]
 dev = [
     "pytest>=8.0,<10.0",
