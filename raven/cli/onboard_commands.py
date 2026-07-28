@@ -110,7 +110,7 @@ _CURATED_PROVIDERS: list[dict[str, Any]] = [
     {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
     {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
     {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
-    {"name": "zhipu", "label": "Zhipu AI", "label_zh": "智谱 AI"},
+    {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
     {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
     {"name": "groq", "label": "Groq", "label_zh": "Groq"},
     {

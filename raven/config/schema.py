@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -389,7 +389,12 @@ class ProvidersConfig(Base):
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Z.ai, the vendor's current brand and LiteLLM's name for it. Configs
+    # written before the rename say "zhipu"; both keys load.
+    zai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("zai", "zhipu"),
+    )
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI

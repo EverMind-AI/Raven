@@ -295,14 +295,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         default_model="gemini/gemini-2.5-flash",
     ),
-    # Zhipu: LiteLLM uses "zai/" prefix.
+    # Z.ai (formerly Zhipu AI): named after the vendor's current brand, which is
+    # also what LiteLLM calls it. Old configs saying "zhipu" still load.
     # Also mirrors key to ZHIPUAI_API_KEY (some LiteLLM paths check that).
     # skip_prefixes: don't add "zai/" when already routed via gateway.
     ProviderSpec(
-        name="zhipu",
+        name="zai",
         keywords=("zhipu", "glm", "zai"),
         env_key="ZAI_API_KEY",
-        display_name="Zhipu AI",
+        display_name="Z.ai",
         litellm_prefix="zai",  # glm-4 → zai/glm-4
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),

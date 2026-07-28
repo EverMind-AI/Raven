@@ -303,7 +303,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     ("openai", "openai/"),
     ("anthropic", "anthropic/"),
     ("gemini", "gemini/"),
-    ("zhipu", "zai/"),
+    ("zai", "zai/"),
     ("groq", "groq/"),
     ("dashscope", "dashscope/"),
 ]
