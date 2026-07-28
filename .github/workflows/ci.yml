@@ -109,7 +109,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Test real uv self-upgrade
-        run: uvx --python 3.12 --from "pytest>=8,<10" pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
+        # pytest-asyncio is needed even though this file has no async test: the
+        # isolated interpreter still reads the project's pytest config, whose
+        # --strict-config turns the then-unknown asyncio_mode into a hard error.
+        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
   tui:
     name: TUI checks
