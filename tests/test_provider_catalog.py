@@ -93,6 +93,11 @@ def _concrete_provider_subclasses() -> set[type]:
         stack.extend(cls.__subclasses__())
         if getattr(cls, "__abstractmethods__", frozenset()):
             continue
+        # LazyProvider is a proxy over a real backend, not a backend itself, and
+        # is not imported above -- so its presence via __subclasses__ depends on
+        # ambient imports from other tests. Skip it to keep the set deterministic.
+        if cls.__module__ == "raven.providers.lazy":
+            continue
         if cls.__module__.startswith("raven.providers"):
             seen.add(cls)
     return seen
