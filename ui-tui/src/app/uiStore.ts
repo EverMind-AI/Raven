@@ -29,6 +29,7 @@ const buildUiState = (): UiState => ({
   status: 'summoning raven…',
   statusBar: 'bottom',
   streaming: true,
+  transcript: 'episodes',
   theme: DEFAULT_THEME,
   usage: ZERO
 })

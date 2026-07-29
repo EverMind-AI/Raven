@@ -44,6 +44,12 @@ export function splitReasoning(input: string): SplitReasoning {
   }
 }
 
+// A reasoning burst that carries no actual words is noise, not thought: some
+// models (e.g. minimax-m3 during a mechanical tool loop) emit reasoning_content
+// that is just "." / ".\n.\n" placeholder dots. Require at least one letter or
+// digit in any script.
+export const hasMeaningfulReasoning = (input: string) => /[\p{L}\p{N}]/u.test(input)
+
 export const hasReasoningTag = (input: string) => {
   for (const tag of TAGS) {
     if (input.includes(`<${tag}>`)) {

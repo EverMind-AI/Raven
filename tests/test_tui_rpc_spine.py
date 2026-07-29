@@ -183,7 +183,10 @@ async def test_outlet_deliver_tool_event_to_tool_start_and_complete():
     assert emitter.emitted == [
         (
             "tui:c1",
-            {"type": "tool.start", "payload": {"tool_call_id": "t1", "name": "shell", "arguments": {"cmd": "ls"}}},
+            {
+                "type": "tool.start",
+                "payload": {"tool_call_id": "t1", "name": "shell", "arguments": {"cmd": "ls"}, "display": None},
+            },
         ),
         (
             "tui:c1",

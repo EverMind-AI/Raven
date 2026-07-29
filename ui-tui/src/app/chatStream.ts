@@ -33,6 +33,7 @@ import type {
 } from '../rpc/index.js'
 import type { Msg } from '../types.js'
 
+import { argPreview } from '../lib/toolArgs.js'
 import { turnController } from './turnController.js'
 import { patchTurnState } from './turnStore.js'
 import { patchUiState } from './uiStore.js'
@@ -109,6 +110,9 @@ const dispatch = (
     case 'message.start':
       onMessageStart(state, event)
       return
+    case 'episode.start':
+      turnController.recordEpisodeStart(event.payload.index)
+      return
     case 'token.delta':
       onTokenDelta(event)
       return
@@ -162,15 +166,10 @@ const onTokenDelta = (ev: TokenDeltaEvent): void => {
 }
 
 const onToolStart = (ev: ToolStartEvent): void => {
-  const { tool_call_id, name, arguments: args } = ev.payload
-  // Render a short context line from the first scalar argument value so the
-  // active-tool list shows useful preview text without leaking the full
-  // argument blob into the UI.
-  const previewKey = Object.keys(args)[0]
-  const previewVal = previewKey !== undefined ? args[previewKey] : undefined
-  const context =
-    typeof previewVal === 'string' ? previewVal : previewVal !== undefined ? JSON.stringify(previewVal) : ''
-  turnController.recordToolStart(tool_call_id, name, context)
+  const { tool_call_id, name, arguments: args, display } = ev.payload
+  // Prefer the tool-authored call label; else preview the "what" of the call
+  // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
+  turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))
 }
 
 const onToolComplete = (ev: ToolCompleteEvent): void => {

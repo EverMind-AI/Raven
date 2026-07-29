@@ -114,9 +114,43 @@ export interface ClarifyReq {
   requestId: string
 }
 
+// One tool invocation inside an episode. `summary` is a target-string ("ls
+// biz/", "approve.go") or empty; the verb comes from the tool name at render.
+export interface EpisodeTool {
+  id: string
+  name: string
+  summary: string
+  resultPreview?: string
+  diff?: string
+  added?: number
+  removed?: number
+  ok: boolean
+  done?: boolean
+  // Wall-clock start, so an in-flight call can show a live elapsed timer
+  // (durationMs is only known once it finishes).
+  startedAt?: number
+  durationMs?: number
+}
+
+// One model call. The transcript groups a turn into these; each collapses to a
+// single summary line and expands to its reasoning + tools.
+export interface Episode {
+  index: number
+  // When this model call began — lets the folded reasoning row show a live
+  // duration while the step is still thinking.
+  startedAt?: number
+  reasoning?: string
+  narration?: string
+  tools: EpisodeTool[]
+  durationMs?: number
+  // Wall time spent before this step's first tool (≈ the model's thinking
+  // time), so "reasoning for Ns" reflects thought, not tool-execution time.
+  reasoningMs?: number
+}
+
 export interface Msg {
   info?: SessionInfo
-  kind?: 'diff' | 'intro' | 'panel' | 'slash' | 'trail'
+  kind?: 'diff' | 'episodes' | 'intro' | 'panel' | 'slash' | 'trail'
   panelData?: PanelData
   role: Role
   text: string
@@ -124,6 +158,7 @@ export interface Msg {
   thinkingTokens?: number
   toolTokens?: number
   tools?: string[]
+  episodes?: Episode[]
   todos?: TodoItem[]
   todoIncomplete?: boolean
   todoCollapsedByDefault?: boolean

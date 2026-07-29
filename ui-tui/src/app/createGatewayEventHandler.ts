@@ -302,6 +302,10 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         turnController.startMessage()
 
         return
+      case 'episode.start':
+        turnController.recordEpisodeStart(Number(ev.payload?.index ?? 0))
+
+        return
       case 'status.update': {
         const p = ev.payload
 

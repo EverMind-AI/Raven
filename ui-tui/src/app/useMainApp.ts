@@ -506,14 +506,20 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
         }
 
         if (answer) {
-          turnController.persistedToolLabels.add(label)
-          appendMessage({
-            kind: 'trail',
-            role: 'system',
-            text: '',
-            tools: [buildToolTrailLine('clarify', clarify.question)]
-          })
-          appendMessage({ role: 'user', text: answer })
+          // Legacy transcript: record the clarify as a tool-trail panel plus the
+          // answer as a message. In episodes mode the ask_user / deep_research
+          // tool already renders this Q&A as a step, so committing them here would
+          // double it — and the answer would masquerade as a typed user message.
+          if (getUiState().transcript !== 'episodes') {
+            turnController.persistedToolLabels.add(label)
+            appendMessage({
+              kind: 'trail',
+              role: 'system',
+              text: '',
+              tools: [buildToolTrailLine('clarify', clarify.question)]
+            })
+            appendMessage({ role: 'user', text: answer })
+          }
           patchUiState({ status: 'running…' })
         } else {
           sys('prompt cancelled')
