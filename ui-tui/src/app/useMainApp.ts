@@ -397,7 +397,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
     // alive (stdin listener keeps the event loop open), so the process.on('exit')
     // handler in entry.tsx — which sends the final resetTerminalModes() — never
     // fires.  This leaves kitty keyboard protocol, mouse modes, etc. enabled
-    // in the parent shell.  See issue #19194.
+    // in the parent shell.
     process.exit(0)
   }, [exit, gw])
 

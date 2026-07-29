@@ -172,7 +172,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
   // Terminal statuses are never overwritten by late-arriving live events —
   // otherwise a stale `subagent.start` / `spawn_requested` can clobber a
-  // `failed` or `interrupted` terminal state (Copilot review #14045).
+  // `failed` or `interrupted` terminal state.
   const isTerminalStatus = (s: SubagentProgress['status']) => s === 'completed' || s === 'failed' || s === 'interrupted'
 
   const keepTerminalElseRunning = (s: SubagentProgress['status']) => (isTerminalStatus(s) ? s : 'running')
