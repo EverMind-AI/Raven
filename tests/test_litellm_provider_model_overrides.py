@@ -72,6 +72,24 @@ async def test_registry_default_still_applies_without_config(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_registry_defaults_survive_gateway_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A gateway-routed id names the gateway and its upstream
+    # ("openrouter/moonshotai/kimi-k2.5"), neither of which is a spec name -- but
+    # Kimi still requires its temperature whichever door it is reached through.
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="test-key",
+        provider_name="openrouter",
+        default_model="openrouter/moonshotai/kimi-k2.5",
+    )
+    p.generation = GenerationSettings(temperature=0.1)
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
+
+    assert seen[0]["temperature"] == 1.0
+
+
+@pytest.mark.asyncio
 async def test_the_most_specific_pattern_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     # Patterns match on substrings, so a broad one shadows a precise one unless
     # length decides -- and dict order must not be what picks the winner.

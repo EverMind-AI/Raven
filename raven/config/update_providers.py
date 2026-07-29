@@ -96,13 +96,18 @@ def _provider_aliases(name: str) -> tuple[str, ...]:
 
 
 def _raw_section(data: dict[str, Any], name: str) -> dict[str, Any]:
-    """Read a provider's raw section, falling back to its pre-rename key."""
+    """Read a provider's raw section, folding in any pre-rename section.
+
+    Both names can hold half the settings; taking whichever is non-empty would
+    drop the other's fields on the next write. Current name wins per field.
+    """
     providers = data.get("providers") or {}
-    for key in (name, *_provider_aliases(name)):
-        section = providers.get(key)
-        if section:
-            return section
-    return {}
+    section: dict[str, Any] = {}
+    for key in (*_provider_aliases(name), name):
+        older = providers.get(key)
+        if isinstance(older, dict):
+            section.update(older)
+    return section
 
 
 def _write_raw_section(data: dict[str, Any], name: str, section: dict[str, Any]) -> None:
@@ -360,12 +365,13 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_providers = data.get("providers") or {}
 
     out: list[dict[str, Any]] = []
     for fname in _provider_names():
         cls = _provider_schema_cls(fname)
-        section = raw_providers.get(fname) or {}
+        # Through _raw_section, so a provider still stored under its pre-rename
+        # key reads as configured here and not just at runtime.
+        section = _raw_section(data, fname)
         try:
             instance = cls.model_validate(section)
         except ValidationError:

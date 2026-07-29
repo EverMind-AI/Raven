@@ -15,7 +15,7 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_model, find_gateway
+from raven.providers.registry import find_by_keywords, find_by_model, find_gateway
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -139,6 +139,13 @@ class LiteLLMProvider(LLMProvider):
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
 
+    def _strip_gateway_prefix(self, model: str) -> str:
+        """Drop this gateway's own prefix, leaving the upstream vendor's id."""
+        if not self._gateway:
+            return model
+        prefix = f"{self._gateway.litellm_prefix or self._gateway.name}/"
+        return model[len(prefix) :] if model.startswith(prefix) else model
+
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
         if self._gateway:
@@ -214,7 +221,9 @@ class LiteLLMProvider(LLMProvider):
         user only wanted to set top_p.
         """
         model_lower = model.lower()
-        spec = find_by_model(model)
+        # A gateway-routed id names the gateway and its upstream, not the vendor
+        # whose quirks these defaults encode -- so match on keywords there.
+        spec = find_by_keywords(self._strip_gateway_prefix(model)) if self._gateway else find_by_model(model)
         if spec:
             for pattern, overrides in spec.model_overrides:
                 if pattern in model_lower:

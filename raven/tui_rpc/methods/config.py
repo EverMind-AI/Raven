@@ -301,6 +301,12 @@ def _set_model(
         spec = find_by_model(raw_value)
         if spec is not None:
             new_provider = spec.name
+        elif "/" in raw_value:
+            # An id like "mistral/..." or "openrouter/anthropic/..." names its
+            # own vendor, and no spec matches it. Keeping the previously forced
+            # provider would send that provider's key to this other vendor, so
+            # hand routing back to auto-detection.
+            new_provider = "auto"
 
     session_id = params.get("session_id")
     if isinstance(session_id, str) and session_id and is_turn_active(session_id):

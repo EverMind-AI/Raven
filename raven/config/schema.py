@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -248,11 +248,6 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    # Route bare model names through this provider (e.g. "openrouter") instead
-    # of matching the model's own vendor. Unlike `provider`, this is a soft
-    # preference -- an explicit "<provider>/<model>" prefix still wins, so
-    # single models can go direct.
-    preferred_gateway: str = ""
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
@@ -381,6 +376,34 @@ class ProvidersConfig(Base):
     """
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_renamed_sections(cls, data: Any) -> Any:
+        """Fold a provider's pre-rename section into its current one.
+
+        A file touched by both names holds two half-filled sections -- say the
+        credentials under the old name and a model list under the new one.
+        Picking either section alone drops the other's fields, so merge with the
+        current name winning per field.
+        """
+        if not isinstance(data, dict):
+            return data
+        from raven.providers.registry import PROVIDERS
+
+        merged = dict(data)
+        for spec in PROVIDERS:
+            stale = [merged.pop(a) for a in spec.name_aliases if isinstance(merged.get(a), dict)]
+            if not stale:
+                continue
+            section: dict[str, Any] = {}
+            for older in stale:
+                section.update(older)
+            current = merged.get(spec.name)
+            if isinstance(current, dict):
+                section.update(current)
+            merged[spec.name] = section
+        return merged
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
     azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
@@ -708,13 +731,6 @@ class Config(BaseSettings):
             passthrough = self.providers.get(passthrough_name)
             if passthrough and passthrough.api_key:
                 return passthrough, passthrough_name
-
-        # Preferred gateway: claims every model the prefix loop above did not.
-        preferred = self.agents.defaults.preferred_gateway
-        if preferred:
-            p = self.providers.get(preferred)
-            if p and p.api_key:
-                return p, preferred
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:

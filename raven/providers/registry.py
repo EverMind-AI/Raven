@@ -359,6 +359,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         strip_model_prefix=False,
         model_overrides=(("kimi-k2.5", {"temperature": 1.0}),),
+        # Needed by `provider test` and the wizard preflight, which probe
+        # /v1/models before any LiteLLM call resolves an endpoint.
+        default_api_base="https://api.moonshot.ai/v1",  # intl; api.moonshot.cn in China
         standard=True,
     ),
     # MiniMax: needs "minimax/" prefix for LiteLLM routing.
@@ -376,6 +379,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         strip_model_prefix=False,
         model_overrides=(),
+        # Needed by `provider test` and the wizard preflight, which probe
+        # /v1/models before any LiteLLM call resolves an endpoint.
+        default_api_base="https://api.minimax.io/v1",
         standard=True,
     ),
     ProviderSpec(
@@ -464,10 +470,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
 
 
 def find_by_model(model: str) -> ProviderSpec | None:
-    """Match a standard provider by model-name keyword (case-insensitive).
+    """Match a standard provider from a model id (case-insensitive).
     Skips gateways/local — those are matched by api_key/api_base instead."""
     model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
     model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
     normalized_prefix = model_prefix.replace("-", "_")
     std_specs = [s for s in PROVIDERS if not s.is_gateway and not s.is_local]
@@ -483,7 +488,22 @@ def find_by_model(model: str) -> ProviderSpec | None:
                 return spec
         return None
 
-    for spec in std_specs:
+    return find_by_keywords(model)
+
+
+def find_by_keywords(model: str) -> ProviderSpec | None:
+    """Match a vendor by keyword alone, ignoring any prefix on the model id.
+
+    For gateway-routed ids the prefixes belong to the gateway and its upstream
+    ("openrouter/moonshotai/kimi-k2.5"), neither of which is a spec name -- but
+    the vendor's own quirks still apply, so the keyword is all there is to go on.
+    Only safe where the spec is not used to place credentials.
+    """
+    model_lower = model.lower()
+    model_normalized = model_lower.replace("-", "_")
+    for spec in PROVIDERS:
+        if spec.is_gateway or spec.is_local:
+            continue
         if any(kw in model_lower or kw.replace("-", "_") in model_normalized for kw in spec.keywords):
             return spec
     return None

@@ -67,11 +67,13 @@ def test_standard_specs_are_named_after_the_litellm_provider() -> None:
             assert spec.name in known, spec.name
 
 
-def test_standard_specs_do_not_restate_what_litellm_supplies() -> None:
+def test_standard_specs_do_not_restate_the_model_prefix() -> None:
+    # The endpoint is a different matter: `provider test` and the wizard probe
+    # /v1/models before any LiteLLM call resolves one, so a spec may still carry
+    # default_api_base for them.
     for spec in PROVIDERS:
         if spec.standard:
             assert not spec.litellm_prefix, spec.name
-            assert not spec.default_api_base, spec.name
 
 
 def test_registry_and_schema_declare_the_same_providers() -> None:

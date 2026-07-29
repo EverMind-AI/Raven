@@ -57,10 +57,13 @@ def test_forcing_an_unregistered_provider_resolves_its_key() -> None:
     assert cfg.get_api_key() == "K-MISTRAL"
 
 
-def test_building_a_provider_writes_no_credentials_to_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The key travels as an api_key kwarg on every call. Deriving env vars from
-    # LiteLLM's "missing keys" instead spilled it into whatever a vendor happens
-    # to want -- AWS_SECRET_ACCESS_KEY for bedrock, an endpoint var for cloudflare.
+def test_a_provider_without_a_spec_writes_no_credentials_to_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Specs still name the one variable their vendor reads. What is gone is
+    # *deriving* variables from LiteLLM's "missing keys" for a vendor we carry no
+    # spec for -- that list is every variable the vendor wants, so the key landed
+    # in AWS_SECRET_ACCESS_KEY for bedrock and an endpoint var for cloudflare.
     import os
 
     for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CLOUDFLARE_API_KEY", "CLOUDFLARE_API_BASE"):
