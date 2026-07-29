@@ -87,6 +87,17 @@ async def test_chat_with_retry_unknown_model_uses_fallback():
     fb.chat_with_retry.assert_awaited_once()
 
 
+def test_sub_providers_inherit_configured_model_overrides():
+    # Routed models are served by their own sub-providers, built here rather
+    # than by make_provider -- so the user's overrides have to be pushed down
+    # the same way generation settings are.
+    fb = _fallback()
+    fb.model_overrides = {"small": {"top_p": 0.3}}
+    p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=fb)
+
+    assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
+
+
 def test_sub_providers_go_through_litellm():
     p = _provider()
     assert all(isinstance(sub, LiteLLMProvider) for sub in p._by_model.values())

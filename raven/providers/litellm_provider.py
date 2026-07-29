@@ -220,10 +220,11 @@ class LiteLLMProvider(LLMProvider):
                 if pattern in model_lower:
                     kwargs.update(overrides)
                     break
-        for pattern, overrides in self.model_overrides.items():
-            if pattern.lower() in model_lower:
-                kwargs.update(overrides)
-                break
+        # Longest match wins, so "kimi-k2.5" beats a broad "kimi" regardless of
+        # the order the entries happen to be written in.
+        matches = [(p, o) for p, o in self.model_overrides.items() if p.lower() in model_lower]
+        if matches:
+            kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:

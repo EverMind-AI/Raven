@@ -29,7 +29,7 @@ from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProvidersConfig
-from raven.providers.registry import ProviderSpec, find_by_name
+from raven.providers.registry import ProviderSpec, canonical_provider_name, find_by_name
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -72,7 +72,7 @@ def _provider_names() -> list[str]:
 
 def _provider_schema_cls(name: str) -> type[BaseModel]:
     """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
-    field = ProvidersConfig.model_fields.get(name)
+    field = ProvidersConfig.model_fields.get(canonical_provider_name(name))
     if field is None:
         raise KeyError(f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}")
     ann = _unwrap_optional(field.annotation)
@@ -83,7 +83,7 @@ def _provider_schema_cls(name: str) -> type[BaseModel]:
 
 def _provider_spec(name: str) -> ProviderSpec:
     """Look up ``ProviderSpec`` from the registry (raises if absent)."""
-    spec = find_by_name(name)
+    spec = find_by_name(canonical_provider_name(name))
     if spec is None:
         raise KeyError(f"No registry entry for provider '{name}'. Add a ProviderSpec to raven/providers/registry.py.")
     return spec

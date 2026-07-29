@@ -248,11 +248,11 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    # Preferred gateway for auto-detection: route bare model names through this
-    # provider (e.g. "openrouter") instead of matching the model's own vendor.
-    # Unlike `provider`, this is a soft preference -- an explicit
-    # "<provider>/<model>" prefix still wins, so single models can go direct.
-    gateway: str = ""
+    # Route bare model names through this provider (e.g. "openrouter") instead
+    # of matching the model's own vendor. Unlike `provider`, this is a soft
+    # preference -- an explicit "<provider>/<model>" prefix still wins, so
+    # single models can go direct.
+    preferred_gateway: str = ""
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
@@ -411,6 +411,12 @@ class ProvidersConfig(Base):
 
     def get(self, name: str) -> ProviderConfig | None:
         """Return one provider's config, declared field or extra key alike."""
+        from raven.providers.registry import canonical_provider_name
+
+        # A renamed provider keeps answering to its old name, and the declared
+        # field wins: a half-migrated config holding both keys must not serve
+        # the stale one.
+        name = canonical_provider_name(name)
         declared = self.__dict__.get(name)
         if isinstance(declared, ProviderConfig):
             return declared
@@ -673,10 +679,13 @@ class Config(BaseSettings):
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from raven.providers.registry import PROVIDERS
+        from raven.providers.registry import PROVIDERS, canonical_provider_name
 
         forced = self.agents.defaults.provider
         if forced != "auto":
+            # Return the canonical name: callers look the spec up by it, and a
+            # config still naming the provider the old way would find nothing.
+            forced = canonical_provider_name(forced)
             p = self.providers.get(forced)
             return (p, forced) if p else (None, None)
 
@@ -704,7 +713,7 @@ class Config(BaseSettings):
                 return passthrough, normalized_prefix
 
         # Preferred gateway: claims every model the prefix loop above did not.
-        preferred = self.agents.defaults.gateway
+        preferred = self.agents.defaults.preferred_gateway
         if preferred:
             p = self.providers.get(preferred)
             if p and p.api_key:

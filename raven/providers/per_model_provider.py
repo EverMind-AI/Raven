@@ -51,8 +51,12 @@ class PerModelProvider(LLMProvider):
         # inherit the fallback's (already configured from AgentDefaults) and push
         # them down so routed calls honor temperature / max_tokens / timeout.
         self.generation = fallback.generation
+        # Same for the user's per-model overrides: a routed model must honor
+        # them exactly as the default provider does.
+        overrides = getattr(fallback, "model_overrides", None) or {}
         for sub in self._by_model.values():
             sub.generation = self.generation
+            sub.model_overrides = overrides
 
     def _pick(self, model: str | None) -> LLMProvider:
         return self._by_model.get(model or "", self._fallback)

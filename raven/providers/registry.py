@@ -534,3 +534,15 @@ def find_by_name(name: str) -> ProviderSpec | None:
         if spec.name == name:
             return spec
     return None
+
+
+def canonical_provider_name(name: str) -> str:
+    """Map a provider's former name to its current one, e.g. zhipu -> zai.
+
+    Renaming a provider otherwise splits users in two: saved configs and typed
+    commands keep the old name, while everything in the code speaks the new one.
+    """
+    for spec in PROVIDERS:
+        if name in spec.name_aliases:
+            return spec.name
+    return name

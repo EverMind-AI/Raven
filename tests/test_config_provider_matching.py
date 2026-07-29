@@ -31,7 +31,7 @@ def test_gateway_fallback_when_the_vendor_has_no_key() -> None:
 def test_preferred_gateway_claims_bare_model_names() -> None:
     cfg = _config(openai={"apiKey": "K-OPENAI"}, openrouter={"apiKey": "sk-or-K"})
     cfg.agents.defaults.model = "gpt-4o"
-    cfg.agents.defaults.gateway = "openrouter"
+    cfg.agents.defaults.preferred_gateway = "openrouter"
 
     assert cfg.get_provider_name() == "openrouter"
 
@@ -40,7 +40,7 @@ def test_explicit_prefix_beats_the_preferred_gateway() -> None:
     # The point of a soft preference: one model can still go direct.
     cfg = _config(openai={"apiKey": "K-OPENAI"}, openrouter={"apiKey": "sk-or-K"})
     cfg.agents.defaults.model = "openai/gpt-4o"
-    cfg.agents.defaults.gateway = "openrouter"
+    cfg.agents.defaults.preferred_gateway = "openrouter"
 
     assert cfg.get_provider_name() == "openai"
 
@@ -48,7 +48,7 @@ def test_explicit_prefix_beats_the_preferred_gateway() -> None:
 def test_preferred_gateway_without_credentials_is_skipped() -> None:
     cfg = _config(openai={"apiKey": "K-OPENAI"})
     cfg.agents.defaults.model = "gpt-4o"
-    cfg.agents.defaults.gateway = "openrouter"
+    cfg.agents.defaults.preferred_gateway = "openrouter"
 
     assert cfg.get_provider_name() == "openai"
 
@@ -72,6 +72,31 @@ def test_a_model_id_written_before_the_zai_rename_still_resolves() -> None:
     assert LiteLLMProvider(default_model="zhipu/glm-4.6")._resolve_model("zhipu/glm-4.6") == "zai/glm-4.6"
 
 
+def test_the_old_provider_name_still_works_on_the_write_path() -> None:
+    # `raven provider set zhipu ...` is muscle memory and lives in every guide
+    # written before the rename.
+    from raven.config.update_providers import provider_field_specs
+
+    assert provider_field_specs("zhipu") == provider_field_specs("zai")
+
+
+def test_a_half_migrated_config_serves_the_current_key() -> None:
+    # Both keys present: the declared field is the live one, and the leftover
+    # must not shadow it with a stale credential.
+    cfg = _config(zhipu={"apiKey": "STALE"}, zai={"apiKey": "CURRENT"})
+
+    assert cfg.providers.get("zhipu").api_key == "CURRENT"
+    assert cfg.providers.get("zai").api_key == "CURRENT"
+
+
+def test_forcing_the_old_provider_name_resolves_to_the_new_one() -> None:
+    cfg = _config(zhipu={"apiKey": "K-ZAI"})
+    cfg.agents.defaults.provider = "zhipu"
+    cfg.agents.defaults.model = "zai/glm-4.6"
+
+    assert cfg.get_provider_name() == "zai"
+
+
 def test_a_config_written_before_the_zai_rename_still_resolves() -> None:
     cfg = _config(zhipu={"apiKey": "K-ZAI"})
     cfg.agents.defaults.model = "zai/glm-4.6"
@@ -84,6 +109,6 @@ def test_forced_provider_outranks_the_preferred_gateway() -> None:
     cfg = _config(openai={"apiKey": "K-OPENAI"}, openrouter={"apiKey": "sk-or-K"})
     cfg.agents.defaults.model = "gpt-4o"
     cfg.agents.defaults.provider = "openai"
-    cfg.agents.defaults.gateway = "openrouter"
+    cfg.agents.defaults.preferred_gateway = "openrouter"
 
     assert cfg.get_provider_name() == "openai"

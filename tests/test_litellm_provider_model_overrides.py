@@ -72,6 +72,18 @@ async def test_registry_default_still_applies_without_config(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_the_most_specific_pattern_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Patterns match on substrings, so a broad one shadows a precise one unless
+    # length decides -- and dict order must not be what picks the winner.
+    seen = _capture(monkeypatch)
+    p = _provider("kimi-k2.5", {"kimi": {"top_p": 0.1}, "kimi-k2.5": {"top_p": 0.9}})
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert seen[0]["top_p"] == 0.9
+
+
+@pytest.mark.asyncio
 async def test_config_override_layers_over_the_registry_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     # Setting one parameter must not discard the rest of the registry's entry:
     # Kimi's mandated temperature has to survive a config that only sets top_p.
