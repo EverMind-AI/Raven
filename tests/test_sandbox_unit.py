@@ -1024,25 +1024,33 @@ class TestConnectMcpSandboxGuard:
         with pytest.raises(SandboxInitError, match="stdio transport"):
             await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=executor)
 
-    async def test_stdio_no_executor_does_not_raise(self):
+    async def test_stdio_no_executor_does_not_raise(self, monkeypatch):
         """executor=None falls through to the normal stdio path (no guard triggered)."""
         from contextlib import AsyncExitStack
+
+        import mcp.client.stdio
 
         from raven.agent.tools.mcp import connect_mcp_servers
         from raven.agent.tools.registry import ToolRegistry
 
+        reached = []
+
+        def fake_stdio_client(params):
+            reached.append(params.command)
+            raise RuntimeError("stdio_client reached — expected in test")
+
+        monkeypatch.setattr(mcp.client.stdio, "stdio_client", fake_stdio_client)
+
         cfg = MagicMock()
         cfg.type = "stdio"
-        cfg.command = "true"
+        cfg.command = "mcp-server"
         cfg.args = []
         cfg.env = None
         cfg.tool_timeout = 30
-        # connect will fail at stdio_client level (not installed / not available) but
-        # that error is caught per-server and logged — it must NOT be a SandboxInitError.
-        try:
-            await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
-        except SandboxInitError:
-            pytest.fail("SandboxInitError should not be raised when executor=None")
+        # Guard should NOT raise; the transport error is caught per-server and logged.
+        await connect_mcp_servers({"svc": cfg}, ToolRegistry(), AsyncExitStack(), executor=None)
+
+        assert reached == ["mcp-server"]
 
     async def test_stdio_sandboxed_with_spawning_does_not_raise(self):
         """Sandboxed executor that supports spawning does not trigger the guard."""
