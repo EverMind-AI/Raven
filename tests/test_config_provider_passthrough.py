@@ -77,6 +77,56 @@ def test_a_provider_without_a_spec_writes_no_credentials_to_the_environment(
     assert os.environ.get("CLOUDFLARE_API_BASE") is None
 
 
+def test_the_cli_configures_a_provider_that_only_litellm_knows(tmp_path) -> None:
+    # Otherwise the whole point of accepting these providers is unreachable
+    # except by hand-editing config.json, which is what the CLI exists to avoid.
+    import json
+
+    from raven.config.update_providers import get_provider_config, set_provider_fields
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"providers": {}}))
+
+    set_provider_fields("mistral", {"api_key": "K-MISTRAL"}, config_path=path)
+
+    assert get_provider_config("mistral", config_path=path, redact_secrets=False)["api_key"] == "K-MISTRAL"
+    assert list(json.loads(path.read_text())["providers"]) == ["mistral"]
+
+
+def test_testing_an_unregistered_provider_reports_instead_of_crashing(tmp_path) -> None:
+    # test_provider reads several spec attributes; a vendor with no spec must not
+    # trip any of them.
+    import json
+
+    from raven.config.update_providers import set_provider_fields, test_provider
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"providers": {}}))
+    set_provider_fields(
+        "mistral",
+        {"api_key": "K", "api_base": "https://api.mistral.ai/v1"},
+        config_path=path,
+    )
+
+    result = test_provider("mistral", config_path=path, timeout_s=1)
+
+    assert result["status"] != "unknown_provider"
+    assert isinstance(result["ok"], bool)
+
+
+def test_the_cli_rejects_a_vendor_nobody_has_heard_of(tmp_path) -> None:
+    # A typo should say so, not quietly write a section nothing will ever read.
+    import json
+
+    from raven.config.update_providers import set_provider_fields
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"providers": {}}))
+
+    with pytest.raises(KeyError, match="notaprovider"):
+        set_provider_fields("notaprovider", {"api_key": "K"}, config_path=path)
+
+
 def test_callers_read_declared_fields_and_extras_through_get() -> None:
     cfg = _config(openai={"apiKey": "A"}, mistral={"apiKey": "B"})
 

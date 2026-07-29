@@ -37,6 +37,7 @@ def test_gateway_shortlist_models_stay_on_their_gateway() -> None:
     from raven.providers.registry import PROVIDERS
 
     competing = {"anthropic": {"apiKey": "K-ANT"}, "openai": {"apiKey": "K-OPENAI"}}
+    checked = 0
     for spec in PROVIDERS:
         shortlist = common_models_for(spec.name)
         if not spec.is_gateway or not shortlist:
@@ -45,6 +46,9 @@ def test_gateway_shortlist_models_stay_on_their_gateway() -> None:
         for model in shortlist:
             cfg.agents.defaults.model = model
             assert cfg.get_provider_name() == spec.name, f"{spec.name}: {model}"
+            checked += 1
+    # Without this the test passes by checking nothing the day a shortlist empties.
+    assert checked, "no gateway shortlist was exercised"
 
 
 def test_a_model_id_written_before_the_zai_rename_still_resolves() -> None:
@@ -148,3 +152,45 @@ def test_a_forced_provider_skips_matching_entirely() -> None:
     cfg.agents.defaults.provider = "openai"
 
     assert cfg.get_provider_name() == "openai"
+
+
+def test_a_gateway_prefixed_model_never_borrows_another_vendors_key() -> None:
+    # LiteLLM routes by the prefix, so this request goes to OpenRouter. Handing
+    # back Anthropic's key would post that key to OpenRouter.
+    cfg = _config(anthropic={"apiKey": "K-ANTHROPIC"})
+    cfg.agents.defaults.model = "openrouter/anthropic/claude-sonnet-4-5"
+
+    assert cfg.get_provider_name() is None
+    assert cfg.get_api_key() is None
+
+
+def test_a_gateway_prefixed_model_still_works_with_the_gateways_key() -> None:
+    cfg = _config(openrouter={"apiKey": "sk-or-K"})
+    cfg.agents.defaults.model = "openrouter/anthropic/claude-sonnet-4-5"
+
+    assert cfg.get_provider_name() == "openrouter"
+
+
+def test_a_bare_vendor_id_may_still_be_served_by_a_gateway() -> None:
+    # The long-standing way to reach a vendor through OpenRouter; narrowing the
+    # gateway case must not take it away.
+    cfg = _config(openrouter={"apiKey": "sk-or-K"})
+    cfg.agents.defaults.model = "anthropic/claude-x"
+
+    assert cfg.get_provider_name() == "openrouter"
+
+
+def test_specs_are_findable_by_a_former_name() -> None:
+    # Call sites all over the codebase look specs up by whatever string a config
+    # or command line handed them, so the rename has to land in the lookup.
+    from raven.providers.registry import find_by_name
+
+    assert find_by_name("zhipu") is find_by_name("zai")
+
+
+def test_a_gateway_prefixed_model_resolves_to_the_gateway_spec() -> None:
+    # The picker and the wizard derive the current provider from the model id.
+    from raven.providers.registry import find_by_model
+
+    spec = find_by_model("openrouter/anthropic/claude-sonnet-4-5")
+    assert spec is not None and spec.name == "openrouter"

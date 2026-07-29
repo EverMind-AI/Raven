@@ -11,8 +11,8 @@ Add a ProviderSpec only for what LiteLLM cannot tell us:
   - a gateway that fronts other vendors (OpenRouter, AiHubMix), an OAuth flow,
     a non-LiteLLM path (Azure), prompt caching, per-model param defaults;
   - a name of our own that differs from LiteLLM's, or a second env var to mirror.
-Set ``standard=True`` when LiteLLM knows the vendor under our own name; the
-entry then omits the prefix and endpoint instead of restating them.
+Set ``standard=True`` when LiteLLM knows the vendor under our own name, so the
+name doubles as the model prefix and the entry need not restate it.
 
 Order matters — it controls match priority and fallback. Gateways first.
 """
@@ -72,9 +72,9 @@ class ProviderSpec:
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 
-    # LiteLLM knows this vendor under the same name we do, which makes the name
-    # the model prefix and lets LiteLLM resolve the endpoint. Set this instead
-    # of restating either here.
+    # LiteLLM knows this vendor under the same name we do, so the name doubles as
+    # the model prefix and the registry need not restate it. Only `model_prefix`
+    # reads this; the endpoint still comes from LiteLLM or from default_api_base.
     standard: bool = False
 
     @property
@@ -486,6 +486,13 @@ def find_by_model(model: str) -> ProviderSpec | None:
         for spec in std_specs:
             if normalized_prefix == spec.name or normalized_prefix in spec.name_aliases:
                 return spec
+        # A gateway prefix names the gateway as the provider: LiteLLM routes the
+        # request there, so anyone resolving credentials from this id must not be
+        # handed the upstream vendor -- that would POST the vendor's key to the
+        # gateway. (Gateways are otherwise matched by key/base, not model name.)
+        for spec in PROVIDERS:
+            if spec.is_gateway and (normalized_prefix == spec.name or normalized_prefix in spec.name_aliases):
+                return spec
         return None
 
     return find_by_keywords(model)
@@ -541,7 +548,13 @@ def find_gateway(
 
 
 def find_by_name(name: str) -> ProviderSpec | None:
-    """Find a provider spec by config field name, e.g. "dashscope"."""
+    """Find a provider spec by config field name, e.g. "dashscope".
+
+    Accepts a provider's former name too: callers all over the codebase look
+    specs up by whatever string a config or a command line handed them, so
+    canonicalizing here is the only way a rename reaches all of them.
+    """
+    name = canonical_provider_name(name)
     for spec in PROVIDERS:
         if spec.name == name:
             return spec

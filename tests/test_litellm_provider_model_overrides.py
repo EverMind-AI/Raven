@@ -94,7 +94,8 @@ async def test_the_most_specific_pattern_wins(monkeypatch: pytest.MonkeyPatch) -
     # Patterns match on substrings, so a broad one shadows a precise one unless
     # length decides -- and dict order must not be what picks the winner.
     seen = _capture(monkeypatch)
-    p = _provider("kimi-k2.5", {"kimi": {"top_p": 0.1}, "kimi-k2.5": {"top_p": 0.9}})
+    # Broad pattern written last: a naive last-wins loop would pick 0.1.
+    p = _provider("kimi-k2.5", {"kimi-k2.5": {"top_p": 0.9}, "kimi": {"top_p": 0.1}})
 
     await p.chat(messages=[{"role": "user", "content": "hi"}])
 

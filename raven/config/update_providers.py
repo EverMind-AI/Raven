@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.config.schema import ProvidersConfig
+from raven.config.schema import ProviderConfig, ProvidersConfig
 from raven.providers.registry import ProviderSpec, canonical_provider_name, find_by_name
 
 # ---------------------------------------------------------------------------
@@ -70,23 +70,40 @@ def _provider_names() -> list[str]:
     return out
 
 
+def _litellm_knows(name: str) -> bool:
+    """Whether LiteLLM speaks to this vendor, so a bare key is enough to reach it."""
+    from raven.providers.litellm_setup import import_litellm
+
+    try:
+        litellm = import_litellm()
+        return name in {str(getattr(p, "value", p)) for p in litellm.provider_list}
+    except Exception:
+        return False
+
+
 def _provider_schema_cls(name: str) -> type[BaseModel]:
     """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
     field = ProvidersConfig.model_fields.get(name)
     if field is None:
-        raise KeyError(f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}")
+        # A vendor with no spec of ours is still configurable when LiteLLM knows
+        # it -- the plain section is all it needs. Anything LiteLLM has never
+        # heard of is a typo, and saying so beats writing a section that will
+        # never be read.
+        if _litellm_knows(name):
+            return ProviderConfig
+        raise KeyError(
+            f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}. "
+            "Any other vendor LiteLLM supports also works, spelled as LiteLLM names it."
+        )
     ann = _unwrap_optional(field.annotation)
     if not _is_model_class(ann):
         raise KeyError(f"'{name}' is not a provider section. Available providers: {sorted(_provider_names())}")
     return ann
 
 
-def _provider_spec(name: str) -> ProviderSpec:
-    """Look up ``ProviderSpec`` from the registry (raises if absent)."""
-    spec = find_by_name(name)
-    if spec is None:
-        raise KeyError(f"No registry entry for provider '{name}'. Add a ProviderSpec to raven/providers/registry.py.")
-    return spec
+def _provider_spec(name: str) -> ProviderSpec | None:
+    """Look up ``ProviderSpec``, or None for a vendor we carry no spec for."""
+    return find_by_name(name)
 
 
 def _provider_aliases(name: str) -> tuple[str, ...]:
@@ -485,7 +502,7 @@ def set_provider_fields(
             f"Unknown field(s) {unknown} for provider '{name}'. Available fields: {sorted(field_specs.keys())}"
         )
 
-    if spec.is_oauth:
+    if spec and spec.is_oauth:
         forbidden = [k for k in fields if field_specs[k]["is_secret"]]
         if forbidden:
             raise RuntimeError(
@@ -551,7 +568,7 @@ def reset_provider(
     _write_raw_section(data, name, cls().model_dump(by_alias=True))
     _write_atomic(path, data)
 
-    if spec.is_oauth:
+    if spec and spec.is_oauth:
         try:
             if name in {"minimax_global", "minimax_cn"}:
                 from raven.providers.minimax_oauth import delete_token
@@ -677,6 +694,7 @@ def test_provider(
 
     try:
         spec = _provider_spec(name)
+        cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
     except KeyError as exc:
         return {
             "ok": False,
@@ -688,11 +706,10 @@ def test_provider(
             "error": str(exc),
         }
 
-    cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
     api_key = cfg.get("api_key") or ""
-    api_base = cfg.get("api_base") or spec.default_api_base or ""
+    api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
 
-    if spec.is_oauth:
+    if spec and spec.is_oauth:
         try:
             if spec.name in {"minimax_global", "minimax_cn"}:
                 from raven.providers.minimax_oauth import get_token
@@ -735,7 +752,7 @@ def test_provider(
             }
         api_key = token.access
 
-    if not api_key and not spec.is_local:
+    if not api_key and not (spec and spec.is_local):
         return {
             "ok": False,
             "status": "not_configured",
@@ -762,7 +779,7 @@ def test_provider(
         url = api_base.rstrip("/") + "/v1/models"
 
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    if spec.name in {"minimax_global", "minimax_cn"} and api_key:
+    if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
     start = time.monotonic()

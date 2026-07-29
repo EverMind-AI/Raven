@@ -696,7 +696,7 @@ class Config(BaseSettings):
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from raven.providers.registry import PROVIDERS, canonical_provider_name
+        from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
 
         forced = self.agents.defaults.provider
         if forced != "auto":
@@ -717,10 +717,18 @@ class Config(BaseSettings):
 
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and model_prefix and normalized_prefix == spec.name:
+            p = self.providers.get(spec.name)
+            if p and model_prefix and normalized_prefix == canonical_provider_name(spec.name):
                 if spec.is_oauth or spec.is_local or p.api_key:
                     return p, spec.name
+
+        # A gateway prefix is where the request goes, so only that gateway can
+        # serve the model. Reading on would hand back some other vendor's key for
+        # a request LiteLLM sends to the gateway -- that vendor's key, posted to
+        # the gateway. Better to report nothing configured.
+        prefix_spec = find_by_name(normalized_prefix) if normalized_prefix else None
+        if prefix_spec is not None and prefix_spec.is_gateway:
+            return None, None
 
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
         # the vendor, so credentials under that name are enough to reach it.

@@ -731,7 +731,7 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
 
 
 def _format_model_for_provider(spec: Any, model_id: str) -> str:
-    """Apply ``spec.litellm_prefix`` to a raw ``/v1/models`` id when needed."""
+    """Apply the provider's model prefix to a raw ``/v1/models`` id when needed."""
     if not model_id:
         return model_id
     if spec.name in {"minimax_global", "minimax_cn"}:
