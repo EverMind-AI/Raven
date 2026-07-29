@@ -119,15 +119,18 @@ class LiteLLMProvider(LLMProvider):
         if not spec:
             self._setup_env_from_litellm(api_key, model)
             return
-        if not spec.env_key:
+        if spec.env_key:
+            # Gateway/local overrides existing env; standard provider doesn't
+            if self._gateway:
+                os.environ[spec.env_key] = api_key
+            else:
+                os.environ.setdefault(spec.env_key, api_key)
+        elif spec.standard:
+            # LiteLLM names the variable for this vendor, so don't restate it.
+            self._setup_env_from_litellm(api_key, self._resolve_model(model))
+        elif not spec.env_extras:
             # OAuth/provider-only specs (for example: openai_codex)
             return
-
-        # Gateway/local overrides existing env; standard provider doesn't
-        if self._gateway:
-            os.environ[spec.env_key] = api_key
-        else:
-            os.environ.setdefault(spec.env_key, api_key)
 
         # Resolve env_extras placeholders:
         #   {api_key}  → user's API key
@@ -163,12 +166,15 @@ class LiteLLMProvider(LLMProvider):
                 model = f"{prefix}/{model}"
             return model
 
-        # Standard mode: auto-prefix for known providers
+        # Standard mode: auto-prefix for known providers. A spec flagged
+        # `standard` shares LiteLLM's name for the vendor, so that name is the
+        # prefix -- no need to restate it in the registry.
         spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            model = self._canonicalize_explicit_prefix(model, spec.name, spec.litellm_prefix)
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
+        prefix = spec.model_prefix if spec else ""
+        if spec and prefix:
+            model = self._canonicalize_explicit_prefix(model, spec.name, prefix)
+            if not any(model.startswith(s) for s in (*spec.skip_prefixes, f"{prefix}/")):
+                model = f"{prefix}/{model}"
 
         return model
 

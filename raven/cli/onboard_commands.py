@@ -739,7 +739,7 @@ def _format_model_for_provider(spec: Any, model_id: str) -> str:
         if model_id.startswith(f"{public_prefix}/"):
             return model_id
         return f"{public_prefix}/{model_id.split('/')[-1]}"
-    prefix = getattr(spec, "litellm_prefix", "") or ""
+    prefix = getattr(spec, "model_prefix", "") or ""
     if not prefix:
         return model_id
     if model_id.startswith(f"{prefix}/"):
@@ -2303,7 +2303,7 @@ def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
     # client must not see; gateways (openrouter) carry their litellm_prefix.
     # Custom endpoints store a bare id already, so no prefix matches → unchanged.
     bare_model = main_model
-    litellm_prefix = getattr(spec, "litellm_prefix", "") if spec else ""
+    litellm_prefix = getattr(spec, "model_prefix", "") if spec else ""
     for prefix in (litellm_prefix, provider):
         if prefix and bare_model.startswith(f"{prefix}/"):
             bare_model = bare_model.split("/", 1)[1]

@@ -1,13 +1,20 @@
 """
-Provider Registry — single source of truth for LLM provider metadata.
+Provider Registry — what Raven knows about a vendor that LiteLLM does not.
 
-Adding a new provider:
-  1. Add a ProviderSpec to PROVIDERS below.
-  2. Add a field to ProvidersConfig in config/schema.py.
-  Done. Env vars, prefixing, config matching, status display all derive from here.
+Any vendor LiteLLM supports already works without an entry here: a key under
+its name in ``providers`` plus a "<vendor>/<model>" model id is enough (see
+``ProvidersConfig.get`` and ``LiteLLMProvider._setup_env_from_litellm``).
+
+Add a ProviderSpec only for what LiteLLM cannot tell us:
+  - keywords, so a bare model name ("kimi-k2.5") finds its vendor;
+  - default_model / display_name for the wizard and the pickers;
+  - a gateway that fronts other vendors (OpenRouter, AiHubMix), an OAuth flow,
+    a non-LiteLLM path (Azure), prompt caching, per-model param defaults;
+  - a name of our own that differs from LiteLLM's, or a second env var to mirror.
+Set ``standard=True`` when LiteLLM knows the vendor under our own name; the
+entry then omits the prefix and endpoint instead of restating them.
 
 Order matters — it controls match priority and fallback. Gateways first.
-Every entry writes out all fields so you can copy-paste as a template.
 """
 
 from __future__ import annotations
@@ -40,7 +47,9 @@ class ProviderSpec:
     # identity
     name: str  # config field name, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
-    env_key: str  # LiteLLM env var, e.g. "DASHSCOPE_API_KEY"
+    # LiteLLM env var, e.g. "DASHSCOPE_API_KEY". Omit it when `standard` is set
+    # and LiteLLM names the variable itself.
+    env_key: str = ""
     display_name: str = ""  # shown in `raven status`
 
     # model prefixing
@@ -75,9 +84,25 @@ class ProviderSpec:
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 
+    # LiteLLM knows this vendor under the same name we do, so it supplies the
+    # model prefix and endpoint. Set it instead of restating either here: the
+    # entry then carries only what LiteLLM cannot know (keywords for bare model
+    # names, the wizard's default model, the display label). `env_key` still
+    # belongs here for the vendors LiteLLM does not name a variable for.
+    standard: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
+
+    @property
+    def model_prefix(self) -> str:
+        """Prefix LiteLLM needs on this provider's model ids ("" when none).
+
+        A `standard` spec shares LiteLLM's name for the vendor, so the name is
+        the prefix and the registry does not restate it.
+        """
+        return self.litellm_prefix or (self.name if self.standard else "")
 
 
 # ---------------------------------------------------------------------------
@@ -207,19 +232,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="openai",
         keywords=("openai", "gpt"),
-        env_key="OPENAI_API_KEY",
         display_name="OpenAI",
-        litellm_prefix="",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
         default_model="openai/gpt-5.5",
+        standard=True,
     ),
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(
@@ -263,19 +286,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="deepseek",
         keywords=("deepseek",),
-        env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
-        litellm_prefix="deepseek",  # deepseek-chat → deepseek/deepseek-chat
         skip_prefixes=("deepseek/",),  # avoid double-prefix
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
         default_model="deepseek/deepseek-v4-flash",
+        standard=True,
     ),
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
@@ -304,35 +325,32 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("zhipu", "glm", "zai"),
         env_key="ZAI_API_KEY",
         display_name="Z.ai",
-        litellm_prefix="zai",  # glm-4 → zai/glm-4
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
         default_model="zai/glm-4.6",
+        standard=True,
     ),
     # DashScope: Qwen models, needs "dashscope/" prefix.
     ProviderSpec(
         name="dashscope",
         keywords=("qwen", "dashscope"),
-        env_key="DASHSCOPE_API_KEY",
         display_name="DashScope",
-        litellm_prefix="dashscope",  # qwen-max → dashscope/qwen-max
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
         default_model="dashscope/qwen-plus",
+        standard=True,
     ),
     # Moonshot: Kimi models, needs "moonshot/" prefix.
     # LiteLLM requires MOONSHOT_API_BASE env var to find the endpoint.
@@ -340,18 +358,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="moonshot",
         keywords=("moonshot", "kimi"),
-        env_key="MOONSHOT_API_KEY",
         display_name="Moonshot",
-        litellm_prefix="moonshot",  # kimi-k2.5 → moonshot/kimi-k2.5
         skip_prefixes=("moonshot/", "openrouter/"),
-        env_extras=(("MOONSHOT_API_BASE", "{api_base}"),),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="https://api.moonshot.ai/v1",  # intl; use api.moonshot.cn for China
         strip_model_prefix=False,
         model_overrides=(("kimi-k2.5", {"temperature": 1.0}),),
+        standard=True,
     ),
     # MiniMax: needs "minimax/" prefix for LiteLLM routing.
     # Uses OpenAI-compatible API at api.minimax.io/v1.
@@ -360,16 +375,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
         display_name="MiniMax",
-        litellm_prefix="minimax",  # MiniMax-M2.1 → minimax/MiniMax-M2.1
         skip_prefixes=("minimax/", "openrouter/"),
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="https://api.minimax.io/v1",
         strip_model_prefix=False,
         model_overrides=(),
+        standard=True,
     ),
     ProviderSpec(
         name="minimax_global",
@@ -435,19 +449,17 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="groq",
         keywords=("groq",),
-        env_key="GROQ_API_KEY",
         display_name="Groq",
-        litellm_prefix="groq",  # llama3-8b-8192 → groq/llama3-8b-8192
         skip_prefixes=("groq/",),  # avoid double-prefix
         env_extras=(),
         is_gateway=False,
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
         default_model="groq/openai/gpt-oss-120b",
+        standard=True,
     ),
 )
 

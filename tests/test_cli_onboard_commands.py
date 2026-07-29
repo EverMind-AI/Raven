@@ -746,7 +746,7 @@ def test_prompt_api_key_empty_is_back_but_whitespace_rejected(monkeypatch: pytes
 
 
 def test_format_model_for_provider_prefix_rules() -> None:
-    """Provider's ``litellm_prefix`` is applied unless model_id already has one."""
+    """The provider's model prefix is applied unless the id already carries one."""
     from raven.providers.registry import find_by_name
 
     openrouter = find_by_name("openrouter")
@@ -763,8 +763,9 @@ def test_format_model_for_provider_prefix_rules() -> None:
         onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
-    # Direct provider with empty prefix → pass-through
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "gpt-4o-mini"
+    # Standard provider: LiteLLM knows it under our own name, so that is the prefix
+    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider(openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"

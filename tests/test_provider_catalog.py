@@ -53,6 +53,27 @@ def test_provider_names_are_unique() -> None:
     assert len(names) == len(set(names))
 
 
+def test_standard_specs_are_named_after_the_litellm_provider() -> None:
+    """`standard` means LiteLLM knows the vendor under our own name.
+
+    That is what lets the entry drop the prefix and endpoint. Flagging a vendor
+    LiteLLM does not carry under that name would send every request nowhere.
+    """
+    import litellm
+
+    known = {str(getattr(p, "value", p)) for p in litellm.provider_list}
+    for spec in PROVIDERS:
+        if spec.standard:
+            assert spec.name in known, spec.name
+
+
+def test_standard_specs_do_not_restate_what_litellm_supplies() -> None:
+    for spec in PROVIDERS:
+        if spec.standard:
+            assert not spec.litellm_prefix, spec.name
+            assert not spec.default_api_base, spec.name
+
+
 def test_registry_and_schema_declare_the_same_providers() -> None:
     # A provider needs both a ProviderSpec (env keys, prefixes, detection) and a
     # ProvidersConfig field (where its credentials live). Miss either half and it
