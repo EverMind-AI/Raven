@@ -120,15 +120,15 @@ class LiteLLMProvider(LLMProvider):
             # No spec: the key still reaches LiteLLM as an explicit api_key
             # kwarg on every call, so nothing needs to go into the environment.
             return
-        if spec.env_key:
-            # Gateway/local overrides existing env; standard provider doesn't
-            if self._gateway:
-                os.environ[spec.env_key] = api_key
-            else:
-                os.environ.setdefault(spec.env_key, api_key)
-        elif not spec.env_extras:
+        if not spec.env_key:
             # OAuth/provider-only specs (for example: openai_codex)
             return
+
+        # Gateway/local overrides existing env; standard provider doesn't
+        if self._gateway:
+            os.environ[spec.env_key] = api_key
+        else:
+            os.environ.setdefault(spec.env_key, api_key)
 
         # Resolve env_extras placeholders:
         #   {api_key}  → user's API key

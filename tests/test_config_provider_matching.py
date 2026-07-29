@@ -53,15 +53,23 @@ def test_preferred_gateway_without_credentials_is_skipped() -> None:
     assert cfg.get_provider_name() == "openai"
 
 
-def test_gateway_shortlist_models_stay_on_the_gateway() -> None:
-    # OpenRouter ids name the upstream vendor ("anthropic/..."); without the
-    # gateway prefix a picked model silently leaves OpenRouter for that vendor.
+def test_gateway_shortlist_models_stay_on_their_gateway() -> None:
+    # Gateway ids name the upstream vendor ("anthropic/..."); without the
+    # gateway's own prefix a picked model silently leaves it for that vendor as
+    # soon as the user holds a key there. Checked for every gateway that ships a
+    # shortlist, not just the one that first got this wrong.
     from raven.providers.common_models import common_models_for
+    from raven.providers.registry import PROVIDERS
 
-    cfg = _config(anthropic={"apiKey": "K-ANT"}, openrouter={"apiKey": "sk-or-K"})
-    for model in common_models_for("openrouter"):
-        cfg.agents.defaults.model = model
-        assert cfg.get_provider_name() == "openrouter", model
+    competing = {"anthropic": {"apiKey": "K-ANT"}, "openai": {"apiKey": "K-OPENAI"}}
+    for spec in PROVIDERS:
+        shortlist = common_models_for(spec.name)
+        if not spec.is_gateway or not shortlist:
+            continue
+        cfg = _config(**competing, **{spec.name: {"apiKey": "K-GATEWAY"}})
+        for model in shortlist:
+            cfg.agents.defaults.model = model
+            assert cfg.get_provider_name() == spec.name, f"{spec.name}: {model}"
 
 
 def test_a_model_id_written_before_the_zai_rename_still_resolves() -> None:

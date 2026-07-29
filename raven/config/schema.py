@@ -427,12 +427,6 @@ class ProvidersConfig(Base):
             return ProviderConfig.model_validate(extra)
         return None
 
-    def configured_names(self) -> list[str]:
-        """Names of providers holding credentials, declared fields and extras."""
-        names = [n for n in type(self).model_fields if self.get(n) and self.get(n).api_key]
-        names += [n for n in (self.model_extra or {}) if (c := self.get(n)) and c.api_key]
-        return names
-
 
 class ModelEndpoint(Base):
     """A routable model and the OpenAI-compatible endpoint that serves it."""

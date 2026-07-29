@@ -49,10 +49,9 @@ def build_model_routing(config, provider):
         router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
         return router, PerModelProvider(config.routing.models, fallback=provider)
 
-    from raven.providers.registry import provider_section
     from raven.routing.router import ModelRouter
 
-    openrouter = provider_section(config.providers, "openrouter")
+    openrouter = config.providers.get("openrouter")
     api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
     if not api_key:
         console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")

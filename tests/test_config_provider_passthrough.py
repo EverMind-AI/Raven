@@ -47,14 +47,6 @@ def test_unregistered_provider_without_a_key_falls_back() -> None:
     assert cfg.get_provider_name() == "openrouter"
 
 
-def test_configured_names_spans_declared_and_extra_providers() -> None:
-    cfg = _config(openai={"apiKey": "K"}, mistral={"apiKey": "K"}, deepseek={})
-
-    names = cfg.providers.configured_names()
-    assert "openai" in names and "mistral" in names
-    assert "deepseek" not in names
-
-
 def test_forcing_an_unregistered_provider_resolves_its_key() -> None:
     # `provider: <name>` short-circuits matching, and that branch used to read
     # the field directly -- which hands back a raw dict for an extra.
@@ -82,14 +74,12 @@ def test_building_a_provider_writes_no_credentials_to_the_environment(monkeypatc
     assert os.environ.get("CLOUDFLARE_API_BASE") is None
 
 
-def test_provider_section_reads_declared_fields_and_extras() -> None:
-    from raven.providers.registry import provider_section
-
+def test_callers_read_declared_fields_and_extras_through_get() -> None:
     cfg = _config(openai={"apiKey": "A"}, mistral={"apiKey": "B"})
 
-    assert provider_section(cfg.providers, "openai").api_key == "A"
-    assert provider_section(cfg.providers, "mistral").api_key == "B"
-    assert provider_section(cfg.providers, "nope") is None
+    assert cfg.providers.get("openai").api_key == "A"
+    assert cfg.providers.get("mistral").api_key == "B"
+    assert cfg.providers.get("nope") is None
 
 
 def test_make_provider_passes_configured_model_overrides_through() -> None:
