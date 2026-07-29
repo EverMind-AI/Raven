@@ -64,6 +64,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     "zhipu",
     "dashscope",
     "groq",
+    "minimax",
     "minimax_global",
     "minimax_cn",
 ]

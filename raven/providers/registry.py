@@ -357,6 +357,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://api.minimax.io/v1",
         strip_model_prefix=False,
         model_overrides=(),
+        default_model="minimax/MiniMax-M3",
     ),
     ProviderSpec(
         name="minimax_global",
