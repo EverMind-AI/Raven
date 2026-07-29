@@ -56,6 +56,24 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
+def _no_update_check(tmp_path, monkeypatch):
+    """Keep the startup update check off the network and off the real disk.
+
+    ``raven tui`` fires ``maybe_refresh_async()`` and ``session.create`` reads
+    the cache, so any test reaching either path would otherwise fetch the
+    GitHub releases API and write ``<cache dir>/update_check.json`` under the
+    real home. Redirecting the cache dir alone still leaves an empty cache,
+    which is exactly the state that spawns the fetch -- so opt out by env for
+    the whole suite. Tests that exercise the notice clear the variable.
+    """
+    from raven.cli import update_notice
+
+    monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
+    monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 

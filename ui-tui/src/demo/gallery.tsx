@@ -99,8 +99,6 @@ const sessionInfo: SessionInfo = {
     core_tools: ['read', 'write', 'edit', 'bash'],
     search_tools: ['grep', 'glob']
   },
-  update_behind: 2,
-  update_command: 'raven upgrade',
   version: '0.0.1'
 }
 
@@ -188,6 +186,24 @@ function AppChromePage() {
           statusColor={t.color.statusWarn}
           t={t}
           turnStartedAt={now - 5_000}
+          usage={usage}
+        />
+      </Demo>
+      <Demo title="StatusRule — update available (right slot takes over)">
+        <StatusRule
+          bgCount={0}
+          busy={false}
+          cols={cols}
+          cwdLabel="~/raven"
+          model="anthropic/claude-opus-4-8"
+          sessionStartedAt={now - 125_000}
+          showCost={false}
+          status="ready"
+          statusColor={t.color.statusGood}
+          t={t}
+          turnStartedAt={null}
+          updateAvailable
+          updateCommand="raven upgrade"
           usage={usage}
         />
       </Demo>
