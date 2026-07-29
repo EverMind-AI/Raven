@@ -62,18 +62,48 @@ def test_v_prefix_is_tolerated(cache):
     assert un.update_notice("v0.1.9") == (True, "raven upgrade")
 
 
+@pytest.mark.parametrize("installed", ["0.1.9rc1", "0.1.9.dev1", "0.1.9+local"])
+def test_prerelease_installs_still_get_the_notice(cache, installed):
+    # The strict grammar matches the whole string, so without normalising the
+    # suffix these users would silently never see the hint.
+    _write(cache, "0.2.0")
+    assert un.update_notice(installed) == (True, "raven upgrade")
+
+
+def test_prerelease_of_the_latest_release_is_not_nagged(cache):
+    # 0.2.0rc1 compares equal to 0.2.0: the suffix is dropped, not ordered.
+    _write(cache, "0.2.0")
+    assert un.update_notice("0.2.0rc1") is None
+
+
+def test_refresh_skipped_when_upgrade_command_would_fail(cache, monkeypatch):
+    # An install that cannot run `raven upgrade` never sees the result, so it
+    # should not pay for the fetch either.
+    monkeypatch.setattr(un, "_upgrade_command_works", lambda: False)
+    spawned = []
+    monkeypatch.setattr("threading.Thread", lambda *a, **k: spawned.append(k) or _FakeThread())
+    un.maybe_refresh_async()
+    assert spawned == []
+
+
 def test_corrupt_cache_is_ignored(cache):
     cache.write_text("{not json", encoding="utf-8")
     assert un.update_notice("0.1.9") is None
 
 
 @pytest.mark.parametrize("payload", ['"0.2.0"', "[1]", "42", "null"])
-def test_non_object_cache_is_ignored(cache, payload):
+def test_non_object_cache_is_ignored(cache, monkeypatch, payload):
     # Valid JSON that is not an object used to raise AttributeError out of
     # update_notice(), which took `raven tui` and session.create down with it.
+    #
+    # A non-object reads back as "no cache", so the refresh call below would
+    # spawn a real thread whose write lands after monkeypatch has restored
+    # _cache_path -- i.e. on the real home. The assertion only needs "does not
+    # raise", so the thread is stubbed.
+    monkeypatch.setattr("threading.Thread", lambda *a, **k: _FakeThread())
     cache.write_text(payload, encoding="utf-8")
     assert un.update_notice("0.1.9") is None
-    un.maybe_refresh_async()  # must not raise either
+    un.maybe_refresh_async()
 
 
 def test_no_notice_when_upgrade_command_would_fail(cache, monkeypatch):

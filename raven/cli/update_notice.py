@@ -42,8 +42,31 @@ def _disabled() -> bool:
     return os.environ.get(_OPT_OUT_ENV, "").strip().lower() in _TRUTHY
 
 
+def _release_prefix(value: str) -> str:
+    """Reduce ``0.2.0rc1`` / ``0.1.9.dev1`` to the ``X.Y.Z`` it builds on.
+
+    The strict parser matches the whole string, so a prerelease or dev suffix
+    would read as unparseable and silence the hint for anyone running one. The
+    suffix is dropped rather than ordered: an rc of a release compares equal to
+    it, so an rc user is not nagged to "upgrade" to the version they are
+    already testing.
+    """
+    raw = value.strip().lstrip("vV")
+    parts = []
+    for part in raw.split(".")[:3]:
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            return raw
+        parts.append(digits)
+    return ".".join(parts) if len(parts) == 3 else raw
+
+
 def _version_key(value: str) -> tuple[int, int, int] | None:
-    """Parse ``1.2.3`` / ``v1.2.3`` leniently, ``None`` when unparseable.
+    """Parse ``1.2.3`` / ``v1.2.3`` / ``1.2.3rc1``, ``None`` when unparseable.
 
     ``upgrade_commands._version_key`` is the single source of truth for the
     grammar; it raises for anything it cannot read, which here just means
@@ -53,7 +76,7 @@ def _version_key(value: str) -> tuple[int, int, int] | None:
     from raven.cli.upgrade_commands import _version_key as strict_key
 
     try:
-        return strict_key(value.strip())
+        return strict_key(_release_prefix(value))
     except (UpgradeError, AttributeError):
         return None
 
@@ -104,9 +127,10 @@ def maybe_refresh_async() -> None:
 
     Fire-and-forget: spawns a daemon thread only when the cache is missing or
     older than the TTL, so a normal launch touches the network at most once a
-    day and never blocks.
+    day and never blocks. Installs that cannot run ``raven upgrade`` skip the
+    fetch entirely -- they would never be shown the result.
     """
-    if _disabled():
+    if _disabled() or not _upgrade_command_works():
         return
 
     cache = _read_cache()
