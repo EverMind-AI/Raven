@@ -1,4 +1,4 @@
-"""SR-1 — SkillSource Protocol shape, LocalSkillSource emission,
+"""SkillSource Protocol shape, LocalSkillSource emission,
 LocalSkillCatalog rendering.
 
 The Local source/catalog own the :class:`LocalPool` /

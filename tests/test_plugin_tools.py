@@ -294,8 +294,7 @@ class TestRenderAttachments:
 # EverOS understand_media tool (needs raven.plugin.memory.everos importable)
 # ---------------------------------------------------------------------------
 
-pytest.importorskip("raven.plugin.memory.everos")
-from raven.plugin.memory.everos.tools import UnderstandMediaTool, make_understand_media_tool  # noqa: E402
+from raven.plugin.memory.everos.tools import UnderstandMediaTool, make_understand_media_tool
 
 
 class TestUnderstandMediaTool:

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from raven.sandbox import (
     DirectExecutor,
@@ -132,7 +133,7 @@ class TestSandboxConfigValidators:
         assert c.extra_volumes == [["/data", "/data", "ro"]]
 
     def test_extra_config_key_rejected(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SandboxConfig(unknown_key="x")  # extra="forbid"
 
     def test_aliases_accept_both_camel_and_snake(self):
@@ -1135,8 +1136,6 @@ class TestSubagentSandboxLifecycle:
             async def stop(self) -> None:
                 stopped.append(True)
 
-        original_build = None
-
         async def fake_build(cfg, workspace):
             return TrackingExecutor()
 
@@ -1161,8 +1160,6 @@ class TestSubagentSandboxLifecycle:
         subagent_mod.build_executor = _patched_build
         try:
             # Patch the inner method so the agent loop completes quickly
-            original_inner = manager._run_subagent_inner
-
             async def _fast_inner(task_id, task, label, origin, executor):
                 await manager._announce_result(task_id, label, task, "done", origin, "ok")
 

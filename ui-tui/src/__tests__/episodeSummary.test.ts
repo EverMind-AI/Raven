@@ -52,7 +52,13 @@ describe('toolsSummary', () => {
     expect(toolsSummary([tool('web_search', 'hermes agent')])).toBe('searched "hermes agent"')
   })
 
-  it('shows +added -removed for an edited file', () => {})
+  it('shows +added -removed for an edited file', () => {
+    const edited = { ...tool('edit_file', 'notes.md'), added: 12, removed: 3 }
+    expect(toolsSummary([edited])).toBe('edited notes.md (+12 -3)')
+    // A missing side reads as zero, and no stats at all means no suffix.
+    expect(toolsSummary([{ ...tool('edit_file', 'notes.md'), added: 5 }])).toBe('edited notes.md (+5 -0)')
+    expect(toolsSummary([tool('edit_file', 'notes.md')])).toBe('edited notes.md')
+  })
 
   it('splits a tool row into verb + detail (full path, not just basename)', () => {
     expect(toolParts(tool('read_file', 'src/approve.go'))).toEqual({ verb: 'read', detail: 'src/approve.go' })

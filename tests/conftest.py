@@ -12,11 +12,12 @@ import pytest
 def pytest_unconfigure(config: pytest.Config) -> None:
     """On CI, hard-exit past interpreter finalization once the run is over.
 
-    Native runtimes pulled in by the suite (lancedb's Rust/tokio thread, asyncio
-    subprocess transports finalized during GC) segfault Py_FinalizeEx on Linux,
-    turning a fully green run into exit 139. raven.cli._exit guards the CLI the
-    same way; the pytest process needs its own guard because it finalizes with
-    those runtimes live.
+    A fully green run still exited 139 on Linux: the suite finalizes with
+    native state live (asyncio subprocess transports collected during GC),
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
+    routes its exit through the same helper, but on a different trigger --
+    see raven.cli._exit for the lancedb-specific gate it uses, which is not
+    what fires here.
 
     Local runs keep normal semantics so nothing masks an exit-time error, and
     the recorded status is preserved either way -- a failing run still exits

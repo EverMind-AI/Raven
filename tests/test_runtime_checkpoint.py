@@ -1,4 +1,4 @@
-"""Bug2 — per-turn shadow-git checkpoint + max-iter interrupted handling.
+"""Per-turn shadow-git checkpoint + max-iter interrupted handling.
 
 Covers the runtime-discipline safety net gated by
 ``config.runtime.checkpoint.policy`` × ``AgentLoop(interactive=...)``:
@@ -173,13 +173,13 @@ async def test_max_iter_baseline_preserved_when_disabled(workspace):
 
 # Note: tests that spied on ``_trigger_local_extraction`` were removed when the
 # embedded extraction path was retired by feature/integrate-everos (Phase B-1).
-# The Bug2 axiom "interrupted turn != completed turn" now lives in two places
+# The axiom "interrupted turn != completed turn" now lives in two places
 # preserved by this merge:
 #   1. Shadow-git snapshot is taken regardless (see test_max_iter_snapshot...)
 #   2. ``outcome.status`` distinguishes interrupted vs completed for any caller
 #      that wants to gate downstream actions on it (the new after-turn
 #      pipeline at the caller level can choose to honor this — out of scope
-#      for Bug2 itself).
+#      for the checkpoint itself).
 
 
 # --- I5/I6: completed and error terminal states ------------------------------
