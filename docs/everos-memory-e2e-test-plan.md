@@ -42,7 +42,7 @@ expectations.
 
 | Layer | What | Where | LLM? |
 |---|---|---|---|
-| L1 | Backend translation (owner routing, message conversion, result flatten, degradation) | `tests/test_em2_backend.py`, `tests/test_em3_http.py` | no (fakes) — default CI |
+| L1 | Backend translation (owner routing, message conversion, result flatten, degradation) | `tests/test_everos_backend.py`, `tests/test_everos_http_adapter.py` | no (fakes) — default CI |
 | L2 | everos extraction quality — direct service + `is_final` flush | `tests/integration/test_everos_extraction_real_llm.py` | yes (`real_llm`) |
 | L3 | backend ↔ everos e2e — embedded mode `store`/`recall` | `tests/integration/test_everos_backend_e2e.py` | yes (`real_llm`) |
 

@@ -816,7 +816,7 @@ describe('createGatewayEventHandler', () => {
     } finally {
       // Drain pending fake timers BEFORE restoring real timers so a mid-
       // test assertion failure can't leak the interrupt-cooldown setTimeout
-      // across test files (the original Copilot concern).
+      // across test files.
       vi.runAllTimers()
       vi.useRealTimers()
     }

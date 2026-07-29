@@ -27,6 +27,8 @@ import time
 import pytest
 
 from tests.tui.autotest.runner import BackendError
+from tests.tui.autotest.statusbar import READY_RE as _READY_RE
+from tests.tui.autotest.statusbar import WORKING_RE as _WORKING_RE
 
 _LEAK_RE = re.compile(
     r"LiteLLM:(DEBUG|INFO|WARNING|ERROR)"
@@ -39,9 +41,16 @@ _LEAK_RE = re.compile(
 
 @pytest.mark.e2e
 def test_tui_chat_streaming_no_log_overlay(harness):
+    prompt = "Reply in exactly 30 words about anything."
     harness.spawn("uv run raven tui")
-    assert harness.wait(r"Raven", timeout=25.0), f"TUI did not reach banner; screen=\n{harness.screen()}"
-    harness.type("Reply in exactly 30 words about anything.")
+    # Key off the status bar, not the banner, and confirm the composer took the
+    # text before submitting. The assertion below is negative (no leak), so a
+    # dropped prompt would mean no streaming, no leak, and a vacuous pass.
+    assert harness.wait(_READY_RE, timeout=45.0), f"TUI status bar never reported ready; screen=\n{harness.screen()}"
+    harness.type(prompt)
+    assert harness.wait(re.escape(prompt), timeout=10.0), (
+        f"composer never showed the typed prompt; screen=\n{harness.screen()}"
+    )
     harness.press("enter")
 
     # If the configured default model isn't accessible (e.g. claude-sonnet-4-6
@@ -53,6 +62,12 @@ def test_tui_chat_streaming_no_log_overlay(harness):
             "start, cannot validate log-overlay absence. Re-run with an "
             "accessible model configured as default (e.g. openrouter/qwen)."
         )
+
+    # Positive precondition before a negative assertion: the turn must actually
+    # be streaming, or "no leak" proves nothing.
+    assert harness.wait(_WORKING_RE, timeout=20.0), (
+        f"turn never started, so there was no streaming to leak from; screen=\n{harness.screen()}"
+    )
 
     # Race the leak pattern against the streaming response. If a log line
     # surfaces on the alt-screen at any moment in the next 30 s, fail with

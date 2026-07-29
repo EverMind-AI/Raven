@@ -16,8 +16,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-pytest.importorskip("raven.plugin.memory.everos")
-
 from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (

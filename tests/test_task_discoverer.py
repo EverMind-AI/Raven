@@ -341,24 +341,6 @@ async def test_discoverer_drops_malformed_options_keeps_valid(memory_store, pend
 @pytest.mark.asyncio
 async def test_discoverer_rejects_routine_confirm_without_routine_id(memory_store, pending_store):
     dispatcher, _posted = _wire_dispatcher(lambda: _NOW)
-    response = _StubResponse(
-        [
-            _option_dict(
-                title="bad routine",
-                type="routine_confirm",
-                exec_kind="routine_confirm",
-                exec_payload={},  # missing routine_id
-            ),
-            _option_dict(
-                title="good routine",
-                type="routine_confirm",
-                exec_kind="routine_confirm",
-                exec_payload={"routine_id": "dow1-h09-meeting", "make_cron": True},
-            ),
-        ]
-    )
-    provider = _StubProvider(response)
-
     # pad with 2 ad_hoc options so we get the minimum 3
     response = _StubResponse(
         [

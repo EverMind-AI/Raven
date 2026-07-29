@@ -227,11 +227,10 @@ describe('createSlashHandler', () => {
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
   })
 
-  // Regressions from Copilot review on #19835: /voice output + frontend
-  // binding state must both track the gateway's fresh ``record_key`` on
-  // every response, or a config edit shows the new shortcut in text
-  // while push-to-talk still fires the old one until the next mtime
-  // poll (~5s).
+  // /voice output and frontend binding state must both track the
+  // gateway's fresh ``record_key`` on every response, or a config edit
+  // shows the new shortcut in text while push-to-talk still fires the
+  // old one until the next mtime poll (~5s).
   it('/voice status renders the gateway record_key and pushes it into frontend state', async () => {
     const rpc = vi.fn(() => Promise.resolve({ enabled: true, record_key: 'ctrl+space', tts: false }))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
@@ -267,11 +266,11 @@ describe('createSlashHandler', () => {
     })
   })
 
-  // Round-2 Copilot review on #19835: a response missing ``record_key``
-  // (e.g. the old tts branch, or any future branch that forgets to
-  // include it) MUST NOT clobber the user's cached binding back to
-  // Ctrl+B. The label still renders the default for display; the
-  // frontend state keeps whatever was last authoritatively set.
+  // A response missing ``record_key`` (e.g. the old tts branch, or any
+  // future branch that forgets to include it) MUST NOT clobber the
+  // user's cached binding back to Ctrl+B. The label still renders the
+  // default for display; the frontend state keeps whatever was last
+  // authoritatively set.
   it('/voice tts without record_key does not clobber cached frontend binding', async () => {
     const rpc = vi.fn(() => Promise.resolve({ enabled: true, tts: true }))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })

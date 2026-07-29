@@ -1,4 +1,4 @@
-"""FB-1 — qualified_id feedback dispatcher.
+"""qualified_id feedback dispatcher.
 
 Exercises:
 1. ``_filter_qualified_ids`` helper — prefix matching, native id

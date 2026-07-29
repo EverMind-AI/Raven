@@ -1,4 +1,4 @@
-"""SR-2 — SkillForgeRouter weighted RRF fusion + concurrent fan-out + failure isolation."""
+"""SkillForgeRouter weighted RRF fusion + concurrent fan-out + failure isolation."""
 
 from __future__ import annotations
 
