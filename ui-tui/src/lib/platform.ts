@@ -222,7 +222,7 @@ const _matchesNamedKey = (named: VoiceRecordKeyNamed, key: RuntimeKeyEvent, ch: 
  * ``voice.record_key: true`` would otherwise crash ``.trim()`` on a
  * non-string scalar. Non-string / empty / unrecognised values fall
  * back to the documented Ctrl+B default so a typo never silently
- * disables the shortcut. / */
+ * disables the shortcut. */
 export const parseVoiceRecordKey = (raw: unknown): ParsedVoiceRecordKey => {
   if (typeof raw !== 'string') {
     return DEFAULT_VOICE_RECORD_KEY
