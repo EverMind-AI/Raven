@@ -92,6 +92,37 @@ def test_sub_providers_go_through_litellm():
     assert all(isinstance(sub, LiteLLMProvider) for sub in p._by_model.values())
 
 
+@pytest.mark.asyncio
+async def test_routed_models_stream_natively(monkeypatch):
+    # The point of routing through LiteLLM: the old direct client had no
+    # chat_stream, so routed models fell back to one delta carrying the whole
+    # reply. Real chunks must now reach the caller one at a time.
+    class _Stream:
+        def __aiter__(self):
+            return self
+
+        def __init__(self):
+            self._chunks = iter(["Hel", "lo", "!"])
+
+        async def __anext__(self):
+            try:
+                text = next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration
+            delta = MagicMock(content=text, tool_calls=None, reasoning_content=None)
+            return MagicMock(choices=[MagicMock(delta=delta, finish_reason=None)], usage=None)
+
+    async def fake_acompletion(**kwargs):
+        return _Stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    chunks = [d.content async for d in p.chat_stream(messages=[{"role": "user", "content": "hi"}], model="small")]
+
+    assert chunks == ["Hel", "lo", "!"]
+
+
 def test_endpoint_without_api_base_is_rejected():
     # ModelEndpoint.api_base defaults to "", and LiteLLM would then fall back to
     # api.openai.com and ship this endpoint's key there. Fail loudly instead.

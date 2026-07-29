@@ -75,9 +75,6 @@ class ProviderSpec:
     # OAuth-based providers (e.g., OpenAI Codex) don't use API keys
     is_oauth: bool = False  # if True, uses OAuth flow instead of API key
 
-    # Direct providers bypass LiteLLM entirely (e.g., Azure OpenAI)
-    is_direct: bool = False
-
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
 
@@ -125,14 +122,16 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         default_api_base="http://localhost:8000/v1",
     ),
-    # === Azure OpenAI (direct API calls with API version 2024-10-21) =====
+    # === Azure OpenAI ======================================================
+    # Served by AzureOpenAIProvider, not LiteLLM (make_provider dispatches on
+    # the name): Azure needs an api-version and takes a deployment name where
+    # every other provider takes a model id.
     ProviderSpec(
         name="azure_openai",
         keywords=("azure", "azure-openai"),
         env_key="",
         display_name="Azure OpenAI",
         litellm_prefix="",
-        is_direct=True,
     ),
     # === Gateways (detected by api_key / api_base, not model name) =========
     # Gateways can route any model, so they win in fallback.
