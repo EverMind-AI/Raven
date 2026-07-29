@@ -22,6 +22,7 @@ import {
   isPasteBackedText,
   stripAnsi
 } from '../lib/text.js'
+import { EpisodeMessage } from './episodeView.js'
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { ToolTrail } from './thinking.js'
@@ -57,6 +58,10 @@ export const MessageLine = memo(function MessageLine({
   // Collapse toggle for long system messages
   const systemIsLong = msg.role === 'system' && msg.text.length > SYSTEM_COLLAPSE_CHARS
   const [systemOpen, setSystemOpen] = useState(false)
+
+  if (msg.kind === 'episodes') {
+    return <EpisodeMessage cols={cols} compact={compact} msg={msg} t={t} />
+  }
 
   if (msg.kind === 'trail' && msg.todos?.length) {
     return (
@@ -150,7 +155,12 @@ export const MessageLine = memo(function MessageLine({
         // streamingMarkdown.tsx for the cost model.
         <StreamingMd compact={compact} t={t} text={boundedLiveRenderText(msg.text)} />
       ) : (
-        <Md compact={compact} t={t} text={limitHistoryRender ? boundedHistoryRenderText(msg.text) : msg.text} />
+        <Md
+          avail={transcriptBodyWidth(cols, msg.role, t.brand.prompt)}
+          compact={compact}
+          t={t}
+          text={limitHistoryRender ? boundedHistoryRenderText(msg.text) : msg.text}
+        />
       )
     }
 
@@ -168,7 +178,13 @@ export const MessageLine = memo(function MessageLine({
       )
     }
 
-    return <Text {...(body ? { color: body } : {})}>{msg.text}</Text>
+    // Bold for the user's own prompt — pairs with the accent chevron to set it
+    // apart from assistant prose and the dim activity lines.
+    return (
+      <Text bold={msg.role === 'user'} {...(body ? { color: body } : {})}>
+        {msg.text}
+      </Text>
+    )
   })()
 
   // Diff segments (emitted by pushInlineDiffSegment between narration

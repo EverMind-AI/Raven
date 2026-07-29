@@ -23,6 +23,7 @@ from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
 from raven.spine import (
     Deliverable,
+    EpisodeStart,
     Origin,
     OriginPools,
     Reasoning,
@@ -143,6 +144,7 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "name": out.name,
                             "arguments": out.arguments or {},
+                            "display": out.display,
                         },
                     },
                 )
@@ -164,6 +166,10 @@ class TuiOutlet:
             # reply uses, so message.complete finalizes it like any other text.
             if out.content:
                 await self._emitter.emit(cid, {"type": "token.delta", "payload": {"text": out.content}})
+        elif isinstance(out, EpisodeStart):
+            # Boundary marker; the TUI buckets this model call's reasoning +
+            # text + tools into one collapsible episode.
+            await self._emitter.emit(cid, {"type": "episode.start", "payload": {"index": out.index}})
         # Notice / MediaOut: eaten (no wire event today).
 
     async def send_stream_chunk(self, chat_id: str, stream_id: str, delta: str, *, done: bool = False) -> None:

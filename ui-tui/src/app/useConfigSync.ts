@@ -154,6 +154,11 @@ export const applyDisplay = (
     showReasoning: d.show_reasoning !== false,
     statusBar: normalizeStatusBar(d.tui_statusbar),
     streaming: d.streaming !== false
+    // NOTE: `transcript` is intentionally NOT synced here. It is a runtime-only
+    // session flag toggled by `/transcript` (`display` is not a persisted config
+    // block). Re-hydration runs on every config mtime poll; setting transcript
+    // here would silently revert the user's `/transcript episodes` choice within
+    // seconds of any other config change.
   })
 }
 

@@ -1525,6 +1525,22 @@
           }
         }
       },
+      "EpisodeStartEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "episode.start" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index"],
+            "properties": {
+              "index": { "type": "integer" }
+            }
+          }
+        }
+      },
       "TokenDeltaEvent": {
         "type": "object",
         "additionalProperties": false,
@@ -1573,7 +1589,8 @@
               "arguments": {
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
-              }
+              },
+              "display": { "type": ["string", "null"] }
             }
           }
         }
@@ -1675,6 +1692,7 @@
         "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
         "oneOf": [
           { "$ref": "#/components/schemas/MessageStartEvent" },
+          { "$ref": "#/components/schemas/EpisodeStartEvent" },
           { "$ref": "#/components/schemas/TokenDeltaEvent" },
           { "$ref": "#/components/schemas/ThinkingDeltaEvent" },
           { "$ref": "#/components/schemas/ToolStartEvent" },
@@ -1688,6 +1706,7 @@
           "propertyName": "type",
           "mapping": {
             "message.start": "#/components/schemas/MessageStartEvent",
+            "episode.start": "#/components/schemas/EpisodeStartEvent",
             "token.delta": "#/components/schemas/TokenDeltaEvent",
             "thinking.delta": "#/components/schemas/ThinkingDeltaEvent",
             "tool.start": "#/components/schemas/ToolStartEvent",

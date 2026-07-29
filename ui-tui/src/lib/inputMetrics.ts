@@ -171,12 +171,15 @@ export function composerPromptWidth(promptText: string) {
   return Math.max(1, stringWidth(promptText)) + COMPOSER_PROMPT_GAP_WIDTH
 }
 
-export function transcriptGutterWidth(role: Role, userPrompt: string) {
-  return role === 'user' ? composerPromptWidth(userPrompt) : 3
+// Both gutters derive from their glyph's display width plus the same gap, so a
+// user line and an assistant line start their text in the same column (a
+// hardcoded non-user width silently drifted one cell off the `❯` gutter).
+export function transcriptGutterWidth(role: Role, userPrompt: string, toolGlyph = '┊') {
+  return composerPromptWidth(role === 'user' ? userPrompt : toolGlyph)
 }
 
-export function transcriptBodyWidth(totalCols: number, role: Role, userPrompt: string) {
-  return Math.max(20, totalCols - transcriptGutterWidth(role, userPrompt) - 2)
+export function transcriptBodyWidth(totalCols: number, role: Role, userPrompt: string, toolGlyph?: string) {
+  return Math.max(20, totalCols - transcriptGutterWidth(role, userPrompt, toolGlyph) - 2)
 }
 
 export function stableComposerColumns(totalCols: number, promptWidth: number) {
