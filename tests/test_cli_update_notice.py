@@ -194,3 +194,30 @@ class _FakeUpgrade:
 
     def _version_key(self, value):  # noqa: D102 - test double
         raise RuntimeError(value)
+
+
+# ---------------------------------------------------------------------------
+# _upgrade_command_works: the real implementation, not the fixture's stub
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_command_works_follows_the_install_kind(monkeypatch) -> None:
+    """It delegates to the uv-tool probe, so editable installs are not nudged."""
+    import raven.cli.upgrade_commands as upgrade
+
+    monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: True)
+    assert un._upgrade_command_works() is True
+
+    monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: False)
+    assert un._upgrade_command_works() is False
+
+
+def test_upgrade_command_works_treats_a_probe_failure_as_no(monkeypatch) -> None:
+    """A malformed uv receipt raises; unknown must read as "cannot upgrade"."""
+    import raven.cli.upgrade_commands as upgrade
+
+    def _boom() -> bool:
+        raise RuntimeError("malformed uv receipt")
+
+    monkeypatch.setattr(upgrade, "_is_uv_tool_install", _boom)
+    assert un._upgrade_command_works() is False

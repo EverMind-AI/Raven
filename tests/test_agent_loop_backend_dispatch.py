@@ -1,4 +1,4 @@
-"""AG-1 — AgentLoop ``backend`` wiring + ``_dispatch_backend_store``.
+"""AgentLoop ``backend`` wiring + ``_dispatch_backend_store``.
 
 The two after-turn callsites (system-message path + REPL path) now call
 :meth:`AgentLoop._dispatch_backend_store` as the third peer step in the
@@ -150,7 +150,7 @@ class TestDispatcher:
 
 
 # ---------------------------------------------------------------------------
-# Legacy compatibility — pre-AG-1 callsites still pass
+# Legacy compatibility -- callsites predating the backend keyword still pass
 # ---------------------------------------------------------------------------
 
 
@@ -159,7 +159,7 @@ class TestLegacyCompat:
         self,
         tmp_path: Path,
     ) -> None:
-        """Pre-AG-1 construction (no ``backend=`` keyword) still works
+        """Construction without the ``backend=`` keyword still works
         end-to-end. After Phase B-3 the ``self.memory`` facade is gone;
         we now assert against the direct subsystem fields AgentLoop
         holds (``memory_consolidator`` + ``context.skills``)."""

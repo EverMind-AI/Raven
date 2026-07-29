@@ -22,7 +22,7 @@ repos:
         args: [--maxkb=1024]
       - id: check-merge-conflict
       - id: detect-private-key
-        exclude: ^tests/test_runtime_checkpoint_bug2_deep\.py$
+        exclude: ^tests/test_runtime_checkpoint_deep\.py$
 
   - repo: local
     hooks:

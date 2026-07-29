@@ -182,7 +182,7 @@ class TestLockedSectionWrite:
             with store.locked():
                 # Inside the lock, record observation order
                 observed_orders.append(label)
-                current = store.read_long_term()
+                store.read_long_term()
                 # Simulate slow LLM-driven section build
                 time.sleep(delay_inside_lock_s)
                 # Each writer claims its own H2 section

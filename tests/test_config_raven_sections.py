@@ -1,4 +1,4 @@
-"""CFG-1 — RavenConfig: plugins / memory / skill_router sections + migration."""
+"""RavenConfig: plugins / memory / skill_router sections + migration."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
@@ -279,7 +280,7 @@ class TestMassLibraryDbDeprecation:
 
 class TestStrictness:
     def test_unknown_field_in_plugins_rejected(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             # ``extra='forbid'`` — typo catches at startup
             PluginsConfig.model_validate(
                 {
@@ -290,5 +291,5 @@ class TestStrictness:
             )
 
     def test_unknown_field_in_memory_rejected(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             MemoryConfig.model_validate({"backend": "x", "typo": 1})

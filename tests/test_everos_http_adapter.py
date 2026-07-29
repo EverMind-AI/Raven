@@ -1,4 +1,4 @@
-"""EM-3 — EverosBackend HTTP mode (remote EverOS)."""
+"""EverosBackend HTTP mode (remote EverOS)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from typing import Any
 
 import httpx
 import pytest
-
-pytest.importorskip("raven.plugin.memory.everos")
 
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (

@@ -3,22 +3,14 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { execFileSync } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-import { SLASH_COMMANDS } from '../app/slash/registry.js'
+import { findSlashCommand } from '../app/slash/registry.js'
 
-type CommandRoute = 'fallback' | 'local' | 'native'
-
-interface CommandRegistryLoad {
-  error?: string
-  names: string[]
-}
-
-const NATIVE_MUTATING_COMMANDS = new Set(['browser', 'busy', 'fast', 'reload-mcp', 'rollback', 'stop'])
-
+// A command that changes session state has to run in this process.
+// createSlashHandler.ts:45-51 routes a slash locally when findSlashCommand
+// resolves it and otherwise hands it to slash.exec, which runs the CLI in a
+// subprocess -- where a mutation cannot reach the live session at all.
 const MUTATING_COMMANDS = [
   'background',
   'branch',
@@ -45,73 +37,17 @@ const MUTATING_COMMANDS = [
   'yolo'
 ] as const
 
-const loadCommandRegistryNames = (): CommandRegistryLoad => {
-  const here = dirname(fileURLToPath(import.meta.url))
-
-  try {
-    const names = JSON.parse(
-      execFileSync(
-        process.env.PYTHON ?? 'python3',
-        [
-          '-c',
-          'import json; from raven_cli.commands import COMMAND_REGISTRY; print(json.dumps([c.name for c in COMMAND_REGISTRY]))'
-        ],
-        { cwd: resolve(here, '../../..'), encoding: 'utf8' }
-      )
-    ) as string[]
-
-    return { names: [...new Set(names)] }
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      names: []
-    }
-  }
-}
-
-const commandRegistry = loadCommandRegistryNames()
-const registryIt = commandRegistry.error ? it.skip : it
-const skipReason = commandRegistry.error ? commandRegistry.error.split('\n')[0] : ''
-
-const LOCAL_COMMAND_NAMES = new Set(
-  SLASH_COMMANDS.flatMap(command => [command.name, ...(command.aliases ?? [])].map(name => name.toLowerCase()))
-)
-
-const classifyRoute = (name: string): CommandRoute => {
-  const normalized = name.toLowerCase()
-
-  if (NATIVE_MUTATING_COMMANDS.has(normalized)) {
-    return 'native'
-  }
-
-  if (LOCAL_COMMAND_NAMES.has(normalized)) {
-    return 'local'
-  }
-
-  return 'fallback'
-}
-
-describe('slash parity matrix', () => {
-  if (commandRegistry.error) {
-    it.skip(`Python command registry unavailable: ${skipReason}`, () => {})
-  }
-
-  registryIt('classifies each command registry command as local/native/fallback', () => {
-    const routes = Object.fromEntries(commandRegistry.names.map(name => [name, classifyRoute(name)]))
-
-    expect(routes['model']).toBe('local')
-    expect(routes['browser']).toBe('native')
-    expect(routes['reload-mcp']).toBe('native')
-    expect(routes['rollback']).toBe('native')
-    expect(routes['stop']).toBe('native')
+describe('slash routing', () => {
+  it('resolves every mutating command locally instead of the CLI slash worker', () => {
+    expect(MUTATING_COMMANDS.filter(name => !findSlashCommand(name))).toEqual([])
   })
 
-  registryIt('keeps every mutating command off slash-worker fallback', () => {
-    const routes = Object.fromEntries(commandRegistry.names.map(name => [name, classifyRoute(name)]))
+  it('leaves an unknown command unresolved so it reaches the CLI', () => {
+    expect(findSlashCommand('channels-status')).toBeUndefined()
+  })
 
-    for (const name of MUTATING_COMMANDS) {
-      expect(routes[name], `missing command in registry: ${name}`).toBeDefined()
-      expect(routes[name], `mutating command must not fallback: ${name}`).not.toBe('fallback')
-    }
+  it('resolves aliases and is case-insensitive', () => {
+    expect(findSlashCommand('MODEL')).toBe(findSlashCommand('model'))
+    expect(findSlashCommand('bg')).toBe(findSlashCommand('background'))
   })
 })

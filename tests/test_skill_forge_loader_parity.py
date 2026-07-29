@@ -1,8 +1,7 @@
-"""Phase A acceptance tests for SkillForge.
+"""SkillForge parity with the legacy SkillsLoader.
 
-Phase A is the structural migration: ``agent/skills.py`` is dismantled
-into ``skill_forge/{store,service,types}.py`` while preserving the exact
-external behavior of the legacy ``SkillsLoader``. These tests pin that
+``agent/skills.py`` was dismantled into ``skill_forge/{store,service,types}.py``
+while preserving the loader's exact external behavior. These tests pin that
 behavior down so future refactors can't drift.
 
 No LLM calls — everything runs offline against a synthetic workspace
@@ -526,7 +525,7 @@ class TestContextBuilderIntegration:
         assert "<name>always_flag_top</name>" not in xml_block
 
     def test_empty_skill_names_falls_back_to_full_directory(self, tmp_workspace, tmp_builtin):
-        """Phase A stub selector returns [] — must fall back, not strip all."""
+        """A stub selector returning [] must fall back, not strip all."""
         from raven.agent.context import ContextBuilder
         from raven.memory_engine.skill_forge import LocalSkillCatalog
 

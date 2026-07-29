@@ -14,10 +14,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-import pytest
 from typer.testing import CliRunner
-
-pytest.importorskip("raven.plugin.memory.everos")
 
 
 def _make_runner_args(tmp_path: Path, config: dict[str, Any]) -> list[str]:

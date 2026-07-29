@@ -49,7 +49,7 @@ export const MessageLine = memo(function MessageLine({
   // calls + Activity; an assistant message with thinking/tools metadata
   // feeds Thinking + Tool calls.  Gating on every section would let
   // `thinking` (expanded by default) keep an empty wrapper alive when only
-  // `tools` is hidden — exactly the empty-Box bug Copilot caught.
+  // `tools` is hidden, leaving a stray empty Box on screen.
   const thinkingMode = sectionMode('thinking', detailsMode, sections, detailsModeCommandOverride)
   const toolsMode = sectionMode('tools', detailsMode, sections, detailsModeCommandOverride)
   const activityMode = sectionMode('activity', detailsMode, sections, detailsModeCommandOverride)

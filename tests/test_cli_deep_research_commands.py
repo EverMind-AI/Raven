@@ -179,7 +179,7 @@ def test_configure_validation_fail_then_save(tmp_path: Path, monkeypatch):
 
 def test_configure_validation_fail_then_cancel(tmp_path: Path, monkeypatch):
     fail = {"ok": False, "status": "http_401", "model_ids": None, "error": "bad"}
-    p = _setup_interactive(monkeypatch, tmp_path, ["configure", "cancel"], validate=lambda *a, **k: fail)
+    _setup_interactive(monkeypatch, tmp_path, ["configure", "cancel"], validate=lambda *a, **k: fail)
     assert configure_deep_research(non_interactive=False, warnings=[]) is False  # cancelled, nothing written
 
 
@@ -231,9 +231,7 @@ def test_configure_validation_retry_then_ok(tmp_path: Path, monkeypatch):
         calls["n"] += 1
         return {"ok": calls["n"] > 1, "status": "http_401" if calls["n"] == 1 else "ok", "model_ids": [], "error": None}
 
-    p = _setup_interactive(
-        monkeypatch, tmp_path, ["configure", "retry", "mirothinker-1-7-deepresearch"], validate=_flaky
-    )
+    _setup_interactive(monkeypatch, tmp_path, ["configure", "retry", "mirothinker-1-7-deepresearch"], validate=_flaky)
     assert configure_deep_research(non_interactive=False, warnings=[]) is True
     assert calls["n"] == 2  # first validate failed, retry validated ok
 

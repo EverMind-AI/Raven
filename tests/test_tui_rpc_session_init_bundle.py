@@ -314,3 +314,33 @@ def test_boot_context_max_uses_live_window_for_openrouter(config, monkeypatch) -
     info = _default_session_info(loop, config)
 
     assert info["usage"]["context_max"] == 163840
+
+
+# ---------------------------------------------------------------------------
+# Upgrade-nudge fields (the producer side; the TUI already reads them)
+# ---------------------------------------------------------------------------
+
+
+def test_default_session_info_carries_the_upgrade_nudge(fake_agent_loop, config, monkeypatch) -> None:
+    """A pending release surfaces as ``update_available`` / ``update_command``.
+
+    The TUI status bar reads both fields, so leaving them unpopulated is the
+    exact defect the nudge feature fixed -- and nothing else in the suite fails
+    if this wiring is removed.
+    """
+    monkeypatch.setattr(session_module, "update_notice", lambda _v: (True, "raven upgrade"))
+
+    info = _default_session_info(fake_agent_loop, config)
+
+    assert info["update_available"] is True
+    assert info["update_command"] == "raven upgrade"
+
+
+def test_default_session_info_omits_the_nudge_when_up_to_date(fake_agent_loop, config, monkeypatch) -> None:
+    """No pending release means the keys stay absent, not present-and-false."""
+    monkeypatch.setattr(session_module, "update_notice", lambda _v: None)
+
+    info = _default_session_info(fake_agent_loop, config)
+
+    assert "update_available" not in info
+    assert "update_command" not in info

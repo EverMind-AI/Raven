@@ -14,6 +14,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.errors import ModelNotAvailableError, RpcError, TurnInProgressError
@@ -191,12 +192,12 @@ async def test_turn_send_without_scheduler_surfaces_build_error_code() -> None:
 
 
 async def test_turn_send_rejects_missing_session_key() -> None:
-    with pytest.raises(Exception):  # noqa: BLE001
+    with pytest.raises(ValidationError):
         await turn_send({"content": "missing session_key"}, scheduler=FakeScheduler())
 
 
 async def test_turn_send_rejects_missing_content() -> None:
-    with pytest.raises(Exception):  # noqa: BLE001
+    with pytest.raises(ValidationError):
         await turn_send({"session_key": "tui:default"}, scheduler=FakeScheduler())
 
 

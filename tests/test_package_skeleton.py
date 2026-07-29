@@ -1,4 +1,4 @@
-"""Tier 1 smoke tests — verify the skeleton imports,
+"""Package skeleton smoke tests - verify the skeleton imports,
 and the surviving interface ABCs behave correctly.
 
 These tests should pass on a fresh checkout with only Python stdlib and
@@ -154,7 +154,7 @@ def test_config_safe_defaults():
     assert cfg.skill_forge.auto_detect is False
     assert cfg.skill_forge.auto_evolve is False
     assert cfg.token_wise.smart_routing.enabled is False
-    # Baseline memory/skill feature layer defaults ON (EverOS R8 + CFG-1): a
+    # Baseline memory/skill feature layer defaults ON: a
     # fresh install runs the everos memory backend, the SkillForgeRouter, and
     # empty-response recovery. Pinned so a future silent flip gets caught.
     assert cfg.memory.backend == "everos"
@@ -192,5 +192,5 @@ def test_tick_interval_seconds_rejects_sub_minute_values():
 
 
 if __name__ == "__main__":
-    # Allow `python tests/test_tier1_skeleton.py` as a quick smoke run.
+    # Allow `python tests/test_package_skeleton.py` as a quick smoke run.
     pytest.main([__file__, "-v"])

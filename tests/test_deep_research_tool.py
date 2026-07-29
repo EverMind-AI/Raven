@@ -552,8 +552,13 @@ def test_promote_survives_unreadable_config(tmp_path: Path, monkeypatch):
 def test_both_deep_research_variants_accept_broker():
     # The CLI double-bind loop over ("ask_user", "deep_research") wires whichever
     # variant is registered; both ask the user deep-vs-regular, so both take a broker.
-    assert hasattr(DeepResearchOfferTool, "set_broker")
-    assert hasattr(DeepResearchTool, "set_broker")
+    # Bind a real object rather than probing for the attribute: the wiring loop
+    # calls set_broker, so accepting the call is the contract, not merely existing.
+    broker = object()
+    for cls in (DeepResearchOfferTool, DeepResearchTool):
+        tool = cls.__new__(cls)
+        tool.set_broker(broker)
+        assert tool._broker is broker, f"{cls.__name__}.set_broker did not bind the broker"
 
 
 def test_deep_research_mode_two_states(monkeypatch):

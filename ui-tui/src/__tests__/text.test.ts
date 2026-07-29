@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  clipToWidth,
   boundedHistoryRenderText,
   boundedLiveRenderText,
   buildToolTrailLine,
@@ -167,5 +168,26 @@ describe('estimateRows', () => {
     const plain = 'look at test case with underscores now'
 
     expect(estimateRows(snake, w)).toBe(estimateRows(plain, w))
+  })
+})
+
+describe('clipToWidth', () => {
+  it('leaves text that already fits, collapsing whitespace', () => {
+    expect(clipToWidth('hello world', 20)).toBe('hello world')
+    expect(clipToWidth('  a\n\tb  ', 20)).toBe('a b')
+  })
+
+  it('clips to the cell budget with an ellipsis', () => {
+    expect(clipToWidth('hello world', 8)).toBe('hello w\u2026')
+  })
+
+  it('counts display cells, not code points, so wide glyphs do not overflow', () => {
+    // Each CJK glyph is two cells: a budget of 6 fits two glyphs plus the
+    // ellipsis, not six glyphs. This is the reason the helper exists.
+    expect(clipToWidth('\u4e2d\u6587\u5b57\u7b26\u6d4b\u8bd5', 6)).toBe('\u4e2d\u6587\u2026')
+  })
+
+  it('treats a non-positive budget as no clipping', () => {
+    expect(clipToWidth('abc', 0)).toBe('abc')
   })
 })

@@ -83,7 +83,11 @@ async def test_user_track_recall_through_backend(
             user_id=ids.user_id,
             top_k=5,
         )
-        assert isinstance(hits, list)
+        # Recall returning nothing is a best-effort miss per this module's
+        # strategy, but it must not read as a pass: the per-hit assertions below
+        # are vacuous on an empty list.
+        if not hits:
+            pytest.xfail("recall returned no hits; the per-hit assertions would be vacuous")
         for h in hits:
             assert isinstance(h, Memory)
             assert h.metadata.get("owner_type") == "user"

@@ -222,11 +222,9 @@ describe('normalizeBusyInputMode', () => {
   })
 
   it('defaults to queue for missing/unknown values (TUI-only override)', () => {
-    // CLI / messaging adapters keep `interrupt` as the framework default
-    // (see raven_cli/config.py + tui_gateway/server.py::_load_busy_input_mode);
-    // the TUI ships `queue` because typing a follow-up while the agent
-    // streams is the common authoring pattern and an unintended interrupt
-    // loses work.
+    // The TUI ships `queue` because typing a follow-up while the agent
+    // streams is the common authoring pattern and an unintended
+    // interrupt loses work.
     expect(normalizeBusyInputMode(undefined)).toBe('queue')
     expect(normalizeBusyInputMode(null)).toBe('queue')
     expect(normalizeBusyInputMode('')).toBe('queue')
@@ -309,10 +307,10 @@ describe('applyDisplay → tui_status_indicator', () => {
   })
 })
 
-// Regressions from Copilot review on #19835: the config-hydration path
-// for voice.record_key was untested, so a future regression in the
-// hydration or mtime-reapply wiring would slip past the suite.
-describe('applyDisplay → voice.record_key (#18994)', () => {
+// The config-hydration path for voice.record_key was untested, so a
+// regression in the hydration or mtime-reapply wiring would slip past
+// the suite.
+describe('applyDisplay → voice.record_key', () => {
   beforeEach(() => {
     resetUiState()
   })
@@ -351,8 +349,7 @@ describe('applyDisplay → voice.record_key (#18994)', () => {
 
     // quietRpc() collapses request failures to null. Resetting the
     // cached shortcut on every null would clobber a custom binding
-    // after one transient error until the next successful poll
-    // (Copilot round-8 review on #19835).
+    // after one transient error until the next successful poll.
     applyDisplay(null, setBell, setVoiceRecordKey)
 
     expect(setVoiceRecordKey).not.toHaveBeenCalled()
@@ -362,11 +359,11 @@ describe('applyDisplay → voice.record_key (#18994)', () => {
   })
 })
 
-// Round-12 Copilot review regression on #19835: the live mtime-reload
-// path was previously untested, so a regression in the polling/RPC
-// wiring to applyDisplay would only be visible at runtime. The fetch
-// + apply body is now shared as ``hydrateFullConfig()``, exercised
-// directly from both the initial hydration and the poll-tick body.
+// The live mtime-reload path was previously untested, so a regression
+// in the polling/RPC wiring to applyDisplay would only be visible at
+// runtime. The fetch + apply body is now shared as
+// ``hydrateFullConfig()``, exercised directly from both the initial
+// hydration and the poll-tick body.
 describe('hydrateFullConfig', () => {
   beforeEach(() => {
     resetUiState()
@@ -416,7 +413,7 @@ describe('hydrateFullConfig', () => {
     const result = await hydrateFullConfig(gw, setBell, setVoiceRecordKey)
 
     // quietRpc() swallows the error and returns null; applyDisplay
-    // sees cfg=null and skips the voice setter (Copilot round-8).
+    // sees cfg=null and skips the voice setter.
     expect(result).toBeNull()
     expect(setVoiceRecordKey).not.toHaveBeenCalled()
     // bell setter still fires — applyDisplay's null-cfg path applies

@@ -323,8 +323,8 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    written in adapter comments.
 3. **Test (all three layers)**:
    ```bash
-   uv run pytest tests/test_em1_skeleton.py tests/test_em2_backend.py \
-     tests/test_em3_http.py tests/test_memory_backend_protocol.py \
+   uv run pytest tests/test_everos_plugin_discovery.py tests/test_everos_backend.py \
+     tests/test_everos_http_adapter.py tests/test_memory_backend_protocol.py \
      tests/test_memory_backend_contract.py -q          # unit (mock adapter)
    uv run pytest tests/integration/test_everos_backend_e2e.py -m real_llm  # real
    python scripts/everos_memory_roundtrip.py            # native shell smoke
@@ -342,7 +342,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
 
 | Layer | Result |
 |---|---|
-| Unit (em1/em2/em3, protocol, contract, plugin discovery/command/tools, cl1, context, config, ag1/fb1, agent-loop pipeline) | 240 passed |
+| Unit (everos plugin discovery / backend / http adapter, protocol, contract, plugin command/tools, cli plugin stack, context, config, agent-loop backend dispatch + feedback, agent-loop pipeline) | 240 passed |
 | `raven plugins` | everos-memory · Source=`bundled` · Status=`activated` |
 | `real_llm` e2e (`test_everos_backend_e2e.py`) | 2 passed, 1 xfailed (best-effort skill-cluster check) — store→extract→recall + dual-track isolation |
 | roundtrip script (new import path) | OK; `users/user-raven/user.md` generated |

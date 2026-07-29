@@ -1,6 +1,6 @@
-"""Bug2 deep tests — pathological inputs, edge state, and concurrency.
+"""Deep tests - pathological inputs, edge state, and concurrency.
 
-The base file ``test_runtime_checkpoint_bug2.py`` validates the happy path and
+The base file ``test_runtime_checkpoint.py`` validates the happy path and
 core regressions; this file is the fail-safe hardening tier:
 
 - D1: filesystem pathology (unicode names, symlinks, deep nesting, file<->dir
@@ -341,7 +341,7 @@ def _agent(workspace: Path, *, policy: str, interactive: bool) -> AgentLoop:
 
 def test_d6_policy_never_disables_checkpoint(workspace):
     """``policy="never"`` is the kill switch — no shadow git regardless of
-    interactive. Loop is byte-identical to the pre-Bug2 baseline."""
+    interactive. Loop is byte-identical to the pre-checkpoint baseline."""
     a_inter = _agent(workspace, policy="never", interactive=True)
     a_one_shot = _agent(workspace, policy="never", interactive=False)
     assert a_inter._checkpoint is None
@@ -519,7 +519,7 @@ async def test_d8_one_shot_mode_creates_no_shadow_dir(workspace):
 # D9 — Containment safety: shadow_dir must stay strictly under the workspace
 # =============================================================================
 #
-# Without this check the per-workspace recovery isolation Bug2 depends on
+# Without this check the per-workspace recovery isolation this suite depends on
 # silently breaks: a misconfigured ``shadow_dir`` can put the shadow git in
 # a sibling/global path and let a second AgentLoop on a different workspace
 # share the repo, cross-contaminating ``edited_files`` in the recovery
