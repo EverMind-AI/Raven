@@ -95,9 +95,19 @@ export const estimatedMsgHeight = (
   // virtualized transcript reserve too few rows and leave stale cells behind.
   if (msg.kind === 'episodes') {
     let h = 0
+    // episodeView spaces a step from the previous one with marginTop={1} when
+    // that previous step showed tool rows. Counting no row for it is what keeps
+    // this estimate low, and a low estimate is the stale-cell symptom.
+    let prevShowedTools = false
 
     for (const ep of msg.episodes ?? []) {
       const narration = (ep.narration ?? '').trim()
+
+      if (prevShowedTools) {
+        h++
+      }
+
+      prevShowedTools = ep.tools.length > 0
 
       // A step with no narration collapses to a single summary row.
       if (!narration) {

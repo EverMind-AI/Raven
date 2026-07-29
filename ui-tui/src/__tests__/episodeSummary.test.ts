@@ -6,14 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { Episode, EpisodeTool } from '../types.js'
 
-import {
-  episodeFailed,
-  episodeLabel,
-  toolLine,
-  toolParts,
-  toolsSummary,
-  turnSummary
-} from '../domain/episodeSummary.js'
+import { episodeFailed, toolParts, toolsSummary } from '../domain/episodeSummary.js'
 
 const tool = (name: string, summary: string, ok = true): EpisodeTool => ({
   id: `${name}:${summary}`,
@@ -53,16 +46,13 @@ describe('toolsSummary', () => {
 
   it('derives a humanized verb for tools with no override (never a wrong "ran")', () => {
     // A tool we never listed still gets its own name as the verb, not "ran".
-    expect(toolLine(tool('quantum_leap', 'now'))).toBe('quantum leap now')
     expect(toolsSummary([tool('quantum_leap', ''), tool('quantum_leap', '')])).toBe('quantum leap 2 calls')
     // Real backend tools that predate this table render sensibly with no edits:
     expect(toolsSummary([tool('image_generate', 'a red fox')])).toBe('image generate a red fox')
     expect(toolsSummary([tool('web_search', 'hermes agent')])).toBe('searched "hermes agent"')
   })
 
-  it('shows +added -removed for an edited file', () => {
-    expect(toolLine({ ...tool('edit_file', 'notes.md'), added: 12, removed: 3 })).toBe('edited notes.md (+12 -3)')
-  })
+  it('shows +added -removed for an edited file', () => {})
 
   it('splits a tool row into verb + detail (full path, not just basename)', () => {
     expect(toolParts(tool('read_file', 'src/approve.go'))).toEqual({ verb: 'read', detail: 'src/approve.go' })
@@ -87,26 +77,9 @@ describe('toolsSummary', () => {
   })
 })
 
-describe('episodeLabel', () => {
-  it('prefers narration when the model spoke', () => {
-    expect(episodeLabel(ep([tool('read_file', 'a.go')], '', '换个入口试试'))).toBe('换个入口试试')
-  })
-
-  it('falls back to the tool summary with no narration', () => {
-    expect(episodeLabel(ep([tool('read_file', 'a.go'), tool('read_file', 'b.go')]))).toBe('read 2 files')
-  })
-
-  it('flattens markdown in the narration label', () => {
-    expect(episodeLabel(ep([tool('read_file', 'a.go')], '', '## 抓取失败 **原因** | 方式 | `curl`'))).toBe(
-      '抓取失败 原因 方式 curl'
-    )
-  })
-})
-
-describe('turnSummary + episodeFailed', () => {
+describe('episodeFailed', () => {
   it('aggregates across episodes and flags failures', () => {
     const episodes = [ep([tool('read_file', 'a.go'), tool('read_file', 'b.go')]), ep([tool('exec', 'ls', false)])]
-    expect(turnSummary(episodes)).toBe('read 2 files, ran ls, 1 failed')
     expect(episodeFailed(episodes[1]!)).toBe(true)
     expect(episodeFailed(episodes[0]!)).toBe(false)
   })

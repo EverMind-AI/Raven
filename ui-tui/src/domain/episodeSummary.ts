@@ -111,9 +111,6 @@ const phraseFor = (tools: EpisodeTool[]): string => {
   return `${verb} ${tools.length} ${unit}`
 }
 
-// A single tool's expanded-row phrase: "read approve.go", "ran ls biz/".
-export const toolLine = (tool: EpisodeTool): string => phraseFor([tool])
-
 // Left-clip so a long path keeps its meaningful tail (basename) instead of the
 // truncate-end losing it: "…/controller/memory/agent_memory.go".
 const clipPath = (s: string, n = 60): string => {
@@ -168,51 +165,5 @@ export const groupTools = (tools: EpisodeTool[]): EpisodeTool[][] => {
 // "read 6 files, ran ls, edited notes.md".
 export const toolsSummary = (tools: EpisodeTool[]): string => groupTools(tools).map(phraseFor).join(', ')
 
-// Flatten inline markdown to plain text for the one-line label: the model's
-// narration often contains **bold**, `code`, ## headings, or | tables that
-// would otherwise show literally in the collapsed row.
-const stripMd = (s: string) =>
-  s
-    .replace(/[*_`~]/g, '')
-    .replace(/^#{1,6}\s*/gm, '')
-    .replace(/\|/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-// The one-line label for a collapsed episode: its narration if the model spoke,
-// otherwise the tool summary. Empty when the step did nothing describable.
-export const episodeLabel = (ep: Episode): string => {
-  const narration = stripMd(ep.narration ?? '')
-
-  if (narration) {
-    return clip(narration, 72)
-  }
-
-  const tools = toolsSummary(ep.tools)
-
-  if (tools) {
-    return tools
-  }
-
-  // A reasoning-only step (kept for its thinking) still gets a readable label.
-  const reasoning = stripMd(ep.reasoning ?? '')
-
-  return reasoning ? clip(reasoning, 72) : ''
-}
-
 // Whether any tool in the episode failed (drives the error tint on the label).
 export const episodeFailed = (ep: Episode): boolean => ep.tools.some(t => !t.ok)
-
-// Turn-level one-liner: "20 steps · 2m04s — read 12 files, ran 4 commands, 1 failed".
-// Clipped so the collapsed turn stays a single line even on a busy turn.
-export const turnSummary = (episodes: Episode[]): string => {
-  const allTools = episodes.flatMap(ep => ep.tools)
-  const parts = [toolsSummary(allTools)].filter(Boolean)
-  const failed = allTools.filter(t => !t.ok).length
-
-  if (failed) {
-    parts.push(`${failed} failed`)
-  }
-
-  return clip(parts.join(', '), 90)
-}

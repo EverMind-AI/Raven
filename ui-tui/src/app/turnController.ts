@@ -136,7 +136,6 @@ const clear = (t: Timer): null => {
 
 class TurnController {
   bufRef = ''
-  episodeIndex = -1
   episodes: Episode[] = []
   private lastEpisodeStartMs = 0
   interrupted = false
@@ -259,7 +258,29 @@ class TurnController {
     if (episodesMode) {
       if (workEpisodes.length) {
         appendMessage({ kind: 'episodes', role: 'assistant', text: interruptedText, episodes: workEpisodes })
-      } else if (partial) {
+
+        return
+      }
+
+      // No episode boundary ever arrived (an older gateway that doesn't emit
+      // episode.start) yet the turn did run tools or stream text. Keep the
+      // legacy trail exactly as recordMessageComplete does, so an interrupt
+      // never loses history the completion path would have preserved.
+      if (segments.length || tools.length) {
+        for (const msg of segments) {
+          appendMessage(msg)
+        }
+
+        appendMessage({
+          role: 'assistant',
+          text: interruptedText,
+          ...(tools.length && { tools })
+        })
+
+        return
+      }
+
+      if (partial) {
         appendMessage({ role: 'assistant', text: interruptedText })
       } else if (!reentrant) {
         sys?.('interrupted')
@@ -674,7 +695,6 @@ class TurnController {
     }
 
     this.lastEpisodeStartMs = now
-    this.episodeIndex = index
     this.episodes = [...this.episodes, { index, startedAt: now, reasoning: '', narration: '', tools: [] }]
     this.publishEpisodes()
   }
@@ -921,7 +941,6 @@ class TurnController {
     this.clearStatusTimer()
     this.idle()
     this.bufRef = ''
-    this.episodeIndex = -1
     this.interrupted = false
     this.lastStatusNote = ''
     this.activeReasoningText = ''

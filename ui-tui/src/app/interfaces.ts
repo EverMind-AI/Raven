@@ -133,8 +133,10 @@ export interface UiState {
   statusBar: StatusBarMode
   streaming: boolean
   // Transcript rendering mode. 'legacy' = the flat thinking/tool panels;
-  // 'episodes' = one collapsible line per model call. Default legacy until the
-  // episodes path is complete; switch via config display.transcript.
+  // 'episodes' = one collapsible line per model call, and the default. Session
+  // scoped and runtime only: `/transcript legacy|episodes` switches it and it is
+  // deliberately never config-synced or persisted, so it stays an instant escape
+  // hatch that cannot get stuck in a config file.
   transcript: 'episodes' | 'legacy'
   theme: Theme
   usage: Usage

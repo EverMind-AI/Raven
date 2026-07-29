@@ -20,6 +20,27 @@ class ToolResult:
     display_text: str | None = None
 
 
+class ToolOutput(str):
+    """What :meth:`ToolRegistry.execute` hands back: the model-facing text with
+    the optional display string attached.
+
+    A ``str`` subclass on purpose. Every caller of the registry boundary --
+    the sentinel action executor, the subagent manager, the context curator,
+    tracing -- puts the return value straight into a message, a preview or an
+    artifact, so the boundary has to return something that *is* a str; handing
+    them a :class:`ToolResult` would format its repr into model context and
+    user-facing replies. The agent loop reads ``display_text`` off it to render
+    the transcript row.
+    """
+
+    display_text: str | None
+
+    def __new__(cls, model_text: str, display_text: str | None = None) -> "ToolOutput":
+        out = super().__new__(cls, model_text)
+        out.display_text = display_text
+        return out
+
+
 class Tool(ABC):
     """
     Abstract base class for agent tools.

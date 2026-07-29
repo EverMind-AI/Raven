@@ -23,7 +23,6 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
-from raven.agent.tools.base import ToolResult
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -1622,15 +1621,12 @@ class AgentLoop:
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    # Split the model-facing text from the optional human-facing
-                    # display: the model always gets model_text; the UI preview
-                    # prefers display_text when the tool supplied one.
-                    if isinstance(result, ToolResult):
-                        model_text = result.model_text
-                        display_src = result.display_text or result.model_text
-                    else:
-                        model_text = str(result)
-                        display_src = model_text
+                    # The registry already unwrapped any ToolResult: `result` is
+                    # the model-facing text, with the optional display string
+                    # riding along on it (ToolOutput). The model always gets the
+                    # model text; the UI preview prefers the display string.
+                    model_text = str(result)
+                    display_src = getattr(result, "display_text", None) or model_text
                     # The log stays one line; the UI event keeps newlines so a
                     # tool that reports several items (e.g. ask_user's
                     # question -> answer pairs) renders one row each.

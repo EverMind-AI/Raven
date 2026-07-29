@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.deep_research import DeepResearchOfferTool
 from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
@@ -56,6 +56,31 @@ class _FakeTool(Tool):
 
     async def execute(self, **kwargs) -> str:
         return "tool-ran"
+
+
+class _SplitTool(Tool):
+    """Returns ToolResult so the loop's unwrap branch is actually exercised."""
+
+    MODEL_TEXT = 'User answered: "Which base?" -> "main". Continue.'
+    DISPLAY_TEXT = "Which base? -> main"
+
+    @property
+    def name(self) -> str:
+        return "splittool"
+
+    @property
+    def description(self) -> str:
+        return "fake tool with distinct model-facing and display-facing text"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    def display_call(self, args: dict) -> str | None:
+        return "Which base?"
+
+    async def execute(self, **kwargs) -> ToolResult:
+        return ToolResult(model_text=self.MODEL_TEXT, display_text=self.DISPLAY_TEXT)
 
 
 class _FakeDeepResearch(Tool):
@@ -291,6 +316,51 @@ async def test_run_tool_call_emits_tool_events_and_notice(tmp_path):
     assert any(isinstance(e, EvNotice) and e.kind is NoticeKind.TOOL_HINT for e in sink.events)
     assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in sink.events)
     assert not any(isinstance(e, EvText) for e in sink.events)  # streamed final dissolves
+
+
+async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
+    # The ToolResult branch: the model's context gets model_text while the UI
+    # event's preview carries display_text. Every other fake tool in this file
+    # returns a bare str, so without this the unwrap branch never runs.
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                StreamDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t9", "function": {"name": "splittool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [StreamDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SplitTool())
+
+    recorded: list[tuple[str, str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result):
+        recorded.append((tool_call_id, tool_name, result))
+        return original_add(messages, tool_call_id, tool_name, result)
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    sink = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), sink, _drain)
+
+    # What the model reads.
+    assert recorded and recorded[0][:2] == ("t9", "splittool")
+    assert recorded[0][2] == _SplitTool.MODEL_TEXT
+    # What the transcript shows -- display_text, not the model sentence.
+    complete = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert complete.result_preview == _SplitTool.DISPLAY_TEXT
+    assert complete.truncated is False
+    # display_call rides tool.start so the row can label itself.
+    start = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.START)
+    assert start.display == "Which base?"
 
 
 async def test_run_emits_one_episode_start_per_model_call(tmp_path):

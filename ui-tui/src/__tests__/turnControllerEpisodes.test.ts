@@ -80,6 +80,33 @@ describe('turnController episodes commit', () => {
     expect(epMsgs[0]!.text).toContain('[interrupted]')
   })
 
+  it('interrupt with no episode.start still keeps the legacy trail', () => {
+    // An older gateway never emits episode.start. The completion path already
+    // falls back to the segment trail in that case; the interrupt path must
+    // too, or a Ctrl+C silently drops everything the turn had accrued.
+    patchUiState({ transcript: 'episodes' })
+    turnController.reset()
+
+    turnController.recordReasoningDelta('reasoned without any episode boundary')
+    turnController.recordToolStart('a', 'web_search', 'gtm agent')
+    turnController.recordToolComplete('a', 'web_search', undefined, '12 results', 0.2)
+
+    expect(turnController.episodes).toHaveLength(0)
+
+    const appended: Msg[] = []
+    turnController.finalizeInterruptedTurn({ appendMessage: m => appended.push(m) })
+
+    expect(appended.some(m => m.kind === 'episodes')).toBe(false)
+    // The legacy trail survives with the reasoning and the tool line on it...
+    const trail = appended.find(m => m.kind === 'trail')
+    expect(trail).toBeTruthy()
+    expect(trail!.thinking).toContain('without any episode boundary')
+    expect(trail!.tools!.join(' ')).toContain('Web Search')
+    expect(trail!.tools!.join(' ')).toContain('12 results')
+    // ...and the interruption is still recorded.
+    expect(appended.some(m => (m.text ?? '').includes('[interrupted]'))).toBe(true)
+  })
+
   it('legacy mode is fully inert: no episodes accrue and no episodes message', () => {
     patchUiState({ transcript: 'legacy' })
     turnController.reset()
