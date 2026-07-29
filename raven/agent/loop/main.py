@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import time
 from contextlib import AsyncExitStack, aclosing
@@ -235,6 +236,33 @@ class AgentLoop:
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
     _LOOP_BREAK_MAX = 2
+    # SWE-eval completion gate (opt-in via RAVEN_REQUIRE_REAL_TEST_EVIDENCE):
+    # a final text answer is only accepted after this turn has actually run the
+    # repository's own test runner — self-written ad-hoc checks are the top
+    # source of false completion claims. Nudges are bounded so the gate itself
+    # can never loop.
+    _TEST_GATE_MAX_NUDGES = 2
+    _TEST_GATE_CMD_RE = re.compile(
+        r"(pytest|runtests\.py|manage\.py\s+test|(?:^|[\s/&;(])bin/test\b"
+        r"|-m\s+unittest\b|\btox\b|\bsympy\.test\()"
+    )
+    _TEST_GATE_OUT_RE = re.compile(
+        r"(\b\d+\s+(?:passed|failed|errors?|xfailed|xpassed|skipped|deselected)\b"
+        r"|\bRan\s+\d+\s+tests?\b|\bOK\b|\bFAILED\b|\bPASSED\b|\bERROR\b)"
+    )
+    _TEST_GATE_NUDGE = (
+        "STOP: you are about to declare completion, but this session has not "
+        "run the repository's own test runner even once (no pytest / "
+        "runtests.py / unittest output was observed). Scripts you wrote "
+        "yourself do NOT count as verification. Locate the tests covering the "
+        "code you changed and run them with the repo's real runner (e.g. "
+        "`python -m pytest <test_file> -x -q`, or for Django "
+        "`python tests/runtests.py <app>.<TestCase> --parallel 1`), from the "
+        "repo root, using the repo environment's own `python` from PATH. If "
+        "the runner errors out, fix the invocation instead of falling back to "
+        "your own scripts. Only reply TASK_COMPLETE after the relevant tests "
+        "actually pass."
+    )
 
     def __init__(
         self,
@@ -1473,6 +1501,9 @@ class AgentLoop:
         post_tool_nudges = 0
         prefill_retries = 0
         empty_retries = 0
+        test_gate_enabled = bool(os.environ.get("RAVEN_REQUIRE_REAL_TEST_EVIDENCE"))
+        real_test_evidence = False
+        test_gate_nudges = 0
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -1613,6 +1644,17 @@ class AgentLoop:
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     result_str = str(result)
+                    if (
+                        test_gate_enabled
+                        and not real_test_evidence
+                        and tool_call.name == "exec"
+                        and self._TEST_GATE_CMD_RE.search(
+                            str((tool_call.arguments or {}).get("command", ""))
+                        )
+                        and self._TEST_GATE_OUT_RE.search(result_str)
+                    ):
+                        real_test_evidence = True
+                        logger.info("test-evidence gate: real test run observed")
                     preview = result_str.replace("\n", " ")[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
@@ -1727,6 +1769,21 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
+                if (
+                    test_gate_enabled
+                    and not real_test_evidence
+                    and test_gate_nudges < self._TEST_GATE_MAX_NUDGES
+                    and iteration < self.max_iterations
+                ):
+                    test_gate_nudges += 1
+                    logger.warning(
+                        "test-evidence gate: refusing final answer without a real test run (nudge {}/{})",
+                        test_gate_nudges,
+                        self._TEST_GATE_MAX_NUDGES,
+                    )
+                    messages.append({"role": "user", "content": self._TEST_GATE_NUDGE})
+                    prev_had_tool_calls = False
+                    continue
                 final_content = clean
                 break
 
