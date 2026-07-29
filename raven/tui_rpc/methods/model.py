@@ -31,7 +31,7 @@ from raven.config.update_providers import (
     set_provider_fields,
 )
 from raven.providers.common_models import common_models_for
-from raven.providers.registry import find_by_model, find_by_name
+from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigValidationError,
     NotSupportedInV01Error,
@@ -110,6 +110,10 @@ def _current_selection() -> tuple[str, str | None]:
     if not provider or provider == "auto":
         spec = find_by_model(current_model) if current_model else None
         provider = spec.name if spec else None
+    else:
+        # The picker keys its rows by the current name; a config written before
+        # a rename would match none of them.
+        provider = canonical_provider_name(provider)
     return current_model, provider
 
 

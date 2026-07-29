@@ -702,9 +702,12 @@ class Config(BaseSettings):
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
         # the vendor, so credentials under that name are enough to reach it.
         if normalized_prefix:
-            passthrough = self.providers.get(normalized_prefix)
+            # Canonical name, for the same reason the forced branch uses one: a
+            # prefix written before a rename must not be handed back as-is.
+            passthrough_name = canonical_provider_name(normalized_prefix)
+            passthrough = self.providers.get(passthrough_name)
             if passthrough and passthrough.api_key:
-                return passthrough, normalized_prefix
+                return passthrough, passthrough_name
 
         # Preferred gateway: claims every model the prefix loop above did not.
         preferred = self.agents.defaults.preferred_gateway

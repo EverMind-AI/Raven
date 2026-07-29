@@ -72,7 +72,7 @@ def _provider_names() -> list[str]:
 
 def _provider_schema_cls(name: str) -> type[BaseModel]:
     """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
-    field = ProvidersConfig.model_fields.get(canonical_provider_name(name))
+    field = ProvidersConfig.model_fields.get(name)
     if field is None:
         raise KeyError(f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}")
     ann = _unwrap_optional(field.annotation)
@@ -83,10 +83,34 @@ def _provider_schema_cls(name: str) -> type[BaseModel]:
 
 def _provider_spec(name: str) -> ProviderSpec:
     """Look up ``ProviderSpec`` from the registry (raises if absent)."""
-    spec = find_by_name(canonical_provider_name(name))
+    spec = find_by_name(name)
     if spec is None:
         raise KeyError(f"No registry entry for provider '{name}'. Add a ProviderSpec to raven/providers/registry.py.")
     return spec
+
+
+def _provider_aliases(name: str) -> tuple[str, ...]:
+    """Former names of ``name`` as they may still appear in config.json."""
+    spec = find_by_name(name)
+    return spec.name_aliases if spec else ()
+
+
+def _raw_section(data: dict[str, Any], name: str) -> dict[str, Any]:
+    """Read a provider's raw section, falling back to its pre-rename key."""
+    providers = data.get("providers") or {}
+    for key in (name, *_provider_aliases(name)):
+        section = providers.get(key)
+        if section:
+            return section
+    return {}
+
+
+def _write_raw_section(data: dict[str, Any], name: str, section: dict[str, Any]) -> None:
+    """Write a provider's section under its current name, retiring older keys."""
+    providers = data.setdefault("providers", {})
+    providers[name] = section
+    for alias in _provider_aliases(name):
+        providers.pop(alias, None)
 
 
 def _annotation_str(ann: Any) -> str:
@@ -311,6 +335,7 @@ def provider_field_specs(name: str) -> dict[str, dict[str, Any]]:
     Used by CLI parsers, the ``provider show`` command, and ``get_provider_config``
     to know which fields exist and which to redact.
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     return _flatten_fields(cls)
 
@@ -398,10 +423,11 @@ def get_provider_config(
     ``redact_secrets=False`` to get plaintext (used by ``test_provider`` to
     actually call the provider's ``/v1/models`` endpoint).
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_section = (data.get("providers") or {}).get(name) or {}
+    raw_section = _raw_section(data, name)
 
     try:
         instance = cls.model_validate(raw_section)
@@ -439,6 +465,7 @@ def set_provider_fields(
             OAuth provider — callers should use ``provider login`` instead.
         ValidationError: a field value violates the provider's Pydantic schema.
     """
+    name = canonical_provider_name(name)
     if not fields:
         return {}
 
@@ -463,7 +490,7 @@ def set_provider_fields(
 
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_section = (data.get("providers") or {}).get(name) or {}
+    raw_section = _raw_section(data, name)
 
     try:
         current = cls.model_validate(raw_section)
@@ -481,8 +508,7 @@ def set_provider_fields(
 
     validated = cls.model_validate(working)
 
-    data.setdefault("providers", {})
-    data["providers"][name] = validated.model_dump(by_alias=True)
+    _write_raw_section(data, name, validated.model_dump(by_alias=True))
     _write_atomic(path, data)
     return prev
 
@@ -510,13 +536,13 @@ def reset_provider(
     Callers don't need to know which case applies — one mental model covers
     both API-key and OAuth providers.
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     spec = _provider_spec(name)
 
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    data.setdefault("providers", {})
-    data["providers"][name] = cls().model_dump(by_alias=True)
+    _write_raw_section(data, name, cls().model_dump(by_alias=True))
     _write_atomic(path, data)
 
     if spec.is_oauth:
@@ -539,7 +565,7 @@ def reset_provider(
 
 def _load_provider_models(name: str, data: dict[str, Any]) -> tuple[type, list[str]]:
     cls = _provider_schema_cls(name)
-    section = (data.get("providers") or {}).get(name) or {}
+    section = _raw_section(data, name)
     try:
         instance = cls.model_validate(section)
     except ValidationError:
@@ -557,16 +583,16 @@ def add_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model not in models:
         models.append(model)
-        section = (data.get("providers") or {}).get(name) or {}
+        section = _raw_section(data, name)
         section["models"] = models
         validated = cls.model_validate(section)
-        data.setdefault("providers", {})
-        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
         _write_atomic(path, data)
     return models
 
@@ -581,16 +607,16 @@ def remove_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model in models:
         models = [m for m in models if m != model]
-        section = (data.get("providers") or {}).get(name) or {}
+        section = _raw_section(data, name)
         section["models"] = models
         validated = cls.model_validate(section)
-        data.setdefault("providers", {})
-        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
         _write_atomic(path, data)
     return models
 
@@ -640,6 +666,7 @@ def test_provider(
     Returns a dict, never raises. ``transport`` is injectable so unit tests
     can mount an ``httpx.MockTransport`` without touching real network.
     """
+    name = canonical_provider_name(name)
     import time
 
     try:

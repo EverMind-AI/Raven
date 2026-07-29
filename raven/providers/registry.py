@@ -35,8 +35,8 @@ class ProviderSpec:
     # identity
     name: str  # config field name, e.g. "dashscope"
     keywords: tuple[str, ...]  # model-name keywords for matching (lowercase)
-    # LiteLLM env var, e.g. "DASHSCOPE_API_KEY". Omit it when `standard` is set
-    # and LiteLLM names the variable itself.
+    # LiteLLM env var, e.g. "DASHSCOPE_API_KEY". Also shown in the model picker
+    # as the variable to export. Empty for OAuth and direct providers.
     env_key: str = ""
     display_name: str = ""  # shown in `raven status`
 
@@ -72,11 +72,9 @@ class ProviderSpec:
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 
-    # LiteLLM knows this vendor under the same name we do, so it supplies the
-    # model prefix and endpoint. Set it instead of restating either here: the
-    # entry then carries only what LiteLLM cannot know (keywords for bare model
-    # names, the wizard's default model, the display label). `env_key` still
-    # belongs here for the vendors LiteLLM does not name a variable for.
+    # LiteLLM knows this vendor under the same name we do, which makes the name
+    # the model prefix and lets LiteLLM resolve the endpoint. Set this instead
+    # of restating either here.
     standard: bool = False
 
     @property
@@ -474,10 +472,16 @@ def find_by_model(model: str) -> ProviderSpec | None:
     normalized_prefix = model_prefix.replace("-", "_")
     std_specs = [s for s in PROVIDERS if not s.is_gateway and not s.is_local]
 
-    # Prefer explicit provider prefix — prevents `github-copilot/...codex` matching openai_codex.
-    for spec in std_specs:
-        if model_prefix and normalized_prefix == spec.name:
-            return spec
+    # An explicit prefix names the vendor outright, so it decides alone. Falling
+    # through to keywords would let one vendor claim another's model whenever the
+    # id happens to contain its name -- "deepinfra/deepseek-ai/DeepSeek-V3" is
+    # DeepInfra's, and matching DeepSeek there would send DeepInfra's key to
+    # DEEPSEEK_API_KEY and rewrite the model id.
+    if model_prefix:
+        for spec in std_specs:
+            if normalized_prefix == spec.name or normalized_prefix in spec.name_aliases:
+                return spec
+        return None
 
     for spec in std_specs:
         if any(kw in model_lower or kw.replace("-", "_") in model_normalized for kw in spec.keywords):
