@@ -74,7 +74,9 @@ def test_writing_under_the_old_provider_name_lands_on_the_current_key(tmp_path) 
 
     stored = json.loads(path.read_text())["providers"]
     assert list(stored) == ["zai"]
-    assert Config.model_validate({"providers": stored}).get_api_key() == "WRITTEN"
+    runtime = Config.model_validate({"providers": stored})
+    runtime.agents.defaults.model = "zai/glm-4.6"
+    assert runtime.get_api_key() == "WRITTEN"
     assert get_provider_config("zai", config_path=path, redact_secrets=False)["api_key"] == "WRITTEN"
 
 

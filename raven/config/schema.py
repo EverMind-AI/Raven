@@ -696,7 +696,7 @@ class Config(BaseSettings):
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+        from raven.providers.registry import PROVIDERS, canonical_provider_name
 
         forced = self.agents.defaults.provider
         if forced != "auto":
@@ -718,17 +718,9 @@ class Config(BaseSettings):
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in PROVIDERS:
             p = self.providers.get(spec.name)
-            if p and model_prefix and normalized_prefix == canonical_provider_name(spec.name):
+            if p and model_prefix and normalized_prefix in (spec.name, *spec.name_aliases):
                 if spec.is_oauth or spec.is_local or p.api_key:
                     return p, spec.name
-
-        # A gateway prefix is where the request goes, so only that gateway can
-        # serve the model. Reading on would hand back some other vendor's key for
-        # a request LiteLLM sends to the gateway -- that vendor's key, posted to
-        # the gateway. Better to report nothing configured.
-        prefix_spec = find_by_name(normalized_prefix) if normalized_prefix else None
-        if prefix_spec is not None and prefix_spec.is_gateway:
-            return None, None
 
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
         # the vendor, so credentials under that name are enough to reach it.
@@ -740,9 +732,14 @@ class Config(BaseSettings):
             if passthrough and passthrough.api_key:
                 return passthrough, passthrough_name
 
-        # Match by keyword (order follows PROVIDERS registry)
+        # Match by keyword (order follows PROVIDERS registry). A prefixed id
+        # already names its vendor, so a keyword may only confirm that vendor --
+        # never a different one whose name happens to appear in the id, whose key
+        # would then be posted to the vendor in the prefix.
         for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
+            if normalized_prefix and normalized_prefix not in (spec.name, *spec.name_aliases):
+                continue
+            p = self.providers.get(spec.name)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
                 if spec.is_oauth or spec.is_local or p.api_key:
                     return p, spec.name
@@ -756,9 +753,14 @@ class Config(BaseSettings):
             if p and p.api_base:
                 return p, spec.name
 
-        # Fallback: gateways first, then others (follows registry order)
-        # OAuth providers are NOT valid fallbacks — they require explicit model selection
+        # Fallback: gateways first, then others (follows registry order).
+        # OAuth providers are NOT valid fallbacks -- they require explicit model
+        # selection. With a prefixed id only gateways and local deployments may
+        # answer: they route whatever they are handed, whereas a direct vendor
+        # would be receiving another vendor's model id along with its own key.
         for spec in PROVIDERS:
+            if normalized_prefix and not (spec.is_gateway or spec.is_local):
+                continue
             if spec.is_oauth:
                 continue
             p = getattr(self.providers, spec.name, None)

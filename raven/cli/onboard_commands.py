@@ -387,15 +387,30 @@ def _provider_label(name: str) -> str:
 
 
 def _validate_provider_name(name: str) -> str:
-    """Resolve a user-supplied provider name (kebab or snake) to a registry key."""
+    """Resolve a user-supplied provider name (kebab or snake) to a registry key.
+
+    The wizard needs a registry entry to guide anyone: a default model to fall
+    back on, whether the provider takes a key or an OAuth login, a label to
+    print. A vendor that only LiteLLM knows has none of that, so point at the
+    command that does configure it rather than walking off a missing spec.
+    """
     from raven.config.update_providers import provider_field_specs
+    from raven.providers.registry import find_by_name
 
     candidate = name.replace("-", "_")
     try:
         provider_field_specs(candidate)
     except KeyError as exc:
         raise typer.BadParameter(str(exc))
-    return candidate
+    spec = find_by_name(candidate)
+    if spec is None:
+        raise typer.BadParameter(
+            f"The wizard does not cover '{name}'. Configure it directly: raven provider set {name} --api-key <key>"
+        )
+    # Return the current name: everything downstream compares and stores by it,
+    # and a former name would have the wizard reading one section and writing
+    # another.
+    return spec.name
 
 
 def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
@@ -1012,9 +1027,15 @@ def _configure_one_provider(
         # Snapshot the stored key before _collect_credentials overwrites it, so a
         # failed re-configuration of an existing provider can be rolled back to
         # its prior working key (rather than left holding the just-typed bad one).
-        _prev = (_load_raw_config().get("providers") or {}).get(provider) or {}
-        old_key = _prev.get("apiKey")
-        old_base = _prev.get("apiBase")
+        # Read through the ops library: it folds in a section still stored under
+        # the provider's pre-rename name, which a raw lookup by the typed name
+        # misses -- and the write below consolidates onto the current name, so a
+        # rollback would otherwise restore nothing over a real key.
+        from raven.config.update_providers import get_provider_config
+
+        _prev = get_provider_config(provider, redact_secrets=False)
+        old_key = _prev.get("api_key")
+        old_base = _prev.get("api_base")
 
         custom_model = _collect_credentials(
             provider,

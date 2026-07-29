@@ -184,7 +184,10 @@ class LiteLLMProvider(LLMProvider):
         """Return True when the provider supports cache_control on content blocks."""
         if self._gateway is not None:
             return self._gateway.supports_prompt_caching
-        spec = find_by_model(model)
+        # Keyword fallback for the same reason token_wise has one: an id routed
+        # through a vendor we carry no spec for ("bedrock/anthropic.claude-...")
+        # still reaches a model whose caching is the upstream vendor's.
+        spec = find_by_model(model) or find_by_keywords(model)
         return spec is not None and spec.supports_prompt_caching
 
     def _apply_cache_control(
