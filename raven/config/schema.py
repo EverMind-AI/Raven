@@ -677,7 +677,7 @@ class Config(BaseSettings):
 
         forced = self.agents.defaults.provider
         if forced != "auto":
-            p = getattr(self.providers, forced, None)
+            p = self.providers.get(forced)
             return (p, forced) if p else (None, None)
 
         model_lower = (model or self.agents.defaults.model).lower()

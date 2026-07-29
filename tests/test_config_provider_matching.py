@@ -64,6 +64,14 @@ def test_gateway_shortlist_models_stay_on_the_gateway() -> None:
         assert cfg.get_provider_name() == "openrouter", model
 
 
+def test_a_model_id_written_before_the_zai_rename_still_resolves() -> None:
+    # The rename has to cover saved model ids too, not just the credential key:
+    # "zhipu/glm-4.6" is what an existing config holds.
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    assert LiteLLMProvider(default_model="zhipu/glm-4.6")._resolve_model("zhipu/glm-4.6") == "zai/glm-4.6"
+
+
 def test_a_config_written_before_the_zai_rename_still_resolves() -> None:
     cfg = _config(zhipu={"apiKey": "K-ZAI"})
     cfg.agents.defaults.model = "zai/glm-4.6"

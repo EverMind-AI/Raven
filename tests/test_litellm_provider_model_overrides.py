@@ -72,6 +72,24 @@ async def test_registry_default_still_applies_without_config(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_config_override_layers_over_the_registry_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Setting one parameter must not discard the rest of the registry's entry:
+    # Kimi's mandated temperature has to survive a config that only sets top_p.
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="test-key",
+        default_model="moonshot/kimi-k2.5",
+        model_overrides={"kimi": {"top_p": 0.9}},
+    )
+    p.generation = GenerationSettings(temperature=0.1)
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
+
+    assert seen[0]["temperature"] == 1.0
+    assert seen[0]["top_p"] == 0.9
+
+
+@pytest.mark.asyncio
 async def test_config_override_wins_over_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture(monkeypatch)
     p = LiteLLMProvider(

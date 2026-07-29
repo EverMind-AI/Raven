@@ -117,7 +117,8 @@ class LiteLLMProvider(LLMProvider):
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
         if not spec:
-            self._setup_env_from_litellm(api_key, model)
+            # No spec: the key still reaches LiteLLM as an explicit api_key
+            # kwarg on every call, so nothing needs to go into the environment.
             return
         if spec.env_key:
             # Gateway/local overrides existing env; standard provider doesn't
@@ -125,9 +126,6 @@ class LiteLLMProvider(LLMProvider):
                 os.environ[spec.env_key] = api_key
             else:
                 os.environ.setdefault(spec.env_key, api_key)
-        elif spec.standard:
-            # LiteLLM names the variable for this vendor, so don't restate it.
-            self._setup_env_from_litellm(api_key, self._resolve_model(model))
         elif not spec.env_extras:
             # OAuth/provider-only specs (for example: openai_codex)
             return
@@ -140,20 +138,6 @@ class LiteLLMProvider(LLMProvider):
             resolved = env_val.replace("{api_key}", api_key)
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
-
-    @staticmethod
-    def _setup_env_from_litellm(api_key: str, model: str) -> None:
-        """Bridge the key for a provider Raven carries no spec for.
-
-        LiteLLM already knows which variable each vendor reads, so a prefixed
-        model name is enough to place the key without a hand-written spec.
-        """
-        try:
-            env_keys = litellm.validate_environment(model=model).get("missing_keys") or []
-        except Exception:
-            return
-        for env_name in env_keys:
-            os.environ.setdefault(env_name, api_key)
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
@@ -172,19 +156,20 @@ class LiteLLMProvider(LLMProvider):
         spec = find_by_model(model)
         prefix = spec.model_prefix if spec else ""
         if spec and prefix:
-            model = self._canonicalize_explicit_prefix(model, spec.name, prefix)
+            model = self._canonicalize_explicit_prefix(model, spec, prefix)
             if not any(model.startswith(s) for s in (*spec.skip_prefixes, f"{prefix}/")):
                 model = f"{prefix}/{model}"
 
         return model
 
     @staticmethod
-    def _canonicalize_explicit_prefix(model: str, spec_name: str, canonical_prefix: str) -> str:
-        """Normalize explicit provider prefixes like `github-copilot/...`."""
+    def _canonicalize_explicit_prefix(model: str, spec: Any, canonical_prefix: str) -> str:
+        """Normalize an explicit prefix (`github-copilot/...`, a former name)."""
         if "/" not in model:
             return model
         prefix, remainder = model.split("/", 1)
-        if prefix.lower().replace("-", "_") != spec_name:
+        known = {spec.name, *spec.name_aliases}
+        if prefix.lower().replace("-", "_") not in known:
             return model
         return f"{canonical_prefix}/{remainder}"
 
@@ -222,18 +207,23 @@ class LiteLLMProvider(LLMProvider):
         return new_messages, new_tools
 
     def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
-        """Apply model-specific parameter overrides, config first then registry."""
+        """Layer per-model parameter overrides: registry defaults, config on top.
+
+        Config supplies one parameter without discarding the rest of the
+        registry's entry -- Kimi keeps its mandated temperature even when the
+        user only wanted to set top_p.
+        """
         model_lower = model.lower()
-        for pattern, overrides in self.model_overrides.items():
-            if pattern.lower() in model_lower:
-                kwargs.update(overrides)
-                return
         spec = find_by_model(model)
         if spec:
             for pattern, overrides in spec.model_overrides:
                 if pattern in model_lower:
                     kwargs.update(overrides)
-                    return
+                    break
+        for pattern, overrides in self.model_overrides.items():
+            if pattern.lower() in model_lower:
+                kwargs.update(overrides)
+                break
 
     @staticmethod
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:

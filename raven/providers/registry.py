@@ -2,8 +2,8 @@
 Provider Registry — what Raven knows about a vendor that LiteLLM does not.
 
 Any vendor LiteLLM supports already works without an entry here: a key under
-its name in ``providers`` plus a "<vendor>/<model>" model id is enough (see
-``ProvidersConfig.get`` and ``LiteLLMProvider._setup_env_from_litellm``).
+its name in ``providers`` plus a "<vendor>/<model>" model id is enough -- the
+key reaches LiteLLM as a per-call argument (see ``ProvidersConfig.get``).
 
 Add a ProviderSpec only for what LiteLLM cannot tell us:
   - keywords, so a bare model name ("kimi-k2.5") finds its vendor;
@@ -55,6 +55,9 @@ class ProviderSpec:
     # model prefixing
     litellm_prefix: str = ""  # "dashscope" → model becomes "dashscope/{model}"
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
+    # Former names this provider answered to, so model ids saved under the old
+    # one ("zhipu/glm-4.6") still resolve after a rename.
+    name_aliases: tuple[str, ...] = ()
 
     # extra env vars, e.g. (("ZHIPUAI_API_KEY", "{api_key}"),)
     env_extras: tuple[tuple[str, str], ...] = ()
@@ -231,6 +234,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="openai",
         keywords=("openai", "gpt"),
+        env_key="OPENAI_API_KEY",
         display_name="OpenAI",
         skip_prefixes=(),
         env_extras=(),
@@ -285,6 +289,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="deepseek",
         keywords=("deepseek",),
+        env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
         skip_prefixes=("deepseek/",),  # avoid double-prefix
         env_extras=(),
@@ -322,6 +327,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="zai",
         keywords=("zhipu", "glm", "zai"),
+        name_aliases=("zhipu",),  # model ids written before the rename
         env_key="ZAI_API_KEY",
         display_name="Z.ai",
         skip_prefixes=("zhipu/", "zai/", "openrouter/", "hosted_vllm/"),
@@ -339,6 +345,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="dashscope",
         keywords=("qwen", "dashscope"),
+        env_key="DASHSCOPE_API_KEY",
         display_name="DashScope",
         skip_prefixes=("dashscope/", "openrouter/"),
         env_extras=(),
@@ -357,6 +364,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="moonshot",
         keywords=("moonshot", "kimi"),
+        env_key="MOONSHOT_API_KEY",
         display_name="Moonshot",
         skip_prefixes=("moonshot/", "openrouter/"),
         is_gateway=False,
@@ -448,6 +456,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ProviderSpec(
         name="groq",
         keywords=("groq",),
+        env_key="GROQ_API_KEY",
         display_name="Groq",
         skip_prefixes=("groq/",),  # avoid double-prefix
         env_extras=(),

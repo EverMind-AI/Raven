@@ -55,19 +55,53 @@ def test_configured_names_spans_declared_and_extra_providers() -> None:
     assert "deepseek" not in names
 
 
-def test_env_bridge_uses_the_variable_litellm_expects(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+def test_forcing_an_unregistered_provider_resolves_its_key() -> None:
+    # `provider: <name>` short-circuits matching, and that branch used to read
+    # the field directly -- which hands back a raw dict for an extra.
+    cfg = _config(mistral={"apiKey": "K-MISTRAL"})
+    cfg.agents.defaults.provider = "mistral"
+    cfg.agents.defaults.model = "mistral/mistral-large-latest"
 
-    LiteLLMProvider(api_key="K-MISTRAL", default_model="mistral/mistral-large-latest")
+    assert cfg.get_api_key() == "K-MISTRAL"
 
+
+def test_building_a_provider_writes_no_credentials_to_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The key travels as an api_key kwarg on every call. Deriving env vars from
+    # LiteLLM's "missing keys" instead spilled it into whatever a vendor happens
+    # to want -- AWS_SECRET_ACCESS_KEY for bedrock, an endpoint var for cloudflare.
     import os
 
-    assert os.environ["MISTRAL_API_KEY"] == "K-MISTRAL"
+    for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CLOUDFLARE_API_KEY", "CLOUDFLARE_API_BASE"):
+        monkeypatch.delenv(var, raising=False)
+
+    LiteLLMProvider(api_key="K-SECRET", default_model="bedrock/amazon.nova-pro-v1:0")
+    LiteLLMProvider(api_key="K-SECRET", default_model="cloudflare/@cf/meta/llama-3-8b-instruct")
+
+    assert os.environ.get("AWS_ACCESS_KEY_ID") is None
+    assert os.environ.get("AWS_SECRET_ACCESS_KEY") is None
+    assert os.environ.get("CLOUDFLARE_API_BASE") is None
 
 
-def test_env_bridge_is_a_noop_for_a_model_litellm_cannot_place(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A bare name with no vendor prefix: nothing to derive, and nothing to crash on.
-    LiteLLMProvider(api_key="K", default_model="some-unprefixed-model")
+def test_provider_section_reads_declared_fields_and_extras() -> None:
+    from raven.providers.registry import provider_section
+
+    cfg = _config(openai={"apiKey": "A"}, mistral={"apiKey": "B"})
+
+    assert provider_section(cfg.providers, "openai").api_key == "A"
+    assert provider_section(cfg.providers, "mistral").api_key == "B"
+    assert provider_section(cfg.providers, "nope") is None
+
+
+def test_make_provider_passes_configured_model_overrides_through() -> None:
+    # The wiring from config to provider is one line and easy to leave out,
+    # which would make every configured override silently do nothing.
+    from raven.cli._helpers import make_provider
+
+    cfg = _config(openai={"apiKey": "K"})
+    cfg.agents.defaults.model = "openai/gpt-4o"
+    cfg.agents.defaults.model_overrides = {"gpt-4o": {"top_p": 0.5}}
+
+    assert make_provider(cfg).model_overrides == {"gpt-4o": {"top_p": 0.5}}
 
 
 def test_declared_provider_fields_are_untouched_by_extras() -> None:
