@@ -227,6 +227,12 @@ class AgentLoop:
     """
 
     _TOOL_RESULT_MAX_CHARS = 16_000
+    # Persistence keeps head + tail of oversized tool results: test runners put
+    # the pass/fail summary at the END of their output, so head-only truncation
+    # used to cut exactly the evidence later turns (and trajectory analysis)
+    # need most.
+    _TOOL_RESULT_HEAD_CHARS = 12_000
+    _TOOL_RESULT_TAIL_CHARS = 4_000
     # Max emergency context shrinks per turn before a context overflow is fatal.
     _MAX_COMPRESS_RETRIES = 2
     # Most recent tool results kept intact when emergency-shrinking; older ones
@@ -262,6 +268,54 @@ class AgentLoop:
         "the runner errors out, fix the invocation instead of falling back to "
         "your own scripts. Only reply TASK_COMPLETE after the relevant tests "
         "actually pass."
+    )
+    # Soft completion reminders (opt-in via RAVEN_GATE_STALE / RAVEN_GATE_RED,
+    # both require RAVEN_REQUIRE_REAL_TEST_EVIDENCE). Design contract: fire at
+    # most ONCE per turn, state only verifiable facts, and leave the decision
+    # to the model — never force iteration, never assert a test color the
+    # parser could not establish (unparseable output means no trigger).
+    # Red vs green is parsed from the FULL in-loop tool output (persistence
+    # truncation happens later and does not affect this).
+    _TEST_RED_RE = re.compile(
+        r"(\b[1-9]\d*\s+(?:failed|errors?)\b"  # pytest summary counts
+        r"|\bFAILED\s*\("  # unittest/Django "FAILED (failures=1)"
+        r"|^FAILED\s+\S"  # pytest short-summary lines
+        r"|^ERROR\s+\S+::)",  # pytest per-test error lines
+        re.MULTILINE,
+    )
+    _TEST_GREEN_RE = re.compile(
+        r"(\b\d+\s+passed\b|^OK\b|\bOK\s*\()",
+        re.MULTILINE,
+    )
+    _GATE_DOC_PATH_RE = re.compile(
+        r"(\.(md|rst|txt)$|(^|/)docs?(/|$))", re.IGNORECASE
+    )
+    _TEST_GATE_STALE_NUDGE_TMPL = (
+        "NOTE (shown once, before you finish): after your most recent test run\n"
+        "(`{cmd}`) you edited these files without re-running any test:\n"
+        "{files}\n"
+        "So that test result no longer covers the code you are about to submit.\n"
+        "If those edits can affect behavior, re-run the relevant tests once and\n"
+        "check the result (a failure that only asserts the exact OLD behavior\n"
+        "the task asks to change is stale and does not need to pass; any other\n"
+        "new failure is yours to fix). If you are certain the edits cannot\n"
+        "affect behavior (e.g. comments only), you may finish now."
+    )
+    _TEST_GATE_RED_NUDGE_TMPL = (
+        "CHECK (shown once, before you finish): your most recent test run\n"
+        "(`{cmd}`) reported failures: {detail}\n"
+        "The task description is the source of truth for intended behavior.\n"
+        "Decide which case this is:\n"
+        "1. The failing test asserts the exact OLD behavior the task asks to\n"
+        "   change — then the test is stale, not your patch. State in one\n"
+        "   sentence, in your reply (no file edits or tool calls needed), which\n"
+        "   requirement contradicts it, keep your fix intact, and finish (that\n"
+        "   test may remain failing). Do NOT weaken your fix or edit the test's\n"
+        "   assertions just to make it pass.\n"
+        "2. Anything else — the failure points at a real problem in your patch.\n"
+        "   Fix the patch and re-run that test. If it still fails after your\n"
+        "   fix, say so explicitly when you finish.\n"
+        "After addressing this once, you may declare completion."
     )
 
     def __init__(
@@ -1504,6 +1558,17 @@ class AgentLoop:
         test_gate_enabled = bool(os.environ.get("RAVEN_REQUIRE_REAL_TEST_EVIDENCE"))
         real_test_evidence = False
         test_gate_nudges = 0
+        # Evidence ledger for the soft completion reminders: what the latest
+        # real-test run said (red/green/None=unparseable), and which non-doc
+        # files were edited AFTER it (staleness). Both reminders are one-shot.
+        gate_stale_enabled = test_gate_enabled and bool(os.environ.get("RAVEN_GATE_STALE"))
+        gate_red_enabled = test_gate_enabled and bool(os.environ.get("RAVEN_GATE_RED"))
+        last_test_status: str | None = None
+        last_test_cmd = ""
+        last_test_detail = ""
+        edits_since_test: list[str] = []
+        stale_nudged = False
+        red_nudged = False
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -1644,17 +1709,24 @@ class AgentLoop:
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     result_str = str(result)
-                    if (
-                        test_gate_enabled
-                        and not real_test_evidence
-                        and tool_call.name == "exec"
-                        and self._TEST_GATE_CMD_RE.search(
-                            str((tool_call.arguments or {}).get("command", ""))
-                        )
-                        and self._TEST_GATE_OUT_RE.search(result_str)
+                    if test_gate_enabled and tool_call.name == "exec":
+                        cmd = str((tool_call.arguments or {}).get("command", ""))
+                        if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(result_str):
+                            if not real_test_evidence:
+                                real_test_evidence = True
+                                logger.info("test-evidence gate: real test run observed")
+                            last_test_status, last_test_detail = self._classify_test_output(result_str)
+                            last_test_cmd = cmd.replace("\n", " ")[:200]
+                            edits_since_test = []
+                    elif (
+                        (gate_stale_enabled or gate_red_enabled)
+                        and tool_call.name in ("write_file", "edit_file")
+                        and not _is_hard_tool_failure(result)
                     ):
-                        real_test_evidence = True
-                        logger.info("test-evidence gate: real test run observed")
+                        path = str((tool_call.arguments or {}).get("path", ""))
+                        if path and not self._GATE_DOC_PATH_RE.search(path):
+                            if path not in edits_since_test:
+                                edits_since_test.append(path)
                     preview = result_str.replace("\n", " ")[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
@@ -1782,6 +1854,53 @@ class AgentLoop:
                         self._TEST_GATE_MAX_NUDGES,
                     )
                     messages.append({"role": "user", "content": self._TEST_GATE_NUDGE})
+                    prev_had_tool_calls = False
+                    continue
+                # Soft one-shot reminders, mutually exclusive by construction:
+                # edits after the last test make its color outdated, so the
+                # stale reminder wins; the red inquiry only fires on CURRENT
+                # red evidence (no edits since the run that produced it).
+                if (
+                    gate_stale_enabled
+                    and real_test_evidence
+                    and edits_since_test
+                    and not stale_nudged
+                    and iteration < self.max_iterations
+                ):
+                    stale_nudged = True
+                    logger.info(
+                        "test-evidence gate: stale reminder (edits after last test: {})",
+                        edits_since_test,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": self._TEST_GATE_STALE_NUDGE_TMPL.format(
+                            cmd=last_test_cmd,
+                            files="\n".join(f"- {p}" for p in edits_since_test[:10]),
+                        ),
+                    })
+                    prev_had_tool_calls = False
+                    continue
+                if (
+                    gate_red_enabled
+                    and real_test_evidence
+                    and not edits_since_test
+                    and last_test_status == "red"
+                    and not red_nudged
+                    and iteration < self.max_iterations
+                ):
+                    red_nudged = True
+                    logger.info(
+                        "test-evidence gate: red inquiry (last test failed: {})",
+                        last_test_detail,
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": self._TEST_GATE_RED_NUDGE_TMPL.format(
+                            cmd=last_test_cmd,
+                            detail=last_test_detail or "(failure summary present in the test output)",
+                        ),
+                    })
                     prev_had_tool_calls = False
                     continue
                 final_content = clean
@@ -2252,6 +2371,27 @@ class AgentLoop:
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
 
+    @classmethod
+    def _classify_test_output(cls, output: str) -> tuple[str | None, str]:
+        """Classify a real-test run's output as red/green, plus a fail snippet.
+
+        Returns ``(status, detail)`` where status is ``"red"``, ``"green"`` or
+        ``None`` when neither pattern set matches confidently (in-dubio-pro-reo:
+        an unparseable result must never trigger a red-gate message). ``detail``
+        is a short quotable snippet of the first failure marker, empty for
+        non-red results.
+        """
+        red = cls._TEST_RED_RE.search(output)
+        if red:
+            line_start = output.rfind("\n", 0, red.start()) + 1
+            line_end = output.find("\n", red.start())
+            if line_end == -1:
+                line_end = len(output)
+            return "red", output[line_start:line_end].strip()[:200]
+        if cls._TEST_GREEN_RE.search(output):
+            return "green", ""
+        return None, ""
+
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         for m in messages[skip:]:
@@ -2262,7 +2402,12 @@ class AgentLoop:
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+                dropped = len(content) - self._TOOL_RESULT_HEAD_CHARS - self._TOOL_RESULT_TAIL_CHARS
+                entry["content"] = (
+                    content[: self._TOOL_RESULT_HEAD_CHARS]
+                    + f"\n... (truncated {dropped} chars) ...\n"
+                    + content[-self._TOOL_RESULT_TAIL_CHARS :]
+                )
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
