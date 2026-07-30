@@ -283,3 +283,74 @@ def test_save_turn_never_writes_base64_to_the_session(role: str, tmp_path: Path)
     assert any("/tmp/x.png" in str(part) for part in stored)
     # And the in-flight message still holds the picture.
     assert messages[0]["content"][1]["type"] == "image_url"
+
+
+# --------------------------------------------------------------------------
+# emergency shrink
+# --------------------------------------------------------------------------
+
+
+def _img_msg(role: str, marker: str) -> dict:
+    return {
+        "role": role,
+        "content": [
+            {"type": "text", "text": marker},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ],
+    }
+
+
+def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
+    from raven.agent.loop.main import AgentLoop
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        _img_msg("tool", "first"),
+        _img_msg("tool", "second"),
+        _img_msg("tool", "third"),
+    ]
+    out, elided = AgentLoop._emergency_shrink(messages)
+
+    assert elided >= 2
+    assert [p["type"] for p in out[1]["content"]] == ["text", "text"]
+    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
+    # The most recent picture is the one the model is reasoning about.
+    assert out[3]["content"][1]["type"] == "image_url"
+    # Surrounding text is preserved, so the model still knows what was there.
+    assert out[1]["content"][0]["text"] == "first"
+
+
+def test_emergency_shrink_reaches_images_attached_to_user_messages() -> None:
+    """On the fallback path the picture rides in a user message, which the
+    tool-only text pass can never touch."""
+    from raven.agent.loop.main import AgentLoop
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        _img_msg("user", "attached-old"),
+        _img_msg("user", "attached-new"),
+    ]
+    out, elided = AgentLoop._emergency_shrink(messages)
+
+    assert elided == 1
+    assert out[1]["content"][1]["text"] == "[image elided to fit the context window]"
+    assert out[2]["content"][1]["type"] == "image_url"
+
+
+def test_emergency_shrink_does_not_mutate_the_caller_messages() -> None:
+    from raven.agent.loop.main import AgentLoop
+
+    messages = [_img_msg("tool", "a"), _img_msg("tool", "b")]
+    AgentLoop._emergency_shrink(messages)
+
+    assert messages[0]["content"][1]["type"] == "image_url"
+
+
+def test_emergency_shrink_is_a_noop_with_a_single_image() -> None:
+    from raven.agent.loop.main import AgentLoop
+
+    messages = [{"role": "system", "content": "sys"}, _img_msg("tool", "only")]
+    out, elided = AgentLoop._emergency_shrink(messages)
+
+    assert elided == 0
+    assert out[1]["content"][1]["type"] == "image_url"

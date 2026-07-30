@@ -263,6 +263,11 @@ class AgentLoop:
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
+    # Image-bearing messages kept intact when emergency-shrinking. Tighter than
+    # the tool-result count because one image can cost 1568 tokens: the picture
+    # the model is currently reasoning about is worth keeping, older ones are the
+    # cheapest thing to give up.
+    _SHRINK_KEEP_RECENT_IMAGES = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -1402,13 +1407,14 @@ class AgentLoop:
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
         """
+        messages, elided = cls._elide_older_images(messages)
+
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            return messages, 0
+            return messages, elided
         elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
         shrunk: list[dict] = []
-        elided = 0
         for i, m in enumerate(messages):
             if i in elide and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
@@ -1418,6 +1424,55 @@ class AgentLoop:
             else:
                 shrunk.append(m)
         return shrunk, elided
+
+    @classmethod
+    def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
+        """Drop inline images from all but the most recent image-bearing message.
+
+        Run before the tool-text pass because an image is by far the densest
+        thing in the window -- one costs up to 1568 tokens, which is more than
+        most tool outputs -- so dropping a stale picture buys more room than
+        eliding several text results, and costs less of what the model still
+        needs.
+
+        Not restricted to ``role="tool"``: when the endpoint cannot carry an
+        image in a tool result the picture is attached to a following ``user``
+        message instead, and that message would otherwise be untouchable here.
+        """
+        bearing = [
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), list)
+            and any(
+                isinstance(p, dict)
+                and p.get("type") == "image_url"
+                and str((p.get("image_url") or {}).get("url", "")).startswith("data:image/")
+                for p in m["content"]
+            )
+        ]
+        if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
+            return messages, 0
+
+        target = set(bearing[: -cls._SHRINK_KEEP_RECENT_IMAGES] if cls._SHRINK_KEEP_RECENT_IMAGES else bearing)
+        out: list[dict] = []
+        elided = 0
+        for i, m in enumerate(messages):
+            if i not in target:
+                out.append(m)
+                continue
+            clean = dict(m)
+            # New list: the caller's messages may still be referenced elsewhere.
+            clean["content"] = [
+                {"type": "text", "text": "[image elided to fit the context window]"}
+                if isinstance(p, dict)
+                and p.get("type") == "image_url"
+                and str((p.get("image_url") or {}).get("url", "")).startswith("data:image/")
+                else p
+                for p in m["content"]
+            ]
+            out.append(clean)
+            elided += 1
+        return out, elided
 
     async def _synthesize_final_on_exhaustion(
         self,
