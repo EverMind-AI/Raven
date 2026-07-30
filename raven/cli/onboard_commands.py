@@ -647,6 +647,42 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Opti
     return key
 
 
+def _prompt_local_api_base(spec: Any, *, allow_back: bool = False) -> Any:
+    """Ask a local deployment for its server URL. Returns ``_BACK`` on empty submit.
+
+    A local deployment is reached by address, not by key -- there is nothing to
+    authenticate against a server the user is running. The registry's
+    `default_api_base` is seeded because it is right for a default install, so
+    accepting it is one keystroke; clearing the field still rewinds.
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    def _validate(v: str) -> Any:
+        if allow_back and v.strip() == "":
+            return True
+        return (
+            True
+            if v.strip().startswith(("http://", "https://"))
+            else _t("URL must start with http:// or https://", "地址需以 http:// 或 https:// 开头")
+        )
+
+    url = questionary.text(
+        _t(f"{spec.label} server URL:", f"{spec.label} 服务地址:"),
+        default=spec.default_api_base or "",
+        validate=_validate,
+        placeholder=_back_placeholder(allow_back),
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if url is None:
+        return None
+    url = url.strip()
+    if allow_back and not url:
+        return _BACK
+    return url
+
+
 def _prompt_base_url(default: str = "https://", *, allow_back: bool = False) -> Any:
     """Ask for an OpenAI-compatible base URL (used by the 'custom' provider).
     Returns ``_BACK`` on empty submit when ``allow_back`` is set."""
@@ -781,8 +817,16 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     ``network_error`` / …) and drives the failure submenu's wording.
     """
     from raven.config.update_providers import test_provider as probe
+    from raven.providers.registry import find_by_name
 
-    console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
+    spec = find_by_name(provider)
+    # A local deployment has no key to verify -- what is being checked is that
+    # the address answers, and saying "API key" there describes a field the user
+    # was never asked for.
+    if spec and spec.is_local:
+        console.print(_t("  [dim]⏳ Reaching the server…[/dim]", "  [dim]⏳ 正在连接服务…[/dim]"))
+    else:
+        console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
     result = probe(provider)
     if result["ok"]:
         models = result.get("models_count")
@@ -1150,6 +1194,7 @@ def _configure_one_provider(
             provider,
             is_oauth=is_oauth,
             is_custom=is_custom,
+            is_local=bool(spec and spec.is_local),
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -1191,6 +1236,7 @@ def _collect_credentials(
     *,
     is_oauth: bool,
     is_custom: bool,
+    is_local: bool = False,
     api_key: Optional[str],
     base_url: Optional[str],
     model: Optional[str],
@@ -1223,6 +1269,24 @@ def _collect_credentials(
             if choice == "retry":
                 continue
             return _BACK
+
+    if is_local:
+        # A local deployment authenticates on nothing: it is reached by address.
+        # Routing it through the api_key prompt would stop the user at a
+        # minimum-length check for a credential that does not exist.
+        from raven.providers.registry import find_by_name
+
+        spec = find_by_name(provider)
+        if not base_url:
+            if non_interactive:
+                raise typer.BadParameter(f"--base-url is required for {provider} in non-interactive mode")
+            base_url = _prompt_local_api_base(spec, allow_back=True)
+            if base_url is _BACK:
+                return _BACK
+            if base_url is None:
+                raise typer.Exit(1)
+        _write_provider_fields(provider, {"api_base": base_url})
+        return None
 
     # Pure interactive path (no creds came from flags): prompt field-by-field
     # with empty-submit = back; backing out of the first field rewinds to the

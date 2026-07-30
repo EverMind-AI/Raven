@@ -2009,3 +2009,51 @@ def test_no_picker_label_names_the_routing_library() -> None:
         for entry in group["providers"]:
             for text in (entry["label"], entry.get("label_zh", "")):
                 assert "litellm" not in text.lower(), f"{entry['name']}: {text}"
+
+
+def test_a_local_deployment_is_configured_by_address_not_by_key(tmp_path, monkeypatch) -> None:
+    """Ollama and vLLM authenticate on nothing; they are reached by URL.
+
+    Sending them through the api_key prompt stopped the user at a minimum-length
+    check for a credential that does not exist, which is what made offering them
+    in the picker impossible before.
+    """
+    from raven.cli import onboard_commands
+
+    (tmp_path / ".raven").mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    written: dict[str, Any] = {}
+    monkeypatch.setattr(onboard_commands, "_write_provider_fields", lambda p, f: written.update({p: f}))
+
+    result = onboard_commands._collect_credentials(
+        "ollama_chat",
+        is_oauth=False,
+        is_custom=False,
+        is_local=True,
+        api_key=None,
+        base_url="http://127.0.0.1:11434",
+        model=None,
+        non_interactive=True,
+    )
+
+    assert result is None
+    assert written == {"ollama_chat": {"api_base": "http://127.0.0.1:11434"}}
+    assert "api_key" not in written["ollama_chat"], "a local deployment was asked for a key"
+
+
+def test_a_local_deployment_without_an_address_says_so(monkeypatch, tmp_path) -> None:
+    """The address is the one thing it cannot be configured without."""
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(typer.BadParameter, match="base-url"):
+        onboard_commands._collect_credentials(
+            "ollama_chat",
+            is_oauth=False,
+            is_custom=False,
+            is_local=True,
+            api_key=None,
+            base_url=None,
+            model=None,
+            non_interactive=True,
+        )
