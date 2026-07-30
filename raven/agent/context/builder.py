@@ -281,11 +281,17 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         ]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+        """Build user message content with optional base64-encoded images.
+
+        Every image's path is named in the text as well: the base64 survives only
+        this turn (the session stores a placeholder), so the path is what lets a
+        later turn re-read the picture instead of only learning one existed.
+        """
         if not media:
             return text
 
         images = []
+        notes = []
         for path in media:
             p = Path(path)
             if not p.is_file():
@@ -297,10 +303,12 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
                 continue
             b64 = base64.b64encode(raw).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            notes.append(f"[Image: {p.name} (path: {p}) — re-read it with read_file if you need another look]")
 
         if not images:
             return text
-        return images + [{"type": "text", "text": text}]
+        body = (f"{text}\n\n" if text else "") + "\n".join(notes)
+        return images + [{"type": "text", "text": body}]
 
     def add_tool_result(
         self,

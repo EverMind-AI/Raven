@@ -198,6 +198,12 @@ def build_user_content(text: str, media: list[str] | None) -> str | list[dict[st
     text note — the model reads them on demand via the ``understand_media``
     tool (contributed by the EverOS plugin). Returns a plain ``str`` when
     there are no image blocks.
+
+    Each image also gets its path named in the text, the same way non-image
+    attachments already do. The base64 lives for exactly this turn — it is
+    replaced by a placeholder on the way into the session — so without the path
+    the model loses any way to look at the picture again, and a follow-up
+    question about it has nothing to work from.
     """
     if not media:
         return text
@@ -212,6 +218,7 @@ def build_user_content(text: str, media: list[str] | None) -> str | list[dict[st
         if mime and mime.startswith("image/"):
             b64 = base64.b64encode(raw).decode()
             images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            notes.append(f"[Image: {p.name} (path: {p}) — re-read it with read_file if you need another look]")
         else:
             notes.append(f"[Attachment: {p.name} (path: {p}) — use the understand_media tool to read its contents]")
     body = text
