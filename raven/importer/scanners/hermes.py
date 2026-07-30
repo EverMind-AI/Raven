@@ -8,9 +8,31 @@ from pathlib import Path
 
 from loguru import logger
 
-from raven.importer.types import ImportSession, Platform, ScanResult, SourceKind
+from raven.importer.types import ImportMessage, ImportSession, Platform, ScanResult, SourceKind
+from raven.utils.text import is_cjk
 
 _MEMORY_SOURCES = (("user-md", "USER.md"), ("memory-md", "MEMORY.md"))
+
+# Hermes' own parser splits on the newline-wrapped section sign specifically so
+# that an entry whose own text contains a bare "§" is not torn in half.
+_ENTRY_DELIMITER = "\n§\n"
+
+# ``(zh, en)`` pairs. The preamble is itself extracted, so it is phrased as a
+# fact that is true on its own ("the user worked in Hermes") rather than as an
+# instruction, which would surface later as a stray directive.
+_USER_MD_PREAMBLE = (
+    "以下是我在 Hermes AI 助手中积累的个人档案，共 {count} 条。",
+    "These are the personal profile facts I accumulated in the Hermes AI assistant, {count} in total.",
+)
+_MEMORY_MD_PREAMBLE = (
+    "我之前用 Hermes AI 助手工作，下面是它当时记录下来的事实，共 {count} 条。",
+    "I worked with the Hermes AI assistant before; below are the facts it recorded, {count} in total.",
+)
+# MEMORY.md is the assistant's own notes, written in its first person, so the
+# entries are assistant turns. The user preamble is not decoration: EverOS'
+# user-track extraction skips a memcell with no role=user sender outright.
+_ENTRY_ROLE = {"user-md": "user", "memory-md": "assistant"}
+_PREAMBLE = {"user-md": _USER_MD_PREAMBLE, "memory-md": _MEMORY_MD_PREAMBLE}
 
 
 def resolve_hermes_home() -> Path:
@@ -46,7 +68,9 @@ class HermesScanner:
         return self._scan_memory_files()
 
     async def read(self, result: ScanResult) -> ImportSession:
-        raise NotImplementedError
+        if result.kind is SourceKind.MEMORY_FILE:
+            return self._read_memory_file(result)
+        raise ValueError(f"unsupported scan result kind: {result.kind}")
 
     # -- scan ---------------------------------------------------------------
 
@@ -69,6 +93,44 @@ class HermesScanner:
                 )
             )
         return out
+
+    # -- read -----------------------------------------------------------------
+
+    def _read_memory_file(self, result: ScanResult) -> ImportSession:
+        session_id = f"import-hermes-{result.source_key}"
+        (path,) = result.file_paths
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            return ImportSession(session_id=session_id, messages=())
+
+        entries = [e.strip() for e in raw.split(_ENTRY_DELIMITER)]
+        entries = [e for e in entries if e]
+        if not entries:
+            return ImportSession(session_id=session_id, messages=())
+
+        base_ms = int(result.mtime * 1000)
+        # Sample the whole file rather than is_cjk's 200-char default: these
+        # files are a short list of atomic facts, so the first entry's language
+        # does not represent the rest. ClaudeCodeScanner keeps the default
+        # because it reads much larger aggregated bodies.
+        cjk = is_cjk(raw, sample=len(raw))
+        preamble = _PREAMBLE[result.source_key][0 if cjk else 1].format(count=len(entries))
+        entry_role = _ENTRY_ROLE[result.source_key]
+
+        messages = [
+            ImportMessage(role="user", content=preamble, timestamp=base_ms, sender_id="user"),
+        ]
+        for i, entry in enumerate(entries, start=1):
+            messages.append(
+                ImportMessage(
+                    role=entry_role,
+                    content=entry,
+                    timestamp=base_ms + i,
+                    sender_id="user",
+                )
+            )
+        return ImportSession(session_id=session_id, messages=tuple(messages))
 
 
 __all__ = ["HermesScanner", "resolve_hermes_home"]
