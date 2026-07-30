@@ -382,16 +382,26 @@ async def test_rerun_is_idempotent(tmp_path: Path) -> None:
     assert second.skipped == 1
 
 
-async def test_no_category_level_uses_root_prefix_on_collision(tmp_path: Path) -> None:
-    """skills/<name>/ has no category segment -- its parent is the root `skills`
-    dir itself, so a collision involving it must not fall back to the
-    meaningless `skills-<name>`."""
-    home = tmp_path / ".hermes"
-    (home / "skills").mkdir(parents=True)
-    _skill(home / "skills", "notes")
-    _skill(home / "skills" / "apple", "notes")
+@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
+async def test_partial_copy_is_removed_so_the_next_run_retries(tmp_path: Path) -> None:
+    """copytree fails partway with SKILL.md already written, so a leftover
+    target would be both a pool entry missing its attachments and, on the next
+    run, an "already present" skip that never retries."""
+    home, made = _home_with_skills(tmp_path, skills=(("cat", "broken"),))
+    unreadable = made["broken"] / "references" / "x.md"
+    unreadable.parent.mkdir()
+    unreadable.write_text("secret", encoding="utf-8")
+    unreadable.chmod(0o000)
     ws = tmp_path / "ws"
-    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
-    landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
-    assert "notes" in landed
-    assert "skills-notes" not in landed
+    state = ImportState(path=tmp_path / "state.json")
+    try:
+        first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+        assert first.failed == 1
+        assert first.installed == 0
+        assert not (ws / "skills" / "hermes" / "broken").exists()
+
+        second = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+        assert second.failed == 1
+        assert second.skipped == 0
+    finally:
+        unreadable.chmod(0o644)

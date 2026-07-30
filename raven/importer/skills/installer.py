@@ -74,6 +74,13 @@ async def install_skills(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(skill.path, target)
         except OSError as exc:
+            # copytree fails partway through, and by then the target usually
+            # holds SKILL.md already: the pool would serve a skill whose
+            # attachments are missing, and the next run would read the leftover
+            # as "already present" and never retry it. Removing it restores both
+            # the retry (a failed entry is not `submitted`) and the invariant
+            # that a directory in the pool is a complete skill.
+            shutil.rmtree(target, ignore_errors=True)
             logger.warning("skill import failed for {}: {}", skill.name, exc)
             state.mark_failed(source.platform, key, str(exc))
             failed += 1
