@@ -329,3 +329,21 @@ def test_tracing_internal_failure_never_breaks_host(trace_dir, monkeypatch):
     # the host's own exception must propagate unchanged
     with pytest.raises(ValueError, match="APP"):
         asyncio.run(app_error())
+
+
+def test_provider_label_reports_the_normalized_route_prefix() -> None:
+    """Telemetry names the backend that served the call, in one spelling.
+
+    Every gateway is reached through the same provider class, so the class name
+    hides the backend; LiteLLM encodes it as the route prefix. Grouping metrics
+    needs one spelling per backend, which is why this goes through the registry's
+    splitter rather than slicing the id here.
+    """
+    from raven.tracing.semconv import _provider_label
+
+    assert _provider_label("openrouter/anthropic/claude-sonnet-4-5", "LiteLLMProvider") == "openrouter"
+    assert _provider_label("nano-gpt/gpt-4o", "LiteLLMProvider") == "nano_gpt"
+    assert _provider_label("NANO-GPT/gpt-4o", "LiteLLMProvider") == "nano_gpt"
+    # A bare id names no backend, so the class is all there is to report.
+    assert _provider_label("claude-opus-4-5", "AnthropicProvider") == "AnthropicProvider"
+    assert _provider_label(None, "AnthropicProvider") == "AnthropicProvider"

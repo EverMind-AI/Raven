@@ -8,12 +8,14 @@ import pytest
 
 from raven.config.schema import ModelEndpoint
 from raven.providers.base import GenerationSettings
+from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.per_model_provider import PerModelProvider
 
 
 def _fallback():
     fb = MagicMock()
     fb.get_default_model.return_value = "fallback-model"
+    fb.generation = GenerationSettings()
     return fb
 
 
@@ -83,3 +85,115 @@ async def test_chat_with_retry_unknown_model_uses_fallback():
 
     assert out == "FB_RESP"
     fb.chat_with_retry.assert_awaited_once()
+
+
+def test_sub_providers_inherit_configured_model_overrides():
+    # Routed models are served by their own sub-providers, built here rather
+    # than by make_provider -- so the user's overrides have to be pushed down
+    # the same way generation settings are.
+    fb = _fallback()
+    fb.model_overrides = {"small": {"top_p": 0.3}}
+    p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=fb)
+
+    assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
+
+
+def test_sub_providers_go_through_litellm():
+    p = _provider()
+    assert all(isinstance(sub, LiteLLMProvider) for sub in p._by_model.values())
+
+
+@pytest.mark.asyncio
+async def test_routed_models_stream_natively(monkeypatch):
+    # The point of routing through LiteLLM: the old direct client had no
+    # chat_stream, so routed models fell back to one delta carrying the whole
+    # reply. Real chunks must now reach the caller one at a time.
+    class _Stream:
+        def __aiter__(self):
+            return self
+
+        def __init__(self):
+            self._chunks = iter(["Hel", "lo", "!"])
+
+        async def __anext__(self):
+            try:
+                text = next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration
+            delta = MagicMock(content=text, tool_calls=None, reasoning_content=None)
+            return MagicMock(choices=[MagicMock(delta=delta, finish_reason=None)], usage=None)
+
+    async def fake_acompletion(**kwargs):
+        return _Stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    chunks = [d.content async for d in p.chat_stream(messages=[{"role": "user", "content": "hi"}], model="small")]
+
+    assert chunks == ["Hel", "lo", "!"]
+
+
+def test_endpoint_without_api_base_is_rejected():
+    # ModelEndpoint.api_base defaults to "", and LiteLLM would then fall back to
+    # api.openai.com and ship this endpoint's key there. Fail loudly instead.
+    with pytest.raises(ValueError, match="api_base"):
+        PerModelProvider([ModelEndpoint(model="m1")], fallback=_fallback())
+
+
+@pytest.mark.asyncio
+async def test_model_name_keeps_its_own_provider_prefix(monkeypatch):
+    # A routed model may itself be prefixed (e.g. "anthropic/claude-x"). The
+    # generic gateway prefix is added on top and LiteLLM strips it back off, so
+    # the endpoint still receives the original name.
+    seen: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        message = MagicMock(content="ok", tool_calls=None)
+        return MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    endpoint = ModelEndpoint(model="anthropic/claude-x", api_base="http://a/v1", api_key="KA")
+    p = PerModelProvider([endpoint], fallback=_fallback())
+    await p.chat(messages=[{"role": "user", "content": "hi"}], model="anthropic/claude-x")
+
+    assert seen[0]["model"] == "openai/anthropic/claude-x"
+
+
+def test_building_endpoints_leaves_litellm_api_base_unset(monkeypatch):
+    # Building a provider must not pin the process-global litellm.api_base:
+    # with several endpoints in one process the last one built would otherwise
+    # become the default base for every caller that omits api_base.
+    from raven.providers.litellm_provider import litellm
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    _provider()
+    assert litellm.api_base is None
+
+
+@pytest.mark.asyncio
+async def test_each_endpoint_sends_its_own_api_base(monkeypatch):
+    # Each sub-provider carries its own api_base / api_key per call, so routed
+    # calls reach the endpoint that serves that model.
+    seen: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        message = MagicMock(content="ok", tool_calls=None)
+        choice = MagicMock(message=message, finish_reason="stop")
+        return MagicMock(choices=[choice], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    for model in ("small", "large"):
+        await p.chat(messages=[{"role": "user", "content": "hi"}], model=model)
+
+    # Assert the (model, base, key) triple per call: a {base: key} dict would
+    # still pass with the model-to-endpoint mapping swapped.
+    assert [(c["model"], c["api_base"], c["api_key"]) for c in seen] == [
+        ("openai/small", "http://a/v1", "KA"),
+        ("openai/large", "http://b/v1", "KB"),
+    ]

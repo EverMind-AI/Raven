@@ -294,6 +294,7 @@ def build_sentinel_stack(
                 api_key=api_key,
                 api_base=sentinel_cfg.evaluator_base_url,
                 default_model=effective_planner_model,
+                model_overrides=config.agents.defaults.model_overrides,
             )
     planner = ProactivePlanner(
         provider=planner_provider or provider,

@@ -51,7 +51,8 @@ def build_model_routing(config, provider):
 
     from raven.routing.router import ModelRouter
 
-    api_key = config.routing.api_key or config.providers.openrouter.api_key or ""
+    openrouter = config.providers.get("openrouter")
+    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
     if not api_key:
         console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
         return None, provider

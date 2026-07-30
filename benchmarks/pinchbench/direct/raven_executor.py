@@ -303,22 +303,25 @@ def _session_to_openclaw_transcript(
 def _make_benchmark_provider(model: str, api_key: str, api_base: str, provider_name: str):
     """Create the benchmark LLM provider."""
     from raven.providers.base import GenerationSettings
-    from raven.providers.custom_provider import CustomProvider
-    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
+    from raven.providers.registry import find_by_name
 
-    if provider_name == "custom":
-        provider = CustomProvider(
-            api_key=api_key,
-            api_base=api_base,
-            default_model=model,
-        )
-    else:
-        provider = LiteLLMProvider(
-            api_key=api_key,
-            api_base=api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None),
-            default_model=model,
-            provider_name=provider_name,
-        )
+    spec = find_by_name(provider_name)
+    resolved_base = api_base or (spec.default_api_base if spec else "") or None
+    if not resolved_base and (spec is None or spec.via_driver):
+        # LiteLLM picks the endpoint from the wire prefix, so a provider reached
+        # through someone else's driver ("openai" for custom / SiliconFlow) lands
+        # on THAT vendor -- api.openai.com -- and would quietly benchmark a third
+        # party. Being registered is no protection: `custom` is registered and is
+        # precisely the case with no endpoint of its own.
+        raise ValueError(f"no api_base for provider {provider_name!r}; set OPENAI_BASE_URL or pass --api-base")
+    provider = LiteLLMProvider(
+        api_key=api_key,
+        api_base=resolved_base,
+        default_model=model,
+        provider_name=provider_name,
+        extra_headers=session_affinity_headers(),
+    )
     provider.generation = GenerationSettings(
         temperature=0.7,
         max_tokens=8192,

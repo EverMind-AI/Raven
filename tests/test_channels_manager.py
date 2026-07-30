@@ -10,6 +10,7 @@ import pytest
 
 from raven.channels.contract import Capabilities, ChannelSpec
 from raven.channels.manager import ChannelManager, _missing_dep_hint
+from raven.config.schema import ProvidersConfig
 
 
 class _FakeChannel:
@@ -45,7 +46,7 @@ def _config(channels=None):
     for name, section in (channels or {}).items():
         setattr(chan, name, section)
     return SimpleNamespace(
-        providers=SimpleNamespace(groq=SimpleNamespace(api_key="gk")),
+        providers=ProvidersConfig.model_validate({"groq": {"apiKey": "gk"}}),
         channels=chan,
     )
 

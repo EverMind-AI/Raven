@@ -130,3 +130,23 @@ async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     register_setup_methods(d)
     resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "setup.status", "params": {}})
     assert resp["result"]["provider_configured"] is True
+
+
+def test_minimax_oauth_is_detected_from_either_spelling_of_the_prefix(monkeypatch) -> None:
+    """The region is read off the model-id prefix, which arrives underscored.
+
+    The check used to compare against hyphenated literals, so a saved
+    "minimax_global/..." matched nothing and a logged-in user read as unconfigured.
+    """
+    import raven.tui_rpc.methods.setup as setup
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        "raven.providers.minimax_oauth.load_token",
+        lambda region: seen.append(region) or object(),
+    )
+    for model in ("minimax_global/abab6.5", "minimax-global/abab6.5"):
+        seen.clear()
+        payload = {"agents": {"defaults": {"model": model}}}
+        assert setup._detect_provider_configured(payload) is True
+        assert seen == ["global"], model
