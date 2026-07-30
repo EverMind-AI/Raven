@@ -20,6 +20,7 @@ function in the failure message, which is the part a future reader needs.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -400,3 +401,50 @@ def test_a_passthrough_section_is_found_under_any_spelling(spelling: str) -> Non
     assert config.providers.get("nano_gpt") is not None
     _, matched = config._match_provider("nano_gpt/gpt-4o")
     assert matched == "nano_gpt"
+
+
+def test_the_litellm_name_snapshot_matches_the_installed_litellm() -> None:
+    """The snapshot exists so reporting need not import LiteLLM; it must be true.
+
+    Drift in either direction is a defect, which is why this asserts equality
+    rather than containment. A name the snapshot has and LiteLLM does not would
+    let a typo through as a configurable vendor; a name LiteLLM has and the
+    snapshot does not would hide a working provider from `provider list` and
+    from the startup gate, sending a configured user back into the wizard.
+
+    Regenerate the snapshot when a LiteLLM bump fails this.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.litellm_setup import import_litellm
+
+    installed = {str(getattr(p, "value", p)) for p in import_litellm().provider_list}
+    assert LITELLM_PROVIDER_NAMES == installed, (
+        f"snapshot is stale: missing {sorted(installed - LITELLM_PROVIDER_NAMES)}, "
+        f"extra {sorted(LITELLM_PROVIDER_NAMES - installed)}"
+    )
+
+
+def test_reporting_paths_answer_provider_names_without_importing_litellm() -> None:
+    """`provider list` and the startup gate must not pay the LiteLLM import.
+
+    Importing it costs about two seconds, and these paths only render what is
+    already configured. This is the property the snapshot exists to provide, so
+    it is asserted directly rather than inferred from the snapshot's contents.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, json, pathlib, tempfile\n"
+        "d = pathlib.Path(tempfile.mkdtemp())\n"
+        "cfg = d / 'config.json'\n"
+        "cfg.write_text(json.dumps({'providers': {'mistral': {'apiKey': 'k'}, 'typovendor': {'apiKey': 'k'}}}))\n"
+        "from raven.config.update_providers import list_providers\n"
+        "names = [row['name'] for row in list_providers(config_path=cfg)]\n"
+        "print(json.dumps({'litellm': 'litellm' in sys.modules, 'names': names}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["litellm"] is False, "list_providers imported litellm"
+    assert "mistral" in result["names"], "a LiteLLM vendor went missing from the report"
+    assert "typovendor" not in result["names"], "a typo was reported as a provider"

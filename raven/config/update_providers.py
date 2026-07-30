@@ -102,7 +102,7 @@ def _listable_provider_names(data: dict[str, Any]) -> list[str]:
     return declared + sorted(extra)
 
 
-def _litellm_knows(name: str) -> bool | None:
+def _litellm_knows(name: str, *, authoritative: bool = True) -> bool | None:
     """Whether LiteLLM speaks to this vendor, or None when it cannot be asked.
 
     Three states, not two. Answering False when LiteLLM is merely unavailable
@@ -111,10 +111,26 @@ def _litellm_knows(name: str) -> bool | None:
     rest turned an unavailable dependency into a bare traceback. None makes
     every caller confront the third case at the point it has to decide.
 
+    A snapshot of LiteLLM's names answers the common case for free. Importing
+    LiteLLM costs about two seconds, which a command that is about to call a
+    model pays anyway and a command that only reports configuration should not.
+    So ``authoritative=False`` stops at the snapshot -- suitable where a wrong
+    answer means one row missing from a report -- while the default falls
+    through to LiteLLM itself when the snapshot has no entry, so a vendor added
+    in a newer LiteLLM than the snapshot can still be configured.
+
     Comparison is normalized on both sides: LiteLLM hyphenates a few vendors
     ("nano-gpt") while config sections and model-id prefixes are underscored, so
     an exact match rejects the very spelling this function tells users to write.
     """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+
+    normalized = normalize_provider_name(name)
+    if normalized in {normalize_provider_name(n) for n in LITELLM_PROVIDER_NAMES}:
+        return True
+    if not authoritative:
+        return False
+
     from raven.providers.litellm_setup import import_litellm
 
     try:
@@ -123,18 +139,22 @@ def _litellm_knows(name: str) -> bool | None:
     except Exception:
         return None
     known = {normalize_provider_name(str(getattr(p, "value", p))) for p in providers}
-    return normalize_provider_name(name) in known
+    return normalized in known
 
 
-def _provider_schema_cls(name: str) -> type[BaseModel]:
-    """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
+def _provider_schema_cls(name: str, *, authoritative: bool = True) -> type[BaseModel]:
+    """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``.
+
+    ``authoritative=False`` keeps the lookup off the LiteLLM import path; see
+    ``_litellm_knows``. Only reporting may pass it.
+    """
     field = ProvidersConfig.model_fields.get(name)
     if field is None:
         # A vendor with no spec of ours is still configurable when LiteLLM knows
         # it -- the plain section is all it needs. Anything LiteLLM has never
         # heard of is a typo, and saying so beats writing a section that will
         # never be read.
-        if _litellm_knows(name) is not False:
+        if _litellm_knows(name, authoritative=authoritative) is not False:
             # Includes "cannot say": refusing a name we failed to verify would
             # block a valid provider, while accepting one at worst writes a
             # section nothing reads. The lesser harm is to accept.
@@ -447,7 +467,9 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for fname in _listable_provider_names(data):
         try:
-            cls = _provider_schema_cls(fname)
+            # Reporting: a stale snapshot costs one row here, whereas importing
+            # LiteLLM to render a table costs every caller two seconds.
+            cls = _provider_schema_cls(fname, authoritative=False)
         except (KeyError, RuntimeError):
             # A key we cannot resolve to a provider is a typo, and listing is a
             # read-only report: skipping it keeps `provider list` and the startup
