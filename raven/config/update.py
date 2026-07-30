@@ -28,6 +28,11 @@ from raven.config.schema import CronConfig
 # supplies their own Bearer token.
 _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 
+# Default EverOS memory server endpoint, seeded into a fresh config's
+# plugins.config["everos-memory"]. Kept in sync with
+# raven.plugin.memory.everos.backend._DEFAULT_EVEROS_BASE_URL.
+_DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
+
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -244,8 +249,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
       - ``skillForge.router.hub.endpoint`` is seeded to the live Skill Hub URL
         (the schema default is ``None`` so programmatic loads stay Hub-off);
         ``apiKey`` is left null for the user to fill with their own token;
-      - ``plugins.config["everos-memory"]`` is seeded with the plugin's identity
-        wiring so the block is never empty and the user can see/edit it.
+      - ``plugins.config["everos-memory"]`` is seeded with only ``base_url`` so
+        the block is never empty and the user can see/edit it. Identity
+        (``user_id`` / ``agent_id``) is deliberately NOT duplicated here — it
+        comes from ``memory.userId`` / ``memory.agentId`` via the host's
+        ``ServiceLocator`` at plugin activation time.
 
     The optional service fields on ``SkillForgeConfig`` (``embedding_url`` /
     ``embedding_api_key`` / ``reranker_url`` / ``reranker_api_key`` /
@@ -276,16 +284,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     plugins = data.setdefault("plugins", {})
     plugins.setdefault("disabled", list(PluginsConfig().disabled))
     # snake_case keys: plugins.config is handed to the plugin factory verbatim.
-    # user_id / agent_id mirror memory.* so the recall identities match (the
-    # backend stamps these onto stored messages; a mismatch makes memory
-    # unretrievable — see MemoryConfig docstring).
+    # Identity is not seeded here — it comes from ServiceLocator, sourced from
+    # memory.userId / memory.agentId at plugin activation, not duplicated.
     plugins.setdefault("config", {}).setdefault(
         "everos-memory",
-        {
-            "base_url": "http://localhost:18791",
-            "user_id": mem.user_id,
-            "agent_id": mem.agent_id,
-        },
+        {"base_url": _DEFAULT_EVEROS_BASE_URL},
     )
 
     router_defaults = SkillForgeRouterConfig()

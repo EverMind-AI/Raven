@@ -16,6 +16,9 @@ from raven.utils.portable_lock import LockTimeoutError, file_lock
 _POLL_INTERVAL = 0.5
 
 
+DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
+
+
 def _extract_port(base_url: str) -> str:
     parsed = urlparse(base_url)
     return str(parsed.port or 80)
@@ -67,7 +70,7 @@ def _start_server_if_unlocked(port: str) -> bool:
 
 
 async def ensure_everos_server(
-    base_url: str = "http://localhost:18791",
+    base_url: str = DEFAULT_EVEROS_BASE_URL,
     *,
     timeout: float = 30.0,
 ) -> None:
@@ -94,4 +97,4 @@ async def ensure_everos_server(
     )
 
 
-__all__ = ["ensure_everos_server"]
+__all__ = ["DEFAULT_EVEROS_BASE_URL", "ensure_everos_server"]

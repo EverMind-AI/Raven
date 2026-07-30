@@ -27,6 +27,7 @@ Three architectural invariants worth re-stating:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
@@ -35,13 +36,15 @@ import httpx
 
 from raven.memory_engine import Memory
 from raven.plugin import PluginContext
+from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
 logger = logging.getLogger("raven.plugin.memory.everos")
 
 _OwnerType = Literal["user", "agent"]
 
-_DEFAULT_AGENT_ID: str = "default"
-_DEFAULT_USER_ID: str = "default"
+_PATH_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_.@+-]+$")
+_PATH_TRAVERSAL_IDS = frozenset({".", ".."})
+_STALE_IDENTITY_KEYS = ("user_id", "agent_id")
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +241,9 @@ class EverosBackend:
         self._config = ctx.config
         self._services = ctx.services
         self._logger = ctx.logger
-        self._agent_id: str = self._config.get("agent_id") or _DEFAULT_AGENT_ID
-        self._user_id: str = self._config.get("user_id") or _DEFAULT_USER_ID
+        self._agent_id: str = self._services.agent_id
+        self._user_id: str = self._services.user_id
+        self._warn_stale_identity_keys()
         self._flush_every_turns: int = int(
             self._config.get("flush_every_turns", 1),
         )
@@ -257,7 +261,7 @@ class EverosBackend:
         Pulls ``base_url`` / ``api_key`` / ``timeout_s`` out of
         ``ctx.config`` with documented defaults.
         """
-        base_url = self._config.get("base_url") or "http://localhost:18791"
+        base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         api_key = self._config.get("api_key")
         timeout_s = float(
             self._config.get("timeout_s", _DEFAULT_HTTP_TIMEOUT_S),
@@ -268,9 +272,41 @@ class EverosBackend:
             timeout_s=timeout_s,
         )
 
+    def _warn_stale_identity_keys(self) -> None:
+        """Surface a config left over from before identity moved to the host.
+
+        A stale value that differs from the host's is exactly the split that
+        used to make every written memory unrecallable, so it must be loud
+        rather than silently ignored.
+        """
+        for key in _STALE_IDENTITY_KEYS:
+            stale = self._config.get(key)
+            if stale is None:
+                continue
+            current = self._user_id if key == "user_id" else self._agent_id
+            if stale != current:
+                self._logger.warning(
+                    "plugins.config['everos-memory'].%s=%r is obsolete and ignored; "
+                    "the active value is memory.%s=%r. Remove the stale key.",
+                    key,
+                    stale,
+                    "userId" if key == "user_id" else "agentId",
+                    current,
+                )
+
+    def _validate_identity(self) -> None:
+        for label, value in (("user_id", self._user_id), ("agent_id", self._agent_id)):
+            if value in _PATH_TRAVERSAL_IDS or not _PATH_SAFE_ID_RE.match(value):
+                raise ValueError(
+                    f"memory.{label}={value!r} is not accepted by EverOS: it becomes a "
+                    f"directory segment on the write path, so it must match "
+                    f"{_PATH_SAFE_ID_RE.pattern} and must not be '.' or '..'."
+                )
+
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self._validate_identity()
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
@@ -291,7 +327,7 @@ class EverosBackend:
 
             from raven.plugin.memory.everos._server import ensure_everos_server
 
-            base_url = self._config.get("base_url") or "http://localhost:18791"
+            base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
             try:
                 await ensure_everos_server(base_url)
             except Exception as e:

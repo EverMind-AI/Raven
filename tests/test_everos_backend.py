@@ -71,10 +71,16 @@ class _FakeAdapter:
             raise self.memorize_raises
 
 
-def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
+def _ctx(
+    tmp_path: Path,
+    *,
+    user_id: str = "default",
+    agent_id: str = "default",
+    **config: Any,
+) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
     )
 
 
@@ -551,3 +557,57 @@ class TestFeedback:
         await b.feedback({})
         await b.feedback({"kind": "skill_usage", "ids": ["x"]})
         await b.feedback({"arbitrary": object()})
+
+
+# ---------------------------------------------------------------------------
+# Identity — sourced from ServiceLocator, not the plugin config slice
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityFromServices:
+    def test_identity_comes_from_services_not_config(self, tmp_path: Path) -> None:
+        ctx = PluginContext(
+            config={"user_id": "from_config", "agent_id": "from_config"},
+            services=ServiceLocator(
+                workspace=tmp_path,
+                user_id="from_services",
+                agent_id="agent_from_services",
+            ),
+        )
+        backend = make_backend(ctx)
+        assert backend._user_id == "from_services"
+        assert backend._agent_id == "agent_from_services"
+
+    def test_stale_identity_keys_in_config_warn(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        ctx = PluginContext(
+            config={"user_id": "other"},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )
+        make_backend(ctx)
+        assert any("user_id" in r.message for r in caplog.records if r.levelname == "WARNING")
+
+    def test_stale_identity_keys_matching_are_silent(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        ctx = PluginContext(
+            config={"user_id": "default"},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )
+        make_backend(ctx)
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    @pytest.mark.parametrize("bad", ["agent:default", "a/b", "..", "."])
+    async def test_illegal_identity_rejected_on_start(self, tmp_path: Path, bad: str) -> None:
+        ctx = PluginContext(
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
+        )
+        backend = make_backend(ctx)
+        with pytest.raises(ValueError, match="user_id"):
+            await backend.start()
