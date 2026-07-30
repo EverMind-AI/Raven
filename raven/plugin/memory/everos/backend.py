@@ -620,11 +620,41 @@ class EverosBackend:
 
 
 def _flatten_profile(profile_data: Any) -> str:
-    """Render a profile dict as ``key: value`` lines for prompt
-    injection. Non-dicts get ``str()``."""
+    """Render a profile dict as human-readable lines for prompt injection.
+
+    Scalars render as ``key: value``. Lists render one bullet per item.
+    Dict items only surface ``category``/``trait`` (label) and
+    ``description`` (body) — an allowlist, not a denylist of the
+    ``evidence``/``basis`` meta-narration fields EverOS attaches to
+    explain *how* it inferred an item, which is not a fact about the
+    user and must never reach the prompt. Non-dicts get ``str()``.
+    """
     if not isinstance(profile_data, dict):
         return str(profile_data)
-    return "\n".join(f"{k}: {v}" for k, v in profile_data.items())
+    lines: list[str] = []
+    for key, value in profile_data.items():
+        if key.endswith("_ms"):
+            continue
+        if isinstance(value, list):
+            lines.extend(_flatten_profile_list(value))
+        else:
+            lines.append(f"{key}: {value}")
+    return "\n".join(lines)
+
+
+def _flatten_profile_list(items: list[Any]) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            lines.append(f"- {item}")
+            continue
+        label = item.get("category") or item.get("trait")
+        body = item.get("description")
+        if label and body:
+            lines.append(f"- {label}: {body}")
+        elif label or body:
+            lines.append(f"- {label or body}")
+    return lines
 
 
 # ---------------------------------------------------------------------------

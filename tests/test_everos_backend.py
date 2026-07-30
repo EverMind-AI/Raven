@@ -20,6 +20,7 @@ from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (
     EverosBackend,
+    _flatten_profile,
     make_backend,
 )
 
@@ -290,6 +291,102 @@ class TestUserSearchConversion:
         hits = await b.recall("q", user_id="x", top_k=5)
         scores = [h.score for h in hits]
         assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# _flatten_profile — rendering a profile dict for prompt injection
+# ---------------------------------------------------------------------------
+
+
+class TestFlattenProfile:
+    def test_ms_suffixed_keys_are_skipped(self) -> None:
+        result = _flatten_profile({"name": "Alice", "profile_timestamp_ms": 123})
+        assert result == "name: Alice"
+
+    def test_scalar_dict_renders_key_value_lines(self) -> None:
+        result = _flatten_profile({"name": "Alice", "tz": "PST"})
+        assert result == "name: Alice\ntz: PST"
+
+    def test_list_of_dicts_renders_category_and_description(self) -> None:
+        result = _flatten_profile(
+            {
+                "explicit_info": [
+                    {
+                        "category": "occupation",
+                        "description": "software engineer",
+                        "evidence": "seen across many conversations",
+                    },
+                ],
+            }
+        )
+        assert result == "- occupation: software engineer"
+        assert "evidence" not in result
+        assert "seen across many conversations" not in result
+
+    def test_list_of_dicts_uses_trait_when_no_category(self) -> None:
+        result = _flatten_profile(
+            {
+                "implicit_traits": [
+                    {
+                        "trait": "detail-oriented",
+                        "description": "asks precise technical questions",
+                        "basis": "observed across multiple conversations",
+                    },
+                ],
+            }
+        )
+        assert result == "- detail-oriented: asks precise technical questions"
+        assert "basis" not in result
+        assert "observed across multiple conversations" not in result
+
+    def test_list_item_missing_description_renders_label_only(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"category": "location", "evidence": "lives in Seattle"}]})
+        assert result == "- location"
+
+    def test_list_item_missing_label_renders_description_only(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"description": "orphan fact"}]})
+        assert result == "- orphan fact"
+
+    def test_list_item_with_neither_label_nor_description_is_skipped(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"evidence": "only evidence, nothing else"}]})
+        assert result == ""
+
+    def test_non_dict_list_item_renders_as_is(self) -> None:
+        result = _flatten_profile({"explicit_info": ["a raw string note"]})
+        assert result == "- a raw string note"
+
+    def test_non_dict_profile_data_renders_str(self) -> None:
+        assert _flatten_profile("just a string") == "just a string"
+        assert _flatten_profile(None) == "None"
+
+    def test_realistic_payload_shape(self) -> None:
+        profile_data = {
+            "summary": "Works as a software engineer, interested in Python and ML.",
+            "explicit_info": [
+                {
+                    "category": "occupation",
+                    "description": "software engineer",
+                    "evidence": "2026-06-25 to 2026-07-21, multiple conversations",
+                },
+            ],
+            "implicit_traits": [
+                {
+                    "trait": "detail-oriented",
+                    "description": "asks precise technical questions",
+                    "basis": "observed across multiple conversations",
+                },
+            ],
+            "profile_timestamp_ms": 1721990400000,
+        }
+        result = _flatten_profile(profile_data)
+        assert result == (
+            "summary: Works as a software engineer, interested in Python and ML.\n"
+            "- occupation: software engineer\n"
+            "- detail-oriented: asks precise technical questions"
+        )
+        assert "evidence" not in result
+        assert "basis" not in result
+        assert "profile_timestamp_ms" not in result
 
 
 # ---------------------------------------------------------------------------
