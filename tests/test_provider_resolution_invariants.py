@@ -448,3 +448,33 @@ def test_reporting_paths_answer_provider_names_without_importing_litellm() -> No
     assert result["litellm"] is False, "list_providers imported litellm"
     assert "mistral" in result["names"], "a LiteLLM vendor went missing from the report"
     assert "typovendor" not in result["names"], "a typo was reported as a provider"
+
+
+def test_every_provider_construction_site_passes_the_users_model_overrides() -> None:
+    """A per-model override must apply on whichever path builds the provider.
+
+    `model_overrides` was added to `LiteLLMProvider` and wired into two of the
+    three places that construct one, which is how a user setting a mandated
+    temperature found it honoured by the agent and ignored by the evolver. The
+    per-endpoint builder is exempt: it inherits the fallback's overrides rather
+    than reading config itself.
+    """
+    exempt = {"raven/providers/per_model_provider.py"}
+    offenders = []
+    for path in _production_files():
+        if _rel(path) in exempt:
+            continue
+        source = path.read_text()
+        if "LiteLLMProvider(" not in source:
+            continue
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name != "LiteLLMProvider":
+                continue
+            if not any(kw.arg == "model_overrides" for kw in node.keywords):
+                offenders.append(f"{_rel(path)}:{node.lineno}")
+    assert not offenders, "pass model_overrides from config here: " + ", ".join(offenders)
