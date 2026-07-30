@@ -41,6 +41,10 @@ def test_retryable_http_5xx_yes_4xx_no():
 
 @pytest.mark.parametrize("code,expected", [(429, True), (500, True), (403, False)])
 def test_slack_transient_classifier(code, expected):
+    # The classifier isinstance-checks slack_sdk's own SlackApiError, so this
+    # one case needs the optional extra where the rest of the file does not.
+    pytest.importorskip("slack_sdk")
+
     from types import SimpleNamespace
 
     from slack_sdk.errors import SlackApiError
