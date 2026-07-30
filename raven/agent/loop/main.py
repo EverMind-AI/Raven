@@ -44,6 +44,7 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -182,6 +183,31 @@ _TRANSIENT_FAILURE_MARKERS = (
 # repeated empty search is legitimate exploration, not a stuck dead call, so it
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
+
+
+def _strip_inline_images(content: list[Any]) -> list[Any]:
+    """Replace inline base64 images with a text placeholder, for persistence.
+
+    Images live for exactly the turn that produced them. Keeping the bytes would
+    bloat the session JSONL by megabytes per picture, and every later turn would
+    replay them to the model — paying for an image nobody asked about again.
+
+    A *new* list is returned: the input is the live message the model is still
+    working from this turn, and `_save_turn` only shallow-copies the entry, so
+    mutating in place would pull the picture out from under the current request.
+    """
+    out: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            out.append(part)
+            continue
+        url = part.get("image_url") or {}
+        url = url.get("url", "") if isinstance(url, dict) else ""
+        if part.get("type") == "image_url" and isinstance(url, str) and url.startswith("data:image/"):
+            out.append({"type": "text", "text": "[image]"})
+        else:
+            out.append(part)
+    return out
 
 
 def _is_hard_tool_failure(result: object) -> bool:
@@ -326,6 +352,8 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        # Resolved lazily on the first tool result that carries an image.
+        self._image_tool_result_ok: bool | None = None
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
@@ -726,6 +754,25 @@ class AgentLoop:
             source=hub_cfg.source,
             cache_dir=workspace / "skills" / "hub",
         )
+
+    def _supports_image_tool_result(self) -> bool:
+        """Cached per loop: resolving the LiteLLM target parses the model string,
+        and this is asked once per tool call that returns an image."""
+        if self._image_tool_result_ok is None:
+            spec = None
+            try:
+                from raven.providers.registry import find_by_model
+
+                spec = find_by_model(self.model)
+            except Exception:
+                pass
+            self._image_tool_result_ok = supports_image_tool_result(self.provider, self.model, spec)
+            logger.debug(
+                "image-in-tool-result support for {}: {}",
+                self.model,
+                self._image_tool_result_ok,
+            )
+        return self._image_tool_result_ok
 
     # ── Context engine helpers ──────────────────────────────────────────
 
@@ -1657,7 +1704,29 @@ class AgentLoop:
                                 "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    blocks = getattr(result, "blocks", None)
+                    attach_blocks: list[dict[str, Any]] | None = None
+                    if blocks:
+                        if self._supports_image_tool_result():
+                            pass  # blocks ride in the tool result itself
+                        else:
+                            # This transport cannot put an image in a tool result,
+                            # so the tool result carries text naming the image and
+                            # the picture follows in a user message. Same shape
+                            # OpenClaw uses against Chat Completions endpoints.
+                            model_text = image_placeholder_text(blocks)
+                            attach_blocks = [b for b in blocks if b.get("type") == "image_url"]
+                            blocks = None
+                    if blocks:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, model_text, blocks
+                        )
+                    else:
+                        # Keep the long-standing 4-arg call for text results so no
+                        # existing caller or test double sees a signature change.
+                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if attach_blocks:
+                        messages.append({"role": "user", "content": attach_blocks})
                     if getattr(result, "abort_action", False):
                         abort_action = True
                         # A single assistant message may contain several parallel
@@ -2268,6 +2337,14 @@ class AgentLoop:
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if role == "tool" and isinstance(content, list):
+                # A multimodal tool result. Images must never reach the JSONL:
+                # a single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The char cap below cannot catch
+                # it either — it guards `str` content only.
+                content = _strip_inline_images(content)
+                entry["content"] = content
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
@@ -2279,20 +2356,16 @@ class AgentLoop:
                     else:
                         continue
                 if isinstance(content, list):
-                    filtered = []
-                    for c in content:
-                        if (
-                            c.get("type") == "text"
+                    filtered = [
+                        c
+                        for c in _strip_inline_images(content)
+                        if not (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
                             and isinstance(c.get("text"), str)
                             and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        ):
-                            continue  # Strip runtime context from multimodal messages
-                        if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
-                            "data:image/"
-                        ):
-                            filtered.append({"type": "text", "text": "[image]"})
-                        else:
-                            filtered.append(c)
+                        )
+                    ]
                     if not filtered:
                         continue
                     entry["content"] = filtered
