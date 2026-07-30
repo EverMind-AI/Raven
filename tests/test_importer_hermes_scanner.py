@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from raven.importer.scanners import hermes as hermes_module
 from raven.importer.scanners.hermes import (
     DryRunRunner,
     HermesExportError,
@@ -359,16 +360,30 @@ async def test_exactly_the_cap_is_listed_in_full_without_windowing() -> None:
     assert len(calls) == 1
 
 
-async def test_a_session_started_this_very_minute_is_still_collected() -> None:
-    """The ceiling needs a buffer past the current minute. Bounds are formatted
-    to minute precision, so a ceiling of `now` becomes `--before <this minute>`
-    and excludes anything started during the minute the scan runs in."""
-    now = datetime.now()
+async def test_ceiling_buffer_covers_a_session_started_on_the_exact_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The buffer only matters when now already sits on a minute boundary.
+
+    `_ceil_to_minute` is a no-op there, and bounds format to minute precision,
+    so without the extra minute the ceiling becomes `--before <now>` -- which
+    excludes a session started at that very instant. Freezing the clock is the
+    only way to reach that case; a wall-clock `now` almost never lands on it,
+    which is why the previous version of this test passed either way.
+    """
+    frozen = datetime(2026, 3, 4, 5, 6, 0)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return frozen
+
+    monkeypatch.setattr(hermes_module, "datetime", _FrozenDatetime)
     sessions = [
         _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
         for i in range(130)
     ]
-    fresh = _FakeSession(f"{now:%Y%m%d_%H%M%S}_ff", now)
+    fresh = _FakeSession("20260304_050600_ff", frozen)
     sessions.append(fresh)
     listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, []))
     assert fresh.session_id in listing.session_ids
@@ -459,6 +474,41 @@ def test_tool_calls_and_tool_call_id_pass_through() -> None:
     assert caller.tool_calls[0]["function"]["name"] == "read"
     result = next(m for m in msgs if m.role == "tool")
     assert result.tool_call_id == "c1"
+
+
+def test_tool_call_id_stays_absent_on_non_tool_roles() -> None:
+    """Real exports carry None there for user and assistant rows, and EverOS
+    pairs a tool result to its call by this id -- a stray one would invent a
+    pairing that never happened."""
+    msgs = hermes_session_to_messages(_SESSION)
+    assert [m.tool_call_id for m in msgs if m.role != "tool"] == [None, None, None]
+
+
+def test_tool_calls_reach_import_message_as_a_tuple() -> None:
+    """ImportMessage declares tuple[dict, ...]; hermes hands over a list."""
+    caller = next(m for m in hermes_session_to_messages(_SESSION) if m.tool_calls)
+    assert isinstance(caller.tool_calls, tuple)
+
+
+def test_sender_id_splits_user_from_assistant() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert {m.role: m.sender_id for m in msgs} == {
+        "user": "user",
+        "assistant": "assistant",
+        "tool": "assistant",
+    }
+
+
+def test_a_zero_timestamp_is_dropped() -> None:
+    """EverOS requires timestamp > 0, so zero is as unusable as a missing one."""
+    session = {
+        "id": "s",
+        "messages": [
+            {"role": "user", "content": "epoch", "timestamp": 0},
+            {"role": "user", "content": "kept", "timestamp": 1.0},
+        ],
+    }
+    assert [m.content for m in hermes_session_to_messages(session)] == ["kept"]
 
 
 def test_strip_images_keeps_text_and_counts_images() -> None:

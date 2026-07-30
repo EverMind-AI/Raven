@@ -167,10 +167,10 @@ def strip_images(content: Any) -> str:
 
     ImportMessage.content is a str and the EverOS adapter reduces list content
     to its text parts anyway, so an inlined base64 image would be carried the
-    whole way only to be discarded. It would not be free on the way: a single
-    multi-megabyte message exceeds the importer's own 30,000-character batch
-    limit by orders of magnitude, becoming a batch of one posted as a body that
-    size.
+    whole way only to be discarded. Carrying it is not free either: a data URI
+    runs past the importer's own 30,000-character batch limit
+    (``orchestrator._BATCH_CHAR_LIMIT``) on its own, so it would be posted as a
+    batch of one sized to the image.
 
     Hermes documents four content-part shapes: ``text`` (text under ``text``),
     ``input_text`` (text under ``content`` instead), ``image_url`` and
@@ -433,12 +433,12 @@ def _uncovered(expected: int, collected: int, unlisted: int) -> int:
     Arithmetic is the only thing that can catch a coverage bug here -- a
     partition that misses a range returns a perfectly well-formed short list.
 
-    A surplus is benign: a session ending mid-scan joins the candidate set.
-    A shortfall is not symmetric with it -- ``ended_at`` never goes back, so a
-    session cannot leave the set and a shortfall points at this partition rather
-    than at a race. It is still counted rather than raised, because reporting
-    the sessions we did find beats failing the whole import, but it means a
-    non-zero result here is a bug to chase, not noise.
+    The race runs both ways, so neither direction is treated as an error: a
+    session ending mid-scan joins the candidate set, and resuming one leaves it
+    again, because Hermes clears ``ended_at`` on resume (``reopen_session``) and
+    only ended sessions are candidates. Counting rather than raising also keeps
+    a genuine coverage bug from failing an import outright, at the cost of
+    making the two causes indistinguishable from here.
     """
     missing = expected - collected - unlisted
     if missing <= 0:
