@@ -621,16 +621,18 @@ class EverosBackend:
         return out
 
 
-# EverOS accumulates the profile monotonically over an install's life with
-# no server-side size limit (11,414 chars measured pre-fix, 5,172 chars on
-# a still-young install afterwards) and it recalls as a single Memory whose
-# score falls back to 1.0 — above every similarity-scored episode. Without
-# a client-side ceiling, one growing, unranked blob can dominate the
-# recalled-memory block indefinitely. The ceiling below is sized to roughly
-# the combined budget of a full episode batch (each episode's ``summary``
-# field is itself capped around 200 chars server-side; ``memory_top_k``
-# defaults to 5 → ~1000 chars), so the profile stays sizeable but can never
-# structurally outweigh the rest of the block.
+# EverOS accumulates the profile monotonically over an install's life with no
+# server-side size limit (11,414 chars measured before it was rendered as prose,
+# 5,172 after, on a still-young install), so without a client-side ceiling one
+# growing blob can come to dominate the recalled-memory block. The ceiling is
+# sized to roughly the combined budget of a full episode batch (each episode's
+# summary is itself capped near 200 chars server-side and memory_top_k defaults
+# to 5), so the profile stays substantial without outweighing everything else.
+#
+# Its score falling back to 1.0 sorts it above every similarity-scored episode,
+# which is ordering only: the profile is a direct fetch that does not count
+# against top_k, and the caller renders every hit, so nothing is displaced by
+# it being first. Length was the whole exposure.
 _PROFILE_MAX_CHARS = 1200
 
 
