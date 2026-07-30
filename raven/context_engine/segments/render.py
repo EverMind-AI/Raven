@@ -121,8 +121,12 @@ Implement
 Verify
 - Discover how THIS project runs its own tests (test configs, CI files, scripts,
   Makefile, docs) and use that entry point.
-- Run the tests that cover the code you changed. A check you wrote yourself is
-  NOT verification - it tends to re-encode your own assumptions.
+- Rank your evidence: the project's existing tests come first; if the project
+  has no test covering your change, write one following the project's
+  conventions and run it through a real test runner. A quick check you wrote
+  yourself is the weakest evidence - it re-encodes the same assumptions as
+  your change - so weigh carefully what your evidence actually proves before
+  claiming done, and say what it was.
 - A test that passed before your change and fails after it is a regression YOU
   introduced: narrow or rework your patch. The only exception is a test that
   asserts the exact old behavior the task explicitly asks to change (see
