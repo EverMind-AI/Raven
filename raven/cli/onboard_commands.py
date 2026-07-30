@@ -100,36 +100,81 @@ def _t(en: str, zh: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Sentinel entries the picker renders as its own step rather than a provider.
+_PICK_LITELLM_VENDOR = "__litellm_vendor__"
+
+# Every provider we carry a spec for, grouped the way the picker shows them.
+# Ordered by expected use inside each group; the groups themselves are what a
+# user scans for, so a provider is never hidden the way eight of them were when
+# this list was a hand-picked subset of the registry.
+_CURATED_GROUPS: list[dict[str, Any]] = [
+    {
+        "kind": "api_key",
+        "providers": [
+            {
+                "name": "openrouter",
+                "label": "OpenRouter (recommended - one key, many models)",
+                "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
+            },
+            {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
+            {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
+            {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
+            {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
+            {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
+            {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
+            {"name": "moonshot", "label": "Moonshot", "label_zh": "Moonshot(月之暗面)"},
+            {"name": "volcengine", "label": "VolcEngine", "label_zh": "火山方舟"},
+            {"name": "siliconflow", "label": "SiliconFlow", "label_zh": "硅基流动"},
+            {"name": "groq", "label": "Groq", "label_zh": "Groq"},
+            {"name": "minimax", "label": "MiniMax", "label_zh": "MiniMax"},
+            {"name": "aihubmix", "label": "AiHubMix", "label_zh": "AiHubMix"},
+            {"name": "azure_openai", "label": "Azure OpenAI", "label_zh": "Azure OpenAI"},
+        ],
+    },
+    {
+        "kind": "oauth",
+        "providers": [
+            {
+                "name": "github_copilot",
+                "label": "GitHub Copilot (OAuth)",
+                "label_zh": "GitHub Copilot(OAuth 登录)",
+            },
+            {"name": "openai_codex", "label": "OpenAI Codex (OAuth)", "label_zh": "OpenAI Codex(OAuth 登录)"},
+            {
+                "name": "minimax_global",
+                "label": "MiniMax Global (OAuth)",
+                "label_zh": "MiniMax Global(OAuth 登录)",
+            },
+            {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
+        ],
+    },
+    {
+        "kind": "local",
+        "providers": [
+            {"name": "ollama_chat", "label": "Ollama (local)", "label_zh": "Ollama(本地)"},
+            {"name": "hosted_vllm", "label": "vLLM / self-hosted", "label_zh": "vLLM / 自托管"},
+        ],
+    },
+    {
+        "kind": "fallback",
+        "providers": [
+            {
+                "name": _PICK_LITELLM_VENDOR,
+                "label": "Another vendor LiteLLM supports (type to filter)",
+                "label_zh": "其他厂商(LiteLLM 支持的 - 输入可筛选)",
+            },
+            {
+                "name": "custom",
+                "label": "Self-hosted OpenAI-compatible endpoint",
+                "label_zh": "自建 OpenAI 兼容端点",
+            },
+        ],
+    },
+]
+
+# Flat view for callers that only need "which providers does the wizard offer".
 _CURATED_PROVIDERS: list[dict[str, Any]] = [
-    {
-        "name": "openrouter",
-        "label": "OpenRouter (recommended — one key, many models)",
-        "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
-    },
-    {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
-    {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
-    {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
-    {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
-    {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
-    {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
-    {"name": "groq", "label": "Groq", "label_zh": "Groq"},
-    {
-        "name": "github_copilot",
-        "label": "GitHub Copilot (OAuth)",
-        "label_zh": "GitHub Copilot(OAuth 登录)",
-    },
-    {"name": "openai_codex", "label": "Codex (OAuth)", "label_zh": "Codex(OAuth 登录)"},
-    {
-        "name": "minimax_global",
-        "label": "MiniMax Global (OAuth)",
-        "label_zh": "MiniMax Global(OAuth 登录)",
-    },
-    {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
-    {
-        "name": "custom",
-        "label": "Other (OpenAI-compatible endpoint)",
-        "label_zh": "其他(OpenAI 兼容端点)",
-    },
+    entry for group in _CURATED_GROUPS for entry in group["providers"] if entry["name"] != _PICK_LITELLM_VENDOR
 ]
 
 _QUESTIONARY_INSTALL_HINT = (
@@ -478,13 +523,20 @@ def _select_provider() -> Optional[str]:
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    choices: list[Any] = [
-        questionary.Choice(
-            _t(entry["label"], entry.get("label_zh", entry["label"])),
-            value=entry["name"],
-        )
-        for entry in _CURATED_PROVIDERS
-    ]
+    choices: list[Any] = []
+    for group in _CURATED_GROUPS:
+        # A rule between groups, so the API-key providers, the OAuth ones, the
+        # local deployments and the two fallbacks read as four decisions rather
+        # than one list of twenty.
+        if choices:
+            choices.append(questionary.Separator())
+        for entry in group["providers"]:
+            choices.append(
+                questionary.Choice(
+                    _t(entry["label"], entry.get("label_zh", entry["label"])),
+                    value=entry["name"],
+                )
+            )
     choices.append(questionary.Separator())
     choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
 
@@ -494,7 +546,59 @@ def _select_provider() -> Optional[str]:
         style=RAVEN_STYLE,
         qmark=_QMARK,
     ).ask()
+    if picked == _PICK_LITELLM_VENDOR:
+        # Second step rather than a hundred more rows: LiteLLM routes to far more
+        # vendors than anyone wants to scroll, and typing the name is how someone
+        # who already knows which one they want gets there.
+        return _prompt_litellm_vendor()
     return picked  # None on Ctrl+C
+
+
+def _litellm_vendor_choices() -> list[str]:
+    """Vendor names for the second step: the ones the picker does not already show.
+
+    Read from the packaged snapshot rather than LiteLLM itself, so offering them
+    costs no import on a path that only renders choices.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.registry import normalize_provider_name
+
+    already_listed = {normalize_provider_name(e["name"]) for e in _CURATED_PROVIDERS}
+    return sorted(n for n in LITELLM_PROVIDER_NAMES if normalize_provider_name(n) not in already_listed)
+
+
+def _prompt_litellm_vendor() -> Optional[str]:
+    """Ask for a vendor by name, completing against the ones LiteLLM routes to.
+
+    Returns the provider name, ``_BACK`` to rewind to the picker, or ``None`` on
+    Ctrl+C. The names come from the packaged snapshot, so offering them costs no
+    LiteLLM import.
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.providers.registry import normalize_provider_name
+
+    choices = _litellm_vendor_choices()
+
+    typed = questionary.autocomplete(
+        _t(
+            f"Vendor name ({len(choices)} available - type to filter, Tab to complete, empty to go back):",
+            f"厂商名({len(choices)} 家 — 输入可筛选,Tab 补全,留空返回):",
+        ),
+        choices=choices,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+        ignore_case=True,
+        match_middle=True,
+    ).ask()
+    if typed is None:
+        return None
+    typed = typed.strip()
+    if not typed:
+        return _BACK
+    # Not validated here: the write path already rejects a name LiteLLM does not
+    # know, and it is the one that has to be right.
+    return normalize_provider_name(typed)
 
 
 def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Optional[str] = None) -> Any:

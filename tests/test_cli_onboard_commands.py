@@ -1916,3 +1916,59 @@ def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
     spec = find_by_name("zai")
     assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
     assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True
+
+
+def test_the_wizard_offers_every_provider_the_registry_carries() -> None:
+    """The picker must not be a hand-picked subset of the registry.
+
+    Eight providers were configurable through the CLI and absent from the wizard,
+    so a new user could not reach them and had to guess at the generic
+    OpenAI-compatible flow instead.
+    """
+    from raven.cli.onboard_commands import _CURATED_PROVIDERS
+    from raven.providers.registry import PROVIDERS
+
+    offered = {entry["name"] for entry in _CURATED_PROVIDERS}
+    registered = {spec.name for spec in PROVIDERS}
+    assert registered - offered == set(), f"registry providers missing from the wizard: {sorted(registered - offered)}"
+    assert offered - registered == set(), f"wizard offers providers with no spec: {sorted(offered - registered)}"
+
+
+def test_the_curated_groups_cover_the_flat_list_and_carry_both_fallbacks() -> None:
+    """Grouping is what keeps twenty rows readable; the fallbacks close the set."""
+    from raven.cli.onboard_commands import _CURATED_GROUPS, _PICK_LITELLM_VENDOR
+
+    kinds = [group["kind"] for group in _CURATED_GROUPS]
+    assert kinds == ["api_key", "oauth", "local", "fallback"]
+    fallback = {entry["name"] for entry in _CURATED_GROUPS[-1]["providers"]}
+    assert fallback == {_PICK_LITELLM_VENDOR, "custom"}
+    # Local deployments are offered, which they were not: reaching Ollama meant
+    # the custom-endpoint path, which routes through the generic OpenAI driver
+    # and so loses the behaviour litellm applies to "ollama_chat/".
+    local = {entry["name"] for group in _CURATED_GROUPS if group["kind"] == "local" for entry in group["providers"]}
+    assert local == {"ollama_chat", "hosted_vllm"}
+
+
+def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list() -> None:
+    """The second step exists so the first one stays short.
+
+    It must not re-offer what the picker already shows, and it must not import
+    LiteLLM to build the list -- that costs two seconds on a path that only
+    renders choices.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, json\n"
+        "from raven.cli.onboard_commands import _litellm_vendor_choices\n"
+        "rest = _litellm_vendor_choices()\n"
+        "print(json.dumps({'litellm': 'litellm' in sys.modules, 'count': len(rest), 'has': 'mistral' in rest,"
+        " 'excludes_listed': 'openai' not in rest}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["litellm"] is False, "building the vendor list imported litellm"
+    assert result["has"] is True, "a vendor litellm supports is missing from the second step"
+    assert result["excludes_listed"] is True, "the second step re-offers what the picker already lists"
+    assert result["count"] > 50
