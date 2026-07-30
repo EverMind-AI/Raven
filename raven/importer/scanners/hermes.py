@@ -35,6 +35,11 @@ _ENTRY_ROLE = {"user-md": "user", "memory-md": "assistant"}
 _PREAMBLE = {"user-md": _USER_MD_PREAMBLE, "memory-md": _MEMORY_MD_PREAMBLE}
 
 
+def split_memory_entries(raw: str) -> list[str]:
+    """Split a Hermes memory file's raw text into stripped, non-blank entries."""
+    return [e.strip() for e in raw.split(_ENTRY_DELIMITER) if e.strip()]
+
+
 def resolve_hermes_home() -> Path:
     """Mirror Hermes' own resolution: HERMES_HOME, else the platform default.
 
@@ -104,8 +109,7 @@ class HermesScanner:
         except OSError:
             return ImportSession(session_id=session_id, messages=())
 
-        entries = [e.strip() for e in raw.split(_ENTRY_DELIMITER)]
-        entries = [e for e in entries if e]
+        entries = split_memory_entries(raw)
         if not entries:
             return ImportSession(session_id=session_id, messages=())
 
@@ -133,4 +137,4 @@ class HermesScanner:
         return ImportSession(session_id=session_id, messages=tuple(messages))
 
 
-__all__ = ["HermesScanner", "resolve_hermes_home"]
+__all__ = ["HermesScanner", "resolve_hermes_home", "split_memory_entries"]

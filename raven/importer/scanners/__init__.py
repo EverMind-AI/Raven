@@ -7,12 +7,13 @@ import asyncio
 from loguru import logger
 
 from raven.importer.scanners.claude_code import ClaudeCodeScanner
+from raven.importer.scanners.hermes import HermesScanner
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind
 
 
 def build_scanners() -> list[Scanner]:
     """Return all available scanner instances."""
-    return [ClaudeCodeScanner()]
+    return [ClaudeCodeScanner(), HermesScanner()]
 
 
 async def scan_all(
@@ -40,4 +41,4 @@ async def scan_all(
     return results
 
 
-__all__ = ["ClaudeCodeScanner", "build_scanners", "scan_all"]
+__all__ = ["ClaudeCodeScanner", "HermesScanner", "build_scanners", "scan_all"]

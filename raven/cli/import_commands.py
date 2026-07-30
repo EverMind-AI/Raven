@@ -7,18 +7,23 @@ import json
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import typer
+from loguru import logger
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
 from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
 from raven.config.loader import load_config
+from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
+
+if TYPE_CHECKING:
+    from raven.providers.base import LLMProvider
 
 console = Console()
 
@@ -73,7 +78,8 @@ async def _build_and_run(
 ) -> ImportSummary:
     from raven.config.raven import load_raven_config
 
-    workspace = load_config().workspace_path
+    config = load_config()
+    workspace = config.workspace_path
     ec_config = load_raven_config()
     registry = build_plugin_registry(ec_config)
     backend = maybe_build_memory_backend(workspace, ec_config, registry=registry)
@@ -91,9 +97,74 @@ async def _build_and_run(
         console.print("[dim]Retry: raven import run[/dim]")
         raise typer.Exit(1)
     try:
-        return await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
+        summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
+        # The native mirror is additive and runs after the EverOS pass, so any
+        # failure in it must be surfaced without reversing an import that has
+        # already succeeded. loguru is redirected to a file during `run`, so the
+        # console line is what the user actually sees.
+        try:
+            await _land_hermes_user_md(items, workspace, config)
+        except Exception as exc:  # noqa: BLE001 -- a best-effort mirror must not fail the import
+            logger.warning("hermes user.md mirror failed: {}", exc)
+            console.print(
+                f"[yellow]Imported to EverOS, but mirroring USER.md into the native profile failed: {exc}[/yellow]"
+            )
+        return summary
     finally:
         await backend.stop()
+
+
+async def _land_hermes_user_md(
+    items: list[tuple[Scanner, ScanResult]],
+    workspace: Path,
+    config: Config,
+) -> None:
+    """Mirror the Hermes ``user-md`` source into the native ``user.md`` profile.
+
+    EverOS storage alone does not reach every consumer: Curator, Personalizer,
+    and the Sentinel producers read ``user_memory/profile/user.md`` directly
+    and never see EverOS-only content.
+    """
+    from raven.importer.hermes_user_md import import_user_md_sections
+    from raven.importer.scanners.hermes import split_memory_entries
+    from raven.memory_engine.consolidate.consolidator import MemoryStore
+
+    for _scanner, result in items:
+        if result.platform is not Platform.HERMES or result.source_key != "user-md":
+            continue
+        (path,) = result.file_paths
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("hermes user.md mirror skipped: {}", exc)
+            return
+        entries = split_memory_entries(raw)
+        if not entries:
+            return
+        written = await import_user_md_sections(
+            entries,
+            MemoryStore(workspace),
+            provider=_make_hermes_provider(config),
+            model=config.agents.defaults.model,
+        )
+        logger.info("hermes user.md mirror: {} entries landed", len(written))
+        return
+
+
+def _make_hermes_provider(config: Config) -> "LLMProvider | None":
+    """Best-effort provider for the USER.md heading classifier.
+
+    ``check_provider_credentials`` (called inside ``make_lazy_provider``)
+    raises when no LLM credentials are configured; import cold-start must
+    still succeed in that case, falling back to the ``## Notes`` heading.
+    """
+    from raven.cli._helpers import make_lazy_provider
+
+    try:
+        return make_lazy_provider(config)
+    except Exception as exc:
+        logger.info("hermes user.md mirror: no LLM provider available ({}); using fallback heading", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------

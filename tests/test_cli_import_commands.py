@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from typer.testing import CliRunner
 
-from raven.cli.import_commands import import_app
+from raven.cli.import_commands import _build_and_run, _land_hermes_user_md, _make_hermes_provider, import_app
+from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary
 from raven.importer.state import ImportState
-from raven.importer.types import Platform, ScanResult, SourceKind
+from raven.importer.types import Platform, Scanner, ScanResult, SourceKind
+from raven.memory_engine.consolidate.consolidator import MemoryStore
+from raven.providers.lazy import LazyProvider
 
 runner = CliRunner()
 
@@ -204,6 +209,155 @@ class TestStop:
             result = runner.invoke(import_app, ["stop"])
         assert result.exit_code == 0
         assert "already" in result.output.lower()
+
+
+def test_build_scanners_includes_hermes() -> None:
+    from raven.importer.scanners import build_scanners
+
+    platforms = {s.platform for s in build_scanners()}
+    assert Platform.HERMES in platforms
+    assert Platform.CLAUDE_CODE in platforms
+
+
+# ---------------------------------------------------------------------------
+# Hermes user.md native landing
+# ---------------------------------------------------------------------------
+
+
+def _hermes_user_md_result(path: Path) -> ScanResult:
+    return ScanResult(
+        source_key="user-md",
+        platform=Platform.HERMES,
+        kind=SourceKind.MEMORY_FILE,
+        file_paths=(path,),
+        estimated_size=path.stat().st_size if path.exists() else 0,
+        mtime=path.stat().st_mtime if path.exists() else 0.0,
+    )
+
+
+class TestLandHermesUserMd:
+    async def test_skips_non_hermes_results(self, tmp_path: Path) -> None:
+        result = _scan_result(platform=Platform.CLAUDE_CODE, kind=SourceKind.MEMORY_FILE)
+        items: list[tuple[Scanner, ScanResult]] = [(object(), result)]  # type: ignore[list-item]
+
+        await _land_hermes_user_md(items, tmp_path, Config())
+
+        assert not (tmp_path / "user_memory").exists()
+
+    async def test_missing_file_does_not_raise(self, tmp_path: Path) -> None:
+        result = _hermes_user_md_result(tmp_path / "does-not-exist.md")
+        items: list[tuple[Scanner, ScanResult]] = [(object(), result)]  # type: ignore[list-item]
+
+        await _land_hermes_user_md(items, tmp_path, Config())
+
+    async def test_falls_back_and_lands_entries_when_no_credentials(self, tmp_path: Path) -> None:
+        hermes_file = tmp_path / "USER.md"
+        hermes_file.write_text("fact one\n§\nfact two", encoding="utf-8")
+        items: list[tuple[Scanner, ScanResult]] = [(object(), _hermes_user_md_result(hermes_file))]  # type: ignore[list-item]
+
+        await _land_hermes_user_md(items, tmp_path, Config())
+
+        body = MemoryStore(tmp_path).read_long_term()
+        assert "fact one" in body
+        assert "fact two" in body
+        assert "## Notes" in body
+
+    async def test_log_counts_entries_not_sections(self, tmp_path: Path) -> None:
+        from loguru import logger as _logger
+
+        hermes_file = tmp_path / "USER.md"
+        hermes_file.write_text("fact one\n§\nfact two", encoding="utf-8")
+        items: list[tuple[Scanner, ScanResult]] = [(object(), _hermes_user_md_result(hermes_file))]  # type: ignore[list-item]
+
+        messages: list[str] = []
+        sink_id = _logger.add(lambda msg: messages.append(msg.record["message"]), level="INFO")
+        try:
+            await _land_hermes_user_md(items, tmp_path, Config())
+        finally:
+            _logger.remove(sink_id)
+
+        # Both entries fall back to the same "## Notes" heading, so a
+        # count keyed on unique sections would wrongly report 1.
+        assert any("2 entries landed" in m for m in messages)
+
+
+class TestMakeHermesProvider:
+    def test_returns_none_without_credentials(self) -> None:
+        assert _make_hermes_provider(Config()) is None
+
+    def test_returns_lazy_provider_with_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import _helpers
+
+        monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="stub"))
+        config = Config()
+        config.providers.anthropic.api_key = "sk-ant-test"
+
+        provider = _make_hermes_provider(config)
+
+        assert isinstance(provider, LazyProvider)
+
+
+class TestBuildAndRunHermesOrdering:
+    async def test_lands_hermes_after_run_import_before_backend_stop(self, tmp_path: Path) -> None:
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            return summary
+
+        async def _fake_land(*_args: object, **_kwargs: object) -> None:
+            calls.append("land")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            patch("raven.cli.import_commands._land_hermes_user_md", new=_fake_land),
+        ):
+            result = await _build_and_run([], state)
+
+        assert calls == ["start", "run_import", "land", "stop"]
+        assert result is summary
+
+    async def test_mirror_failure_does_not_fail_the_import(self, tmp_path: Path) -> None:
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            return summary
+
+        async def _boom(*_args: object, **_kwargs: object) -> None:
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "bad byte")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            patch("raven.cli.import_commands._land_hermes_user_md", new=_boom),
+        ):
+            result = await _build_and_run([], state)
+
+        # The EverOS pass already succeeded, so its result must survive.
+        assert result is summary
+        assert calls == ["start", "run_import", "stop"]
 
 
 class TestStatusCancelled:
