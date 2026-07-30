@@ -252,7 +252,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["tests/integration", "tests/data", "*.egg", ".*", "build", "dist"]
+norecursedirs = ["tests/integration", "*.egg", ".*", "build", "dist"]
 addopts = [
     "-ra",
     "--strict-markers",

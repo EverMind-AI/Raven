@@ -26,9 +26,9 @@ import time
 
 import pytest
 
+from tests.tui.autotest.raven_ux import READY_RE as _READY_RE
+from tests.tui.autotest.raven_ux import WORKING_RE as _WORKING_RE
 from tests.tui.autotest.runner import BackendError
-from tests.tui.autotest.statusbar import READY_RE as _READY_RE
-from tests.tui.autotest.statusbar import WORKING_RE as _WORKING_RE
 
 _LEAK_RE = re.compile(
     r"LiteLLM:(DEBUG|INFO|WARNING|ERROR)"

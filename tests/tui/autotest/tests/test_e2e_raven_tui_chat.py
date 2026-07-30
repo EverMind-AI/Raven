@@ -32,9 +32,9 @@ import time
 
 import pytest
 
-from tests.tui.autotest.runner import BackendError
-from tests.tui.autotest.statusbar import READY_RE as _READY_RE
-from tests.tui.autotest.statusbar import WORKING_RE as _WORKING_RE
+from tests.tui.autotest.raven_ux import READY_RE as _READY_RE
+from tests.tui.autotest.raven_ux import WORKING_RE as _WORKING_RE
+from tests.tui.autotest.raven_ux import exit_tui
 
 # Content-neutral prompt: we never assert WHAT the model says, only that the
 # pipeline ran the turn.
@@ -91,15 +91,7 @@ def test_tui_chat_round_trip(harness):
         f"return to ready) within 60s.\nscreen=\n{harness.screen()}"
     )
 
-    # Turn has settled (status returned to ready); exit via the standard Raven
-    # double Ctrl+C (first clears any composer/overlay state, second exits), the
-    # pattern the idle/typing Ctrl+C e2e tests use.
-    harness.press("ctrl+c")
-    time.sleep(0.5)
-    try:
-        harness.press("ctrl+c")
-    except BackendError:
-        pass  # already exiting after the first Ctrl+C
+    exit_tui(harness)
     assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"
 
 
@@ -158,12 +150,7 @@ def test_tui_chat_multi_turn_accumulates_the_session(harness):
     for prompt in prompts:
         _run_turn(harness, prompt)
 
-    harness.press("ctrl+c")
-    time.sleep(0.5)
-    try:
-        harness.press("ctrl+c")
-    except BackendError:
-        pass
+    exit_tui(harness)
     assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"
 
     # The run created a fresh tui session; it is now the most recent one.

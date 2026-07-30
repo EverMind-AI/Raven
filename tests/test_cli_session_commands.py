@@ -314,7 +314,10 @@ def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:
 def test_session_fork_help() -> None:
     r = runner.invoke(session_app, ["fork", "--help"])
     assert r.exit_code == 0
-    assert "fork" in r.stdout.lower()
+    # Not just "fork": the usage line echoes the subcommand name, so that
+    # would hold even with no help text at all.
+    assert "fork-at-head" in r.stdout
+    assert "--title" in r.stdout
 
 
 def test_fork_prints_child_id(two_sessions: list[str], patched_workspace: Path, manager: SessionManager) -> None:
