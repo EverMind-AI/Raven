@@ -7,9 +7,14 @@ spending a turn, and each asserts the intermediate state rather than only the
 final exit code -- pressing twice and checking just the exit passes even when
 the first press did nothing.
 
-The third rung -- Ctrl+C while a turn is in flight, which routes to turn.cancel
--- has no coverage anywhere in the tier: the chat e2e presses Ctrl+C only after
-the status bar has returned to ready, so it exercises this same quit path.
+The third rung -- Ctrl+C while a turn is in flight -- is covered a layer down
+rather than here, since provoking it needs a live turn: `decideCtrlC` in
+ui-tui/src/__tests__/useInputHandlers.test.ts pins which rung a keypress lands
+on, chatStream / turn-subscribe cover the client side of the cancel, and
+tests/integration/test_tui_cancel_inflight_e2e.py drives turn.cancel over a real
+RpcServer with a fake streaming agent. What no test does is the physical
+end-to-end; the chat e2e presses Ctrl+C only after the status bar returns to
+ready, so it exercises this same quit path.
 """
 
 from __future__ import annotations
