@@ -249,13 +249,20 @@ class AgentLoop:
     # can never loop.
     _TEST_GATE_MAX_NUDGES = 2
     _TEST_GATE_CMD_RE = re.compile(
-        r"(pytest|runtests\.py|manage\.py\s+test|(?:^|[\s/&;(])bin/test\b"
-        r"|-m\s+unittest\b|\btox\b|\bsympy\.test\()"
+        r"(pytest|runtests(?:\.py)?\b|manage\.py\s+test|(?:^|[\s/&;(])bin/test\b"
+        r"|-m\s+unittest\b|\btox\b|\bsympy\.test\(|\bdoctest\()"
     )
     _TEST_GATE_OUT_RE = re.compile(
         r"(\b\d+\s+(?:passed|failed|errors?|xfailed|xpassed|skipped|deselected)\b"
-        r"|\bRan\s+\d+\s+tests?\b|\bOK\b|\bFAILED\b|\bPASSED\b|\bERROR\b)"
+        r"|\bRan\s+\d+\s+tests?\b|\bOK\b|\bFAILED\b|\bPASSED\b|\bERROR\b"
+        r"|\btest process starts\b|\btests finished\b)"
     )
+    # Terminal color codes glue onto adjacent digits/words and defeat \b
+    # matching (e.g. ESC[32m201 passed) — strip before any output matching.
+    _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    # Scratch locations whose edits are not part of the deliverable and must
+    # not mark test evidence as stale.
+    _GATE_SCRATCH_PATH_RE = re.compile(r"^(/tmp|/var/tmp|/dev/shm)(/|$)")
     _TEST_GATE_NUDGE = (
         "STOP: you are about to declare completion, but this session has not "
         "run the repository's own test runner even once (no pytest / "
@@ -266,8 +273,10 @@ class AgentLoop:
         "`python tests/runtests.py <app>.<TestCase> --parallel 1`), from the "
         "repo root, using the repo environment's own `python` from PATH. If "
         "the runner errors out, fix the invocation instead of falling back to "
-        "your own scripts. Only reply TASK_COMPLETE after the relevant tests "
-        "actually pass."
+        "your own scripts — do NOT install packages; if pytest is unavailable, "
+        "use the repo's bundled runner (e.g. `bin/test` or `runtests.py`) or "
+        "`python -m unittest`. Only reply TASK_COMPLETE after the relevant "
+        "tests actually pass."
     )
     # Soft completion reminders (opt-in via RAVEN_GATE_STALE / RAVEN_GATE_RED,
     # both require RAVEN_REQUIRE_REAL_TEST_EVIDENCE). Design contract: fire at
@@ -1711,11 +1720,12 @@ class AgentLoop:
                     result_str = str(result)
                     if test_gate_enabled and tool_call.name == "exec":
                         cmd = str((tool_call.arguments or {}).get("command", ""))
-                        if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(result_str):
+                        plain_out = self._ANSI_RE.sub("", result_str)
+                        if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(plain_out):
                             if not real_test_evidence:
                                 real_test_evidence = True
                                 logger.info("test-evidence gate: real test run observed")
-                            last_test_status, last_test_detail = self._classify_test_output(result_str)
+                            last_test_status, last_test_detail = self._classify_test_output(plain_out)
                             last_test_cmd = cmd.replace("\n", " ")[:200]
                             edits_since_test = []
                     elif (
@@ -1724,7 +1734,11 @@ class AgentLoop:
                         and not _is_hard_tool_failure(result)
                     ):
                         path = str((tool_call.arguments or {}).get("path", ""))
-                        if path and not self._GATE_DOC_PATH_RE.search(path):
+                        if (
+                            path
+                            and not self._GATE_DOC_PATH_RE.search(path)
+                            and not self._GATE_SCRATCH_PATH_RE.search(path)
+                        ):
                             if path not in edits_since_test:
                                 edits_since_test.append(path)
                     preview = result_str.replace("\n", " ")[:200]
