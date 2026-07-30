@@ -12,6 +12,8 @@ import pytest
 
 from raven.importer.skills import DiscoveredSkill, SkillOrigin, package_hash
 from raven.importer.skills.hermes import HermesSkillSource
+from raven.importer.skills.installer import install_skills
+from raven.importer.state import ImportState
 
 
 def _skill(
@@ -281,3 +283,115 @@ async def test_legacy_agent_created_flag_also_counts_as_curator_managed(tmp_path
 async def test_missing_skills_dir_yields_nothing(tmp_path: Path) -> None:
     (tmp_path / ".hermes").mkdir()
     assert await HermesSkillSource(hermes_home=tmp_path / ".hermes").discover() == []
+
+
+# ---------------------------------------------------------------------------
+# install_skills
+# ---------------------------------------------------------------------------
+
+
+async def test_pristine_skipped_others_installed(tmp_path: Path) -> None:
+    home, made = _home_with_skills(
+        tmp_path,
+        skills=(("cat", "pristine"), ("cat", "keepme"), ("", "byagent")),
+        usage={"byagent": {"created_by": "agent"}},
+    )
+    (home / "skills" / ".bundled_manifest").write_text(f"pristine:{package_hash(made['pristine'])}\n", encoding="utf-8")
+    ws = tmp_path / "ws"
+    summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
+    assert landed == {"keepme", "byagent"}
+    assert summary.installed == 2
+    assert summary.pristine == 1
+    assert summary.skipped == 0
+    assert summary.total == summary.installed + summary.pristine + summary.skipped + summary.failed
+
+
+async def test_category_level_is_dropped_and_attachments_kept(tmp_path: Path) -> None:
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "health-fitness", "coach", extra={"references/plan.md": "keep me"})
+    ws = tmp_path / "ws"
+    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    dest = ws / "skills" / "hermes" / "coach"
+    assert (dest / "SKILL.md").exists()
+    assert (dest / "references" / "plan.md").read_text(encoding="utf-8") == "keep me"
+
+
+async def test_source_label_resolves_to_hermes(tmp_path: Path) -> None:
+    from raven.memory_engine.skill_local.registry import SkillRegistry
+
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "cat", "coach")
+    ws = tmp_path / "ws"
+    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    metas = SkillRegistry(workspace=ws).list_all()
+    assert ("hermes", "coach") in {(m.source, m.name) for m in metas}
+
+
+async def test_existing_target_is_not_overwritten(tmp_path: Path) -> None:
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "cat", "coach")
+    ws = tmp_path / "ws"
+    dest = ws / "skills" / "hermes" / "coach"
+    dest.mkdir(parents=True)
+    (dest / "SKILL.md").write_text("mine", encoding="utf-8")
+    summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    assert (dest / "SKILL.md").read_text(encoding="utf-8") == "mine"
+    assert summary.skipped == 1
+
+
+async def test_flatten_collision_falls_back_to_category_prefix(tmp_path: Path) -> None:
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "apple", "notes")
+    _skill(home / "skills" / "productivity", "notes")
+    ws = tmp_path / "ws"
+    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
+    assert "notes" in landed
+    assert landed & {"apple-notes", "productivity-notes"}
+
+
+async def test_uncategorised_collision_uses_a_numeric_suffix(tmp_path: Path) -> None:
+    """A skill sitting at Hermes' skills root has no category to borrow, and
+    the target directory is one the user browses, so the loser of the
+    collision must not be named after an invented category word."""
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "apple", "notes")
+    _skill(home / "skills", "notes")
+    ws = tmp_path / "ws"
+    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
+    assert landed == {"notes", "notes-2"}
+
+
+async def test_rerun_is_idempotent(tmp_path: Path) -> None:
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "cat", "coach")
+    ws = tmp_path / "ws"
+    state = ImportState(path=tmp_path / "state.json")
+    first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+    second = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+    assert first.installed == 1
+    assert second.installed == 0
+    assert second.skipped == 1
+
+
+async def test_no_category_level_uses_root_prefix_on_collision(tmp_path: Path) -> None:
+    """skills/<name>/ has no category segment -- its parent is the root `skills`
+    dir itself, so a collision involving it must not fall back to the
+    meaningless `skills-<name>`."""
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills", "notes")
+    _skill(home / "skills" / "apple", "notes")
+    ws = tmp_path / "ws"
+    await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
+    assert "notes" in landed
+    assert "skills-notes" not in landed

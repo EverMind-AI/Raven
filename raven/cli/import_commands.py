@@ -19,6 +19,9 @@ from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_ba
 from raven.config.loader import load_config
 from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
+from raven.importer.skills import SkillOrigin
+from raven.importer.skills.hermes import HermesSkillSource
+from raven.importer.skills.installer import SkillImportSummary, install_skills
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
@@ -109,9 +112,51 @@ async def _build_and_run(
             console.print(
                 f"[yellow]Imported to EverOS, but mirroring USER.md into the native profile failed: {exc}[/yellow]"
             )
+        try:
+            skill_summary = await _install_hermes_skills(items, workspace, state)
+        except Exception as exc:
+            logger.warning("hermes skill import failed: {}", exc)
+            console.print(f"[yellow]Imported to EverOS, but installing Hermes skills failed: {exc}[/yellow]")
+            skill_summary = None
+        if skill_summary is not None:
+            console.print(_format_skill_summary(skill_summary))
         return summary
     finally:
         await backend.stop()
+
+
+def _format_skill_summary(summary: SkillImportSummary) -> str:
+    """One standalone sentence, worded like the ``scan`` line.
+
+    It lands before ``_print_summary``'s indented block, so it must read on its
+    own rather than borrow that block's ``  Label:`` shape. Naming the untouched
+    factory skills matters: without it, a run that installs 12 of 82 looks like
+    it dropped 70.
+    """
+    parts = [f"{summary.installed} installed"]
+    if summary.pristine:
+        parts.append(f"{summary.pristine} left as factory content")
+    if summary.skipped:
+        parts.append(f"{summary.skipped} already present")
+    if summary.failed:
+        parts.append(f"{summary.failed} failed")
+    return f"Hermes skills: {', '.join(parts)}"
+
+
+async def _install_hermes_skills(
+    items: list[tuple[Scanner, ScanResult]],
+    workspace: Path,
+    state: ImportState,
+) -> SkillImportSummary | None:
+    """Install Hermes skills once per run, only when Hermes is in scope.
+
+    Skills are directories, not message sources, so they never travel as a
+    ScanResult; Hermes' presence among the scanned items is what "in scope"
+    means here, mirroring how ``_land_hermes_user_md`` detects it.
+    """
+    if not any(result.platform is Platform.HERMES for _scanner, result in items):
+        return None
+    return await install_skills(HermesSkillSource(), workspace, state)
 
 
 async def _land_hermes_user_md(
@@ -192,13 +237,18 @@ def scan_cmd(
     _logger.disable("raven")
     platform_filter = _platform_option(platform)
 
-    async def _do() -> list[ScanResult]:
+    async def _do() -> tuple[list[ScanResult], int | None]:
         from raven.importer.scanners import scan_all
 
-        return await scan_all(platform_filter=platform_filter)
+        results = await scan_all(platform_filter=platform_filter)
+        skill_count = None
+        if platform_filter is None or platform_filter is Platform.HERMES:
+            skills = await HermesSkillSource().discover()
+            skill_count = sum(1 for s in skills if s.origin is not SkillOrigin.BUNDLED_PRISTINE)
+        return results, skill_count
 
     try:
-        results = asyncio.run(_do())
+        results, skill_count = asyncio.run(_do())
     finally:
         _logger.enable("raven")
 
@@ -227,6 +277,8 @@ def scan_cmd(
     mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
     conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
     console.print(f"\nTotal: {len(results)} items ({mem} memory files, {conv} conversations)")
+    if skill_count is not None:
+        console.print(f"Hermes skills: {skill_count} importable")
 
 
 # ---------------------------------------------------------------------------

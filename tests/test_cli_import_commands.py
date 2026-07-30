@@ -10,9 +10,18 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from raven.cli.import_commands import _build_and_run, _land_hermes_user_md, _make_hermes_provider, import_app
+from raven.cli.import_commands import (
+    _build_and_run,
+    _format_skill_summary,
+    _install_hermes_skills,
+    _land_hermes_user_md,
+    _make_hermes_provider,
+    import_app,
+)
 from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary
+from raven.importer.skills import DiscoveredSkill, SkillOrigin
+from raven.importer.skills.installer import SkillImportSummary
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind
 from raven.memory_engine.consolidate.consolidator import MemoryStore
@@ -70,6 +79,40 @@ class TestScan:
 
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
+
+    def test_scan_shows_importable_skill_count(self) -> None:
+        skills = [
+            DiscoveredSkill(name="a", path=Path("/fake/a"), origin=SkillOrigin.LOCAL_UNKNOWN, size=1),
+            DiscoveredSkill(name="b", path=Path("/fake/b"), origin=SkillOrigin.BUNDLED_PRISTINE, size=1),
+        ]
+        with (
+            patch(
+                "raven.importer.scanners.scan_all",
+                new=AsyncMock(return_value=_make_scan_results()),
+            ),
+            patch(
+                "raven.importer.skills.hermes.HermesSkillSource.discover",
+                new=AsyncMock(return_value=skills),
+            ),
+        ):
+            result = runner.invoke(import_app, ["scan"])
+
+        assert result.exit_code == 0
+        assert "Hermes skills: 1 importable" in result.stdout
+
+    def test_scan_with_other_platform_filter_skips_skill_line(self) -> None:
+        with (
+            patch(
+                "raven.importer.scanners.scan_all",
+                new=AsyncMock(return_value=_make_scan_results()),
+            ),
+            patch("raven.importer.skills.hermes.HermesSkillSource.discover") as mocked_discover,
+        ):
+            result = runner.invoke(import_app, ["scan", "--platform", "claude_code"])
+
+        assert result.exit_code == 0
+        mocked_discover.assert_not_called()
+        assert "Hermes skills" not in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +427,117 @@ class TestBuildAndRunHermesOrdering:
         # The EverOS pass already succeeded, so its result must survive.
         assert result is summary
         assert calls == ["start", "run_import", "stop"]
+
+
+class TestInstallHermesSkills:
+    async def test_returns_none_when_hermes_not_in_scope(self, tmp_path: Path) -> None:
+        result = _scan_result(platform=Platform.CLAUDE_CODE, kind=SourceKind.MEMORY_FILE)
+        items: list[tuple[Scanner, ScanResult]] = [(object(), result)]  # type: ignore[list-item]
+        state = ImportState(path=tmp_path / "state.json")
+
+        assert await _install_hermes_skills(items, tmp_path, state) is None
+
+    async def test_installs_once_when_hermes_in_scope(self, tmp_path: Path) -> None:
+        result = _hermes_user_md_result(tmp_path / "does-not-exist.md")
+        items: list[tuple[Scanner, ScanResult]] = [(object(), result)]  # type: ignore[list-item]
+        state = ImportState(path=tmp_path / "state.json")
+        summary = SkillImportSummary(total=1, installed=1, skipped=0, failed=0)
+
+        with patch(
+            "raven.cli.import_commands.install_skills",
+            new=AsyncMock(return_value=summary),
+        ) as mocked:
+            got = await _install_hermes_skills(items, tmp_path, state)
+
+        mocked.assert_awaited_once()
+        assert got is summary
+
+
+class TestFormatSkillSummary:
+    def test_names_the_untouched_factory_skills(self) -> None:
+        line = _format_skill_summary(SkillImportSummary(total=82, installed=12, pristine=70))
+        assert line == "Hermes skills: 12 installed, 70 left as factory content"
+
+    def test_rerun_reports_already_present_rather_than_a_bare_zero(self) -> None:
+        line = _format_skill_summary(SkillImportSummary(total=82, installed=0, pristine=70, skipped=12))
+        assert line == "Hermes skills: 0 installed, 70 left as factory content, 12 already present"
+
+    def test_failures_are_surfaced(self) -> None:
+        line = _format_skill_summary(SkillImportSummary(total=2, installed=1, failed=1))
+        assert line == "Hermes skills: 1 installed, 1 failed"
+
+
+class TestBuildAndRunHermesSkills:
+    async def test_installs_hermes_skills_after_land_before_stop(self, tmp_path: Path) -> None:
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            return summary
+
+        async def _fake_land(*_args: object, **_kwargs: object) -> None:
+            calls.append("land")
+
+        async def _fake_install(*_args: object, **_kwargs: object) -> SkillImportSummary:
+            calls.append("skills")
+            return SkillImportSummary(total=1, installed=1, skipped=0, failed=0)
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            patch("raven.cli.import_commands._land_hermes_user_md", new=_fake_land),
+            patch("raven.cli.import_commands._install_hermes_skills", new=_fake_install),
+        ):
+            result = await _build_and_run([], state)
+
+        assert calls == ["start", "run_import", "land", "skills", "stop"]
+        assert result is summary
+
+    async def test_skill_install_failure_does_not_fail_the_import(self, tmp_path: Path) -> None:
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            return summary
+
+        async def _fake_land(*_args: object, **_kwargs: object) -> None:
+            calls.append("land")
+
+        async def _boom(*_args: object, **_kwargs: object) -> SkillImportSummary:
+            raise OSError("disk full")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            patch("raven.cli.import_commands._land_hermes_user_md", new=_fake_land),
+            patch("raven.cli.import_commands._install_hermes_skills", new=_boom),
+        ):
+            result = await _build_and_run([], state)
+
+        # The EverOS pass and the USER.md mirror already succeeded, so their
+        # results must survive a skill-install failure.
+        assert result is summary
+        assert calls == ["start", "run_import", "land", "stop"]
 
 
 class TestStatusCancelled:
