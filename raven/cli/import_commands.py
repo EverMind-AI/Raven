@@ -224,6 +224,13 @@ async def _land_hermes_user_md(
             model=config.agents.defaults.model,
         )
         logger.info("hermes user.md mirror: {} entries landed", len(written))
+        # The skill phase prints its own line, so staying silent here made a
+        # successful mirror look like it had not run. loguru is file-only during
+        # `run`, which is why this is a console print rather than a log call.
+        parts = [f"{len(written)} entries into the native profile"]
+        if written.skipped:
+            parts.append(f"{written.skipped} already present")
+        console.print(f"Hermes USER.md: {', '.join(parts)}")
         return
 
 
@@ -304,12 +311,16 @@ def scan_cmd(
     table.add_column("Size", justify="right")
 
     for r in sorted(results, key=lambda x: (x.platform, x.kind, x.source_key)):
+        # A scanner that cannot cost its unit up front leaves both at zero --
+        # hermes' conversation listing reports only an id and a source, so
+        # rendering "0" and "0 B" there would read as an empty conversation.
+        has_files = bool(r.file_paths)
         table.add_row(
             PLATFORM_DISPLAY_NAMES.get(r.platform.value, r.platform.value),
             r.kind.value,
             r.source_key,
-            str(len(r.file_paths)),
-            _format_size(r.estimated_size),
+            str(len(r.file_paths)) if has_files else "-",
+            _format_size(r.estimated_size) if has_files else "-",
         )
 
     console.print(table)

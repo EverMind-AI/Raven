@@ -333,7 +333,6 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
      tests/test_everos_http_adapter.py tests/test_memory_backend_protocol.py \
      tests/test_memory_backend_contract.py -q          # unit (mock adapter)
    uv run pytest tests/integration/test_everos_backend_e2e.py -m real_llm  # real
-   python scripts/everos_memory_roundtrip.py            # native shell smoke
    ```
 4. **Data migration (major bumps only)**: if the schema changed, real
    `~/.everos/.index/` may need rebuild/migration per the changelog.
