@@ -339,6 +339,20 @@ class TestFlattenProfile:
         assert "basis" not in result
         assert "observed across multiple conversations" not in result
 
+    def test_category_wins_when_both_label_fields_present(self) -> None:
+        result = _flatten_profile(
+            {
+                "explicit_info": [
+                    {
+                        "category": "work",
+                        "trait": "detail-oriented",
+                        "description": "ships backend services",
+                    },
+                ],
+            }
+        )
+        assert result == "- work: ships backend services"
+
     def test_list_item_missing_description_renders_label_only(self) -> None:
         result = _flatten_profile({"explicit_info": [{"category": "location", "evidence": "lives in Seattle"}]})
         assert result == "- location"
