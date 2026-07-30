@@ -125,10 +125,23 @@ def _classify(
             return SkillOrigin.BUNDLED_MODIFIED
     if directory.name in hub:
         return SkillOrigin.HUB_INSTALLED
-    record = usage.get(directory.name)
-    if isinstance(record, dict) and record.get("created_by") == "agent":
-        return SkillOrigin.AGENT_CREATED
+    if _is_curator_managed(usage.get(directory.name)):
+        return SkillOrigin.CURATOR_MANAGED
     return SkillOrigin.LOCAL_UNKNOWN
+
+
+def _is_curator_managed(record: Any) -> bool:
+    """Mirrors Hermes' ``_is_curator_managed_record`` (tools/skill_usage.py).
+
+    The on-disk field is ``created_by: "agent"``, which reads like provenance
+    but upstream consumes as a curator-management opt-in -- ``hermes curator
+    adopt`` stamps the same marker on a skill the user wrote themselves. Both
+    that field and the older ``agent_created`` flag count, and neither proves
+    authorship; only that the skill is not factory content.
+    """
+    if not isinstance(record, dict):
+        return False
+    return record.get("created_by") == "agent" or record.get("agent_created") is True
 
 
 def _frontmatter_name(skill_md: Path) -> str:

@@ -84,7 +84,7 @@ def test_unreadable_file_aborts_the_whole_hash(tmp_path: Path) -> None:
 
 
 def test_discovered_skill_is_frozen(tmp_path: Path) -> None:
-    s = DiscoveredSkill(name="s", path=tmp_path, origin=SkillOrigin.AGENT_CREATED, size=1)
+    s = DiscoveredSkill(name="s", path=tmp_path, origin=SkillOrigin.CURATOR_MANAGED, size=1)
     with pytest.raises(dataclasses.FrozenInstanceError):
         s.name = "other"  # type: ignore[misc]
 
@@ -94,7 +94,7 @@ def _home_with_skills(
     *,
     manifest: dict[str, str] | None = None,
     hub: list[str] | None = None,
-    usage: dict[str, dict[str, str]] | None = None,
+    usage: dict[str, dict[str, object]] | None = None,
     skills: tuple[tuple[str, str], ...] = (),
 ) -> tuple[Path, dict[str, Path]]:
     home = tmp_path / ".hermes"
@@ -135,7 +135,7 @@ async def test_all_five_origins_classified(tmp_path: Path) -> None:
         "pristine": SkillOrigin.BUNDLED_PRISTINE,
         "modified": SkillOrigin.BUNDLED_MODIFIED,
         "fromhub": SkillOrigin.HUB_INSTALLED,
-        "byagent": SkillOrigin.AGENT_CREATED,
+        "byagent": SkillOrigin.CURATOR_MANAGED,
         "mystery": SkillOrigin.LOCAL_UNKNOWN,
     }
 
@@ -257,6 +257,25 @@ async def test_a_category_named_like_a_support_dir_stays_discoverable(tmp_path: 
     home, _ = _home_with_skills(tmp_path, skills=(("scripts", "real-skill"),))
     names = {s.name for s in await HermesSkillSource(hermes_home=home).discover()}
     assert names == {"real-skill"}
+
+
+async def test_top_level_support_dir_is_a_category_even_beside_a_root_skill(tmp_path: Path) -> None:
+    """The one shape where the support rule's index guard changes the answer.
+
+    Hermes only treats a support dir as support from the second path component
+    on, so `skills/references/<skill>` stays a category even when `skills/`
+    itself happens to hold a SKILL.md, and the skill inside it is discovered.
+    """
+    home, _ = _home_with_skills(tmp_path, skills=(("references", "nested"),))
+    (home / "skills" / "SKILL.md").write_text("---\nname: root\n---\nbody\n", encoding="utf-8")
+    names = {s.name for s in await HermesSkillSource(hermes_home=home).discover()}
+    assert names == {"nested", "skills"}
+
+
+async def test_legacy_agent_created_flag_also_counts_as_curator_managed(tmp_path: Path) -> None:
+    home, _ = _home_with_skills(tmp_path, skills=(("", "a"),), usage={"a": {"agent_created": True}})
+    (skill,) = await HermesSkillSource(hermes_home=home).discover()
+    assert skill.origin is SkillOrigin.CURATOR_MANAGED
 
 
 async def test_missing_skills_dir_yields_nothing(tmp_path: Path) -> None:

@@ -26,7 +26,9 @@ class SkillOrigin(StrEnum):
     BUNDLED_PRISTINE = "bundled_pristine"
     BUNDLED_MODIFIED = "bundled_modified"
     HUB_INSTALLED = "hub_installed"
-    AGENT_CREATED = "agent_created"
+    # Not "agent authored it". The marker behind this is a management opt-in that
+    # a user also sets by hand, so the only thing it proves is "not factory".
+    CURATOR_MANAGED = "curator_managed"
     LOCAL_UNKNOWN = "local_unknown"
 
 
