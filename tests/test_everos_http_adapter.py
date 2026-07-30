@@ -132,7 +132,46 @@ class TestHttpAdapterSearch:
             "user_id": "alice",
             "query": "coffee",
             "top_k": 5,
+            "include_profile": True,
         }
+
+    async def test_requests_profile_for_user_track(
+        self,
+        mock,
+        http_client,
+    ) -> None:
+        adapter = _HttpEverosAdapter(
+            "http://mem.test",
+            client=http_client,
+        )
+        await adapter.search(
+            user_id="alice",
+            agent_id=None,
+            query="coffee",
+            top_k=5,
+        )
+        body = json.loads(mock.requests[0].content.decode())
+        assert body["include_profile"] is True
+        assert "app_id" not in body
+        assert "project_id" not in body
+
+    async def test_agent_track_omits_include_profile(
+        self,
+        mock,
+        http_client,
+    ) -> None:
+        adapter = _HttpEverosAdapter(
+            "http://mem.test",
+            client=http_client,
+        )
+        await adapter.search(
+            user_id=None,
+            agent_id="agent:default",
+            query="coffee",
+            top_k=5,
+        )
+        body = json.loads(mock.requests[0].content.decode())
+        assert "include_profile" not in body
 
     async def test_returns_jsonified_data(self, mock, http_client) -> None:
         mock.search_response = {

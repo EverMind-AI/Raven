@@ -177,6 +177,11 @@ class _HttpEverosAdapter:
         body: dict[str, Any] = {"query": query, "top_k": top_k}
         if user_id is not None:
             body["user_id"] = user_id
+            # Profiles are opt-in server-side and default off, so without this
+            # every extracted user profile stays unreachable. It costs nothing:
+            # a direct fetch, not ranked, not counted against top_k, at most one
+            # row. Agent owners ignore the flag, so only send it for user_id.
+            body["include_profile"] = True
         if agent_id is not None:
             body["agent_id"] = agent_id
         url = f"{self._base_url}/api/v1/memory/search"
