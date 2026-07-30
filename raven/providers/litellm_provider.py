@@ -156,7 +156,11 @@ class LiteLLMProvider(LLMProvider):
             # the model id.
             prefix = self._gateway.model_prefix
             if self._gateway.strip_model_prefix:
-                model = model.split("/")[-1]
+                # One leading vendor segment, not everything but the last: a
+                # model id may itself contain a slash ("openai/gpt-oss-120b" is
+                # Groq's own name for it), and keeping only the tail truncated
+                # the id this gateway is asked to serve.
+                _, model = split_model_id(model)
             if prefix and not model.startswith(f"{prefix}/"):
                 model = f"{prefix}/{model}"
             return model

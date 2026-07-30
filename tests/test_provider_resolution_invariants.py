@@ -478,3 +478,26 @@ def test_every_provider_construction_site_passes_the_users_model_overrides() -> 
             if not any(kw.arg == "model_overrides" for kw in node.keywords):
                 offenders.append(f"{_rel(path)}:{node.lineno}")
     assert not offenders, "pass model_overrides from config here: " + ", ".join(offenders)
+
+
+@pytest.mark.parametrize(
+    ("configured", "sent"),
+    [
+        ("anthropic/claude-opus-4-5", "openai/claude-opus-4-5"),
+        ("deepseek-ai/DeepSeek-V3", "openai/DeepSeek-V3"),
+        ("claude-3", "openai/claude-3"),
+        # The vendor's own id contains a slash; only the routing segment goes.
+        ("groq/openai/gpt-oss-120b", "openai/gpt-oss-120b"),
+        ("openrouter/anthropic/claude-x", "openai/anthropic/claude-x"),
+    ],
+)
+def test_a_prefix_stripping_gateway_drops_one_segment_not_all_but_the_last(configured: str, sent: str) -> None:
+    """AiHubMix wants the vendor's bare id, which is not the last path segment.
+
+    Keeping only the tail truncated any id that carried a slash of its own, so
+    the gateway was asked for a model that does not exist under that name.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    provider = LiteLLMProvider(api_key="K", provider_name="aihubmix", default_model="probe")
+    assert provider._resolve_model(configured) == sent
