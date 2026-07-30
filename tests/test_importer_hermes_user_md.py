@@ -176,3 +176,13 @@ async def test_landed_entry_is_retrievable_by_relevance(tmp_path: Path) -> None:
     )
     ctx = store.get_memory_context(current_message="what is my protein target")
     assert "130g protein" in ctx
+
+
+async def test_blank_entries_are_dropped(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    provider = _Provider(["Goals"])
+    written = await import_user_md_sections(["   ", "", "\n\t", "a real fact"], store, provider=provider, model="m")
+    assert written == ["## Goals"]
+    # A blank entry must not reach the classifier at all.
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["messages"][0]["content"].endswith("a real fact")

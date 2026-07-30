@@ -57,7 +57,11 @@ async def import_user_md_sections(
     model: str = "",
 ) -> list[str]:
     """Land each entry as its own H2 section, or append it into that section's
-    body if the heading already exists. Returns headings actually written.
+    body if the heading already exists. Returns one heading per entry written,
+    so two entries sharing a section yield that heading twice.
+
+    Entry text is written unchanged apart from surrounding whitespace; blank
+    entries carry nothing to import and are dropped.
 
     Idempotency is keyed on the entry's own text, not on the heading: a
     heading collision is a routine outcome (several facts can legitimately
@@ -69,8 +73,10 @@ async def import_user_md_sections(
     with store.locked():
         for entry in entries:
             stripped = entry.strip()
+            if not stripped:
+                continue
             current = store.read_long_term()
-            if stripped and stripped in current:
+            if stripped in current:
                 logger.info("hermes user.md: entry already present, skipping")
                 continue
             heading = await _pick_heading(entry, provider=provider, model=model)
