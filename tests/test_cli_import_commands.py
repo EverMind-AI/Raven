@@ -71,14 +71,40 @@ class TestScan:
         assert "global-claude-md" in result.stdout
 
     def test_scan_empty(self) -> None:
-        with patch(
-            "raven.importer.scanners.scan_all",
-            new=AsyncMock(return_value=[]),
+        # discover() has to be stubbed too, or the result depends on how many
+        # skills the developer's own Hermes install happens to hold.
+        with (
+            patch(
+                "raven.importer.scanners.scan_all",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "raven.importer.skills.hermes.HermesSkillSource.discover",
+                new=AsyncMock(return_value=[]),
+            ),
         ):
             result = runner.invoke(import_app, ["scan"])
 
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
+
+    def test_scan_with_only_skills_does_not_say_there_is_nothing(self) -> None:
+        """Skills never travel as ScanResults, so an install whose only
+        importable data is skills produced an empty result list and was told
+        there was nothing to import."""
+        skills = [DiscoveredSkill(name="a", path=Path("/fake/a"), origin=SkillOrigin.LOCAL_UNKNOWN, registry_name="a")]
+        with (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=[])),
+            patch(
+                "raven.importer.skills.hermes.HermesSkillSource.discover",
+                new=AsyncMock(return_value=skills),
+            ),
+        ):
+            result = runner.invoke(import_app, ["scan"])
+
+        assert result.exit_code == 0
+        assert "Hermes skills: 1 importable" in result.stdout
+        assert "No importable data found" not in result.stdout
 
     def test_scan_shows_importable_skill_count(self) -> None:
         skills = [

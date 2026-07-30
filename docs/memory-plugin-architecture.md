@@ -61,16 +61,22 @@ Contract rules:
 
 ### Identity consistency
 
-`recall` is the read side; `store` is the write side. They must agree
-on identity for stored memory to be retrievable:
+`recall` is the read side and `store` is the write side, and they must
+agree on identity or stored memory is unretrievable. That is enforced
+structurally rather than asked of the user: **`memory.userId` and
+`memory.agentId` are the only place either id lives**, and the host
+hands both to the backend through `ctx.services`.
 
-| Host (read) | == | Plugin (write) |
-|---|:--:|---|
-| `memory.userId` | == | `plugins.config[<id>].user_id` |
-| `memory.agentId` | == | `plugins.config[<id>].agent_id` |
+| Host config | Reaches the backend as |
+|---|---|
+| `memory.userId` | `ctx.services.user_id` |
+| `memory.agentId` | `ctx.services.agent_id` |
 
-Because ids are now bare strings, both sides hold the **identical
-literal** (e.g. `"user-raven"`) — no prefix stripping to reconcile.
+A backend must not read an id from its own `plugins.config[<id>]`
+slice. Two places holding the same value is what allowed a user to edit
+one of them and split writes from reads, and nothing warned: recall
+simply returned nothing forever. The everos backend logs a warning if
+those obsolete keys are still present and disagree.
 
 ---
 

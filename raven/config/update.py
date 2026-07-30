@@ -30,7 +30,7 @@ _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 
 # Default EverOS memory server endpoint, seeded into a fresh config's
 # plugins.config["everos-memory"]. Kept in sync with
-# raven.plugin.memory.everos.backend._DEFAULT_EVEROS_BASE_URL.
+# raven.plugin.memory.everos._server.DEFAULT_EVEROS_BASE_URL.
 _DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
 
 

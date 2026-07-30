@@ -19,6 +19,7 @@ import pytest
 from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (
+    _PROFILE_MAX_CHARS,
     EverosBackend,
     _flatten_profile,
     make_backend,
@@ -372,6 +373,33 @@ class TestFlattenProfile:
     def test_non_dict_profile_data_renders_str(self) -> None:
         assert _flatten_profile("just a string") == "just a string"
         assert _flatten_profile(None) == "None"
+
+    def test_short_profile_is_not_truncated(self) -> None:
+        result = _flatten_profile({"name": "Alice", "tz": "PST"})
+        assert "truncated" not in result
+        assert len(result) <= _PROFILE_MAX_CHARS
+
+    def test_long_profile_is_capped_at_line_boundary_with_visible_marker(
+        self,
+    ) -> None:
+        items = [{"category": f"trait{i}", "description": "d" * 100} for i in range(30)]
+        uncapped = "\n".join(f"- trait{i}: {'d' * 100}" for i in range(30))
+        assert len(uncapped) > _PROFILE_MAX_CHARS  # sanity: cap must actually engage
+
+        result = _flatten_profile({"explicit_info": items})
+
+        assert len(result) < len(uncapped)
+        assert len(result) <= _PROFILE_MAX_CHARS + len("\n[profile truncated, 99999 chars omitted]")
+        body, _, marker = result.rpartition("\n")
+        assert marker.startswith("[profile truncated, ") and marker.endswith(" chars omitted]")
+        # Cut on a line boundary — no bullet is left half-written.
+        for line in body.split("\n"):
+            assert line.startswith("- trait")
+
+    def test_non_dict_profile_data_is_also_capped(self) -> None:
+        result = _flatten_profile("x" * (_PROFILE_MAX_CHARS + 500))
+        assert len(result) < _PROFILE_MAX_CHARS + 500
+        assert "[profile truncated," in result
 
     def test_realistic_payload_shape(self) -> None:
         profile_data = {

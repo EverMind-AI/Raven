@@ -156,6 +156,24 @@ def _format_skill_summary(summary: SkillImportSummary) -> str:
     return f"Hermes skills: {', '.join(parts)}"
 
 
+async def _install_skills_without_a_scan(platform_filter: Platform | None) -> bool:
+    """Install Hermes skills on the paths where no ScanResult survived.
+
+    Skills are directories rather than message sources, so they never appear as
+    ScanResults and the tier filter has nothing of theirs to keep. An install
+    whose only importable data is skills therefore reached an early return and
+    was told there was nothing to import. Reached only when the normal path did
+    not run, so a skill is never installed twice.
+    """
+    if platform_filter not in (None, Platform.HERMES):
+        return False
+    summary = await install_skills(HermesSkillSource(), load_config().workspace_path, _default_state())
+    if summary.total == 0:
+        return False
+    console.print(_format_skill_summary(summary))
+    return True
+
+
 async def _install_hermes_skills(
     items: list[tuple[Scanner, ScanResult]],
     workspace: Path,
@@ -266,8 +284,16 @@ def scan_cmd(
         _logger.enable("raven")
 
     if not results:
-        console.print("No importable data found.")
-        console.print(f"Supported platforms: {', '.join(PLATFORM_DISPLAY_NAMES.values())}")
+        # Skills do not travel as ScanResults, so an install whose only
+        # importable data is skills has an empty results list. Returning here
+        # unconditionally told such a user there was nothing to import while
+        # a dozen of their own skills were waiting.
+        if skill_count:
+            console.print(f"Hermes skills: {skill_count} importable")
+            console.print("No memory files or conversations found.")
+        else:
+            console.print("No importable data found.")
+            console.print(f"Supported platforms: {', '.join(PLATFORM_DISPLAY_NAMES.values())}")
         return
 
     table = Table(title="Cold-Start Import -- Available Sources")
@@ -483,7 +509,8 @@ async def _run_async(
     all_results = await scan_all(platform_filter=platform_filter, on_error=_report_scan_error)
 
     if not all_results:
-        console.print("No importable data found.")
+        if not await _install_skills_without_a_scan(platform_filter):
+            console.print("No importable data found.")
         return
 
     if platform_filter is None:
@@ -510,7 +537,8 @@ async def _run_async(
 
     filtered = filter_by_tier(all_results, selected_tier)
     if not filtered:
-        console.print("No items match the selected tier.")
+        if not await _install_skills_without_a_scan(platform_filter):
+            console.print("No items match the selected tier.")
         return
 
     mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)

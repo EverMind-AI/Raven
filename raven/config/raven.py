@@ -1083,9 +1083,9 @@ class PluginsConfig(_Base):
     ``disabled`` is the user opt-out list keyed by plugin id (matches
     the ``id`` in ``raven-plugin.toml``). ``config`` is the per-
     plugin config slice the registry hands to each plugin's factory
-    via :class:`PluginContext.config` — its shape is determined by
-    each plugin's own ``config_schema`` in the manifest, so the host
-    treats it as a free-form dict.
+    via :class:`PluginContext.config` — the host treats it as a
+    free-form dict and never validates it, so each plugin is
+    responsible for reading and defaulting its own keys.
     """
 
     disabled: list[str] = Field(default_factory=list)
@@ -1108,9 +1108,11 @@ class MemoryConfig(_Base):
     agent-track recall (``backend.recall`` takes one XOR the other).
     EverOS routes each to its matching store; flat backends (mem0 /
     MemOS / Letta) use ``user_id`` and return empty for the agent call.
-    Each value must match the corresponding id the active backend
-    stamps on stored messages (e.g. ``plugins.config["everos-memory"]``
-    ``user_id`` / ``agent_id``) for stored memory to be retrievable.
+    These two fields are the only place either id is configured. A
+    backend receives them through ``ctx.services`` and must not read an
+    id from its own config slice: a second place holding the same value
+    lets a user edit one of them and silently split writes from reads,
+    after which every stored memory is unrecallable with no warning.
     """
 
     backend: str | None = "everos"
