@@ -462,10 +462,6 @@ def register(app: typer.Typer) -> None:
                             )
 
             asyncio.run(run_once())
-            # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
-            # thread, torch) segfault during interpreter finalization. The exit
-            # chokepoint in raven.cli.commands.run hard-exits past finalization
-            # when that hazard is live, so this path just returns normally.
         else:
             # Interactive mode — user turns run through spine (submit -> lane ->
             # hub -> CliOutlet); cron/sentinel nudges go via the spine hub

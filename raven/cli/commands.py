@@ -148,16 +148,7 @@ app.add_typer(import_app, name="import")
 
 
 def run() -> None:
-    """Console-script entry point.
-
-    Runs the Typer app, then hard-exits past CPython interpreter finalization
-    when a native runtime that segfaults at finalization is live (lancedb's
-    Rust/tokio background thread — see :mod:`raven.cli._exit`). Any command that
-    builds the agent loop starts that thread, so guarding here covers them all
-    at once. CliRunner invokes ``app`` directly and never reaches this wrapper,
-    so in-process test hosts keep normal exit semantics.
-    """
-    from raven.cli._exit import flush_and_hard_exit, lancedb_finalization_hazard
+    """Console-script entry point."""
     from raven.config.loader import ConfigReadError
 
     try:
@@ -170,13 +161,6 @@ def run() -> None:
 
         Console(stderr=True).print(f"[red]✗[/red] {exc}")
         raise SystemExit(1) from exc
-    except SystemExit as exc:
-        code = exc.code
-        if not isinstance(code, int):
-            code = 0 if code is None else 1
-        if lancedb_finalization_hazard():
-            flush_and_hard_exit(code)
-        raise
 
 
 if __name__ == "__main__":
