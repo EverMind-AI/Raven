@@ -945,8 +945,28 @@ def _pick_model(
     else:
         default_value = spec.default_model or ""
 
+    # A live fetch is the best answer when there is one; when there is not, the
+    # same chain the TUI picker offers beats an empty prompt. Eleven providers
+    # carry no curated shortlist, so before this a failed fetch left the user
+    # typing a model id from memory.
+    if not model_ids:
+        from raven.providers.common_models import common_models_for, litellm_models_for
+
+        known = [*common_models_for(spec.name), *litellm_models_for(spec.name)]
+        if known:
+            console.print(
+                _t(
+                    "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]",
+                    "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
+                )
+            )
+            model_ids = known
+
     if model_ids:
         choices = [_format_model_for_provider(spec, mid) for mid in model_ids]
+        # Dedupe: the chain above already prefixes its ids, and _format_ leaves a
+        # correctly-prefixed id alone, so two sources can agree on one model.
+        choices = list(dict.fromkeys(choices))
         if default_value and default_value not in choices:
             choices.insert(0, default_value)
         prompt_label = _t(

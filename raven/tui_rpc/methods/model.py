@@ -30,7 +30,7 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
-from raven.providers.common_models import common_models_for
+from raven.providers.common_models import common_models_for, litellm_models_for
 from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -68,11 +68,19 @@ def _provider_models(slug: str) -> list[str]:
         cfg = {}
     configured = cfg.get("models", [])
     configured = list(configured) if isinstance(configured, list) else []
-    # Priority: the user's configured models first (manual entry via
-    # ``model.add_model`` writes here), then our curated "common" shortlist,
-    # deduped. Keeps the picker useful out of the box without a network call.
-    seen = set(configured)
-    return configured + [m for m in common_models_for(slug) if m not in seen]
+    # Priority: what the user configured (manual entry via ``model.add_model``
+    # writes here), then the curated shortlist, then LiteLLM's own catalogue.
+    # Curated before catalogue because the shortlist is a few models worth
+    # recommending and the catalogue is everything, deprecated snapshots
+    # included; catalogue after it because eleven providers have no shortlist at
+    # all, which is why the picker used to offer them nothing.
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug)):
+        if candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:

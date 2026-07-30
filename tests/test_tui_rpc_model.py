@@ -67,9 +67,13 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     result = await model_options({})
     entry = _entry(result, "anthropic")
     assert entry["authenticated"] is True
-    # Configured models rank first; the curated shortlist follows (deduped).
+    # Configured models rank first, then the curated shortlist, then LiteLLM's
+    # catalogue (deduped). The order is the contract: recommendations stay at the
+    # top of a list the catalogue makes long.
     assert entry["models"][:2] == ["claude-opus-4-8", "claude-sonnet-4-5"]
-    assert entry["total_models"] == 2 + len(common_models_for("anthropic"))
+    curated = common_models_for("anthropic")
+    assert entry["models"][2 : 2 + len(curated)] == curated
+    assert entry["total_models"] > 2 + len(curated), "the catalogue tier added nothing"
     assert entry["auth_type"] == "api_key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
 
@@ -81,8 +85,9 @@ async def test_options_unauthed_provider_marked(fake_home: Path) -> None:
     assert entry["authenticated"] is False
     # Curated shortlist is shown regardless of auth (as openrouter always has),
     # so the picker is never empty; the unauthed state is conveyed separately.
-    assert entry["models"] == common_models_for("openai")
-    assert entry["total_models"] == len(common_models_for("openai"))
+    curated = common_models_for("openai")
+    assert entry["models"][: len(curated)] == curated
+    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
 
 
 async def test_options_current_provider_marked(fake_home: Path) -> None:
@@ -274,8 +279,9 @@ async def test_options_openrouter_seeds_common_models(fake_home: Path) -> None:
         },
     )
     entry = _entry(await model_options({}), "openrouter")
-    assert entry["models"] == common_models_for("openrouter")
-    assert entry["total_models"] == len(common_models_for("openrouter"))
+    curated = common_models_for("openrouter")
+    assert entry["models"][: len(curated)] == curated
+    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
 
 
 async def test_options_config_models_rank_before_common_and_dedup(fake_home: Path) -> None:
@@ -330,7 +336,8 @@ async def test_options_direct_provider_lists_common_models_when_unconfigured(
     )
     entry = _entry(await model_options({}), slug)
     assert entry["total_models"] > 0
-    assert entry["models"] == common_models_for(slug)
+    curated = common_models_for(slug)
+    assert entry["models"][: len(curated)] == curated, "the curated shortlist must stay at the top"
 
 
 async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> None:
@@ -345,3 +352,65 @@ async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> No
 
     assert result["provider"]["slug"] == "mistral"
     assert result["provider"]["authenticated"] is True
+
+
+@pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
+def test_litellm_catalogue_fills_providers_with_no_curated_shortlist(slug: str) -> None:
+    """Eleven providers had no shortlist, so the picker offered them nothing.
+
+    Ollama is the case that proves the lookup has to go through every name the
+    provider answers to: LiteLLM files its models under "ollama" while the
+    section is "ollama_chat", so a lookup by section name alone finds none.
+    """
+    from raven.providers.common_models import common_models_for, litellm_models_for
+
+    assert not common_models_for(slug), f"{slug} now has a shortlist; pick another provider for this test"
+    models = litellm_models_for(slug)
+    assert models, f"{slug}: the catalogue tier found nothing"
+    assert all("/" in m for m in models), models[:3]
+
+
+def test_catalogue_ids_are_spelled_the_way_they_route() -> None:
+    """The catalogue is inconsistent about prefixes; the picker must not be.
+
+    Moonshot's entries carry their prefix and VolcEngine's do not. An id offered
+    bare would be routed by keyword instead of to the provider the user picked.
+    """
+    from raven.providers.common_models import litellm_models_for
+    from raven.providers.registry import find_by_name
+
+    for slug in ("moonshot", "volcengine", "ollama_chat"):
+        spec = find_by_name(slug)
+        assert spec is not None
+        for model in litellm_models_for(slug):
+            assert model.startswith(f"{spec.model_prefix}/"), f"{slug}: {model}"
+
+
+def test_catalogue_offers_only_chat_models() -> None:
+    """Embeddings and speech share the catalogue and fail as a chat default."""
+    from raven.providers.common_models import litellm_models_for
+
+    offered = {m for slug in ("minimax", "volcengine") for m in litellm_models_for(slug)}
+    assert offered, "nothing to check"
+    assert not [m for m in offered if "embedding" in m or "speech" in m], sorted(offered)
+
+
+def test_the_catalogue_is_not_read_until_the_picker_is_opened() -> None:
+    """Reading it imports LiteLLM, which is two seconds Raven must not spend at
+    startup. Importing the module that offers it must stay free."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, json\n"
+        "import raven.tui_rpc.methods.model  # noqa: F401\n"
+        "before = 'litellm' in sys.modules\n"
+        "from raven.providers.common_models import litellm_models_for\n"
+        "n = len(litellm_models_for('moonshot'))\n"
+        "print(json.dumps({'before': before, 'after': 'litellm' in sys.modules, 'n': n}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["before"] is False, "importing the picker module pulled in litellm"
+    assert result["after"] is True, "reading the catalogue did not import litellm; is it still the source?"
+    assert result["n"] > 0

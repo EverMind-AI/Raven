@@ -15,6 +15,8 @@ Providers not listed here fall back to their configured list.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 COMMON_MODELS: dict[str, list[str]] = {
     # Carries the "openrouter/" prefix like this provider's default_model does.
     # Bare OpenRouter ids start with the upstream vendor ("anthropic/...",
@@ -120,3 +122,65 @@ COMMON_MODELS: dict[str, list[str]] = {
 def common_models_for(slug: str) -> list[str]:
     """Return a copy of the curated common-model shortlist for ``slug``."""
     return list(COMMON_MODELS.get(slug, []))
+
+
+@lru_cache(maxsize=1)
+def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """LiteLLM's own catalogue, indexed by the provider it belongs to.
+
+    Built once and cached: reading it imports LiteLLM, which costs about two
+    seconds, so callers must be somewhere a user is already waiting.
+
+    Only ``mode == "chat"`` survives. The catalogue also carries embedding and
+    speech models, and offering those where a chat model is asked for produces a
+    selection that fails on first use.
+    """
+    from collections import defaultdict
+
+    from raven.providers.litellm_setup import import_litellm
+
+    try:
+        catalogue = import_litellm().model_cost
+    except Exception:
+        return {}
+
+    by_provider: dict[str, list[str]] = defaultdict(list)
+    for model, info in catalogue.items():
+        if not isinstance(info, dict) or info.get("mode") != "chat":
+            continue
+        provider = info.get("litellm_provider")
+        if provider:
+            by_provider[provider].append(model)
+    return {provider: tuple(sorted(models)) for provider, models in by_provider.items()}
+
+
+def litellm_models_for(slug: str) -> list[str]:
+    """Chat models LiteLLM knows for this provider, as ids that actually route.
+
+    Looked up by every name the provider answers to, not just its own: LiteLLM
+    files vLLM under "hosted_vllm" and Ollama under "ollama", so a lookup by the
+    section name alone finds nothing for exactly the providers whose curated
+    shortlist is empty.
+
+    Ids come back spelled the way LiteLLM would have to receive them. The
+    catalogue is inconsistent -- Moonshot's entries carry their prefix, VolcEngine's
+    do not -- and offering a bare id would route it by keyword rather than to the
+    provider the user picked.
+    """
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name(slug)
+    if spec is None:
+        return []
+    index = _litellm_chat_models_by_provider()
+    prefix = spec.model_prefix
+    out: list[str] = []
+    seen: set[str] = set()
+    for route_name in sorted(spec.route_names):
+        for model in index.get(route_name, ()):
+            bare = model.split("/", 1)[1] if "/" in model else model
+            full = f"{prefix}/{bare}" if prefix else bare
+            if full not in seen:
+                seen.add(full)
+                out.append(full)
+    return out
