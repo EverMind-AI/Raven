@@ -20,7 +20,7 @@ import re
 
 import pytest
 
-from tests.tui.autotest.statusbar import READY_RE
+from tests.tui.autotest.raven_ux import READY_RE, exit_tui
 
 _EXPECTED = r"Raven Status"
 
@@ -45,11 +45,5 @@ def test_tui_status_slash_round_trip(harness):
         f"`/status` output not rendered within 30s; screen=\n{harness.screen()}"
     )
 
-    # Ctrl+C is a ladder (busy cancels, pending input clears, idle quits), so
-    # press until the process is gone rather than a fixed number of times.
-    harness.press("escape")
-    for _ in range(4):
-        if harness.expect_exit(0, timeout=2.0):
-            break
-        harness.press("ctrl+c")
+    exit_tui(harness)
     assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after Ctrl+C; final screen=\n{harness.screen()}"

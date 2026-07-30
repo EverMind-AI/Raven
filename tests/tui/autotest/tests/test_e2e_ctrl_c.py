@@ -7,7 +7,9 @@ spending a turn, and each asserts the intermediate state rather than only the
 final exit code -- pressing twice and checking just the exit passes even when
 the first press did nothing.
 
-The cancel rung needs a live turn, which `test_e2e_raven_tui_chat.py` owns.
+The third rung -- Ctrl+C while a turn is in flight, which routes to turn.cancel
+-- has no coverage anywhere in the tier: the chat e2e presses Ctrl+C only after
+the status bar has returned to ready, so it exercises this same quit path.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import time
 
 import pytest
 
-from tests.tui.autotest.statusbar import READY_RE
+from tests.tui.autotest.raven_ux import READY_RE
 
 _PARTIAL = "partial input that will never send"
 

@@ -26,8 +26,7 @@ import re
 
 import pytest
 
-from tests.tui.autotest.runner import BackendError
-from tests.tui.autotest.statusbar import READY_RE
+from tests.tui.autotest.raven_ux import READY_RE, exit_tui
 
 # (slash command, a literal from that command's real output)
 #
@@ -50,8 +49,6 @@ _WHITELIST = [
     ("sandbox list", r"Sandbox VMs|Debug socket not found"),
 ]
 
-_MAX_CTRL_C = 4
-
 
 def _make_test_id(entry):
     return entry[0].replace(" ", "_")
@@ -64,21 +61,6 @@ def _assert_absent_before_submit(harness, slash: str, expected: str) -> None:
         f"expected pattern {expected!r} for /{slash} already matches the idle screen, "
         f"so the output assertion would pass without the command running; screen=\n{screen}"
     )
-
-
-def _exit_tui(harness) -> None:
-    """Escape closes any pager, then Ctrl+C until the ladder reaches quit."""
-    try:
-        harness.press("escape")
-    except BackendError:
-        return
-    for _ in range(_MAX_CTRL_C):
-        if harness.expect_exit(0, timeout=2.0):
-            return
-        try:
-            harness.press("ctrl+c")
-        except BackendError:
-            return
 
 
 @pytest.mark.e2e
@@ -105,7 +87,5 @@ def test_dogfood_slash_command(harness, slash, expected):
         f"slash /{slash} did not produce expected output (regex={expected!r}); screen=\n{harness.screen()}"
     )
 
-    _exit_tui(harness)
-    assert harness.expect_exit(0, timeout=10.0), (
-        f"TUI did not exit 0 after /{slash} and {_MAX_CTRL_C} ctrl+c presses; final screen=\n{harness.screen()}"
-    )
+    exit_tui(harness)
+    assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after /{slash}; final screen=\n{harness.screen()}"
