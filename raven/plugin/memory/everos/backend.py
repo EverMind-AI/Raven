@@ -295,10 +295,12 @@ class EverosBackend:
                 )
 
     def _validate_identity(self) -> None:
-        for label, value in (("user_id", self._user_id), ("agent_id", self._agent_id)):
+        # Name the on-disk camelCase key, not the Python attribute: the message
+        # has to be greppable in the user's config.json.
+        for key, value in (("userId", self._user_id), ("agentId", self._agent_id)):
             if value in _PATH_TRAVERSAL_IDS or not _PATH_SAFE_ID_RE.match(value):
                 raise ValueError(
-                    f"memory.{label}={value!r} is not accepted by EverOS: it becomes a "
+                    f"memory.{key}={value!r} is not accepted by EverOS: it becomes a "
                     f"directory segment on the write path, so it must match "
                     f"{_PATH_SAFE_ID_RE.pattern} and must not be '.' or '..'."
                 )

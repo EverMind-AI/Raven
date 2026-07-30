@@ -609,5 +609,7 @@ class TestIdentityFromServices:
             services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
         )
         backend = make_backend(ctx)
-        with pytest.raises(ValueError, match="user_id"):
+        # The message must name the on-disk camelCase key so the user can grep
+        # for it in config.json.
+        with pytest.raises(ValueError, match="memory.userId"):
             await backend.start()
