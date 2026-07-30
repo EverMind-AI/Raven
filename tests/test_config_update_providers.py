@@ -46,13 +46,27 @@ def test_set_api_key_for_simple_provider(cfg_path: Path) -> None:
 
 def test_set_api_base_for_local_provider(cfg_path: Path) -> None:
     set_provider_fields(
-        "ollama",
+        "ollama_chat",
         {"api_base": "http://localhost:11434"},
         config_path=cfg_path,
     )
 
-    section = _read(cfg_path)["providers"]["ollama"]
+    section = _read(cfg_path)["providers"]["ollama_chat"]
     assert section["apiBase"] == "http://localhost:11434"
+
+
+def test_setting_a_provider_by_its_former_name_consolidates_on_the_current_one(cfg_path: Path) -> None:
+    """A saved config keeps working, and does not end up with two sections.
+
+    Reading folds the spellings together, so leaving the old key behind would
+    make the retired section's fields reappear on the next read.
+    """
+    set_provider_fields("ollama", {"api_base": "http://localhost:11434"}, config_path=cfg_path)
+
+    providers = _read(cfg_path)["providers"]
+    assert "ollama" not in providers
+    assert providers["ollama_chat"]["apiBase"] == "http://localhost:11434"
+    assert get_provider_config("ollama", config_path=cfg_path)["api_base"] == "http://localhost:11434"
 
 
 def test_set_complex_provider_azure(cfg_path: Path) -> None:
@@ -228,8 +242,8 @@ def test_list_reports_every_provider_with_correct_status(cfg_path: Path) -> None
 
     assert by_name["anthropic"]["configured"] is False
     assert by_name["github_copilot"]["is_oauth"] is True
-    assert by_name["ollama"]["is_local"] is True
-    assert by_name["ollama"]["api_key_redacted"] == "(not needed for local)"
+    assert by_name["ollama_chat"]["is_local"] is True
+    assert by_name["ollama_chat"]["api_key_redacted"] == "(not needed for local)"
 
     assert len(rows) >= 18
 

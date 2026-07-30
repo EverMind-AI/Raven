@@ -46,7 +46,10 @@ _INFO_STATUS_RE = re.compile(r"Status:\s*(\w+)")
 _BANNER_MARKER = "───"  # tui-use snapshot frames rows in U+2500 box-drawing chars
 
 _TUI_USE_BIN = "tui-use"
-_SPAWN_TIMEOUT_S = 15.0
+# The spawned command is usually `uv run raven tui`, and a `uv run` that has to
+# re-sync the environment first (any dependency-group change since the last run)
+# blows a tight budget here, failing the test for a reason it is not about.
+_SPAWN_TIMEOUT_S = 60.0
 _VERB_TIMEOUT_S = 10.0
 
 

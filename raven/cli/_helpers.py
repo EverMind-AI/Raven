@@ -135,6 +135,7 @@ def make_provider(config: Config):
             extra_headers=p.extra_headers if p else None,
             provider_name=provider_name,
             extra_body=extra_body,
+            model_overrides=config.agents.defaults.model_overrides,
         )
 
     defaults = config.agents.defaults

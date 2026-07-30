@@ -296,11 +296,15 @@ def _set_model(
         )
     # Bare `/model <name>` carries no provider; derive it from the model so a
     # previously-forced provider does not silently mis-route the new model.
-    # Gateway/local models (no keyword match) leave the forced provider intact.
     if new_provider is None:
         spec = find_by_model(raw_value)
         if spec is not None:
             new_provider = spec.name
+        elif "/" in raw_value:
+            # A prefixed id whose vendor has no spec of ours ("mistral/..."):
+            # keeping the previously forced provider would send that provider's
+            # key to this other vendor, so hand routing back to auto-detection.
+            new_provider = "auto"
 
     session_id = params.get("session_id")
     if isinstance(session_id, str) and session_id and is_turn_active(session_id):

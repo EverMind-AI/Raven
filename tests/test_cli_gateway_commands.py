@@ -217,7 +217,7 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
 from types import SimpleNamespace
 
 from raven.cli.gateway_commands import build_model_routing
-from raven.config.schema import ModelEndpoint, RoutingConfig
+from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
 from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
 from raven.routing.knn_router import KNNModelRouter
@@ -234,7 +234,7 @@ class _FakeProvider:
 def _routing_config_obj(routing):
     return SimpleNamespace(
         routing=routing,
-        providers=SimpleNamespace(openrouter=SimpleNamespace(api_key="")),
+        providers=ProvidersConfig.model_validate({}),
         agents=SimpleNamespace(defaults=SimpleNamespace(model="default-model")),
     )
 

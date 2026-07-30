@@ -5,6 +5,7 @@ import hashlib
 import os
 import secrets
 import string
+import uuid
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
@@ -14,7 +15,7 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_model, find_gateway
+from raven.providers.registry import find_by_keywords, find_by_model, find_gateway, split_model_id
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -55,6 +56,15 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
+def session_affinity_headers() -> dict[str, str]:
+    """Headers pinning one caller to one backend replica.
+
+    Self-hosted OpenAI-compatible backends (vLLM and friends) route by this
+    header, so a stable value per provider instance keeps prefix-cache hits warm.
+    """
+    return {"x-session-affinity": uuid.uuid4().hex}
+
+
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -73,6 +83,7 @@ class LiteLLMProvider(LLMProvider):
         provider_name: str | None = None,
         disable_auto_cache_control: bool = False,
         extra_body: dict[str, Any] | None = None,
+        model_overrides: dict[str, dict[str, Any]] | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -85,6 +96,8 @@ class LiteLLMProvider(LLMProvider):
         # Common use: OpenRouter routing affinity to keep prompt-cache hits warm,
         #   extra_body={"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
         self.extra_body = extra_body or {}
+        # User-configured per-model parameter overrides; win over the registry's.
+        self.model_overrides = model_overrides or {}
 
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -97,9 +110,6 @@ class LiteLLMProvider(LLMProvider):
         if api_key:
             self._setup_env(api_key, api_base, default_model)
 
-        if api_base:
-            litellm.api_base = api_base
-
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
 
@@ -107,6 +117,8 @@ class LiteLLMProvider(LLMProvider):
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
         if not spec:
+            # No spec: the key still reaches LiteLLM as an explicit api_key
+            # kwarg on every call, so nothing needs to go into the environment.
             return
         if not spec.env_key:
             # OAuth/provider-only specs (for example: openai_codex)
@@ -127,33 +139,49 @@ class LiteLLMProvider(LLMProvider):
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
 
+    def _strip_gateway_prefix(self, model: str) -> str:
+        """Drop this gateway's own prefix, leaving the upstream vendor's id."""
+        if not self._gateway:
+            return model
+        prefix = f"{self._gateway.model_prefix}/"
+        return model[len(prefix) :] if model.startswith(prefix) else model
+
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
         if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
-            prefix = self._gateway.litellm_prefix
+            # Gateway mode: apply gateway prefix, skip provider-specific prefixes.
+            # model_prefix, not the raw field: a gateway whose name is already
+            # LiteLLM's declares nothing, and reading the field would drop the
+            # prefix entirely -- sending the gateway's key to the vendor named in
+            # the model id.
+            prefix = self._gateway.model_prefix
             if self._gateway.strip_model_prefix:
-                model = model.split("/")[-1]
+                # One leading vendor segment, not everything but the last: a
+                # model id may itself contain a slash ("openai/gpt-oss-120b" is
+                # Groq's own name for it), and keeping only the tail truncated
+                # the id this gateway is asked to serve.
+                _, model = split_model_id(model)
             if prefix and not model.startswith(f"{prefix}/"):
                 model = f"{prefix}/{model}"
             return model
 
-        # Standard mode: auto-prefix for known providers
+        # Standard mode: auto-prefix for known providers.
         spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            model = self._canonicalize_explicit_prefix(model, spec.name, spec.litellm_prefix)
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
+        prefix = spec.model_prefix if spec else ""
+        if spec and prefix:
+            model = self._canonicalize_explicit_prefix(model, spec, prefix)
+            if not any(model.startswith(s) for s in (*spec.skip_prefixes, f"{prefix}/")):
+                model = f"{prefix}/{model}"
 
         return model
 
     @staticmethod
-    def _canonicalize_explicit_prefix(model: str, spec_name: str, canonical_prefix: str) -> str:
-        """Normalize explicit provider prefixes like `github-copilot/...`."""
+    def _canonicalize_explicit_prefix(model: str, spec: Any, canonical_prefix: str) -> str:
+        """Normalize an explicit prefix (`github-copilot/...`, a former name)."""
         if "/" not in model:
             return model
-        prefix, remainder = model.split("/", 1)
-        if prefix.lower().replace("-", "_") != spec_name:
+        prefix, remainder = split_model_id(model)
+        if prefix not in spec.route_names:
             return model
         return f"{canonical_prefix}/{remainder}"
 
@@ -161,7 +189,10 @@ class LiteLLMProvider(LLMProvider):
         """Return True when the provider supports cache_control on content blocks."""
         if self._gateway is not None:
             return self._gateway.supports_prompt_caching
-        spec = find_by_model(model)
+        # Keyword fallback for the same reason token_wise has one: an id routed
+        # through a vendor we carry no spec for ("bedrock/anthropic.claude-...")
+        # still reaches a model whose caching is the upstream vendor's.
+        spec = find_by_model(model) or find_by_keywords(model)
         return spec is not None and spec.supports_prompt_caching
 
     def _apply_cache_control(
@@ -191,14 +222,26 @@ class LiteLLMProvider(LLMProvider):
         return new_messages, new_tools
 
     def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
-        """Apply model-specific parameter overrides from the registry."""
+        """Layer per-model parameter overrides: registry defaults, config on top.
+
+        Config supplies one parameter without discarding the rest of the
+        registry's entry -- Kimi keeps its mandated temperature even when the
+        user only wanted to set top_p.
+        """
         model_lower = model.lower()
-        spec = find_by_model(model)
+        # A gateway-routed id names the gateway and its upstream, not the vendor
+        # whose quirks these defaults encode -- so match on keywords there.
+        spec = find_by_keywords(self._strip_gateway_prefix(model)) if self._gateway else find_by_model(model)
         if spec:
             for pattern, overrides in spec.model_overrides:
                 if pattern in model_lower:
                     kwargs.update(overrides)
-                    return
+                    break
+        # Longest match wins, so "kimi-k2.5" beats a broad "kimi" regardless of
+        # the order the entries happen to be written in.
+        matches = [(p, o) for p, o in self.model_overrides.items() if p.lower() in model_lower]
+        if matches:
+            kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:

@@ -1,60 +1,50 @@
-"""Dogfood — working TUI whitelist commands.
+"""Dogfood — a slash command renders through the whole stack.
 
-Each command is sent into the alt-screen TUI via `/cmd<sub>` slash routing,
-which hits the `cli.dispatch` RPC method on the Python side; the rendered
-Click output streams back through the unix socket and renders into Ink.
+A slash the TUI does not own locally goes out as `slash.exec`, runs Click
+in-process on the Python side, and comes back through the unix socket to be
+rendered by Ink. That round trip is what only a real terminal can prove; the
+dispatch layer itself has 31 dedicated tests in `tests/test_tui_rpc_cli_dispatch.py`
+and needs no TUI.
 
-Pattern: spawn → wait readiness → type slash → wait output → Ctrl+C×2 →
-expect_exit 0. Output pattern is chosen to match a stable substring that
-appears in a non-error response (avoiding `-32012` / `-32015` error codes
-which would indicate cli.dispatch / handler failure).
+The TUI leg is identical for every dispatched command (`createSlashHandler.ts`
+routes them all through one `slash.exec` call), so this covers output *shapes*
+rather than a command list -- a paged table, an inline notice, a usage error.
+Repeating it per command bought nothing and cost 12 spawns a run (#228).
 
-`/sentinel routines` is flagged "possibly broken" — the CLI command name is
-`sentinel learn-routines`, not `sentinel routines`. Marked xfail-strict so
-the marker comes off the day CLI ships a matching command.
+Two properties this file has to keep, both learned the hard way (#228):
+
+- The expected pattern is matched against the whole screen, which includes the
+  composer echoing what was just typed and the welcome frame's own text. A
+  pattern like `skill` or `cron` is therefore satisfied before the command runs
+  at all. Every entry below is a literal from real command output, and
+  `_assert_absent_before_submit` fails loudly the day one stops being specific.
+- Ctrl+C is a ladder, not an exit key (`ui-tui/src/app/useInputHandlers.ts`):
+  while the UI is busy it cancels the turn, with text in the composer it clears
+  the input, and only then does it quit. `exit_tui` presses until the process
+  is gone.
 """
 
 from __future__ import annotations
 
-import time
+import re
 
 import pytest
 
-from tests.tui.autotest.runner import BackendError
+from tests.tui.autotest.raven_ux import READY_RE, exit_tui
 
-# (slash command, output regex, xfail (reason, strict) or None)
+# (slash command, a literal from that command's real output)
 #
-# `xfail (reason, strict=False)` marks "known-volatile" — tests where
-# dogfood revealed an inconsistent Raven TUI exit-key UX (some overlays
-# absorb Ctrl+C / Esc differently, leaving the subprocess alive past the
-# expect_exit timeout). strict=False so XPASS does NOT fail the suite —
-# treats these as informational.
-_VOLATILE = (
-    "Raven TUI overlay exit UX inconsistent (Esc+Ctrl+C doesn't always "
-    "terminate this command's overlay); revisit when tui-chat "
-    "lands since it touches Cancel UX. strict=False = informational.",
-    False,
-)
-
+# One entry per rendering shape the stack can produce, not one per command:
 _WHITELIST = [
-    ("status", r"OpenRouter|Model:|provider", None),
-    ("channels status", r"channels?|telegram|slack|discord|enabled|disabled", _VOLATILE),
-    ("channels list", r"channels?|telegram|slack|discord|empty", _VOLATILE),
-    ("skill list", r"skill|name|empty|no skills", None),
-    ("skill get", r"skill|usage|argument|missing", _VOLATILE),
-    ("skill refresh", r"skill|refresh|done|complete|empty", None),
-    ("skill stats", r"skill|stats|count|empty|total", None),
-    ("cron list", r"cron|job|schedule|empty|name", None),
-    ("cron show", r"cron|job|usage|argument|missing", _VOLATILE),
-    ("sentinel status", r"sentinel|enabled|disabled|status", _VOLATILE),
-    ("sentinel nudges", r"nudges?|empty|count|none|recent", None),
-    ("sentinel decisions", r"decisions?|empty|count|none|pending", _VOLATILE),
-    # NB: coverage-report §2 flagged `sentinel routines` as "possibly broken"
-    # (CLI has `learn-routines`), but 2026-05-20 dogfood proves it works
-    # through TUI whitelist — informational xfail (strict=False) covers
-    # day-to-day overlay UX volatility.
-    ("sentinel routines", r"routines?|empty|count|none|learn", _VOLATILE),
-    ("sandbox list", r"sandbox|vm|empty|no sandboxes|name", None),
+    # top-level command, panel output
+    ("status", r"Raven Status"),
+    # long output -> pager overlay, and a table header the welcome frame's own
+    # "Available Skills (1)" line cannot satisfy
+    ("skill list", r"Source.+Description"),
+    # non-zero exit -> Click usage error rendered as a warning
+    ("skill get", r"Missing argument"),
+    # short output -> inline notice instead of a pager
+    ("sentinel routines", r"No routines in store|Routines \(\d+\)"),
 ]
 
 
@@ -62,31 +52,38 @@ def _make_test_id(entry):
     return entry[0].replace(" ", "_")
 
 
+def _assert_absent_before_submit(harness, slash: str, expected: str) -> None:
+    """Guard against an expected pattern the idle screen already satisfies."""
+    screen = harness.screen()
+    assert not re.search(expected, screen), (
+        f"expected pattern {expected!r} for /{slash} already matches the idle screen, "
+        f"so the output assertion would pass without the command running; screen=\n{screen}"
+    )
+
+
 @pytest.mark.e2e
 @pytest.mark.parametrize(
-    ("slash", "expected", "xfail_marker"),
+    ("slash", "expected"),
     _WHITELIST,
     ids=[_make_test_id(e) for e in _WHITELIST],
 )
-def test_dogfood_slash_command(harness, slash, expected, xfail_marker, request):
-    if xfail_marker:
-        reason, strict = xfail_marker
-        request.applymarker(pytest.mark.xfail(reason=reason, strict=strict))
-
+def test_dogfood_slash_command(harness, slash, expected):
     harness.spawn("uv run raven tui")
-    assert harness.wait(r"Raven", timeout=25.0), f"TUI not ready in 25s for /{slash}; screen=\n{harness.screen()}"
+    assert harness.wait(READY_RE, timeout=60.0), (
+        f"TUI status bar never reported ready for /{slash}; screen=\n{harness.screen()}"
+    )
+
+    _assert_absent_before_submit(harness, slash, expected)
+
     harness.type(f"/{slash}")
+    assert harness.wait(re.escape(f"/{slash}"), timeout=10.0), (
+        f"composer never showed /{slash}, so enter would submit nothing; screen=\n{harness.screen()}"
+    )
     harness.press("enter")
-    assert harness.wait(expected, timeout=10.0), (
+
+    assert harness.wait(expected, timeout=30.0), (
         f"slash /{slash} did not produce expected output (regex={expected!r}); screen=\n{harness.screen()}"
     )
-    # Escape dismisses any open overlay/panel (per Raven TUI footer hint
-    # "Esc/q close"); the subsequent Ctrl+C exits. press() raises BackendError
-    # if session already exited inline — that's the inline-exit path and fine.
-    for key in ("escape", "ctrl+c"):
-        try:
-            harness.press(key)
-        except BackendError:
-            break
-        time.sleep(0.5)
+
+    exit_tui(harness)
     assert harness.expect_exit(0, timeout=10.0), f"TUI did not exit 0 after /{slash}; final screen=\n{harness.screen()}"

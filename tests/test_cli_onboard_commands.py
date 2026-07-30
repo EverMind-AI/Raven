@@ -164,6 +164,36 @@ def test_onboard_help_lists_all_flags() -> None:
         assert flag in out, f"missing flag in help: {flag}"
 
 
+# --------------------------------------------------------------------------- curated provider list
+
+
+def test_curated_providers_all_exist_in_registry() -> None:
+    from raven.providers.registry import find_by_name
+
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert find_by_name(entry["name"]) is not None, f"unknown provider: {entry['name']}"
+
+
+def test_curated_providers_cover_the_seeded_picker_providers() -> None:
+    """Every provider seeded in the model picker must be pickable in the wizard.
+
+    The two lists drifted apart once already: zhipu / dashscope / groq carried a
+    curated shortlist and a default_model, yet the wizard offered no way to
+    choose them short of --provider or "Other".
+    """
+    from tests.test_provider_catalog import _SEEDED_DIRECT_PROVIDERS
+
+    curated = {entry["name"] for entry in onboard_commands._CURATED_PROVIDERS}
+    assert set(_SEEDED_DIRECT_PROVIDERS) <= curated
+
+
+def test_curated_providers_do_not_restate_registry_flags() -> None:
+    # is_oauth lives on the ProviderSpec; a copy here would be a second source
+    # of truth that silently goes stale.
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert "is_oauth" not in entry
+
+
 # --------------------------------------------------------------------------- non-interactive happy path
 
 
@@ -651,14 +681,14 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker. The schema's pre-existing default model
-    # (``anthropic/claude-opus-4-5``) routes to anthropic by prefix, so it
-    # gets prepended as the "keep current" candidate.
+    # Catalog feeds the picker, every id carrying the provider's route prefix.
+    # The schema's pre-existing default (``anthropic/claude-opus-4-5``) is one of
+    # them rather than a fourth entry: while bare and prefixed spellings coexisted
+    # the same model appeared twice, once in each form.
     assert captured_choices["choices"] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
-        "claude-haiku-4-5",
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
     # User's pick made it into config
@@ -716,7 +746,7 @@ def test_prompt_api_key_empty_is_back_but_whitespace_rejected(monkeypatch: pytes
 
 
 def test_format_model_for_provider_prefix_rules() -> None:
-    """Provider's ``litellm_prefix`` is applied unless model_id already has one."""
+    """The provider's model prefix is applied unless the id already carries one."""
     from raven.providers.registry import find_by_name
 
     openrouter = find_by_name("openrouter")
@@ -733,8 +763,9 @@ def test_format_model_for_provider_prefix_rules() -> None:
         onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
-    # Direct provider with empty prefix → pass-through
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "gpt-4o-mini"
+    # Standard provider: LiteLLM knows it under our own name, so that is the prefix
+    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider(openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
@@ -1872,3 +1903,16 @@ def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
     tmp_env.write_text("{  // comment => invalid JSON\n}", encoding="utf-8")
     with pytest.raises(ConfigReadError):
         onboard_commands._load_raw_config()
+
+
+def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
+    """The guard exists to stop a removal from orphaning the default model.
+
+    A model id written before the provider was renamed routes to the very
+    provider being removed, which is exactly when the warning has to fire.
+    """
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("zai")
+    assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
+    assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True

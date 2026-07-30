@@ -27,14 +27,14 @@ EXPECTED_PROVIDER_NAMES = {
     "github_copilot",
     "deepseek",
     "gemini",
-    "zhipu",
+    "zai",
     "dashscope",
     "moonshot",
     "minimax",
     "minimax_global",
     "minimax_cn",
-    "vllm",
-    "ollama",
+    "hosted_vllm",
+    "ollama_chat",
     "groq",
 }
 
@@ -53,6 +53,61 @@ def test_provider_names_are_unique() -> None:
     assert len(names) == len(set(names))
 
 
+def test_a_specs_route_prefix_is_a_provider_litellm_knows() -> None:
+    """The prefix decides where LiteLLM sends the request.
+
+    Defaulting it to our own name only works while that name is one LiteLLM
+    carries; a name it does not know would route every request nowhere.
+    """
+    import litellm
+
+    known = {str(getattr(p, "value", p)) for p in litellm.provider_list}
+    for spec in PROVIDERS:
+        if spec.model_prefix:
+            assert spec.model_prefix in known, spec.name
+
+
+def test_via_driver_names_another_vendor_that_litellm_actually_speaks() -> None:
+    """A borrowed driver must be somebody else's, and must exist.
+
+    Naming your own driver is a no-op that invites the two to drift apart;
+    naming a vendor LiteLLM has never heard of routes nowhere. Neither can be
+    caught by reading the field -- only by checking it against LiteLLM.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    known = {str(getattr(p, "value", p)) for p in import_litellm().provider_list}
+    for spec in PROVIDERS:
+        if not spec.via_driver:
+            continue
+        assert spec.via_driver not in spec.route_names, f"{spec.name}: via_driver is one of its own names"
+        assert spec.via_driver in known, f"{spec.name}: LiteLLM does not know driver {spec.via_driver!r}"
+
+
+def test_a_providers_name_is_litellms_spelling_whenever_litellm_has_one() -> None:
+    """One name per provider: ours is LiteLLM's wherever LiteLLM has one.
+
+    This is what removed the reconciliation layer. A spec whose own name is
+    absent from LiteLLM while an alias of it is present means the rename went
+    the wrong way, and every prefix comparison downstream inherits two answers.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    known = {str(getattr(p, "value", p)) for p in import_litellm().provider_list}
+    for spec in PROVIDERS:
+        stale = [a for a in spec.name_aliases if a in known and spec.name not in known]
+        assert not stale, f"{spec.name}: LiteLLM knows {stale} but not {spec.name!r} -- adopt LiteLLM's spelling"
+
+
+def test_registry_and_schema_declare_the_same_providers() -> None:
+    # A provider needs both a ProviderSpec (env keys, prefixes, detection) and a
+    # ProvidersConfig field (where its credentials live). Miss either half and it
+    # is unconfigurable or unreachable, with nothing else failing.
+    from raven.config.schema import ProvidersConfig
+
+    assert {spec.name for spec in PROVIDERS} == set(ProvidersConfig.model_fields)
+
+
 # Direct providers seeded in the model picker (issue #100). Each must expose a
 # non-empty default_model drawn from its curated shortlist, so the onboarding
 # fallback and the picker stay in sync and no provider defaults to empty.
@@ -61,7 +116,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     "openai",
     "anthropic",
     "gemini",
-    "zhipu",
+    "zai",
     "dashscope",
     "groq",
     "minimax_global",
@@ -80,7 +135,6 @@ def _concrete_provider_subclasses() -> set[type]:
     """All non-abstract LLMProvider subclasses defined in raven.providers."""
     # Import each backend module so its subclass is registered on LLMProvider.
     import raven.providers.azure_openai_provider  # noqa: F401
-    import raven.providers.custom_provider  # noqa: F401
     import raven.providers.litellm_provider  # noqa: F401
     import raven.providers.minimax_oauth_provider  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
@@ -103,10 +157,9 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_six_concrete_backend_classes() -> None:
+def test_exactly_five_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
-    from raven.providers.custom_provider import CustomProvider
     from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
@@ -116,10 +169,26 @@ def test_exactly_six_concrete_backend_classes() -> None:
         LiteLLMProvider,
         AzureOpenAIProvider,
         OpenAICodexProvider,
-        CustomProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
         assert issubclass(cls, LLMProvider)
+
+
+def test_every_gateway_prefixes_the_models_it_routes() -> None:
+    """The prefix is what sends the request to the gateway rather than the vendor.
+
+    Reading the raw registry field instead of the resolved prefix dropped it for
+    any gateway whose name is already LiteLLM's, so a stored "anthropic/claude-x"
+    went out unprefixed and LiteLLM handed the gateway's key to Anthropic.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    for spec in PROVIDERS:
+        if not spec.is_gateway:
+            continue
+        provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
+        resolved = provider._resolve_model("probe-model")
+        assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
