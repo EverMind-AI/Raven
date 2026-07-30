@@ -1,11 +1,15 @@
-"""Dogfood — TUI whitelist commands routed through cli.dispatch.
+"""Dogfood — a slash command renders through the whole stack.
 
-Each command is sent into the alt-screen TUI via `/cmd<sub>` slash routing,
-which hits the `cli.dispatch` RPC method on the Python side; the rendered
-Click output streams back through the unix socket and renders into Ink.
+A slash the TUI does not own locally goes out as `slash.exec`, runs Click
+in-process on the Python side, and comes back through the unix socket to be
+rendered by Ink. That round trip is what only a real terminal can prove; the
+dispatch layer itself has 31 dedicated tests in `tests/test_tui_rpc_cli_dispatch.py`
+and needs no TUI.
 
-Pattern: spawn -> wait for the status bar to report ready -> type slash ->
-confirm the composer took it -> enter -> wait for output -> exit.
+The TUI leg is identical for every dispatched command (`createSlashHandler.ts`
+routes them all through one `slash.exec` call), so this covers output *shapes*
+rather than a command list -- a paged table, an inline notice, a usage error.
+Repeating it per command bought nothing and cost 12 spawns a run (#228).
 
 Two properties this file has to keep, both learned the hard way (#228):
 
@@ -16,7 +20,7 @@ Two properties this file has to keep, both learned the hard way (#228):
   `_assert_absent_before_submit` fails loudly the day one stops being specific.
 - Ctrl+C is a ladder, not an exit key (`ui-tui/src/app/useInputHandlers.ts`):
   while the UI is busy it cancels the turn, with text in the composer it clears
-  the input, and only then does it quit. `_exit_tui` presses until the process
+  the input, and only then does it quit. `exit_tui` presses until the process
   is gone.
 """
 
@@ -30,23 +34,17 @@ from tests.tui.autotest.raven_ux import READY_RE, exit_tui
 
 # (slash command, a literal from that command's real output)
 #
-# Alternations cover renderings that depend on local state: an empty store
-# prints a one-line notice where a populated one renders a table.
+# One entry per rendering shape the stack can produce, not one per command:
 _WHITELIST = [
+    # top-level command, panel output
     ("status", r"Raven Status"),
-    ("channels status", r"Channel Status"),
-    ("channels list", r"Available Channels"),
+    # long output -> pager overlay, and a table header the welcome frame's own
+    # "Available Skills (1)" line cannot satisfy
     ("skill list", r"Source.+Description"),
+    # non-zero exit -> Click usage error rendered as a warning
     ("skill get", r"Missing argument"),
-    ("cron list", r"Cron service"),
-    ("cron get", r"Missing argument"),
-    ("sentinel status", r"Sentinel Status"),
-    # --state defaults on, so the NudgePolicy section prints even with an
-    # empty feedback log; the table title only appears when events exist.
-    ("sentinel nudges", r"Recent NudgeFeedback|NudgePolicy state"),
-    ("sentinel decisions", r"No live decisions|Discovery decisions \("),
+    # short output -> inline notice instead of a pager
     ("sentinel routines", r"No routines in store|Routines \(\d+\)"),
-    ("sandbox list", r"Sandbox VMs|Debug socket not found"),
 ]
 
 
