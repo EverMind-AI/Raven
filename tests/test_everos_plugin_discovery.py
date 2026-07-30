@@ -131,7 +131,7 @@ class TestActivationAndFactory:
         backend = reg.build_memory_backend(
             "everos",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         # @runtime_checkable Protocol: isinstance returns True iff all
         # five methods are present.
@@ -151,7 +151,7 @@ def backend(tmp_path: Path):
     be = reg.build_memory_backend(
         "everos",
         config={},
-        services=ServiceLocator(workspace=tmp_path),
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
     )
     be._adapter = _NoOpAdapter()
     return be
@@ -195,7 +195,7 @@ class TestConfigPassthrough:
         backend = reg.build_memory_backend(
             "everos",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(backend._adapter, _HttpEverosAdapter)
 
@@ -206,7 +206,7 @@ class TestConfigPassthrough:
         backend = reg.build_memory_backend(
             "everos",
             config={"base_url": "http://custom:9000"},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(backend._adapter, _HttpEverosAdapter)
         assert backend._adapter._base_url == "http://custom:9000"

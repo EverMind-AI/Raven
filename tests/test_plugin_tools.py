@@ -147,7 +147,7 @@ class TestRegistryTools:
         out = reg.build_tool(
             "t",
             config={"k": 1},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert out == "built"
         assert captured["config"] == {"k": 1}

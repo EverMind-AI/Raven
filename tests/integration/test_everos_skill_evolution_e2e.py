@@ -59,7 +59,7 @@ def _backend(tmp_path: Path, *, agent_id: str) -> EverosBackend:
     be = EverosBackend(
         PluginContext(
             config={"agent_id": agent_id},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
     )
     assert isinstance(be._adapter, _HttpEverosAdapter), "backend did not bind the HTTP adapter"

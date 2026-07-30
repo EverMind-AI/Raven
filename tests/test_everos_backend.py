@@ -74,7 +74,7 @@ class _FakeAdapter:
 def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path),
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
     )
 
 
