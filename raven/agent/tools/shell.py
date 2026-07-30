@@ -222,9 +222,7 @@ class ExecTool(Tool):
         if digest in turn.denied_digests:
             return self._terminal_error("Error: User denied this command earlier in the current turn")
         if turn.responder is None or not turn.conversation_id:
-            return self._terminal_error(
-                "Error: Command requires user approval, but this turn is not interactive"
-            )
+            return self._terminal_error("Error: Command requires user approval, but this turn is not interactive")
         approved = await turn.responder.await_approval(
             conversation_id=turn.conversation_id,
             turn_id=turn.turn_id,
