@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
-from raven.security.trust import wrap_untrusted
+from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.helpers import build_assistant_message, detect_image_mime
 
 if TYPE_CHECKING:
@@ -308,14 +308,24 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         tool_call_id: str,
         tool_name: str,
         result: str,
+        blocks: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
         Tool output is attacker-influenceable (web pages, file/command
         contents, MCP returns), so it is fenced as untrusted data before it
         reaches the model — every tool result funnels through here.
+
+        ``blocks`` carries multimodal content (an image the tool read) and
+        replaces the plain text when present. It is only ever set for providers
+        that can carry an image in a tool result; ``result`` stays the fallback
+        and must make sense on its own.
         """
-        content = wrap_untrusted(result, source=tool_name)
+        content: Any
+        if blocks:
+            content = wrap_untrusted_blocks(blocks, source=tool_name)
+        else:
+            content = wrap_untrusted(result, source=tool_name)
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
         return messages
 
