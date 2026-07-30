@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -14,13 +15,14 @@ from raven.importer.scanners.hermes import (
     DryRunRunner,
     HermesExportError,
     HermesScanner,
+    SessionListing,
     hermes_session_to_messages,
     list_exportable_sessions,
     parse_dry_run_listing,
     resolve_hermes_home,
     strip_images,
 )
-from raven.importer.types import Platform, SourceKind
+from raven.importer.types import Platform, ScanResult, SourceKind
 
 
 def _make_home(
@@ -40,6 +42,15 @@ def _make_home(
     return home
 
 
+async def _no_conversations(args: list[str]) -> str:
+    """A run_cli stub for tests that only care about memory files.
+
+    scan() always probes for conversations too, so any test that does not
+    supply its own fake here must not fall through to the real hermes binary.
+    """
+    return "Would export 0 session(s) (>= 1 messages).\n"
+
+
 def test_env_var_wins_over_platform_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "custom"))
     assert resolve_hermes_home() == tmp_path / "custom"
@@ -57,7 +68,7 @@ async def test_missing_home_yields_nothing(tmp_path: Path) -> None:
 
 async def test_both_memory_files_discovered(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    results = await HermesScanner(hermes_home=home).scan()
+    results = await HermesScanner(hermes_home=home, run_cli=_no_conversations).scan()
     keys = {r.source_key for r in results}
     assert keys == {"user-md", "memory-md"}
     assert all(r.platform is Platform.HERMES for r in results)
@@ -66,26 +77,28 @@ async def test_both_memory_files_discovered(tmp_path: Path) -> None:
 
 async def test_lock_sibling_is_not_a_source(tmp_path: Path) -> None:
     home = _make_home(tmp_path)
-    results = await HermesScanner(hermes_home=home).scan()
+    results = await HermesScanner(hermes_home=home, run_cli=_no_conversations).scan()
     assert not any(".lock" in str(p) for r in results for p in r.file_paths)
 
 
 async def test_missing_one_file_yields_only_the_other(tmp_path: Path) -> None:
     home = _make_home(tmp_path, memory_md=None)
-    results = await HermesScanner(hermes_home=home).scan()
+    results = await HermesScanner(hermes_home=home, run_cli=_no_conversations).scan()
     assert [r.source_key for r in results] == ["user-md"]
 
 
 async def test_scan_result_carries_size_and_mtime(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="x" * 40)
-    (result,) = [r for r in await HermesScanner(hermes_home=home).scan() if r.source_key == "user-md"]
+    (result,) = [
+        r for r in await HermesScanner(hermes_home=home, run_cli=_no_conversations).scan() if r.source_key == "user-md"
+    ]
     assert result.estimated_size == 40
     assert result.mtime > 0
 
 
 async def test_user_md_entries_are_all_user_role(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="fact one\n§\nfact two")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     assert session.session_id == "import-hermes-user-md"
@@ -95,7 +108,7 @@ async def test_user_md_entries_are_all_user_role(tmp_path: Path) -> None:
 
 async def test_memory_md_entries_are_assistant_after_a_user_preamble(tmp_path: Path) -> None:
     home = _make_home(tmp_path, memory_md="agent noted X\n§\nagent noted Y")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "memory-md"]
     session = await scanner.read(result)
     assert [m.role for m in session.messages] == ["user", "assistant", "assistant"]
@@ -103,7 +116,7 @@ async def test_memory_md_entries_are_assistant_after_a_user_preamble(tmp_path: P
 
 async def test_bare_section_sign_inside_an_entry_is_not_split(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="see § 4.2 for details\n§\nsecond")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     bodies = [m.content for m in session.messages[1:]]
@@ -112,7 +125,7 @@ async def test_bare_section_sign_inside_an_entry_is_not_split(tmp_path: Path) ->
 
 async def test_blank_entries_dropped_and_empty_file_yields_preamble_only(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="a\n§\n\n§\n   \n§\nb")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     assert [m.content for m in session.messages[1:]] == ["a", "b"]
@@ -120,7 +133,7 @@ async def test_blank_entries_dropped_and_empty_file_yields_preamble_only(tmp_pat
 
 async def test_empty_file_yields_zero_messages(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     assert session.messages == ()
@@ -128,7 +141,7 @@ async def test_empty_file_yields_zero_messages(tmp_path: Path) -> None:
 
 async def test_timestamps_are_monotonic_from_mtime(tmp_path: Path) -> None:
     home = _make_home(tmp_path, user_md="a\n§\nb")
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     stamps = [m.timestamp for m in session.messages]
@@ -155,7 +168,7 @@ async def test_preamble_language_looks_past_the_first_entry(tmp_path: Path) -> N
 
 async def _preamble(root: Path, body: str) -> str:
     home = _make_home(root, user_md=body)
-    scanner = HermesScanner(hermes_home=home)
+    scanner = HermesScanner(hermes_home=home, run_cli=_no_conversations)
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     return session.messages[0].content
@@ -584,3 +597,131 @@ def test_strip_images_unknown_dict_part_with_neither_field_is_dropped_not_counte
     out = strip_images(content)
     assert out == ""
     assert "[image" not in out
+
+
+# -- HermesScanner conversation wiring --------------------------------------
+
+
+class _FakeCli:
+    """Stands in for the hermes binary via the scanner's run_cli seam.
+
+    The single seam used for both the dry-run listing and the export takes
+    just an argument list and returns stdout -- there is no separate output
+    path, since both calls pass "-" for stdout themselves.
+    """
+
+    def __init__(self, listing: str, sessions: dict[str, dict]) -> None:
+        self.listing = listing
+        self.sessions = sessions
+        self.calls: list[list[str]] = []
+
+    async def __call__(self, args: list[str]) -> str:
+        self.calls.append(list(args))
+        if "--dry-run" in args:
+            return self.listing
+        sid = args[args.index("--session-id") + 1]
+        return json.dumps(self.sessions[sid]) + "\n"
+
+
+async def test_conversations_become_scan_results(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    cli = _FakeCli(_GOOD, {})
+    results = await HermesScanner(hermes_home=home, run_cli=cli).scan()
+    convs = [r for r in results if r.kind is SourceKind.CONVERSATION]
+    assert {r.source_key for r in convs} == {
+        "20260723_153451_9a0929",
+        "20260727_110342_d612f2ef",
+    }
+    assert all(r.platform is Platform.HERMES for r in convs)
+    assert all(r.file_paths == () and r.estimated_size == 0 and r.mtime == 0.0 for r in convs)
+
+
+async def test_default_run_cli_is_the_task_11_runner() -> None:
+    scanner = HermesScanner(hermes_home=Path("/nonexistent"))
+    assert scanner._run_cli is hermes_module._run_hermes_dry_run
+
+
+async def test_read_conversation_uses_session_id_export(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    sid = "20260727_110342_d612f2ef"
+    cli = _FakeCli(f"Would export 1 session(s).\n  {sid}  qqbot\n", {sid: _SESSION})
+    scanner = HermesScanner(hermes_home=home, run_cli=cli)
+    (conv,) = [r for r in await scanner.scan() if r.kind is SourceKind.CONVERSATION]
+    session = await scanner.read(conv)
+    assert session.session_id == f"import-hermes-{sid}"
+    assert [m.role for m in session.messages] == ["user", "assistant", "tool", "assistant"]
+    export_call = cli.calls[-1]
+    assert export_call[export_call.index("--session-id") : export_call.index("--session-id") + 2] == [
+        "--session-id",
+        sid,
+    ]
+    assert export_call[-1] == "-"
+
+
+async def test_read_conversation_tolerates_multiple_export_lines(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    sid = "s1"
+    first = {"id": sid, "messages": [{"role": "user", "content": "first", "timestamp": 1.0}]}
+    second = {"id": sid, "messages": [{"role": "user", "content": "second", "timestamp": 2.0}]}
+
+    async def cli(args: list[str]) -> str:
+        return json.dumps(first) + "\n" + json.dumps(second) + "\n"
+
+    scanner = HermesScanner(hermes_home=home, run_cli=cli)
+    result = ScanResult(
+        source_key=sid,
+        platform=Platform.HERMES,
+        kind=SourceKind.CONVERSATION,
+        file_paths=(),
+        estimated_size=0,
+        mtime=0.0,
+    )
+    session = await scanner.read(result)
+    assert [m.content for m in session.messages] == ["first", "second"]
+
+
+async def test_scan_conversations_logs_a_warning_for_unlisted_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = _make_home(tmp_path)
+    listing = SessionListing(session_ids=("20260723_153451_9a0929",), unlisted=50)
+
+    async def fake_list_exportable_sessions(*, runner: DryRunRunner) -> SessionListing:
+        return listing
+
+    monkeypatch.setattr(hermes_module, "list_exportable_sessions", fake_list_exportable_sessions)
+    warnings: list[tuple] = []
+    monkeypatch.setattr(hermes_module.logger, "warning", lambda *a, **k: warnings.append(a))
+
+    results = await HermesScanner(hermes_home=home, run_cli=_no_conversations).scan()
+    convs = [r for r in results if r.kind is SourceKind.CONVERSATION]
+    assert {r.source_key for r in convs} == {"20260723_153451_9a0929"}
+    assert any(50 in call for call in warnings)
+
+
+async def test_scan_wraps_a_missing_binary_as_an_export_error(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+
+    async def _boom(args: list[str]) -> str:
+        raise FileNotFoundError("hermes")
+
+    with pytest.raises(HermesExportError, match="hermes"):
+        await HermesScanner(hermes_home=home, run_cli=_boom).scan()
+
+
+async def test_read_wraps_a_missing_binary_as_an_export_error(tmp_path: Path) -> None:
+    home = _make_home(tmp_path)
+    result = ScanResult(
+        source_key="sid",
+        platform=Platform.HERMES,
+        kind=SourceKind.CONVERSATION,
+        file_paths=(),
+        estimated_size=0,
+        mtime=0.0,
+    )
+
+    async def _boom(args: list[str]) -> str:
+        raise FileNotFoundError("hermes")
+
+    with pytest.raises(HermesExportError, match="hermes"):
+        await HermesScanner(hermes_home=home, run_cli=_boom).read(result)

@@ -12,6 +12,7 @@ module.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
@@ -85,18 +86,21 @@ class HermesScanner:
 
     platform = Platform.HERMES
 
-    def __init__(self, hermes_home: Path | None = None) -> None:
+    def __init__(self, hermes_home: Path | None = None, run_cli: DryRunRunner | None = None) -> None:
         self._home = hermes_home if hermes_home is not None else resolve_hermes_home()
+        self._run_cli = run_cli if run_cli is not None else _run_hermes_dry_run
 
     async def scan(self) -> list[ScanResult]:
         if not self._home.is_dir():
             logger.info("hermes not installed at {}; nothing to import", self._home)
             return []
-        return self._scan_memory_files()
+        return self._scan_memory_files() + await self._scan_conversations()
 
     async def read(self, result: ScanResult) -> ImportSession:
         if result.kind is SourceKind.MEMORY_FILE:
             return self._read_memory_file(result)
+        if result.kind is SourceKind.CONVERSATION:
+            return await self._read_conversation(result)
         raise ValueError(f"unsupported scan result kind: {result.kind}")
 
     # -- scan ---------------------------------------------------------------
@@ -156,6 +160,49 @@ class HermesScanner:
                     sender_id="user",
                 )
             )
+        return ImportSession(session_id=session_id, messages=tuple(messages))
+
+    # -- conversations --------------------------------------------------------
+
+    async def _scan_conversations(self) -> list[ScanResult]:
+        try:
+            listing = await list_exportable_sessions(runner=self._run_cli)
+        except HermesExportError:
+            raise
+        except OSError as exc:
+            raise HermesExportError(f"cannot run the hermes CLI ({exc}); conversations cannot be imported") from exc
+        if listing.unlisted:
+            logger.warning(
+                "hermes has {} session(s) that could not be enumerated; they will not be imported",
+                listing.unlisted,
+            )
+        return [
+            ScanResult(
+                source_key=sid,
+                platform=Platform.HERMES,
+                kind=SourceKind.CONVERSATION,
+                file_paths=(),
+                estimated_size=0,
+                mtime=0.0,
+            )
+            for sid in listing.session_ids
+        ]
+
+    async def _read_conversation(self, result: ScanResult) -> ImportSession:
+        session_id = f"import-hermes-{result.source_key}"
+        args = [*_EXPORT_ARGS, "--session-id", result.source_key, "-"]
+        try:
+            raw = await self._run_cli(args)
+        except HermesExportError:
+            raise
+        except OSError as exc:
+            raise HermesExportError(f"cannot run the hermes CLI ({exc}); session not imported") from exc
+        messages: list[ImportMessage] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            messages.extend(hermes_session_to_messages(json.loads(stripped)))
         return ImportSession(session_id=session_id, messages=tuple(messages))
 
 
@@ -254,6 +301,11 @@ def hermes_session_to_messages(session: dict[str, Any]) -> list[ImportMessage]:
 
 _SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]+$")
 _DRYRUN_HEADER_RE = re.compile(r"^Would export (\d+) session\(s\)")
+
+# The trailing "-" writes the export to stdout instead of a file, same as the
+# dry-run listing's own "-" argument, so the single DryRunRunner seam serves
+# both call shapes.
+_EXPORT_ARGS = ("sessions", "export", "--format", "jsonl")
 
 # hermes truncates the printed listing at this many rows even when the
 # header count is higher (hermes_cli/main.py: `candidates[:100]`).

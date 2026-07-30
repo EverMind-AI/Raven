@@ -125,6 +125,19 @@ async def _build_and_run(
         await backend.stop()
 
 
+def _report_scan_error(platform: Platform, error: BaseException) -> None:
+    """Say which platform could not be scanned, and why, on the console.
+
+    `scan` silences the raven logger and `run` sends it to a file, so a scanner
+    failure would otherwise show up only as that platform's data quietly missing
+    from the table. Hermes has to shell out to enumerate conversations, so this
+    is reachable simply by having its binary off PATH.
+    """
+    name = PLATFORM_DISPLAY_NAMES.get(platform.value, platform.value)
+    console.print(f"[yellow]Could not scan {name}: {error}[/yellow]")
+    console.print("[dim]Other platforms were scanned normally.[/dim]")
+
+
 def _format_skill_summary(summary: SkillImportSummary) -> str:
     """One standalone sentence, worded like the ``scan`` line.
 
@@ -240,7 +253,7 @@ def scan_cmd(
     async def _do() -> tuple[list[ScanResult], int | None]:
         from raven.importer.scanners import scan_all
 
-        results = await scan_all(platform_filter=platform_filter)
+        results = await scan_all(platform_filter=platform_filter, on_error=_report_scan_error)
         skill_count = None
         if platform_filter is None or platform_filter is Platform.HERMES:
             skills = await HermesSkillSource().discover()
@@ -467,7 +480,7 @@ async def _run_async(
     platform_filter = _platform_option(platform)
     from raven.importer.scanners import scan_all
 
-    all_results = await scan_all(platform_filter=platform_filter)
+    all_results = await scan_all(platform_filter=platform_filter, on_error=_report_scan_error)
 
     if not all_results:
         console.print("No importable data found.")

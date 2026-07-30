@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 from loguru import logger
 
@@ -20,18 +21,36 @@ async def scan_all(
     scanners: list[Scanner] | None = None,
     *,
     platform_filter: Platform | None = None,
+    on_error: Callable[[Platform, BaseException], None] | None = None,
 ) -> list[ScanResult]:
-    """Run all scanners concurrently and return aggregated results."""
+    """Run all scanners concurrently and return aggregated results.
+
+    One platform failing must not cost the others theirs. A scanner that has to
+    shell out -- hermes does, to enumerate conversations -- fails for reasons
+    that say nothing about whether the user's other tools are importable, and
+    letting that propagate would leave someone whose hermes binary is off PATH
+    unable to import anything at all. ``on_error`` is how a caller surfaces the
+    failure instead of it becoming a silent zero: the CLI prints it, since the
+    logger is file-only during a run.
+    """
     if scanners is None:
         scanners = build_scanners()
     if platform_filter:
         scanners = [s for s in scanners if s.platform == platform_filter]
     logger.info("scan started: {} scanner(s)", len(scanners))
 
-    per_scanner = await asyncio.gather(*(s.scan() for s in scanners))
+    per_scanner = await asyncio.gather(*(s.scan() for s in scanners), return_exceptions=True)
 
     results: list[ScanResult] = []
     for scanner, found in zip(scanners, per_scanner):
+        # gather only hands back Exception instances as results; a BaseException
+        # such as KeyboardInterrupt propagates out of the gather itself, so a
+        # Ctrl-C is never mistaken here for a platform that failed to scan.
+        if isinstance(found, Exception):
+            logger.warning("scan {} failed: {}", scanner.platform.value, found)
+            if on_error is not None:
+                on_error(scanner.platform, found)
+            continue
         logger.info("scan {}: {} results", scanner.platform.value, len(found))
         results.extend(found)
 
