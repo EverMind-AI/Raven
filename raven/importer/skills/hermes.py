@@ -86,12 +86,13 @@ class HermesSkillSource:
             if not _is_discoverable(skill_md, root):
                 continue
             directory = skill_md.parent
+            frontmatter_name = _frontmatter_name(skill_md)
             out.append(
                 DiscoveredSkill(
                     name=directory.name,
                     path=directory,
-                    origin=_classify(directory, skill_md, manifest, hub, usage),
-                    size=_directory_size(directory),
+                    origin=_classify(directory, manifest, hub, usage, frontmatter_name=frontmatter_name),
+                    registry_name=frontmatter_name or directory.name,
                 )
             )
         return out
@@ -111,21 +112,26 @@ def _is_discoverable(skill_md: Path, root: Path) -> bool:
 
 def _classify(
     directory: Path,
-    skill_md: Path,
     manifest: dict[str, str],
     hub: set[str],
     usage: dict[str, Any],
+    *,
+    frontmatter_name: str,
 ) -> SkillOrigin:
-    for key in (_frontmatter_name(skill_md), directory.name):
+    for key in (frontmatter_name, directory.name):
         if key and key in manifest:
             origin_hash = manifest[key]
             if origin_hash and origin_hash == package_hash(directory):
                 return SkillOrigin.BUNDLED_PRISTINE
             # A v1 manifest carries no hash: bundled is proven, pristine is not.
             return SkillOrigin.BUNDLED_MODIFIED
+    # Hermes' hub lock really is keyed by directory name, unlike the manifest
+    # and usage records above -- verified against a real install where the
+    # lock key ("segment-anything") differs from the frontmatter name
+    # ("segment-anything-model").
     if directory.name in hub:
         return SkillOrigin.HUB_INSTALLED
-    if _is_curator_managed(usage.get(directory.name)):
+    if _is_curator_managed(usage.get(frontmatter_name or directory.name)):
         return SkillOrigin.CURATOR_MANAGED
     return SkillOrigin.LOCAL_UNKNOWN
 
@@ -182,17 +188,6 @@ def _read_usage(root: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _directory_size(directory: Path) -> int:
-    total = 0
-    for path in directory.rglob("*"):
-        try:
-            if path.is_file():
-                total += path.stat().st_size
-        except OSError:
-            continue
-    return total
 
 
 __all__ = ["HermesSkillSource"]

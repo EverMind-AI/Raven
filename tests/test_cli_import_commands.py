@@ -82,8 +82,8 @@ class TestScan:
 
     def test_scan_shows_importable_skill_count(self) -> None:
         skills = [
-            DiscoveredSkill(name="a", path=Path("/fake/a"), origin=SkillOrigin.LOCAL_UNKNOWN, size=1),
-            DiscoveredSkill(name="b", path=Path("/fake/b"), origin=SkillOrigin.BUNDLED_PRISTINE, size=1),
+            DiscoveredSkill(name="a", path=Path("/fake/a"), origin=SkillOrigin.LOCAL_UNKNOWN, registry_name="a"),
+            DiscoveredSkill(name="b", path=Path("/fake/b"), origin=SkillOrigin.BUNDLED_PRISTINE, registry_name="b"),
         ]
         with (
             patch(

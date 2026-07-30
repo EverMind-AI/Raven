@@ -58,7 +58,22 @@ async def install_skills(
     installed = skipped = failed = 0
     pristine = len(discovered) - len(wanted)
     claimed: set[str] = set()
+    claimed_registry_names: set[str] = set()
     for skill in wanted:
+        # A registry-name collision cannot be renamed away: the pool keys a
+        # skill as (source, frontmatter name), which travels inside the copied
+        # SKILL.md, so a second skill under any directory name would still be
+        # the invisible one that get(name) never returns. Skipping and counting
+        # it at least makes the loss reportable.
+        if skill.registry_name in claimed_registry_names:
+            logger.warning(
+                "skill {} declares the name {} already claimed this run; skipping the duplicate at {}",
+                skill.name,
+                skill.registry_name,
+                skill.path,
+            )
+            skipped += 1
+            continue
         target = _target_for(skill, dest_root, claimed)
         if target is None:
             skipped += 1
@@ -86,6 +101,7 @@ async def install_skills(
             failed += 1
             continue
         state.mark_submitted(source.platform, key)
+        claimed_registry_names.add(skill.registry_name)
         installed += 1
 
     logger.info(

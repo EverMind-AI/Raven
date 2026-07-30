@@ -5,13 +5,14 @@ EverOS is not enough on its own: six host consumers read
 Sentinel producers), and the Sentinel daily plan takes that file as its entire
 input. Content that only reaches EverOS is invisible to all of them.
 
-Each entry targets one H2 section because injection picks whole sections --
-``MemoryStore.get_memory_context`` keeps the top-2 by lexical overlap. A single
-large section is therefore all-or-nothing and occupies one of the two slots,
-while a small section per fact aligns the selection grain with the fact grain.
-Entries that land on the same heading (including a heading the seeded USER.md
-template already ships, e.g. ``## Preferences``) are appended into that
-section's existing body rather than replacing it.
+Each entry is classified to one H2 section because injection picks whole
+sections -- ``MemoryStore.get_memory_context`` keeps the top-2 by lexical
+overlap -- so which section an entry lands in is what determines whether a
+later turn ever sees it. In practice the classifier is biased toward the
+handful of headings the seeded USER.md template already ships (e.g.
+``## Preferences``), so most entries append into an existing section's body
+rather than minting a new one; a new heading is created only when nothing
+already on file fits.
 
 The LLM only picks a heading; the entry text is written verbatim. On any
 failure -- a raised exception, a provider-returned error response, or an
@@ -22,11 +23,12 @@ includes, so a misclassification costs tokens, never visibility.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from raven.memory_engine.consolidate.consolidator import _parse_user_md_sections
+from raven.memory_engine.consolidate.consolidator import _parse_user_md_sections as parse_user_md_sections
 
 if TYPE_CHECKING:
     from raven.memory_engine.consolidate.consolidator import MemoryStore
@@ -49,45 +51,83 @@ _PROMPT = (
 )
 
 
+@dataclass(frozen=True)
+class ImportedSections:
+    """Headings written, plus how many entries were already present.
+
+    ``len()`` reflects only ``written`` -- matching the plain list of
+    headings this replaces, so ``len(result)`` at the existing call site
+    keeps counting what actually landed, not what was skipped.
+    """
+
+    written: tuple[str, ...]
+    skipped: int
+
+    def __len__(self) -> int:
+        return len(self.written)
+
+
 async def import_user_md_sections(
     entries: list[str],
     store: "MemoryStore",
     *,
     provider: "LLMProvider | None" = None,
     model: str = "",
-) -> list[str]:
+) -> ImportedSections:
     """Land each entry as its own H2 section, or append it into that section's
-    body if the heading already exists. Returns one heading per entry written,
-    so two entries sharing a section yield that heading twice.
+    body if the heading already exists. ``written`` holds one heading per
+    entry actually written, so two entries sharing a section yield that
+    heading twice; ``skipped`` counts entries already present verbatim in
+    their target section.
 
     Entry text is written unchanged apart from surrounding whitespace; blank
-    entries carry nothing to import and are dropped.
+    entries carry nothing to import and are dropped (and are not counted as
+    skipped).
 
-    Idempotency is keyed on the entry's own text, not on the heading: a
-    heading collision is a routine outcome (several facts can legitimately
-    share a section, and the seeded USER.md template already ships headings
-    like "## Preferences"), so treating "heading already exists" as "already
+    Idempotency is keyed on the entry's own text against its *target
+    section's* body, not the heading and not the whole file: a heading
+    collision is a routine outcome (several facts can legitimately share a
+    section, and the seeded USER.md template already ships headings like
+    "## Preferences"), so treating "heading already exists" as "already
     imported" would silently drop content on the common cold-start path.
+    Matching the whole file would go too far the other way and drop a
+    distinct entry that happens to be a substring of unrelated text
+    elsewhere in the profile.
+
+    Heading classification (the LLM call) never depends on the file's current
+    content, so every heading is picked before the write lock is taken --
+    only the read-check-write of each section is serialized, keeping a
+    classification-heavy run from stalling every other writer of user.md for
+    its whole duration.
     """
+    kept = [(entry, stripped) for entry, stripped in ((e, e.strip()) for e in entries) if stripped]
+    headings = [await _pick_heading(entry, provider=provider, model=model) for entry, _ in kept]
+
     written: list[str] = []
+    skipped = 0
     with store.locked():
-        for entry in entries:
-            stripped = entry.strip()
-            if not stripped:
-                continue
+        for (_, stripped), heading in zip(kept, headings):
             current = store.read_long_term()
-            if stripped in current:
-                logger.info("hermes user.md: entry already present, skipping")
+            existing_body = parse_user_md_sections(current).get(heading, "")
+            if _entry_already_in_section(stripped, existing_body):
+                logger.info("hermes user.md: entry already present in {}, skipping", heading)
+                skipped += 1
                 continue
-            heading = await _pick_heading(entry, provider=provider, model=model)
-            existing_body = _parse_user_md_sections(current).get(heading)
             # update_section replaces a section's body wholesale, so any existing
             # body (template placeholder text or a user edit) must be folded into
             # the new body here or it is silently destroyed.
             new_body = f"{existing_body}\n\n{stripped}" if existing_body else stripped
             store.update_section(heading, new_body, at_end=False)
             written.append(heading)
-    return written
+    return ImportedSections(written=tuple(written), skipped=skipped)
+
+
+def _entry_already_in_section(entry: str, section_body: str) -> bool:
+    """True iff ``entry`` is already one of the blank-line-separated
+    paragraphs of ``section_body`` -- the same shape ``import_user_md_sections``
+    appends entries in, so an exact match here means this entry, not merely
+    text that happens to contain or be contained by it."""
+    return entry in {paragraph.strip() for paragraph in section_body.split("\n\n")}
 
 
 async def _pick_heading(entry: str, *, provider: "LLMProvider | None", model: str) -> str:

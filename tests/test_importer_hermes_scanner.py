@@ -45,7 +45,7 @@ def _make_home(
 
 # Captured before the autouse guard below can replace it, so the one test that
 # needs the real runner's behaviour can still reach it explicitly.
-_REAL_DRY_RUN_RUNNER = hermes_module._run_hermes_dry_run
+_REAL_HERMES_CLI_RUNNER = hermes_module._run_hermes_cli
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +61,7 @@ def _forbid_the_real_hermes_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _refuse(args: Sequence[str]) -> str:
         raise AssertionError(f"test reached the real hermes CLI with {list(args)!r}; pass run_cli= or runner=")
 
-    monkeypatch.setattr(hermes_module, "_run_hermes_dry_run", _refuse)
+    monkeypatch.setattr(hermes_module, "_run_hermes_cli", _refuse)
 
 
 async def _no_conversations(args: list[str]) -> str:
@@ -81,6 +81,56 @@ def test_env_var_wins_over_platform_default(tmp_path: Path, monkeypatch: pytest.
 def test_blank_env_var_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HERMES_HOME", "   ")
     assert resolve_hermes_home() != tmp_path / "   "
+
+
+def test_active_named_profile_resolves_under_profiles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "active_profile").write_text("coder\n", encoding="utf-8")
+    assert resolve_hermes_home() == home / "profiles" / "coder"
+
+
+def test_active_profile_named_default_stays_at_the_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "active_profile").write_text("Default\n", encoding="utf-8")
+    assert resolve_hermes_home() == home
+
+
+def test_missing_active_profile_file_stays_at_the_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert resolve_hermes_home() == tmp_path / ".hermes"
+
+
+def test_env_var_still_wins_over_an_active_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    (home / "active_profile").write_text("coder\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "custom"))
+    assert resolve_hermes_home() == tmp_path / "custom"
+
+
+def test_windows_fallback_without_localappdata_uses_home_appdata_local(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(hermes_module.sys, "platform", "win32")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert resolve_hermes_home() == tmp_path / "AppData" / "Local" / "hermes"
+
+
+def test_windows_fallback_prefers_localappdata_when_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
+    monkeypatch.setattr(hermes_module.sys, "platform", "win32")
+    assert resolve_hermes_home() == tmp_path / "AppData" / "Local" / "hermes"
 
 
 async def test_missing_home_yields_nothing(tmp_path: Path) -> None:
@@ -463,7 +513,7 @@ async def test_missing_hermes_executable_raises(monkeypatch: pytest.MonkeyPatch)
     so it uses the reference captured before the autouse guard replaced it."""
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     with pytest.raises(HermesExportError):
-        await list_exportable_sessions(runner=_REAL_DRY_RUN_RUNNER)
+        await list_exportable_sessions(runner=_REAL_HERMES_CLI_RUNNER)
 
 
 # -- hermes_session_to_messages / strip_images ------------------------------
@@ -558,15 +608,6 @@ def test_tool_calls_reach_import_message_as_a_tuple() -> None:
     """ImportMessage declares tuple[dict, ...]; hermes hands over a list."""
     caller = next(m for m in hermes_session_to_messages(_SESSION) if m.tool_calls)
     assert isinstance(caller.tool_calls, tuple)
-
-
-def test_sender_id_splits_user_from_assistant() -> None:
-    msgs = hermes_session_to_messages(_SESSION)
-    assert {m.role: m.sender_id for m in msgs} == {
-        "user": "user",
-        "assistant": "assistant",
-        "tool": "assistant",
-    }
 
 
 def test_a_zero_timestamp_is_dropped() -> None:
@@ -693,9 +734,9 @@ async def test_conversations_become_scan_results(tmp_path: Path) -> None:
     assert all(r.file_paths == () and r.estimated_size == 0 and r.mtime == 0.0 for r in convs)
 
 
-async def test_default_run_cli_is_the_task_11_runner() -> None:
+async def test_default_run_cli_is_the_module_level_hermes_cli_runner() -> None:
     scanner = HermesScanner(hermes_home=Path("/nonexistent"))
-    assert scanner._run_cli is hermes_module._run_hermes_dry_run
+    assert scanner._run_cli is hermes_module._run_hermes_cli
 
 
 async def test_read_conversation_uses_session_id_export(tmp_path: Path) -> None:
@@ -770,6 +811,32 @@ async def test_a_missing_binary_costs_the_conversations_not_the_memory_files(tmp
     assert {r.source_key for r in results} == {"user-md", "memory-md"}
     assert all(r.kind is SourceKind.MEMORY_FILE for r in results)
     assert isinstance(scanner.partial_failure, HermesExportError)
+
+
+async def test_read_conversation_names_the_session_when_hermes_prints_a_failure_to_stdout(
+    tmp_path: Path,
+) -> None:
+    """Hermes can print an error message to stdout and still exit 0, so
+    ``json.loads`` fails with a message that names neither the session nor
+    what hermes actually said. Both must be surfaced."""
+    home = _make_home(tmp_path)
+    sid = "s1"
+
+    async def cli(args: list[str]) -> str:
+        return "Error: session store is locked by another process\n"
+
+    scanner = HermesScanner(hermes_home=home, run_cli=cli)
+    result = ScanResult(
+        source_key=sid,
+        platform=Platform.HERMES,
+        kind=SourceKind.CONVERSATION,
+        file_paths=(),
+        estimated_size=0,
+        mtime=0.0,
+    )
+    with pytest.raises(HermesExportError, match=sid) as exc_info:
+        await scanner.read(result)
+    assert "session store is locked by another process" in str(exc_info.value)
 
 
 async def test_read_wraps_a_missing_binary_as_an_export_error(tmp_path: Path) -> None:

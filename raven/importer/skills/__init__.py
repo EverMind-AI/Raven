@@ -37,7 +37,12 @@ class DiscoveredSkill:
     name: str
     path: Path
     origin: SkillOrigin
-    size: int
+    # SkillRegistry keys a skill as (source, registry_name), not (source,
+    # directory name) -- registry_name is the frontmatter ``name`` with the
+    # directory name as fallback, mirroring registry.py's own display-name
+    # rule. The installer needs this to detect a collision the on-disk
+    # directory name alone would miss.
+    registry_name: str
 
 
 @runtime_checkable

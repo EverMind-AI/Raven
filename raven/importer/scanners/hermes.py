@@ -58,7 +58,7 @@ _MEMORY_MD_PREAMBLE = (
 )
 # MEMORY.md is the assistant's own notes, written in its first person, so the
 # entries are assistant turns. The user preamble is not decoration: EverOS'
-# user-track extraction skips a memcell with no role=user sender outright.
+# user-track extraction skips any memcell whose role is not "user" outright.
 _ENTRY_ROLE = {"user-md": "user", "memory-md": "assistant"}
 _PREAMBLE = {"user-md": _USER_MD_PREAMBLE, "memory-md": _MEMORY_MD_PREAMBLE}
 
@@ -68,22 +68,55 @@ def split_memory_entries(raw: str) -> list[str]:
     return [e.strip() for e in raw.split(_ENTRY_DELIMITER) if e.strip()]
 
 
-def resolve_hermes_home() -> Path:
-    """Mirror Hermes' own resolution: HERMES_HOME, else the platform default.
+_DEFAULT_PROFILE_NAME = "default"
 
-    Only the resolved home is imported. Hermes also supports named profiles
-    under ``<root>/profiles/<name>``, each with its own memories/ and skills/;
-    importing every profile would need a cross-profile collision policy that no
-    current use case calls for.
+
+def resolve_hermes_home() -> Path:
+    """Mirror Hermes' own resolution: HERMES_HOME, else the active profile
+    under the platform-default root, else the root itself.
+
+    Hermes stores named profiles under ``<root>/profiles/<name>``, each with
+    its own memories/ and skills/ (``hermes_cli/profiles.py``). When
+    ``HERMES_HOME`` is unset and a non-default profile is sticky-active
+    (``<root>/active_profile``), reading the root would import that user's
+    *default* profile while their actual data sits in the active one --
+    upstream treats this as a bug serious enough to warn loudly about rather
+    than a silent, equally-valid fallback (``hermes_constants.py``,
+    ``_warn_profile_fallback_once``).
     """
     env = os.environ.get("HERMES_HOME", "").strip()
     if env:
         return Path(env)
+    root = _platform_default_hermes_home()
+    active = _read_active_profile(root)
+    if active:
+        return root / "profiles" / active
+    return root
+
+
+def _platform_default_hermes_home() -> Path:
     if sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA", "").strip()
-        if local:
-            return Path(local) / "hermes"
+        base = Path(local) if local else Path.home() / "AppData" / "Local"
+        return base / "hermes"
     return Path.home() / ".hermes"
+
+
+def _read_active_profile(root: Path) -> str:
+    """Return the sticky active profile name, or "" when it is the default.
+
+    Mirrors ``get_active_profile`` + ``normalize_profile_name``
+    (``hermes_cli/profiles.py``): the file's content is trimmed, and both a
+    missing/empty file and a value that case-insensitively reads "default"
+    mean the root itself, not a named profile directory.
+    """
+    try:
+        raw = (root / "active_profile").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not raw or raw.casefold() == _DEFAULT_PROFILE_NAME:
+        return ""
+    return raw.lower()
 
 
 class HermesScanner:
@@ -93,7 +126,7 @@ class HermesScanner:
 
     def __init__(self, hermes_home: Path | None = None, run_cli: DryRunRunner | None = None) -> None:
         self._home = hermes_home if hermes_home is not None else resolve_hermes_home()
-        self._run_cli = run_cli if run_cli is not None else _run_hermes_dry_run
+        self._run_cli = run_cli if run_cli is not None else _run_hermes_cli
         self.partial_failure: Exception | None = None
         """Set when scan() returned an incomplete result on purpose -- read by
         scan_all so the reason reaches the user rather than only the log."""
@@ -168,7 +201,7 @@ class HermesScanner:
         entry_role = _ENTRY_ROLE[result.source_key]
 
         messages = [
-            ImportMessage(role="user", content=preamble, timestamp=base_ms, sender_id="user"),
+            ImportMessage(role="user", content=preamble, timestamp=base_ms),
         ]
         for i, entry in enumerate(entries, start=1):
             messages.append(
@@ -176,7 +209,6 @@ class HermesScanner:
                     role=entry_role,
                     content=entry,
                     timestamp=base_ms + i,
-                    sender_id="user",
                 )
             )
         return ImportSession(session_id=session_id, messages=tuple(messages))
@@ -221,7 +253,7 @@ class HermesScanner:
             stripped = line.strip()
             if not stripped:
                 continue
-            messages.extend(hermes_session_to_messages(json.loads(stripped)))
+            messages.extend(hermes_session_to_messages(_parse_exported_line(stripped, raw, result.source_key)))
         return ImportSession(session_id=session_id, messages=tuple(messages))
 
 
@@ -309,12 +341,29 @@ def hermes_session_to_messages(session: dict[str, Any]) -> list[ImportMessage]:
                 role=role,
                 content=content,
                 timestamp=int(ts * 1000),
-                sender_id="user" if role == "user" else "assistant",
                 tool_calls=tuple(tool_calls) if tool_calls else None,
                 tool_call_id=raw.get("tool_call_id"),
             )
         )
     return out
+
+
+def _parse_exported_line(line: str, raw: str, session_id: str) -> dict[str, Any]:
+    """Decode one line of ``sessions export --format jsonl`` output.
+
+    Hermes can print a failure to stdout and still exit 0 (``hermes_cli/
+    main.py``), so a bad line here is a hermes-side error, not malformed JSON
+    from a healthy export. ``json.JSONDecodeError``'s own message ("Expecting
+    value: line 1 column 1 (char 0)") names neither the session nor what
+    hermes actually said, so both are added here.
+    """
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as exc:
+        first_line = raw.splitlines()[0].strip() if raw.strip() else ""
+        raise HermesExportError(
+            f"hermes export for session {session_id!r} did not return valid JSON; hermes said: {first_line!r}"
+        ) from exc
 
 
 # -- session export listing ------------------------------------------------
@@ -470,7 +519,13 @@ async def _collect_window(runner: DryRunRunner, start: datetime, end: datetime) 
     return left_ids + right_ids, left_unlisted + right_unlisted
 
 
-async def _run_hermes_dry_run(args: Sequence[str]) -> str:
+async def _run_hermes_cli(args: Sequence[str]) -> str:
+    """Invoke the ``hermes`` binary with ``args`` and return its stdout.
+
+    Despite the historical name of its call sites' ``DryRunRunner`` type, this
+    is the one seam both the dry-run listing probe and the real
+    ``sessions export`` (no ``--dry-run``) go through -- see ``_read_conversation``.
+    """
     hermes_path = shutil.which("hermes")
     if hermes_path is None:
         raise HermesExportError("hermes executable not found on PATH")
@@ -504,7 +559,7 @@ async def list_exportable_sessions(*, runner: DryRunRunner | None = None) -> Ses
     than hermes counted while claiming success is the failure this whole
     enumeration exists to avoid.
     """
-    active_runner = runner if runner is not None else _run_hermes_dry_run
+    active_runner = runner if runner is not None else _run_hermes_cli
     root = await _probe(active_runner, None, None)
     if root.expected <= _LISTING_CAP:
         ids = tuple(dict.fromkeys(root.session_ids))

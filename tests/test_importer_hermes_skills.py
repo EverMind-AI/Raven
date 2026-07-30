@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import errno
 import json
 import os
 from pathlib import Path
@@ -86,7 +85,7 @@ def test_unreadable_file_aborts_the_whole_hash(tmp_path: Path) -> None:
 
 
 def test_discovered_skill_is_frozen(tmp_path: Path) -> None:
-    s = DiscoveredSkill(name="s", path=tmp_path, origin=SkillOrigin.CURATOR_MANAGED, size=1)
+    s = DiscoveredSkill(name="s", path=tmp_path, origin=SkillOrigin.CURATOR_MANAGED, registry_name="s")
     with pytest.raises(dataclasses.FrozenInstanceError):
         s.name = "other"  # type: ignore[misc]
 
@@ -193,6 +192,21 @@ async def test_frontmatter_name_wins_over_a_colliding_directory_name(tmp_path: P
     }
 
 
+async def test_usage_record_is_looked_up_by_frontmatter_name_not_directory_name(tmp_path: Path) -> None:
+    """Mirrors Hermes' own ``_read_skill_name(skill_md, fallback=parent.name)``
+    (tools/skill_usage.py): ``.usage.json`` keys are the frontmatter name, not
+    the directory name."""
+    home = tmp_path / ".hermes"
+    sk = home / "skills"
+    sk.mkdir(parents=True)
+    d = sk / "dir-name"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: display-name\n---\nbody\n", encoding="utf-8")
+    (sk / ".usage.json").write_text(json.dumps({"display-name": {"created_by": "agent"}}), encoding="utf-8")
+    (skill,) = await HermesSkillSource(hermes_home=home).discover()
+    assert skill.origin is SkillOrigin.CURATOR_MANAGED
+
+
 async def test_corrupt_usage_json_degrades_to_unknown(tmp_path: Path) -> None:
     home, _ = _home_with_skills(tmp_path, skills=(("", "a"),))
     (home / "skills" / ".usage.json").write_text("{not json", encoding="utf-8")
@@ -215,28 +229,6 @@ async def test_manifest_with_crlf_and_trailing_space_still_matches(tmp_path: Pat
     (home / "skills" / ".bundled_manifest").write_bytes(f"a : {digest} \r\n".encode())
     (skill,) = await HermesSkillSource(hermes_home=home).discover()
     assert skill.origin is SkillOrigin.BUNDLED_PRISTINE
-
-
-async def test_file_vanishing_mid_size_scan_does_not_abort_discovery(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A dangling symlink cannot express this: is_file() returns False for one
-    without raising, and it does not route through Path.stat, so only a failing
-    stat() on a file is_file() just accepted -- one deleted mid-scan -- reaches
-    the guard."""
-    home, _ = _home_with_skills(tmp_path, skills=(("", "a"), ("", "b")))
-    real_stat = Path.stat
-
-    def flaky_stat(self: Path, **kwargs: object) -> os.stat_result:
-        if self.name == "SKILL.md" and self.parent.name == "a":
-            raise OSError(errno.ENOENT, "vanished mid-scan")
-        return real_stat(self, **kwargs)
-
-    monkeypatch.setattr(Path, "stat", flaky_stat)
-    sizes = {s.name: s.size for s in await HermesSkillSource(hermes_home=home).discover()}
-    assert set(sizes) == {"a", "b"}
-    assert sizes["a"] == 0
-    assert sizes["b"] > 0
 
 
 async def test_archived_skills_are_not_discovered(tmp_path: Path) -> None:
@@ -278,6 +270,32 @@ async def test_legacy_agent_created_flag_also_counts_as_curator_managed(tmp_path
     home, _ = _home_with_skills(tmp_path, skills=(("", "a"),), usage={"a": {"agent_created": True}})
     (skill,) = await HermesSkillSource(hermes_home=home).discover()
     assert skill.origin is SkillOrigin.CURATOR_MANAGED
+
+
+async def test_registry_name_prefers_frontmatter_over_directory(tmp_path: Path) -> None:
+    """SkillRegistry keys a skill as (source, frontmatter-name-with-dir-fallback)
+    -- registry_name must match that identity so the installer can dedupe on
+    it, not on the on-disk directory name."""
+    home = tmp_path / ".hermes"
+    sk = home / "skills"
+    sk.mkdir(parents=True)
+    d = sk / "dir-name"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: display-name\n---\nbody\n", encoding="utf-8")
+    (skill,) = await HermesSkillSource(hermes_home=home).discover()
+    assert skill.name == "dir-name"
+    assert skill.registry_name == "display-name"
+
+
+async def test_registry_name_falls_back_to_directory_without_frontmatter_name(tmp_path: Path) -> None:
+    home = tmp_path / ".hermes"
+    sk = home / "skills"
+    sk.mkdir(parents=True)
+    d = sk / "no-frontmatter-name"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\ndescription: nameless\n---\nbody\n", encoding="utf-8")
+    (skill,) = await HermesSkillSource(hermes_home=home).discover()
+    assert skill.registry_name == "no-frontmatter-name"
 
 
 async def test_missing_skills_dir_yields_nothing(tmp_path: Path) -> None:
@@ -344,10 +362,14 @@ async def test_existing_target_is_not_overwritten(tmp_path: Path) -> None:
 
 
 async def test_flatten_collision_falls_back_to_category_prefix(tmp_path: Path) -> None:
+    """Renaming the directory only helps when the two skills declare different
+    names, since the pool keys on the declared name; the fixtures therefore give
+    each a distinct one, which is also the real shape -- two of the 82 skills on
+    a real install declare a name that differs from their directory."""
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
-    _skill(home / "skills" / "apple", "notes")
-    _skill(home / "skills" / "productivity", "notes")
+    _skill(home / "skills" / "apple", "notes", body="---\nname: apple-notes\n---\nbody\n")
+    _skill(home / "skills" / "productivity", "notes", body="---\nname: productivity-notes\n---\nbody\n")
     ws = tmp_path / "ws"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
@@ -361,12 +383,30 @@ async def test_uncategorised_collision_uses_a_numeric_suffix(tmp_path: Path) -> 
     collision must not be named after an invented category word."""
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
-    _skill(home / "skills" / "apple", "notes")
-    _skill(home / "skills", "notes")
+    _skill(home / "skills" / "apple", "notes", body="---\nname: apple-notes\n---\nbody\n")
+    _skill(home / "skills", "notes", body="---\nname: root-notes\n---\nbody\n")
     ws = tmp_path / "ws"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
     assert landed == {"notes", "notes-2"}
+
+
+async def test_two_skills_declaring_one_name_do_not_both_land(tmp_path: Path) -> None:
+    """The pool keys a skill as (source, frontmatter name), and that name rides
+    inside the copied SKILL.md, so renaming the directory cannot separate them --
+    the second would sit on disk and never be returned by get(name)."""
+    home = tmp_path / ".hermes"
+    sk = home / "skills"
+    sk.mkdir(parents=True)
+    for directory in ("first", "second"):
+        d = sk / directory
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: shared\n---\nbody\n", encoding="utf-8")
+    ws = tmp_path / "ws"
+    summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+    assert summary.installed == 1
+    assert summary.skipped == 1
+    assert len(list((ws / "skills" / "hermes").iterdir())) == 1
 
 
 async def test_rerun_is_idempotent(tmp_path: Path) -> None:
