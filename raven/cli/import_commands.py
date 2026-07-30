@@ -104,7 +104,7 @@ async def _build_and_run(
         # console line is what the user actually sees.
         try:
             await _land_hermes_user_md(items, workspace, config)
-        except Exception as exc:  # noqa: BLE001 -- a best-effort mirror must not fail the import
+        except Exception as exc:
             logger.warning("hermes user.md mirror failed: {}", exc)
             console.print(
                 f"[yellow]Imported to EverOS, but mirroring USER.md into the native profile failed: {exc}[/yellow]"
@@ -154,17 +154,27 @@ async def _land_hermes_user_md(
 def _make_hermes_provider(config: Config) -> "LLMProvider | None":
     """Best-effort provider for the USER.md heading classifier.
 
-    ``check_provider_credentials`` (called inside ``make_lazy_provider``)
-    raises when no LLM credentials are configured; import cold-start must
-    still succeed in that case, falling back to the ``## Notes`` heading.
+    ``check_provider_credentials`` (called inside ``make_provider``) raises when
+    no LLM credentials are configured; import cold-start must still succeed in
+    that case, falling back to the ``## Notes`` heading.
+
+    Built eagerly rather than lazily so litellm is imported here: it reattaches
+    its own stderr StreamHandler on import, and ``redirect_loguru_to_file`` has
+    already stripped TTY handlers by this point, so a deferred import would put
+    litellm's DEBUG chatter straight onto the terminal that is supposed to show
+    only the progress bar. Stripping again right after the import closes that
+    window. There is nothing to gain from laziness in a one-shot command.
     """
-    from raven.cli._helpers import make_lazy_provider
+    from raven.cli._helpers import make_provider
+    from raven.cli._log_file import _strip_tty_stream_handlers
 
     try:
-        return make_lazy_provider(config)
+        provider = make_provider(config)
     except Exception as exc:
         logger.info("hermes user.md mirror: no LLM provider available ({}); using fallback heading", exc)
         return None
+    _strip_tty_stream_handlers()
+    return provider
 
 
 # ---------------------------------------------------------------------------

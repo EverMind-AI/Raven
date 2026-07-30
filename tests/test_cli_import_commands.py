@@ -16,7 +16,6 @@ from raven.importer.orchestrator import ImportSummary
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind
 from raven.memory_engine.consolidate.consolidator import MemoryStore
-from raven.providers.lazy import LazyProvider
 
 runner = CliRunner()
 
@@ -285,16 +284,43 @@ class TestMakeHermesProvider:
     def test_returns_none_without_credentials(self) -> None:
         assert _make_hermes_provider(Config()) is None
 
-    def test_returns_lazy_provider_with_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_returns_provider_with_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.cli import _helpers
 
-        monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="stub"))
+        stub = SimpleNamespace(name="stub")
+        monkeypatch.setattr(_helpers, "make_provider", lambda _c: stub)
         config = Config()
         config.providers.anthropic.api_key = "sk-ant-test"
 
-        provider = _make_hermes_provider(config)
+        assert _make_hermes_provider(config) is stub
 
-        assert isinstance(provider, LazyProvider)
+    def test_strips_tty_handlers_after_building(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """litellm reattaches its stderr handler when it is imported, which happens
+        inside make_provider -- after redirect_loguru_to_file already stripped."""
+        from raven.cli import _helpers, _log_file
+
+        calls: list[str] = []
+        monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="stub"))
+        monkeypatch.setattr(
+            _log_file,
+            "_strip_tty_stream_handlers",
+            lambda: calls.append("strip"),
+        )
+        config = Config()
+        config.providers.anthropic.api_key = "sk-ant-test"
+
+        _make_hermes_provider(config)
+
+        assert calls == ["strip"]
+
+    def test_does_not_strip_when_no_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.cli import _log_file
+
+        calls: list[str] = []
+        monkeypatch.setattr(_log_file, "_strip_tty_stream_handlers", lambda: calls.append("strip"))
+
+        assert _make_hermes_provider(Config()) is None
+        assert calls == []
 
 
 class TestBuildAndRunHermesOrdering:
