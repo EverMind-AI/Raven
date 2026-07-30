@@ -1,6 +1,9 @@
 """Utility functions for raven."""
 
+import base64
+import binascii
 import json
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +23,80 @@ def detect_image_mime(data: bytes) -> str | None:
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
     return None
+
+
+# Vision models bill images by patch area, not by the size of the transport
+# encoding. Counting a data URI as text charges ~350x the real cost (a 1000x1000
+# JPEG is ~1.3k image tokens but ~460k base64 characters), which starves the
+# history budget and can trip emergency shrinking on a prompt that would have
+# fit comfortably.
+_IMAGE_PATCH_PX = 28
+_IMAGE_TOKEN_CAP = 1568
+_IMAGE_HEADER_BYTES = 4096
+
+
+def _image_pixel_size(data: bytes) -> tuple[int, int] | None:
+    """Pixel dimensions from an image header, or None if not derivable.
+
+    Header-only parsing on purpose: the caller has a whole image in memory
+    already and this runs on every budget probe, so decoding pixels (or pulling
+    in an imaging library) would cost far more than the estimate is worth.
+    WebP is deliberately absent -- its three chunk variants need more parsing
+    than the fallback is worth.
+    """
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:3] == b"\xff\xd8\xff":
+        # Walk JPEG segments to the first frame header; SOF carries the size.
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                return None
+            marker = data[i + 1]
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                return (
+                    int.from_bytes(data[i + 7 : i + 9], "big"),
+                    int.from_bytes(data[i + 5 : i + 7], "big"),
+                )
+            i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
+    return None
+
+
+def estimate_image_tokens(width: int, height: int, cap: int = _IMAGE_TOKEN_CAP) -> int:
+    """Image tokens for a ``width`` x ``height`` image, same order of magnitude
+    across vendors and biased high.
+
+    Anthropic's own formula (28x28 patches, capped at 1568 for the standard
+    tier). Exact for Claude; ~10% high for OpenAI's 512px tiles; ~2.25x high for
+    Doubao 2.x, which moved to 42x42 patches. Over-estimating is the safe
+    direction for a budget guard -- under-estimating overflows the context.
+    """
+    if width <= 0 or height <= 0:
+        return cap
+    patches = math.ceil(width / _IMAGE_PATCH_PX) * math.ceil(height / _IMAGE_PATCH_PX)
+    return min(patches, cap)
+
+
+def estimate_content_part_tokens(part: Any) -> int | None:
+    """Token estimate for a non-text multimodal content part, or None when the
+    part carries no image and should fall through to text accounting."""
+    if not isinstance(part, dict) or part.get("type") != "image_url":
+        return None
+    url = part.get("image_url", {})
+    url = url.get("url", "") if isinstance(url, dict) else ""
+    if not isinstance(url, str) or not url.startswith("data:image/"):
+        # A remote URL costs the model an image either way, but its dimensions
+        # are unknowable without fetching it. Charge the ceiling.
+        return _IMAGE_TOKEN_CAP
+    _, _, payload = url.partition(",")
+    try:
+        head = base64.b64decode(payload[:_IMAGE_HEADER_BYTES], validate=False)
+    except (binascii.Error, ValueError):
+        return _IMAGE_TOKEN_CAP
+    size = _image_pixel_size(head)
+    return estimate_image_tokens(*size) if size else _IMAGE_TOKEN_CAP
 
 
 def ensure_dir(path: Path) -> Path:
@@ -96,6 +173,7 @@ def estimate_prompt_tokens(
 ) -> int:
     """Estimate prompt tokens with tiktoken."""
     parts: list[str] = []
+    extra_tokens = 0
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str):
@@ -106,6 +184,8 @@ def estimate_prompt_tokens(
                     txt = part.get("text", "")
                     if txt:
                         parts.append(txt)
+                elif (image_tokens := estimate_content_part_tokens(part)) is not None:
+                    extra_tokens += image_tokens
                 else:
                     parts.append(json.dumps(part, ensure_ascii=False))
         elif content is not None:
@@ -128,18 +208,20 @@ def estimate_prompt_tokens(
 
     payload = "\n".join(parts)
     if not payload:
-        return 0
+        return extra_tokens
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(1, len(enc.encode(payload)))
+        text_tokens = len(enc.encode(payload))
     except Exception:
-        return max(1, len(payload) // 4)
+        text_tokens = len(payload) // 4
+    return max(1, text_tokens + extra_tokens)
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate prompt tokens contributed by one persisted message."""
     content = message.get("content")
     parts: list[str] = []
+    extra_tokens = 0
     if isinstance(content, str):
         parts.append(content)
     elif isinstance(content, list):
@@ -148,6 +230,8 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
                 text = part.get("text", "")
                 if text:
                     parts.append(text)
+            elif (image_tokens := estimate_content_part_tokens(part)) is not None:
+                extra_tokens += image_tokens
             else:
                 parts.append(json.dumps(part, ensure_ascii=False))
     elif content is not None:
@@ -167,12 +251,13 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
 
     payload = "\n".join(parts)
     if not payload:
-        return 1
+        return max(1, extra_tokens)
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        return max(1, len(enc.encode(payload)))
+        text_tokens = len(enc.encode(payload))
     except Exception:
-        return max(1, len(payload) // 4)
+        text_tokens = len(payload) // 4
+    return max(1, text_tokens + extra_tokens)
 
 
 def estimate_prompt_tokens_chain(
