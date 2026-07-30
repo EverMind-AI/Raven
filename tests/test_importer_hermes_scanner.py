@@ -13,9 +13,11 @@ from raven.importer.scanners.hermes import (
     DryRunRunner,
     HermesExportError,
     HermesScanner,
+    hermes_session_to_messages,
     list_exportable_sessions,
     parse_dry_run_listing,
     resolve_hermes_home,
+    strip_images,
 )
 from raven.importer.types import Platform, SourceKind
 
@@ -343,7 +345,192 @@ async def test_one_minute_window_still_over_cap_reports_unlisted_without_raising
     assert listing.unlisted == 50
 
 
+async def test_exactly_the_cap_is_listed_in_full_without_windowing() -> None:
+    """The boundary the whole task turns on: hermes prints its hundredth row,
+    so a count equal to the cap is complete and must not be split."""
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(100)
+    ]
+    calls: list[list[str]] = []
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    assert len(listing.session_ids) == 100
+    assert listing.unlisted == 0
+    assert len(calls) == 1
+
+
+async def test_a_session_started_this_very_minute_is_still_collected() -> None:
+    """The ceiling needs a buffer past the current minute. Bounds are formatted
+    to minute precision, so a ceiling of `now` becomes `--before <this minute>`
+    and excludes anything started during the minute the scan runs in."""
+    now = datetime.now()
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    fresh = _FakeSession(f"{now:%Y%m%d_%H%M%S}_ff", now)
+    sessions.append(fresh)
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, []))
+    assert fresh.session_id in listing.session_ids
+    assert listing.unlisted == 0
+
+
 async def test_missing_hermes_executable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     with pytest.raises(HermesExportError):
         await list_exportable_sessions()
+
+
+# -- hermes_session_to_messages / strip_images ------------------------------
+
+_SESSION = {
+    "id": "20260727_110342_d612f2ef",
+    "system_prompt": "You are Hermes Agent...",
+    "messages": [
+        {"role": "user", "content": "hi", "timestamp": 1785121422.9861},
+        {"role": "session_meta", "content": None, "timestamp": 1785121430.8},
+        {
+            "role": "assistant",
+            "content": "",
+            "timestamp": 1785121500.0,
+            "reasoning_content": "secret thoughts",
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "content": "file body", "timestamp": 1785121529.55, "tool_call_id": "c1"},
+        {"role": "assistant", "content": "done", "timestamp": 1785121600.0},
+        {"role": "user", "content": "no time", "timestamp": None},
+        {"role": "user", "content": "", "timestamp": 1785121700.0},
+    ],
+}
+
+
+def test_roles_and_order_preserved() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert [m.role for m in msgs] == ["user", "assistant", "tool", "assistant"]
+
+
+def test_session_meta_and_system_prompt_dropped() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert all(m.role != "session_meta" for m in msgs)
+    assert all("Hermes Agent" not in m.content for m in msgs)
+
+
+def test_an_unaccepted_role_is_dropped_even_when_it_carries_content() -> None:
+    """Real session_meta rows have `content: None`, so the empty-content rule
+    alone drops them and leaves the role filter unverified. EverOS accepts only
+    user, assistant and tool, so a populated row of any other role must go."""
+    session = {
+        "id": "s",
+        "messages": [
+            {"role": "system", "content": "you are hermes", "timestamp": 1.0},
+            {"role": "developer", "content": "hidden instruction", "timestamp": 2.0},
+            {"role": "user", "content": "kept", "timestamp": 3.0},
+        ],
+    }
+    msgs = hermes_session_to_messages(session)
+    assert [m.role for m in msgs] == ["user"]
+    assert [m.content for m in msgs] == ["kept"]
+
+
+def test_reasoning_is_not_carried_over() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert all("secret thoughts" not in m.content for m in msgs)
+
+
+def test_timestamp_converted_from_float_seconds_to_int_ms() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert msgs[0].timestamp == 1785121422986
+    assert all(isinstance(m.timestamp, int) and m.timestamp > 0 for m in msgs)
+
+
+def test_message_without_timestamp_dropped() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert all(m.content != "no time" for m in msgs)
+
+
+def test_empty_content_without_tool_calls_dropped() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    assert len([m for m in msgs if m.content == ""]) == 1  # only the tool_calls carrier
+
+
+def test_tool_calls_and_tool_call_id_pass_through() -> None:
+    msgs = hermes_session_to_messages(_SESSION)
+    caller = next(m for m in msgs if m.tool_calls)
+    assert caller.tool_calls[0]["function"]["name"] == "read"
+    result = next(m for m in msgs if m.role == "tool")
+    assert result.tool_call_id == "c1"
+
+
+def test_strip_images_keeps_text_and_counts_images() -> None:
+    content = [
+        {"type": "text", "text": "look at these"},
+        {"type": "image_url", "image_url": "data:image/png;base64,AAAA"},
+        {"type": "image_url", "image_url": "data:image/png;base64,BBBB"},
+    ]
+    out = strip_images(content)
+    assert "look at these" in out
+    assert "AAAA" not in out
+    assert "[image x2]" in out
+
+
+def test_strip_images_passes_plain_strings_through() -> None:
+    assert strip_images("plain") == "plain"
+
+
+def test_long_content_truncated() -> None:
+    session = {"id": "s", "messages": [{"role": "user", "content": "x" * 20_000, "timestamp": 1.0}]}
+    (msg,) = hermes_session_to_messages(session)
+    assert len(msg.content) == 10_003  # limit + "..."
+
+
+def test_strip_images_input_text_part_keeps_text_and_is_not_counted_as_image() -> None:
+    # input_text carries its text under "content", not "text" -- the shape the
+    # brief's version does not handle and falls through to the image branch.
+    content = [{"type": "input_text", "content": "hello from input_text"}]
+    assert strip_images(content) == "hello from input_text"
+
+
+def test_strip_images_input_text_mixed_with_a_real_image_counts_only_the_image() -> None:
+    content = [
+        {"type": "input_text", "content": "an input_text part"},
+        {"type": "text", "text": "a text part"},
+        {"type": "image_url", "image_url": "data:image/png;base64,AAAA"},
+    ]
+    out = strip_images(content)
+    assert "an input_text part" in out
+    assert "a text part" in out
+    assert "[image x1]" in out
+
+
+def test_strip_images_nested_image_url_dict_form_still_counts_as_one_image() -> None:
+    content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
+    out = strip_images(content)
+    assert "[image x1]" in out
+    assert "AAAA" not in out
+
+
+def test_strip_images_input_image_type_counts_as_image() -> None:
+    content = [{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]
+    out = strip_images(content)
+    assert "[image x1]" in out
+
+
+def test_strip_images_unknown_dict_part_falls_back_to_text_field() -> None:
+    content = [{"type": "mystery", "text": "fallback via text"}]
+    out = strip_images(content)
+    assert out == "fallback via text"
+    assert "[image" not in out
+
+
+def test_strip_images_unknown_dict_part_falls_back_to_content_field() -> None:
+    content = [{"type": "mystery", "content": "fallback via content"}]
+    out = strip_images(content)
+    assert out == "fallback via content"
+    assert "[image" not in out
+
+
+def test_strip_images_unknown_dict_part_with_neither_field_is_dropped_not_counted() -> None:
+    content = [{"type": "mystery", "other": "irrelevant"}]
+    out = strip_images(content)
+    assert out == ""
+    assert "[image" not in out

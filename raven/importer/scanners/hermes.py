@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -27,6 +28,12 @@ from raven.importer.types import ImportMessage, ImportSession, Platform, ScanRes
 from raven.utils.text import is_cjk
 
 _MEMORY_SOURCES = (("user-md", "USER.md"), ("memory-md", "MEMORY.md"))
+
+_CONTENT_TRUNCATE_LIMIT = 10_000
+_ACCEPTED_ROLES = frozenset({"user", "assistant", "tool"})
+_IMAGE_PLACEHOLDER = "[image x{count}]"
+_TEXT_FIELD_BY_TYPE = {"text": "text", "input_text": "content"}
+_IMAGE_TYPES = frozenset({"image_url", "input_image"})
 
 # Hermes' own parser splits on the newline-wrapped section sign specifically so
 # that an entry whose own text contains a bare "§" is not torn in half.
@@ -150,6 +157,97 @@ class HermesScanner:
                 )
             )
         return ImportSession(session_id=session_id, messages=tuple(messages))
+
+
+# -- exported session conversion -------------------------------------------
+
+
+def strip_images(content: Any) -> str:
+    """Flatten multimodal content to text, replacing images with a marker.
+
+    ImportMessage.content is a str and the EverOS adapter reduces list content
+    to its text parts anyway, so an inlined base64 image would be carried the
+    whole way only to be discarded. It would not be free on the way: a single
+    multi-megabyte message exceeds the importer's own 30,000-character batch
+    limit by orders of magnitude, becoming a batch of one posted as a body that
+    size.
+
+    Hermes documents four content-part shapes: ``text`` (text under ``text``),
+    ``input_text`` (text under ``content`` instead), ``image_url`` and
+    ``input_image``. Neither real export sampled here contains list content at
+    all -- the image-heavy session on that install had not ended, and only ended
+    sessions are exportable -- so this path rests on the documented shapes rather
+    than on observed data.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return "" if content is None else str(content)
+    texts: list[str] = []
+    images = 0
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        text_field = _TEXT_FIELD_BY_TYPE.get(part_type)
+        if text_field is not None:
+            text = (part.get(text_field) or "").strip()
+            if text:
+                texts.append(text)
+        elif part_type in _IMAGE_TYPES:
+            images += 1
+        else:
+            # Unrecognised part shape: recover any string text/content it
+            # carries instead of discarding it, and never count it as an image.
+            fallback = part.get("text") or part.get("content")
+            if isinstance(fallback, str) and fallback.strip():
+                texts.append(fallback.strip())
+    if images:
+        texts.append(_IMAGE_PLACEHOLDER.format(count=images))
+    return "\n\n".join(texts)
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= _CONTENT_TRUNCATE_LIMIT:
+        return text
+    return text[:_CONTENT_TRUNCATE_LIMIT] + "..."
+
+
+def hermes_session_to_messages(session: dict[str, Any]) -> list[ImportMessage]:
+    """Map one exported Hermes session onto ImportMessage.
+
+    ``system_prompt`` lives at session level and is Hermes' own prompt, not user
+    content; EverOS has no system role either. ``session_meta`` is not an
+    accepted role. ``reasoning`` / ``reasoning_content`` are chain-of-thought,
+    dropped for the same reason ClaudeCodeScanner drops thinking blocks.
+
+    ``active`` and ``compacted`` need no filtering here: Hermes' own exporter
+    already calls ``get_messages(session_id, include_inactive=False)``, so
+    rewound and compaction-archived messages never reach this payload.
+    """
+    out: list[ImportMessage] = []
+    for raw in session.get("messages") or []:
+        role = raw.get("role")
+        if role not in _ACCEPTED_ROLES:
+            continue
+        ts = raw.get("timestamp")
+        if not isinstance(ts, (int, float)) or ts <= 0:
+            continue
+        content = _truncate(strip_images(raw.get("content")))
+        tool_calls = raw.get("tool_calls") or None
+        if not content and not tool_calls:
+            continue
+        out.append(
+            ImportMessage(
+                role=role,
+                content=content,
+                timestamp=int(ts * 1000),
+                sender_id="user" if role == "user" else "assistant",
+                tool_calls=tuple(tool_calls) if tool_calls else None,
+                tool_call_id=raw.get("tool_call_id"),
+            )
+        )
+    return out
 
 
 # -- session export listing ------------------------------------------------
@@ -334,9 +432,13 @@ def _uncovered(expected: int, collected: int, unlisted: int) -> int:
 
     Arithmetic is the only thing that can catch a coverage bug here -- a
     partition that misses a range returns a perfectly well-formed short list.
-    A surplus is benign: a live session ending mid-scan joins the candidates.
-    A shortfall is counted as unlisted rather than raised for the same reason,
-    since the race runs both ways, but it is never left unreported.
+
+    A surplus is benign: a session ending mid-scan joins the candidate set.
+    A shortfall is not symmetric with it -- ``ended_at`` never goes back, so a
+    session cannot leave the set and a shortfall points at this partition rather
+    than at a race. It is still counted rather than raised, because reporting
+    the sessions we did find beats failing the whole import, but it means a
+    non-zero result here is a bug to chase, not noise.
     """
     missing = expected - collected - unlisted
     if missing <= 0:
@@ -356,8 +458,10 @@ __all__ = [
     "HermesExportError",
     "HermesScanner",
     "SessionListing",
+    "hermes_session_to_messages",
     "list_exportable_sessions",
     "parse_dry_run_listing",
     "resolve_hermes_home",
     "split_memory_entries",
+    "strip_images",
 ]
