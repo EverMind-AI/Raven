@@ -367,6 +367,19 @@ class GeminiProviderConfig(ProviderConfig):
         return [self.api_key] if self.api_key else []
 
 
+def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str, Any]:
+    """Merge two sections for one provider, letting a set value beat an unset one.
+
+    The current name wins a genuine conflict, but a declared field exists as an
+    empty section whether or not it was configured -- so taking it verbatim let a
+    placeholder erase the credential the user had written under the provider's
+    other spelling.
+    """
+    merged = dict(base)
+    merged.update({k: v for k, v in winner.items() if v not in ("", None, [], {})})
+    return merged
+
+
 def _has_credentials(config: "ProviderConfig", spec: Any) -> bool:
     """Is this section actually usable, or just a placeholder?
 
@@ -405,7 +418,7 @@ class ProvidersConfig(Base):
         """
         if not isinstance(data, dict):
             return data
-        from raven.providers.registry import PROVIDERS, normalize_provider_name
+        from raven.providers.registry import PROVIDERS, names_same_provider
 
         merged = dict(data)
 
@@ -415,22 +428,14 @@ class ProvidersConfig(Base):
         # configured -- so without this, "azure-openai" or "OpenRouter" lands in
         # extras where the always-present empty field then wins, and a key the
         # user really wrote reads back as unset. One rule for both kinds.
-        # Both spellings a field can be written as, keyed case-insensitively:
-        # the underscored field name, and the camelCase this model serializes to.
-        # Built forwards from the field, never by splitting a key on capitals --
-        # that cannot tell "azureOpenai" (two words) from "OpenRouter" (one).
-        declared = {}
-        for field in cls.model_fields:
-            declared[normalize_provider_name(field)] = field
-            declared[to_camel(field).lower()] = field
         for key in [k for k in merged if k not in cls.model_fields]:
-            field = declared.get(normalize_provider_name(key))
+            field = next((f for f in cls.model_fields if names_same_provider(key, f)), None)
             if field is None or not isinstance(merged[key], dict):
                 continue
             section = dict(merged.pop(key))
             current = merged.get(field)
             if isinstance(current, dict):
-                section.update(current)
+                section = _prefer_set_values(section, current)
             merged[field] = section
 
         for spec in PROVIDERS:
@@ -439,10 +444,10 @@ class ProvidersConfig(Base):
                 continue
             section: dict[str, Any] = {}
             for older in stale:
-                section.update(older)
+                section = _prefer_set_values(section, older)
             current = merged.get(spec.name)
             if isinstance(current, dict):
-                section.update(current)
+                section = _prefer_set_values(section, current)
             merged[spec.name] = section
         return merged
 
@@ -491,7 +496,7 @@ class ProvidersConfig(Base):
         this is the only place a provider name may be resolved to its config;
         reading the attribute directly sees just the one spelling.
         """
-        from raven.providers.registry import canonical_provider_name, normalize_provider_name
+        from raven.providers.registry import canonical_provider_name, names_same_provider
 
         # A renamed provider keeps answering to its old name, and the declared
         # field wins: a half-migrated config holding both keys must not serve
@@ -502,11 +507,8 @@ class ProvidersConfig(Base):
             return declared
         extra = (self.model_extra or {}).get(name)
         if extra is None:
-            # to_camel on the name rather than un-camelCasing the key: splitting
-            # a key on capitals cannot tell one word from two.
-            camel = to_camel(name)
             for key, value in (self.model_extra or {}).items():
-                if key == camel or normalize_provider_name(key) == name:
+                if names_same_provider(key, name):
                     extra = value
                     break
         if isinstance(extra, ProviderConfig):

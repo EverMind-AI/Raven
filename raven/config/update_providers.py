@@ -34,8 +34,22 @@ from raven.providers.registry import (
     ProviderSpec,
     canonical_provider_name,
     find_by_name,
+    names_same_provider,
     normalize_provider_name,
 )
+
+
+def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge two spellings of one section, letting a set value beat an unset one.
+
+    Blindly preferring the later spelling let an empty `apiKey` from a
+    placeholder section erase the key the user had actually written under the
+    other spelling.
+    """
+    merged = dict(base)
+    merged.update({k: v for k, v in overlay.items() if v not in ("", None, [], {})})
+    return merged
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -193,11 +207,10 @@ def _raw_section(data: dict[str, Any], name: str) -> dict[str, Any]:
     # ("nanoGpt") is the same section, and the management surface reading only
     # the underscored key is how a key the runtime happily uses became
     # invisible to `provider get/set`.
-    wanted = [normalize_provider_name(n) for n in (*_provider_aliases(name), name)]
-    for want in wanted:
+    for want in (*_provider_aliases(name), name):
         for key, older in providers.items():
-            if normalize_provider_name(key) == want and isinstance(older, dict):
-                section.update(older)
+            if names_same_provider(key, want) and isinstance(older, dict):
+                section = _overlay(section, older)
     return section
 
 
@@ -210,8 +223,8 @@ def _write_raw_section(data: dict[str, Any], name: str, section: dict[str, Any])
     them and the loser's fields reappear after being removed.
     """
     providers = data.setdefault("providers", {})
-    retired = {normalize_provider_name(n) for n in (*_provider_aliases(name), name)}
-    for key in [k for k in providers if normalize_provider_name(k) in retired]:
+    wanted = (*_provider_aliases(name), name)
+    for key in [k for k in providers if any(names_same_provider(k, w) for w in wanted)]:
         providers.pop(key, None)
     providers[name] = section
 

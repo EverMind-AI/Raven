@@ -533,6 +533,32 @@ def normalize_provider_name(name: str | None) -> str:
     return (name or "").strip().lower().replace("-", "_")
 
 
+def names_same_provider(key: str, name: str) -> bool:
+    """Do these two strings name the same provider?
+
+    One provider is written three ways and all three must resolve to it: the
+    snake_case field name, LiteLLM's hyphenated spelling, and the camelCase this
+    project's models serialize to. The camelCase comparison is made forwards, by
+    camelCasing the snake name -- splitting a key on capitals cannot tell
+    "azureOpenai" (two words) from "OpenRouter" (one).
+
+    Every place that matches a config key against a provider name uses this, so
+    the read path and the write path cannot answer it differently: they did, and
+    a section stored under one spelling was invisible to `provider get/set` while
+    the runtime read it happily -- then a write added a second section and the
+    real credential became unreachable.
+    """
+    from pydantic.alias_generators import to_camel
+
+    if key == name:
+        return True
+    # Case-insensitive, so "AzureOpenai" counts too -- still built forwards from
+    # the snake name, never by splitting the key on its capitals.
+    if key.lower() == to_camel(name).lower():
+        return True
+    return normalize_provider_name(key) == normalize_provider_name(name)
+
+
 def split_model_id(model: str) -> tuple[str, str]:
     """Split a model id into its normalized route prefix and the rest.
 

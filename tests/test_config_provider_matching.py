@@ -7,6 +7,10 @@ model's own vendor by keyword, then a credentialed fallback.
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from raven.config.schema import Config
 
 
@@ -196,3 +200,80 @@ def test_a_gateway_prefixed_model_resolves_to_the_gateway_spec() -> None:
 
     spec = find_by_model("openrouter/anthropic/claude-sonnet-4-5")
     assert spec is not None and spec.name == "openrouter"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "field"),
+    [
+        ("azureOpenai", "azure_openai"),
+        ("azure-openai", "azure_openai"),
+        ("AzureOpenai", "azure_openai"),
+        ("nanoGpt", "nano_gpt"),
+        ("nano-gpt", "nano_gpt"),
+    ],
+)
+def test_the_management_surface_reads_a_section_under_any_spelling(spelling: str, field: str, tmp_path) -> None:
+    """`provider get` must see what the runtime sees.
+
+    The two used different comparisons, so a section stored under one spelling
+    was invisible here while the runtime read it happily.
+    """
+    from raven.config.update_providers import get_provider_config
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {spelling: {"apiKey": "REAL-KEY"}}}))
+    assert get_provider_config(field, redact_secrets=False, config_path=cfg)["api_key"] == "REAL-KEY"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "field"),
+    [
+        ("azureOpenai", "azure_openai"),
+        ("azure-openai", "azure_openai"),
+        ("nanoGpt", "nano_gpt"),
+    ],
+)
+def test_writing_a_provider_never_leaves_a_second_section_or_drops_its_key(spelling: str, field: str, tmp_path) -> None:
+    """A write must consolidate, not add a rival section.
+
+    Retiring only the spellings one comparison recognised left the other behind.
+    The declared field is then present and empty, and merging it over the stored
+    section erased the credential the user had actually written.
+    """
+    from raven.config.update_providers import set_provider_fields
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {spelling: {"apiKey": "REAL-KEY"}}}))
+    set_provider_fields(field, {"api_base": "https://example.invalid/v1"}, config_path=cfg)
+
+    stored = json.loads(cfg.read_text())["providers"]
+    assert len(stored) == 1, f"expected one section, got {sorted(stored)}"
+    resolved = Config.model_validate({"providers": stored}).providers.get(field)
+    assert resolved is not None
+    assert resolved.api_key == "REAL-KEY", "the write erased the key it was not asked to touch"
+    assert resolved.api_base == "https://example.invalid/v1"
+
+
+def test_a_placeholder_section_does_not_erase_a_key_stored_under_another_spelling() -> None:
+    """A config that already holds both spellings must keep the real credential.
+
+    Older builds could leave two sections for one provider. The declared field is
+    always present, so merging it over the other verbatim let its empty apiKey
+    win -- the credential was in the file and unreachable.
+    """
+    config = Config.model_validate(
+        {"providers": {"azureOpenai": {"apiKey": "REAL-KEY"}, "azure_openai": {"apiKey": ""}}}
+    )
+    section = config.providers.get("azure_openai")
+    assert section is not None and section.api_key == "REAL-KEY"
+
+
+def test_the_current_name_still_wins_a_real_conflict() -> None:
+    """Preferring a set value must not demote the current name when both are set."""
+    config = Config.model_validate(
+        {"providers": {"zhipu": {"apiKey": "OLD", "apiBase": "https://old/v1"}, "zai": {"apiKey": "NEW"}}}
+    )
+    section = config.providers.get("zai")
+    assert section is not None
+    assert section.api_key == "NEW", "the current name must win where both hold a value"
+    assert section.api_base == "https://old/v1", "a field only the old section had must survive"
