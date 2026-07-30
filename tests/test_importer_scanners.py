@@ -19,6 +19,7 @@ class _StubScanner:
         self.platform = platform
         self._results = results or []
         self._fail = fail
+        self.partial_failure: BaseException | None = None
 
     async def scan(self) -> list[ScanResult]:
         if self._fail is not None:
@@ -80,6 +81,19 @@ async def test_platform_filter_skips_other_scanners_entirely() -> None:
     results = await scan_all(scanners, platform_filter=Platform.HERMES, on_error=lambda p, _e: seen.append(p))
     assert [r.source_key for r in results] == ["b"]
     assert seen == []
+
+
+async def test_a_partial_result_is_reported_as_well_as_kept() -> None:
+    """A scanner may return less than everything on purpose -- hermes keeps its
+    memory files when the CLI it needs for conversations is gone. Keeping the
+    results silently would be the silent under-import the design warns about, so
+    the reason travels the same path a total failure does."""
+    scanner = _StubScanner(Platform.HERMES, results=[_result(Platform.HERMES, "user-md")])
+    scanner.partial_failure = RuntimeError("hermes executable not found on PATH")
+    seen: list[tuple[Platform, str]] = []
+    results = await scan_all([scanner], on_error=lambda p, e: seen.append((p, str(e))))
+    assert [r.source_key for r in results] == ["user-md"]
+    assert seen == [(Platform.HERMES, "hermes executable not found on PATH")]
 
 
 async def test_only_the_failing_platform_is_reported_not_the_healthy_one() -> None:

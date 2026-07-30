@@ -3729,12 +3729,16 @@ def _step5_import_body(
         _build_and_run,
         _default_state,
         _print_summary,
+        _report_scan_error,
     )
     from raven.importer.orchestrator import ImportSummary, ProgressEvent
     from raven.importer.scanners import build_scanners, scan_all
     from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
-    all_results = asyncio.run(scan_all())
+    # on_error is not optional here: scan_all isolates a failing scanner rather
+    # than propagating, and loguru is file-only during onboarding, so without it
+    # a platform that failed to scan is indistinguishable from one with no data.
+    all_results = asyncio.run(scan_all(on_error=_report_scan_error))
     if not all_results:
         console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None

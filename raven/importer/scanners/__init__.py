@@ -43,16 +43,25 @@ async def scan_all(
 
     results: list[ScanResult] = []
     for scanner, found in zip(scanners, per_scanner):
-        # gather only hands back Exception instances as results; a BaseException
-        # such as KeyboardInterrupt propagates out of the gather itself, so a
-        # Ctrl-C is never mistaken here for a platform that failed to scan.
-        if isinstance(found, Exception):
+        # KeyboardInterrupt and SystemExit propagate out of the gather rather
+        # than arriving as results, so a Ctrl-C is never mistaken for a platform
+        # that failed to scan. CancelledError does arrive here and is not an
+        # Exception, which is why the check is the wider BaseException.
+        if isinstance(found, BaseException):
             logger.warning("scan {} failed: {}", scanner.platform.value, found)
             if on_error is not None:
                 on_error(scanner.platform, found)
             continue
         logger.info("scan {}: {} results", scanner.platform.value, len(found))
         results.extend(found)
+        # A scanner may deliberately return less than everything -- hermes keeps
+        # its memory files when the CLI it needs for conversations is missing --
+        # and that reason must travel the same path a total failure does, or it
+        # reaches only the log, which is silenced during scan and file-only
+        # during run.
+        partial = getattr(scanner, "partial_failure", None)
+        if partial is not None and on_error is not None:
+            on_error(scanner.platform, partial)
 
     mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
     conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)

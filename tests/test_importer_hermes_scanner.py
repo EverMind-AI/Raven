@@ -218,15 +218,48 @@ def test_extra_column_does_not_break_parsing() -> None:
     assert parse_dry_run_listing(text).session_ids == ("20260723_153451_9a0929",)
 
 
-def test_malformed_id_lines_are_ignored() -> None:
+def test_more_rows_than_the_header_counted_is_an_error() -> None:
+    """Rows are read structurally, not by guessing at the id's shape, because
+    cron ids are `cron_<job>_<stamp>` and ACP ids are bare uuids. The safety net
+    is hermes' own invariant: it never prints more rows than it counted, so a
+    surplus means something that is not a session row was read as one."""
     text = "Would export 1 session(s).\n  ----------\n  20260723_153451_9a0929  desktop\n"
-    assert parse_dry_run_listing(text).session_ids == ("20260723_153451_9a0929",)
+    with pytest.raises(HermesExportError, match="no longer understood"):
+        parse_dry_run_listing(text)
 
 
-def test_count_without_any_parsable_id_is_an_error() -> None:
-    text = "Would export 3 session(s).\n  ??? garbage\n"
+def test_a_cron_or_acp_session_id_is_not_discarded() -> None:
+    text = (
+        "Would export 3 session(s).\n"
+        "  20260723_153451_9a0929  desktop\n"
+        "  cron_daily-report_20260725_090000  cron\n"
+        "  3f2b1c88-4d5e-4a6b-8c9d-0e1f2a3b4c5d  acp\n"
+    )
+    listing = parse_dry_run_listing(text)
+    assert listing.expected == 3
+    assert len(listing.session_ids) == 3
+    assert "cron_daily-report_20260725_090000" in listing.session_ids
+
+
+def test_a_count_with_no_listing_rows_at_all_is_an_error() -> None:
+    """Zero rows under a non-zero count means the format changed, and returning
+    an empty list would report "no conversations, done" as a success."""
+    text = "Would export 3 session(s).\nnot an indented row\n"
     with pytest.raises(HermesExportError, match="3"):
         parse_dry_run_listing(text)
+
+
+async def test_the_short_path_reports_rows_it_could_not_parse() -> None:
+    """The under-100 path is the one nearly every install takes, so a header
+    counting more than the rows yielded has to surface there too -- otherwise a
+    dropped session is invisible exactly where it is most likely."""
+
+    async def runner(args: Sequence[str]) -> str:
+        return "Would export 5 session(s) (>= 1 messages).\n  20260723_153451_9a0929  desktop\n"
+
+    listing = await list_exportable_sessions(runner=runner)
+    assert listing.session_ids == ("20260723_153451_9a0929",)
+    assert listing.unlisted == 4
 
 
 def test_unrecognised_header_is_an_error() -> None:
@@ -557,7 +590,7 @@ def test_strip_images_keeps_text_and_counts_images() -> None:
     out = strip_images(content)
     assert "look at these" in out
     assert "AAAA" not in out
-    assert "[image x2]" in out
+    assert "[media x2]" in out
 
 
 def test_strip_images_passes_plain_strings_through() -> None:
@@ -586,20 +619,20 @@ def test_strip_images_input_text_mixed_with_a_real_image_counts_only_the_image()
     out = strip_images(content)
     assert "an input_text part" in out
     assert "a text part" in out
-    assert "[image x1]" in out
+    assert "[media x1]" in out
 
 
 def test_strip_images_nested_image_url_dict_form_still_counts_as_one_image() -> None:
     content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]
     out = strip_images(content)
-    assert "[image x1]" in out
+    assert "[media x1]" in out
     assert "AAAA" not in out
 
 
 def test_strip_images_input_image_type_counts_as_image() -> None:
     content = [{"type": "input_image", "image_url": "data:image/png;base64,AAAA"}]
     out = strip_images(content)
-    assert "[image x1]" in out
+    assert "[media x1]" in out
 
 
 def test_strip_images_unknown_dict_part_falls_back_to_text_field() -> None:
@@ -723,14 +756,20 @@ async def test_scan_conversations_logs_a_warning_for_unlisted_sessions(
     assert any(50 in call for call in warnings)
 
 
-async def test_scan_wraps_a_missing_binary_as_an_export_error(tmp_path: Path) -> None:
+async def test_a_missing_binary_costs_the_conversations_not_the_memory_files(tmp_path: Path) -> None:
+    """The memory files are read straight off disk and never needed the CLI, so
+    losing hermes must not lose them too. The earlier version of this test
+    asserted the opposite and pinned that loss in place."""
     home = _make_home(tmp_path)
 
     async def _boom(args: list[str]) -> str:
         raise FileNotFoundError("hermes")
 
-    with pytest.raises(HermesExportError, match="hermes"):
-        await HermesScanner(hermes_home=home, run_cli=_boom).scan()
+    scanner = HermesScanner(hermes_home=home, run_cli=_boom)
+    results = await scanner.scan()
+    assert {r.source_key for r in results} == {"user-md", "memory-md"}
+    assert all(r.kind is SourceKind.MEMORY_FILE for r in results)
+    assert isinstance(scanner.partial_failure, HermesExportError)
 
 
 async def test_read_wraps_a_missing_binary_as_an_export_error(tmp_path: Path) -> None:

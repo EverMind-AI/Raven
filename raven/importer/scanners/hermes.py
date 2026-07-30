@@ -32,9 +32,14 @@ _MEMORY_SOURCES = (("user-md", "USER.md"), ("memory-md", "MEMORY.md"))
 
 _CONTENT_TRUNCATE_LIMIT = 10_000
 _ACCEPTED_ROLES = frozenset({"user", "assistant", "tool"})
-_IMAGE_PLACEHOLDER = "[image x{count}]"
-_TEXT_FIELD_BY_TYPE = {"text": "text", "input_text": "content"}
-_IMAGE_TYPES = frozenset({"image_url", "input_image"})
+_NON_TEXT_PLACEHOLDER = "[media x{count}]"
+
+# Mirrors agent/message_content.py upstream. A text part can carry its text
+# under either key -- run_agent reads "text" for input_text as well as for text,
+# while the canonical flattener tries "content" next -- so reading only one of
+# them drops real prose, and drops the whole message once nothing is left.
+_TEXT_KEYS = ("text", "content")
+_NON_TEXT_TYPES = frozenset({"image", "image_url", "input_image", "audio", "input_audio"})
 
 # Hermes' own parser splits on the newline-wrapped section sign specifically so
 # that an entry whose own text contains a bare "§" is not torn in half.
@@ -89,12 +94,26 @@ class HermesScanner:
     def __init__(self, hermes_home: Path | None = None, run_cli: DryRunRunner | None = None) -> None:
         self._home = hermes_home if hermes_home is not None else resolve_hermes_home()
         self._run_cli = run_cli if run_cli is not None else _run_hermes_dry_run
+        self.partial_failure: Exception | None = None
+        """Set when scan() returned an incomplete result on purpose -- read by
+        scan_all so the reason reaches the user rather than only the log."""
 
     async def scan(self) -> list[ScanResult]:
         if not self._home.is_dir():
             logger.info("hermes not installed at {}; nothing to import", self._home)
             return []
-        return self._scan_memory_files() + await self._scan_conversations()
+        memory_files = self._scan_memory_files()
+        try:
+            conversations = await self._scan_conversations()
+        except HermesExportError as exc:
+            # The memory files are already in hand and never needed the CLI, so
+            # a missing or failing hermes binary must not take them down with
+            # the conversations. The failure still has to reach the user, which
+            # is what partial_failure is for.
+            logger.warning("hermes conversations cannot be enumerated: {}", exc)
+            self.partial_failure = exc
+            return memory_files
+        return memory_files + conversations
 
     async def read(self, result: ScanResult) -> ImportSession:
         if result.kind is SourceKind.MEMORY_FILE:
@@ -219,39 +238,40 @@ def strip_images(content: Any) -> str:
     (``orchestrator._BATCH_CHAR_LIMIT``) on its own, so it would be posted as a
     batch of one sized to the image.
 
-    Hermes documents four content-part shapes: ``text`` (text under ``text``),
-    ``input_text`` (text under ``content`` instead), ``image_url`` and
-    ``input_image``. Neither real export sampled here contains list content at
-    all -- the image-heavy session on that install had not ended, and only ended
-    sessions are exportable -- so this path rests on the documented shapes rather
-    than on observed data.
+    No exportable session on the machine this was written against carries list
+    content at all, because the image-heavy one had not ended, so the part
+    handling follows agent/message_content.py upstream rather than observed data.
     """
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
         return "" if content is None else str(content)
     texts: list[str] = []
-    images = 0
+    non_text = 0
     for part in content:
         if not isinstance(part, dict):
             continue
         part_type = part.get("type")
-        text_field = _TEXT_FIELD_BY_TYPE.get(part_type)
-        if text_field is not None:
-            text = (part.get(text_field) or "").strip()
-            if text:
-                texts.append(text)
-        elif part_type in _IMAGE_TYPES:
-            images += 1
-        else:
-            # Unrecognised part shape: recover any string text/content it
-            # carries instead of discarding it, and never count it as an image.
-            fallback = part.get("text") or part.get("content")
-            if isinstance(fallback, str) and fallback.strip():
-                texts.append(fallback.strip())
-    if images:
-        texts.append(_IMAGE_PLACEHOLDER.format(count=images))
+        if part_type in _NON_TEXT_TYPES:
+            non_text += 1
+            continue
+        # Text parts and unrecognised ones are treated alike: take whichever
+        # text key is populated. Guessing at an unknown shape's meaning risks
+        # discarding prose, while counting it as an image would invent one.
+        text = _first_text(part)
+        if text:
+            texts.append(text)
+    if non_text:
+        texts.append(_NON_TEXT_PLACEHOLDER.format(count=non_text))
     return "\n\n".join(texts)
+
+
+def _first_text(part: dict[str, Any]) -> str:
+    for key in _TEXT_KEYS:
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _truncate(text: str) -> str:
@@ -299,8 +319,13 @@ def hermes_session_to_messages(session: dict[str, Any]) -> list[ImportMessage]:
 
 # -- session export listing ------------------------------------------------
 
-_SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]+$")
 _DRYRUN_HEADER_RE = re.compile(r"^Would export (\d+) session\(s\)")
+
+# The listing's own row format is f"  {id}  {source}" (hermes_cli/main.py), so
+# the id is the first token of an indented line. Matching a shape instead would
+# silently drop whole classes of session: cron ids are `cron_<job>_<stamp>` and
+# ACP ids are bare uuid4, neither of which looks like the timestamped default.
+_TRUNCATION_MARKER = "..."
 
 # The trailing "-" writes the export to stdout instead of a file, same as the
 # dry-run listing's own "-" argument, so the single DryRunRunner seam serves
@@ -356,11 +381,11 @@ def parse_dry_run_listing(text: str) -> DryRunListing:
 
     The output is written for humans and upstream can change it at any time.
     The dangerous failure is not a crash but a silent empty result, which
-    would report "0 conversations, done" and look like success, so the
-    header count is cross-checked and an unrecognised header is an error
-    rather than a zero. A header count above ``len(session_ids)`` is the
-    documented 100-cap, not a parse error -- the caller decides what to do
-    about it.
+    would report "0 conversations, done" and look like success, so the header
+    count is kept and an unrecognised header is an error rather than a zero.
+    Every caller must reconcile ``expected`` against the ids it received: a
+    shortfall is the documented 100-cap or a row this parser did not recognise,
+    and both mean sessions that will not be imported.
     """
     lines = text.splitlines()
     header = None
@@ -378,14 +403,20 @@ def parse_dry_run_listing(text: str) -> DryRunListing:
         if line is header or not line.startswith(" "):
             continue
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith(_TRUNCATION_MARKER):
             continue
-        token = stripped.split()[0]
-        if _SESSION_ID_RE.match(token):
-            ids.append(token)
+        ids.append(stripped.split()[0])
 
     if expected > 0 and not ids:
         raise HermesExportError(f"hermes reported {expected} session(s) but no session id could be parsed")
+    if len(ids) > expected:
+        # hermes prints at most the number it counted, so a surplus means a row
+        # was read as a session that is not one. Exporting it would fail per
+        # session, but raising here says which listing is no longer understood.
+        raise HermesExportError(
+            f"hermes reported {expected} session(s) but {len(ids)} listing rows parsed as ids; "
+            "the listing format is no longer understood"
+        )
     return DryRunListing(expected=expected, session_ids=tuple(ids))
 
 
@@ -460,18 +491,24 @@ async def _run_hermes_dry_run(args: Sequence[str]) -> str:
 async def list_exportable_sessions(*, runner: DryRunRunner | None = None) -> SessionListing:
     """Find every Hermes session id that ``sessions export`` can produce.
 
-    A single unwindowed probe answers the question directly when hermes
-    counts at most the 100 it is willing to print. Above that, the
-    ``started_at`` axis is partitioned into half-open, minute-aligned
-    windows (the finest hermes' own minute-truncated ``--after``/``--before``
-    can express) and probed recursively, so a window this parser cannot
-    resolve further contributes its listed ids plus a counted, logged
-    remainder instead of either raising or silently dropping sessions.
+    A single unwindowed probe answers the question directly when hermes counts
+    at most the 100 it is willing to print. Above that, the ``started_at`` axis
+    is partitioned into half-open, minute-aligned windows and probed
+    recursively, so a window this parser cannot resolve further contributes its
+    listed ids plus a counted, logged remainder instead of either raising or
+    silently dropping sessions.
+
+    Both paths reconcile against the header count, including the short one every
+    install with fewer than a hundred sessions takes: a row the parser did not
+    recognise is invisible there otherwise, and reporting fewer conversations
+    than hermes counted while claiming success is the failure this whole
+    enumeration exists to avoid.
     """
     active_runner = runner if runner is not None else _run_hermes_dry_run
     root = await _probe(active_runner, None, None)
     if root.expected <= _LISTING_CAP:
-        return SessionListing(session_ids=root.session_ids, unlisted=0)
+        ids = tuple(dict.fromkeys(root.session_ids))
+        return SessionListing(session_ids=ids, unlisted=_uncovered(root.expected, len(ids), 0))
 
     ceiling = _ceil_to_minute(datetime.now()) + timedelta(minutes=1)
     session_ids, unlisted = await _collect_window(active_runner, _PARTITION_FLOOR, ceiling)
