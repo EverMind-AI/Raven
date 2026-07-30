@@ -298,10 +298,12 @@ def _is_config_populated() -> bool:
     satisfied: a provider key plus ``agents.defaults.model``. Either alone is
     not enough to talk to a model.
     """
+    from raven.providers.registry import split_model_id
+
     data = _load_raw_config()
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
     configured = _configured_providers()
-    model_prefix = str(model or "").split("/", 1)[0].replace("-", "_")
+    model_prefix, _ = split_model_id(str(model or ""))
     has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
     has_provider = has_non_minimax_provider or model_prefix in configured
     return bool(has_provider and model)
@@ -731,18 +733,11 @@ def _load_current_default_model() -> Optional[str]:
 
 
 def _model_routes_to_provider(model: str, spec: Any) -> bool:
-    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``."""
-    if not model or not spec:
-        return False
-    model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
-    if "/" in model_lower:
-        prefix = model_lower.split("/", 1)[0].replace("-", "_")
-        return prefix == spec.name
-    return any(
-        kw.lower() in model_lower or kw.lower().replace("-", "_") in model_normalized
-        for kw in (getattr(spec, "keywords", None) or ())
-    )
+    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``.
+
+    Defers to the spec so this guard cannot disagree with the routing it guards.
+    """
+    return bool(model and spec and spec.claims(model))
 
 
 def _format_model_for_provider(spec: Any, model_id: str) -> str:
@@ -1363,10 +1358,18 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             )
         elif action == "remove":
             current = _load_current_default_model()
-            from raven.providers.registry import find_by_name
+            from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
 
             spec = find_by_name(target)
-            was_default_source = bool(current and spec and _model_routes_to_provider(current, spec))
+            if spec is not None:
+                was_default_source = bool(current and _model_routes_to_provider(current, spec))
+            else:
+                # A vendor with no spec of ours is reached by its prefix alone, so
+                # that is the whole test. Treating "no spec" as "not the source"
+                # skipped the guard and left a default model pointing at a
+                # provider whose key had just been removed.
+                prefix, _ = split_model_id(current or "")
+                was_default_source = bool(current and prefix == normalize_provider_name(target))
             if was_default_source:
                 confirm = questionary.confirm(
                     _t(
@@ -2267,10 +2270,12 @@ def _resolve_model_provider(model: str) -> Optional[str]:
     prefix, so an unrecognized head falls back to ``"custom"`` when a custom
     provider is actually configured with a key. Returns ``None`` when no match.
     """
+    from raven.providers.registry import split_model_id
+
     if not model:
         return None
-    head = model.split("/", 1)[0].replace("-", "_")
-    if "/" in model:
+    head, _ = split_model_id(model)
+    if head:
         from raven.config.update_providers import provider_field_specs
 
         try:
@@ -2312,23 +2317,34 @@ def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
         registry ``default_api_base`` → a known fallback);
       - carry the provider's stored api_key.
     """
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
 
-    provider = _resolve_model_provider(main_model) or main_model.split("/", 1)[0].replace("-", "_")
+    provider = _resolve_model_provider(main_model) or split_model_id(main_model)[0]
     spec = find_by_name(provider)
-    prov_cfg = (_load_raw_config().get("providers") or {}).get(provider, {})
+    # Through the ops library, so a section still stored under the provider's
+    # pre-rename name is found -- a raw lookup by the resolved name is not.
+    from raven.config.update_providers import get_provider_config
 
-    # Strip the litellm routing prefix to the bare model id the upstream
-    # endpoint expects. Direct providers (openai / deepseek / gemini) carry a
-    # ``{provider}/`` route prefix that litellm consumes but the raw OpenAI
-    # client must not see; gateways (openrouter) carry their litellm_prefix.
-    # Custom endpoints store a bare id already, so no prefix matches → unchanged.
+    # No `if spec` gate: LiteLLM-only vendors have no spec of ours yet their
+    # section holds real credentials, and gating on the spec silently handed the
+    # probe an empty api_key while the main model was working fine.
+    try:
+        _resolved = get_provider_config(provider, redact_secrets=False)
+    except KeyError:
+        _resolved = {}
+    prov_cfg = {"apiKey": _resolved.get("api_key"), "apiBase": _resolved.get("api_base")} if _resolved else {}
+
+    # Strip the routing prefix to the bare model id the upstream endpoint
+    # expects: litellm consumes it, the raw OpenAI client must not see it. Only
+    # a prefix naming this provider is stripped -- a custom endpoint stores a
+    # bare id already, and anything else is part of the vendor's own model id.
     bare_model = main_model
-    litellm_prefix = getattr(spec, "model_prefix", "") if spec else ""
-    for prefix in (litellm_prefix, provider):
-        if prefix and bare_model.startswith(f"{prefix}/"):
-            bare_model = bare_model.split("/", 1)[1]
-            break
+    head, rest = split_model_id(main_model)
+    known_prefixes = set(spec.route_names) if spec else {normalize_provider_name(provider)}
+    if spec:
+        known_prefixes.add(normalize_provider_name(spec.model_prefix))
+    if head and head in known_prefixes:
+        bare_model = rest
 
     base_url = (
         prov_cfg.get("apiBase")

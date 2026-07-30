@@ -681,14 +681,14 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker. The schema's pre-existing default model
-    # (``anthropic/claude-opus-4-5``) routes to anthropic by prefix, so it
-    # gets prepended as the "keep current" candidate.
+    # Catalog feeds the picker, every id carrying the provider's route prefix.
+    # The schema's pre-existing default (``anthropic/claude-opus-4-5``) is one of
+    # them rather than a fourth entry: while bare and prefixed spellings coexisted
+    # the same model appeared twice, once in each form.
     assert captured_choices["choices"] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
-        "claude-haiku-4-5",
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
     # User's pick made it into config
@@ -1903,3 +1903,16 @@ def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
     tmp_env.write_text("{  // comment => invalid JSON\n}", encoding="utf-8")
     with pytest.raises(ConfigReadError):
         onboard_commands._load_raw_config()
+
+
+def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
+    """The guard exists to stop a removal from orphaning the default model.
+
+    A model id written before the provider was renamed routes to the very
+    provider being removed, which is exactly when the warning has to fire.
+    """
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("zai")
+    assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
+    assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True

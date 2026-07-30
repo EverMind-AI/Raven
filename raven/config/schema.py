@@ -367,6 +367,22 @@ class GeminiProviderConfig(ProviderConfig):
         return [self.api_key] if self.api_key else []
 
 
+def _has_credentials(config: "ProviderConfig", spec: Any) -> bool:
+    """Is this section actually usable, or just a placeholder?
+
+    Every declared provider exists as an empty section whether or not the user
+    configured it, so "the field is there" says nothing. A spec flag must not
+    stand in for evidence either: `is_local` used to answer with no api_base at
+    all, and an empty declared section then beat the credentials the user had
+    really written under one of that provider's other names.
+    """
+    if spec.is_oauth:
+        return True  # credentials live in a token file, not the config section
+    if spec.is_local:
+        return bool(config.api_base)
+    return bool(config.api_key)
+
+
 class ProvidersConfig(Base):
     """Configuration for LLM providers.
 
@@ -389,9 +405,34 @@ class ProvidersConfig(Base):
         """
         if not isinstance(data, dict):
             return data
-        from raven.providers.registry import PROVIDERS
+        from raven.providers.registry import PROVIDERS, normalize_provider_name
 
         merged = dict(data)
+
+        # Fold any key that spells a declared field differently into that field.
+        # Extras are matched spelling-insensitively (`ProvidersConfig.get`), and
+        # a declared field exists as an empty section whether or not it was
+        # configured -- so without this, "azure-openai" or "OpenRouter" lands in
+        # extras where the always-present empty field then wins, and a key the
+        # user really wrote reads back as unset. One rule for both kinds.
+        # Both spellings a field can be written as, keyed case-insensitively:
+        # the underscored field name, and the camelCase this model serializes to.
+        # Built forwards from the field, never by splitting a key on capitals --
+        # that cannot tell "azureOpenai" (two words) from "OpenRouter" (one).
+        declared = {}
+        for field in cls.model_fields:
+            declared[normalize_provider_name(field)] = field
+            declared[to_camel(field).lower()] = field
+        for key in [k for k in merged if k not in cls.model_fields]:
+            field = declared.get(normalize_provider_name(key))
+            if field is None or not isinstance(merged[key], dict):
+                continue
+            section = dict(merged.pop(key))
+            current = merged.get(field)
+            if isinstance(current, dict):
+                section.update(current)
+            merged[field] = section
+
         for spec in PROVIDERS:
             stale = [merged.pop(a) for a in spec.name_aliases if isinstance(merged.get(a), dict)]
             if not stale:
@@ -419,22 +460,38 @@ class ProvidersConfig(Base):
         validation_alias=AliasChoices("zai", "zhipu"),
     )
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
+    # LiteLLM's own names for these two, so a model id and a config section are
+    # spelled the same. Configs written before the rename keep loading.
+    hosted_vllm: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("hosted_vllm", "hostedVllm", "vllm"),
+    )
     gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_global: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_cn: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
+    ollama_chat: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("ollama_chat", "ollamaChat", "ollama"),
+    )
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
 
     def get(self, name: str) -> ProviderConfig | None:
-        """Return one provider's config, declared field or extra key alike."""
-        from raven.providers.registry import canonical_provider_name
+        """Return one provider's config, declared field or extra key alike.
+
+        The lookup is spelling-insensitive on both sides. A section key reaches
+        here in whichever form its writer used -- LiteLLM's hyphenated vendor
+        name, the camelCase this model serializes to, or the underscored field
+        name -- and a caller holding a model-id prefix has only one of those. So
+        this is the only place a provider name may be resolved to its config;
+        reading the attribute directly sees just the one spelling.
+        """
+        from raven.providers.registry import canonical_provider_name, normalize_provider_name
 
         # A renamed provider keeps answering to its old name, and the declared
         # field wins: a half-migrated config holding both keys must not serve
@@ -444,6 +501,14 @@ class ProvidersConfig(Base):
         if isinstance(declared, ProviderConfig):
             return declared
         extra = (self.model_extra or {}).get(name)
+        if extra is None:
+            # to_camel on the name rather than un-camelCasing the key: splitting
+            # a key on capitals cannot tell one word from two.
+            camel = to_camel(name)
+            for key, value in (self.model_extra or {}).items():
+                if key == camel or normalize_provider_name(key) == name:
+                    extra = value
+                    break
         if isinstance(extra, ProviderConfig):
             return extra
         if isinstance(extra, dict):
@@ -696,7 +761,7 @@ class Config(BaseSettings):
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from raven.providers.registry import PROVIDERS, canonical_provider_name
+        from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_keywords, split_model_id
 
         forced = self.agents.defaults.provider
         if forced != "auto":
@@ -706,64 +771,54 @@ class Config(BaseSettings):
             p = self.providers.get(forced)
             return (p, forced) if p else (None, None)
 
-        model_lower = (model or self.agents.defaults.model).lower()
-        model_normalized = model_lower.replace("-", "_")
-        model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
-        normalized_prefix = model_prefix.replace("-", "_")
+        model_id = model or self.agents.defaults.model
+        prefix, _ = split_model_id(model_id)
 
-        def _kw_matches(kw: str) -> bool:
-            kw = kw.lower()
-            return kw in model_lower or kw.replace("-", "_") in model_normalized
-
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
+        # `spec.claims` is the whole prefix-beats-keyword rule: a prefixed id is
+        # answered only by the provider it names (so `github-copilot/...codex`
+        # cannot match openai_codex, and no vendor's key is posted to another's
+        # endpoint), while a bare id falls to keywords in registry order.
         for spec in PROVIDERS:
+            if not spec.claims(model_id):
+                continue
             p = self.providers.get(spec.name)
-            if p and model_prefix and normalized_prefix in (spec.name, *spec.name_aliases):
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
+            if p and _has_credentials(p, spec):
+                return p, spec.name
 
         # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
         # the vendor, so credentials under that name are enough to reach it.
-        if normalized_prefix:
-            # Canonical name, for the same reason the forced branch uses one: a
-            # prefix written before a rename must not be handed back as-is.
-            passthrough_name = canonical_provider_name(normalized_prefix)
-            passthrough = self.providers.get(passthrough_name)
+        if prefix:
+            passthrough = self.providers.get(prefix)
             if passthrough and passthrough.api_key:
-                return passthrough, passthrough_name
-
-        # Match by keyword (order follows PROVIDERS registry). A prefixed id
-        # already names its vendor, so a keyword may only confirm that vendor --
-        # never a different one whose name happens to appear in the id, whose key
-        # would then be posted to the vendor in the prefix.
-        for spec in PROVIDERS:
-            if normalized_prefix and normalized_prefix not in (spec.name, *spec.name_aliases):
-                continue
-            p = self.providers.get(spec.name)
-            if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
+                return passthrough, canonical_provider_name(prefix)
 
         # Fallback: configured local providers can route models without
         # provider-specific keywords (for example plain "llama3.2" on Ollama).
         for spec in PROVIDERS:
             if not spec.is_local:
                 continue
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_base:
+            p = self.providers.get(spec.name)
+            if p and _has_credentials(p, spec):
                 return p, spec.name
 
         # Fallback: gateways first, then others (follows registry order).
         # OAuth providers are NOT valid fallbacks -- they require explicit model
-        # selection. With a prefixed id only gateways and local deployments may
-        # answer: they route whatever they are handed, whereas a direct vendor
-        # would be receiving another vendor's model id along with its own key.
+        # selection.
+        #
+        # Once an id names a vendor -- by prefix, or by a keyword that only one
+        # vendor answers to -- reaching this point means that vendor has no
+        # credentials. Only a gateway or a local deployment may answer then,
+        # because they route whatever they are handed; a direct vendor would be
+        # receiving a competitor's model id along with its own key. Getting here
+        # having named nobody ("llama-3.3-70b") carries no such claim, so any
+        # credentialed provider is a legitimate guess.
+        names_a_vendor = bool(prefix) or find_by_keywords(model_id) is not None
         for spec in PROVIDERS:
-            if normalized_prefix and not (spec.is_gateway or spec.is_local):
+            if names_a_vendor and not (spec.is_gateway or spec.is_local):
                 continue
             if spec.is_oauth:
                 continue
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get(spec.name)
             if p and p.api_key:
                 return p, spec.name
         return None, None

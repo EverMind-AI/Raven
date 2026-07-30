@@ -15,7 +15,7 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_keywords, find_by_model, find_gateway
+from raven.providers.registry import find_by_keywords, find_by_model, find_gateway, split_model_id
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -143,23 +143,25 @@ class LiteLLMProvider(LLMProvider):
         """Drop this gateway's own prefix, leaving the upstream vendor's id."""
         if not self._gateway:
             return model
-        prefix = f"{self._gateway.litellm_prefix or self._gateway.name}/"
+        prefix = f"{self._gateway.model_prefix}/"
         return model[len(prefix) :] if model.startswith(prefix) else model
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""
         if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
-            prefix = self._gateway.litellm_prefix
+            # Gateway mode: apply gateway prefix, skip provider-specific prefixes.
+            # model_prefix, not the raw field: a gateway whose name is already
+            # LiteLLM's declares nothing, and reading the field would drop the
+            # prefix entirely -- sending the gateway's key to the vendor named in
+            # the model id.
+            prefix = self._gateway.model_prefix
             if self._gateway.strip_model_prefix:
                 model = model.split("/")[-1]
             if prefix and not model.startswith(f"{prefix}/"):
                 model = f"{prefix}/{model}"
             return model
 
-        # Standard mode: auto-prefix for known providers. A spec flagged
-        # `standard` shares LiteLLM's name for the vendor, so that name is the
-        # prefix -- no need to restate it in the registry.
+        # Standard mode: auto-prefix for known providers.
         spec = find_by_model(model)
         prefix = spec.model_prefix if spec else ""
         if spec and prefix:
@@ -174,9 +176,8 @@ class LiteLLMProvider(LLMProvider):
         """Normalize an explicit prefix (`github-copilot/...`, a former name)."""
         if "/" not in model:
             return model
-        prefix, remainder = model.split("/", 1)
-        known = {spec.name, *spec.name_aliases}
-        if prefix.lower().replace("-", "_") not in known:
+        prefix, remainder = split_model_id(model)
+        if prefix not in spec.route_names:
             return model
         return f"{canonical_prefix}/{remainder}"
 

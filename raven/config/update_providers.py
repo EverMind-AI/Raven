@@ -25,11 +25,17 @@ from typing import Any, Union
 import httpx
 from loguru import logger
 from pydantic import BaseModel, ValidationError
+from pydantic.alias_generators import to_camel
 from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProvidersConfig
-from raven.providers.registry import ProviderSpec, canonical_provider_name, find_by_name
+from raven.providers.registry import (
+    ProviderSpec,
+    canonical_provider_name,
+    find_by_name,
+    normalize_provider_name,
+)
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -70,15 +76,54 @@ def _provider_names() -> list[str]:
     return out
 
 
-def _litellm_knows(name: str) -> bool:
-    """Whether LiteLLM speaks to this vendor, so a bare key is enough to reach it."""
+def _listable_provider_names(data: dict[str, Any]) -> list[str]:
+    """Declared providers, plus any others the config actually holds.
+
+    A vendor configured by name alone would otherwise be invisible to callers of
+    ``list_providers`` -- ``provider list`` and the startup gate that decides
+    whether the wizard has to run -- while the runtime routes to it happily.
+    Reporting it as unconfigured is what sends a user who has set it up straight
+    back into a wizard that declines to configure it.
+
+    """
+    declared = _provider_names()
+    # Sections are stored camelCase ("azureOpenai"), so compare on the snake form
+    # or every declared provider looks like an unknown extra.
+    known = {n for name in declared for n in (name, to_camel(name))}
+    stored = data.get("providers") or {}
+    extra = [
+        name
+        for name, section in stored.items()
+        if isinstance(section, dict)
+        and name not in known
+        and canonical_provider_name(name) not in known
+        and normalize_provider_name(name) not in known
+    ]
+    return declared + sorted(extra)
+
+
+def _litellm_knows(name: str) -> bool | None:
+    """Whether LiteLLM speaks to this vendor, or None when it cannot be asked.
+
+    Three states, not two. Answering False when LiteLLM is merely unavailable
+    would tell the user their provider name is wrong when it may well be right.
+    Raising instead was worse: only one of the five call sites caught it, so the
+    rest turned an unavailable dependency into a bare traceback. None makes
+    every caller confront the third case at the point it has to decide.
+
+    Comparison is normalized on both sides: LiteLLM hyphenates a few vendors
+    ("nano-gpt") while config sections and model-id prefixes are underscored, so
+    an exact match rejects the very spelling this function tells users to write.
+    """
     from raven.providers.litellm_setup import import_litellm
 
     try:
         litellm = import_litellm()
-        return name in {str(getattr(p, "value", p)) for p in litellm.provider_list}
+        providers = litellm.provider_list
     except Exception:
-        return False
+        return None
+    known = {normalize_provider_name(str(getattr(p, "value", p))) for p in providers}
+    return normalize_provider_name(name) in known
 
 
 def _provider_schema_cls(name: str) -> type[BaseModel]:
@@ -89,7 +134,10 @@ def _provider_schema_cls(name: str) -> type[BaseModel]:
         # it -- the plain section is all it needs. Anything LiteLLM has never
         # heard of is a typo, and saying so beats writing a section that will
         # never be read.
-        if _litellm_knows(name):
+        if _litellm_knows(name) is not False:
+            # Includes "cannot say": refusing a name we failed to verify would
+            # block a valid provider, while accepting one at worst writes a
+            # section nothing reads. The lesser harm is to accept.
             return ProviderConfig
         raise KeyError(
             f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}. "
@@ -120,19 +168,32 @@ def _raw_section(data: dict[str, Any], name: str) -> dict[str, Any]:
     """
     providers = data.get("providers") or {}
     section: dict[str, Any] = {}
-    for key in (*_provider_aliases(name), name):
-        older = providers.get(key)
-        if isinstance(older, dict):
-            section.update(older)
+    # Spelling-insensitive, exactly like `ProvidersConfig.get`: a section written
+    # as LiteLLM spells it ("nano-gpt") or as this model serializes it
+    # ("nanoGpt") is the same section, and the management surface reading only
+    # the underscored key is how a key the runtime happily uses became
+    # invisible to `provider get/set`.
+    wanted = [normalize_provider_name(n) for n in (*_provider_aliases(name), name)]
+    for want in wanted:
+        for key, older in providers.items():
+            if normalize_provider_name(key) == want and isinstance(older, dict):
+                section.update(older)
     return section
 
 
 def _write_raw_section(data: dict[str, Any], name: str, section: dict[str, Any]) -> None:
-    """Write a provider's section under its current name, retiring older keys."""
+    """Write a provider's section under its current name, retiring older keys.
+
+    Retires every key that names the same provider, not just declared aliases:
+    `_raw_section` folds spellings together on read, so leaving the old spelling
+    behind would produce two sections for one provider -- the next read merges
+    them and the loser's fields reappear after being removed.
+    """
     providers = data.setdefault("providers", {})
+    retired = {normalize_provider_name(n) for n in (*_provider_aliases(name), name)}
+    for key in [k for k in providers if normalize_provider_name(k) in retired]:
+        providers.pop(key, None)
     providers[name] = section
-    for alias in _provider_aliases(name):
-        providers.pop(alias, None)
 
 
 def _annotation_str(ann: Any) -> str:
@@ -384,8 +445,17 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     data = read_raw_or_raise(path)
 
     out: list[dict[str, Any]] = []
-    for fname in _provider_names():
-        cls = _provider_schema_cls(fname)
+    for fname in _listable_provider_names(data):
+        try:
+            cls = _provider_schema_cls(fname)
+        except (KeyError, RuntimeError):
+            # A key we cannot resolve to a provider is a typo, and listing is a
+            # read-only report: skipping it keeps `provider list` and the startup
+            # gate working, where raising would leave the user unable to start
+            # Raven or even reach the wizard that would fix the file. RuntimeError
+            # covers "LiteLLM unavailable, so we cannot say" -- reporting is not
+            # the place to fail on that either.
+            continue
         # Through _raw_section, so a provider still stored under its pre-rename
         # key reads as configured here and not just at runtime.
         section = _raw_section(data, fname)

@@ -153,3 +153,128 @@ def test_declared_provider_fields_are_untouched_by_extras() -> None:
 
     assert cfg.openai.api_key == "A"
     assert cfg.get("mistral").api_key == "B"
+
+
+def test_an_unregistered_provider_counts_as_configured(tmp_path) -> None:
+    """The startup gate has to see it, or the wizard runs forever.
+
+    Runtime routing already worked, but list_providers only enumerated declared
+    fields -- so the gate read "no provider configured", forced the wizard, and
+    the wizard declines to configure exactly this kind of vendor.
+    """
+    import json
+
+    from raven.config.loader import set_config_path
+    from raven.config.update_providers import list_providers
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"providers": {"mistral": {"apiKey": "K"}}}))
+    set_config_path(path)
+
+    rows = {row["name"]: row["configured"] for row in list_providers()}
+    assert rows.get("mistral") is True
+
+
+def test_a_hyphenated_vendor_name_reads_back(tmp_path) -> None:
+    # LiteLLM names some vendors with a hyphen, which is the spelling the write
+    # path accepts. Matching normalizes to underscores, so looking up only one
+    # form left a section that was written correctly unreachable.
+    for section, model in (
+        ("nano-gpt", "nano-gpt/gpt-4o"),
+        ("nano-gpt", "nano_gpt/gpt-4o"),
+        ("nano_gpt", "nano-gpt/gpt-4o"),
+    ):
+        cfg = Config.model_validate({"providers": {section: {"apiKey": "K"}}})
+        cfg.agents.defaults.model = model
+        assert cfg.get_api_key() == "K", f"{section} / {model}"
+
+
+def test_a_local_deployment_answers_to_litellms_spelling_and_its_own_former_name() -> None:
+    # A local deployment's section name IS LiteLLM's spelling for it, so the id
+    # and the section agree; the pre-rename spelling still resolves so saved
+    # configs keep working. A configured gateway must not intercept either.
+    for model, expected in (
+        ("hosted_vllm/my-model", "hosted_vllm"),
+        ("vllm/my-model", "hosted_vllm"),
+        ("ollama_chat/llama3.2", "ollama_chat"),
+        ("ollama/llama3.2", "ollama_chat"),
+    ):
+        cfg = Config.model_validate(
+            {
+                "providers": {"openrouter": {"apiKey": "sk-or-K"}, "hosted_vllm": {"apiBase": "http://x/v1"}}
+                if expected == "hosted_vllm"
+                else {"openrouter": {"apiKey": "sk-or-K"}, "ollama_chat": {"apiBase": "http://x:11434"}}
+            }
+        )
+        cfg.agents.defaults.model = model
+        assert cfg.get_provider_name() == expected, model
+
+
+def test_an_empty_section_does_not_answer_for_a_provider() -> None:
+    # Every declared provider exists as an empty section, so presence proves
+    # nothing. An empty one used to win over the credentials the user had really
+    # written under another of that provider's names.
+    cfg = Config.model_validate({"providers": {"hosted_vllm": {}, "openrouter": {"apiKey": "sk-or-K"}}})
+    cfg.agents.defaults.model = "hosted_vllm/my-model"
+    assert cfg.get_provider_name() != "hosted_vllm"
+
+
+def test_an_unrecognizable_provider_key_does_not_break_listing(tmp_path) -> None:
+    """A typo must not cost the user their ability to start Raven.
+
+    Keeping unknown keys means they reach the enumeration, and raising there took
+    down `provider list` and the startup gate together -- leaving no way in, not
+    even the wizard that would fix the file.
+    """
+    import json
+
+    from raven.config.loader import set_config_path
+    from raven.config.update_providers import list_providers
+
+    for typo in ("openRouter", "azureOpenAI", "totally-bogus"):
+        path = tmp_path / f"{typo}.json"
+        path.write_text(json.dumps({"providers": {typo: {"apiKey": "K"}, "openai": {"apiKey": "K"}}}))
+        set_config_path(path)
+
+        rows = {row["name"]: row["configured"] for row in list_providers()}
+        assert rows["openai"] is True, typo
+        assert typo not in rows, typo
+
+
+def test_listing_survives_litellm_being_unavailable(tmp_path) -> None:
+    """Reporting must not fail on "we cannot check".
+
+    Name validation asks LiteLLM whether it knows a vendor. Answering "no" when
+    LiteLLM cannot be consulted would call a correct name wrong, so it raises --
+    and listing has to tolerate that, or the startup gate goes down with it.
+    """
+    import json
+    from unittest.mock import patch
+
+    from raven.config.loader import set_config_path
+    from raven.config.update_providers import list_providers
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"providers": {"mistral": {"apiKey": "K"}, "openai": {"apiKey": "K"}}}))
+    set_config_path(path)
+
+    with patch("raven.providers.litellm_setup.import_litellm", side_effect=RuntimeError("broken")):
+        rows = {row["name"]: row["configured"] for row in list_providers()}
+
+    assert rows["openai"] is True
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["azure_openai", "azureOpenai", "azure-openai", "AzureOpenai", "AZURE_OPENAI"],
+)
+def test_a_declared_provider_is_found_under_any_spelling(spelling: str) -> None:
+    """Declared fields follow the same spelling rule as passthrough sections.
+
+    A declared field exists as an empty section whether or not it was configured,
+    so a differently-spelled key landing in extras used to lose to that empty
+    field -- the key the user really wrote read back as unset, silently.
+    """
+    cfg = Config.model_validate({"providers": {spelling: {"apiKey": "sk-probe"}}})
+    section = cfg.providers.get("azure_openai")
+    assert section is not None and section.api_key == "sk-probe"

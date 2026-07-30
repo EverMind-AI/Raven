@@ -136,20 +136,20 @@ async def model_options(params: dict) -> dict:
 async def model_save_key(params: dict) -> dict:
     parsed = _parse(ModelSaveKeyParams, params)
 
+    # No spec of our own is not a reason to refuse: the picker lists such a
+    # provider once it is configured, and the write path below is what decides
+    # whether the name is usable. Rejecting here while the other four handlers
+    # accepted it is how an orphan section got created.
     spec = find_by_name(parsed.slug)
-    if spec is None:
-        raise ConfigValidationError(
-            f"unknown provider '{parsed.slug}'",
-            data={"slug": parsed.slug},
-        )
-    if spec.is_oauth:
+    label = spec.label if spec else parsed.slug
+    if spec and spec.is_oauth:
         raise NotSupportedInV01Error(
-            f"{spec.label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
+            f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
     if parsed.slug in _NEEDS_API_BASE and not parsed.api_base:
         raise ConfigValidationError(
-            f"{spec.label} requires an api_base",
+            f"{label} requires an api_base",
             data={"slug": parsed.slug, "field": "api_base"},
         )
 

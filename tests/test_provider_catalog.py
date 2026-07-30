@@ -33,8 +33,8 @@ EXPECTED_PROVIDER_NAMES = {
     "minimax",
     "minimax_global",
     "minimax_cn",
-    "vllm",
-    "ollama",
+    "hosted_vllm",
+    "ollama_chat",
     "groq",
 }
 
@@ -53,27 +53,50 @@ def test_provider_names_are_unique() -> None:
     assert len(names) == len(set(names))
 
 
-def test_standard_specs_are_named_after_the_litellm_provider() -> None:
-    """`standard` means LiteLLM knows the vendor under our own name.
+def test_a_specs_route_prefix_is_a_provider_litellm_knows() -> None:
+    """The prefix decides where LiteLLM sends the request.
 
-    That is what lets the entry drop the prefix and endpoint. Flagging a vendor
-    LiteLLM does not carry under that name would send every request nowhere.
+    Defaulting it to our own name only works while that name is one LiteLLM
+    carries; a name it does not know would route every request nowhere.
     """
     import litellm
 
     known = {str(getattr(p, "value", p)) for p in litellm.provider_list}
     for spec in PROVIDERS:
-        if spec.standard:
-            assert spec.name in known, spec.name
+        if spec.model_prefix:
+            assert spec.model_prefix in known, spec.name
 
 
-def test_standard_specs_do_not_restate_the_model_prefix() -> None:
-    # The endpoint is a different matter: `provider test` and the wizard probe
-    # /v1/models before any LiteLLM call resolves one, so a spec may still carry
-    # default_api_base for them.
+def test_via_driver_names_another_vendor_that_litellm_actually_speaks() -> None:
+    """A borrowed driver must be somebody else's, and must exist.
+
+    Naming your own driver is a no-op that invites the two to drift apart;
+    naming a vendor LiteLLM has never heard of routes nowhere. Neither can be
+    caught by reading the field -- only by checking it against LiteLLM.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    known = {str(getattr(p, "value", p)) for p in import_litellm().provider_list}
     for spec in PROVIDERS:
-        if spec.standard:
-            assert not spec.litellm_prefix, spec.name
+        if not spec.via_driver:
+            continue
+        assert spec.via_driver not in spec.route_names, f"{spec.name}: via_driver is one of its own names"
+        assert spec.via_driver in known, f"{spec.name}: LiteLLM does not know driver {spec.via_driver!r}"
+
+
+def test_a_providers_name_is_litellms_spelling_whenever_litellm_has_one() -> None:
+    """One name per provider: ours is LiteLLM's wherever LiteLLM has one.
+
+    This is what removed the reconciliation layer. A spec whose own name is
+    absent from LiteLLM while an alias of it is present means the rename went
+    the wrong way, and every prefix comparison downstream inherits two answers.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    known = {str(getattr(p, "value", p)) for p in import_litellm().provider_list}
+    for spec in PROVIDERS:
+        stale = [a for a in spec.name_aliases if a in known and spec.name not in known]
+        assert not stale, f"{spec.name}: LiteLLM knows {stale} but not {spec.name!r} -- adopt LiteLLM's spelling"
 
 
 def test_registry_and_schema_declare_the_same_providers() -> None:
@@ -152,3 +175,20 @@ def test_exactly_five_concrete_backend_classes() -> None:
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
         assert issubclass(cls, LLMProvider)
+
+
+def test_every_gateway_prefixes_the_models_it_routes() -> None:
+    """The prefix is what sends the request to the gateway rather than the vendor.
+
+    Reading the raw registry field instead of the resolved prefix dropped it for
+    any gateway whose name is already LiteLLM's, so a stored "anthropic/claude-x"
+    went out unprefixed and LiteLLM handed the gateway's key to Anthropic.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    for spec in PROVIDERS:
+        if not spec.is_gateway:
+            continue
+        provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
+        resolved = provider._resolve_model("probe-model")
+        assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
