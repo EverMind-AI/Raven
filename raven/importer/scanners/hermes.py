@@ -1,9 +1,24 @@
-"""Hermes Agent scanner -- memory files and conversations."""
+"""Hermes Agent scanner -- memory files and conversations.
+
+Conversation listing drives the ``hermes`` CLI's own
+``sessions export --dry-run`` rather than reading Hermes' SQLite store
+directly, because that schema is internal and versioned. Only ended sessions
+are ever candidates there (Hermes' own prune-candidate filter always
+requires ``ended_at IS NOT NULL``), so a currently live session is never
+listed -- that gap is a property of the data source, not data loss by this
+module.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
+import shutil
 import sys
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from loguru import logger
@@ -137,4 +152,212 @@ class HermesScanner:
         return ImportSession(session_id=session_id, messages=tuple(messages))
 
 
-__all__ = ["HermesScanner", "resolve_hermes_home", "split_memory_entries"]
+# -- session export listing ------------------------------------------------
+
+_SESSION_ID_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]+$")
+_DRYRUN_HEADER_RE = re.compile(r"^Would export (\d+) session\(s\)")
+
+# hermes truncates the printed listing at this many rows even when the
+# header count is higher (hermes_cli/main.py: `candidates[:100]`).
+_LISTING_CAP = 100
+
+_BOUND_FMT = "%Y-%m-%d %H:%M"
+
+# `--after`/`--before` truncate to the minute, so any window narrower than
+# this cannot be expressed and is treated as a leaf.
+_MIN_WINDOW = timedelta(minutes=1)
+
+# The partition's left edge, and the one bound that cannot be a judgment call:
+# a session starting before it falls outside every window and is dropped with
+# nothing to notice the loss. A recent-looking floor would be cheaper by a
+# handful of probes and wrong the first time a clock skew or a migrated store
+# produced an older started_at, so the epoch it is -- the empty halves left of
+# real data return on their first probe without recursing.
+_PARTITION_FLOOR = datetime(1970, 1, 1)
+
+
+class HermesExportError(RuntimeError):
+    """The hermes CLI produced output this parser does not recognise."""
+
+
+@dataclass(frozen=True)
+class DryRunListing:
+    """One parsed ``sessions export --dry-run`` invocation."""
+
+    expected: int
+    session_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SessionListing:
+    """The exportable session ids assembled from one or more dry-run probes."""
+
+    session_ids: tuple[str, ...]
+    unlisted: int
+
+
+# A probe: the argument list after the ``hermes`` executable, returning
+# stdout. Real callers spawn a subprocess; tests inject a fake in-memory one.
+DryRunRunner = Callable[[Sequence[str]], Awaitable[str]]
+
+
+def parse_dry_run_listing(text: str) -> DryRunListing:
+    """Extract session ids from ``sessions export --dry-run`` output.
+
+    The output is written for humans and upstream can change it at any time.
+    The dangerous failure is not a crash but a silent empty result, which
+    would report "0 conversations, done" and look like success, so the
+    header count is cross-checked and an unrecognised header is an error
+    rather than a zero. A header count above ``len(session_ids)`` is the
+    documented 100-cap, not a parse error -- the caller decides what to do
+    about it.
+    """
+    lines = text.splitlines()
+    header = None
+    expected = 0
+    for line in lines:
+        matched = _DRYRUN_HEADER_RE.match(line.strip())
+        if matched is not None:
+            header, expected = line, int(matched.group(1))
+            break
+    if header is None:
+        raise HermesExportError("unrecognised hermes export header; refusing to assume there are no sessions")
+
+    ids: list[str] = []
+    for line in lines:
+        if line is header or not line.startswith(" "):
+            continue
+        stripped = line.strip()
+        if not stripped:
+            continue
+        token = stripped.split()[0]
+        if _SESSION_ID_RE.match(token):
+            ids.append(token)
+
+    if expected > 0 and not ids:
+        raise HermesExportError(f"hermes reported {expected} session(s) but no session id could be parsed")
+    return DryRunListing(expected=expected, session_ids=tuple(ids))
+
+
+def _format_bound(dt: datetime) -> str:
+    return dt.strftime(_BOUND_FMT)
+
+
+def _ceil_to_minute(dt: datetime) -> datetime:
+    truncated = dt.replace(second=0, microsecond=0)
+    return truncated if truncated == dt else truncated + timedelta(minutes=1)
+
+
+def _midpoint_minute(start: datetime, end: datetime) -> datetime:
+    whole_minutes = (end - start) // timedelta(minutes=1)
+    return start + timedelta(minutes=whole_minutes // 2)
+
+
+def _dry_run_args(start: datetime | None, end: datetime | None) -> list[str]:
+    args = ["sessions", "export", "--dry-run", "--min-messages", "1"]
+    if start is not None:
+        args += ["--after", _format_bound(start)]
+    if end is not None:
+        args += ["--before", _format_bound(end)]
+    args.append("-")
+    return args
+
+
+async def _probe(runner: DryRunRunner, start: datetime | None, end: datetime | None) -> DryRunListing:
+    stdout = await runner(_dry_run_args(start, end))
+    return parse_dry_run_listing(stdout)
+
+
+async def _collect_window(runner: DryRunRunner, start: datetime, end: datetime) -> tuple[tuple[str, ...], int]:
+    listing = await _probe(runner, start, end)
+    if listing.expected <= _LISTING_CAP:
+        return listing.session_ids, 0
+    if end - start <= _MIN_WINDOW:
+        unlisted = listing.expected - len(listing.session_ids)
+        logger.warning(
+            "hermes window {}..{} has {} sessions, past the {} the dry-run listing caps at; {} will not be imported",
+            _format_bound(start),
+            _format_bound(end),
+            listing.expected,
+            _LISTING_CAP,
+            unlisted,
+        )
+        return listing.session_ids, unlisted
+    mid = _midpoint_minute(start, end)
+    left_ids, left_unlisted = await _collect_window(runner, start, mid)
+    right_ids, right_unlisted = await _collect_window(runner, mid, end)
+    return left_ids + right_ids, left_unlisted + right_unlisted
+
+
+async def _run_hermes_dry_run(args: Sequence[str]) -> str:
+    hermes_path = shutil.which("hermes")
+    if hermes_path is None:
+        raise HermesExportError("hermes executable not found on PATH")
+    proc = await asyncio.create_subprocess_exec(
+        hermes_path,
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise HermesExportError(
+            f"hermes exited with code {proc.returncode}: {stderr.decode('utf-8', 'replace').strip()}"
+        )
+    return stdout.decode("utf-8", errors="replace")
+
+
+async def list_exportable_sessions(*, runner: DryRunRunner | None = None) -> SessionListing:
+    """Find every Hermes session id that ``sessions export`` can produce.
+
+    A single unwindowed probe answers the question directly when hermes
+    counts at most the 100 it is willing to print. Above that, the
+    ``started_at`` axis is partitioned into half-open, minute-aligned
+    windows (the finest hermes' own minute-truncated ``--after``/``--before``
+    can express) and probed recursively, so a window this parser cannot
+    resolve further contributes its listed ids plus a counted, logged
+    remainder instead of either raising or silently dropping sessions.
+    """
+    active_runner = runner if runner is not None else _run_hermes_dry_run
+    root = await _probe(active_runner, None, None)
+    if root.expected <= _LISTING_CAP:
+        return SessionListing(session_ids=root.session_ids, unlisted=0)
+
+    ceiling = _ceil_to_minute(datetime.now()) + timedelta(minutes=1)
+    session_ids, unlisted = await _collect_window(active_runner, _PARTITION_FLOOR, ceiling)
+    unique = tuple(dict.fromkeys(session_ids))
+    return SessionListing(session_ids=unique, unlisted=unlisted + _uncovered(root.expected, len(unique), unlisted))
+
+
+def _uncovered(expected: int, collected: int, unlisted: int) -> int:
+    """Reconcile the windows against the count the root probe reported.
+
+    Arithmetic is the only thing that can catch a coverage bug here -- a
+    partition that misses a range returns a perfectly well-formed short list.
+    A surplus is benign: a live session ending mid-scan joins the candidates.
+    A shortfall is counted as unlisted rather than raised for the same reason,
+    since the race runs both ways, but it is never left unreported.
+    """
+    missing = expected - collected - unlisted
+    if missing <= 0:
+        return 0
+    logger.warning(
+        "hermes reported {} exportable session(s) but windowed probing accounted for {}; {} unaccounted for",
+        expected,
+        collected + unlisted,
+        missing,
+    )
+    return missing
+
+
+__all__ = [
+    "DryRunListing",
+    "DryRunRunner",
+    "HermesExportError",
+    "HermesScanner",
+    "SessionListing",
+    "list_exportable_sessions",
+    "parse_dry_run_listing",
+    "resolve_hermes_home",
+    "split_memory_entries",
+]

@@ -1,12 +1,22 @@
-"""HermesScanner -- home resolution and memory-file discovery."""
+"""HermesScanner -- home resolution, memory-file discovery, and session listing."""
 
 from __future__ import annotations
 
+import shutil
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from raven.importer.scanners.hermes import HermesScanner, resolve_hermes_home
+from raven.importer.scanners.hermes import (
+    DryRunRunner,
+    HermesExportError,
+    HermesScanner,
+    list_exportable_sessions,
+    parse_dry_run_listing,
+    resolve_hermes_home,
+)
 from raven.importer.types import Platform, SourceKind
 
 
@@ -146,3 +156,194 @@ async def _preamble(root: Path, body: str) -> str:
     (result,) = [r for r in await scanner.scan() if r.source_key == "user-md"]
     session = await scanner.read(result)
     return session.messages[0].content
+
+
+# -- parse_dry_run_listing -------------------------------------------------
+
+_GOOD = """Would export 2 session(s) (>= 1 messages).
+  20260723_153451_9a0929  desktop
+  20260727_110342_d612f2ef  qqbot
+"""
+
+
+def test_parses_ids_from_normal_output() -> None:
+    listing = parse_dry_run_listing(_GOOD)
+    assert listing.expected == 2
+    assert listing.session_ids == (
+        "20260723_153451_9a0929",
+        "20260727_110342_d612f2ef",
+    )
+
+
+def test_extra_column_does_not_break_parsing() -> None:
+    text = "Would export 1 session(s).\n  20260723_153451_9a0929  desktop  some title\n"
+    assert parse_dry_run_listing(text).session_ids == ("20260723_153451_9a0929",)
+
+
+def test_malformed_id_lines_are_ignored() -> None:
+    text = "Would export 1 session(s).\n  ----------\n  20260723_153451_9a0929  desktop\n"
+    assert parse_dry_run_listing(text).session_ids == ("20260723_153451_9a0929",)
+
+
+def test_count_without_any_parsable_id_is_an_error() -> None:
+    text = "Would export 3 session(s).\n  ??? garbage\n"
+    with pytest.raises(HermesExportError, match="3"):
+        parse_dry_run_listing(text)
+
+
+def test_unrecognised_header_is_an_error() -> None:
+    with pytest.raises(HermesExportError, match="header"):
+        parse_dry_run_listing("Exporting sessions now...\n  20260723_153451_9a0929  cli\n")
+
+
+def test_zero_sessions_is_a_valid_empty_result() -> None:
+    listing = parse_dry_run_listing("Would export 0 session(s) (>= 1 messages).\n")
+    assert listing.expected == 0
+    assert listing.session_ids == ()
+
+
+def test_uncapped_count_with_short_id_list_is_not_an_error() -> None:
+    # The 100-cap truncation: expected > len(ids) is documented, not a format break.
+    text = "Would export 3 session(s).\n  20260723_153451_9a0929  desktop\n  ... 2 more\n"
+    listing = parse_dry_run_listing(text)
+    assert listing.expected == 3
+    assert listing.session_ids == ("20260723_153451_9a0929",)
+
+
+# -- list_exportable_sessions -----------------------------------------------
+
+_TIME_FMT = "%Y-%m-%d %H:%M"
+
+
+@dataclass(frozen=True)
+class _FakeSession:
+    session_id: str
+    started_at: datetime
+
+
+def _extract_bound(args: list[str], flag: str) -> datetime | None:
+    if flag not in args:
+        return None
+    return datetime.strptime(args[args.index(flag) + 1], _TIME_FMT)
+
+
+def _make_fake_runner(sessions: list[_FakeSession], calls: list[list[str]]) -> DryRunRunner:
+    async def fake(args: list[str]) -> str:
+        calls.append(list(args))
+        after = _extract_bound(args, "--after")
+        before = _extract_bound(args, "--before")
+        matched = sorted(
+            (
+                s
+                for s in sessions
+                if (after is None or s.started_at >= after) and (before is None or s.started_at < before)
+            ),
+            key=lambda s: s.started_at,
+        )
+        listed = matched[:100]
+        lines = [f"Would export {len(matched)} session(s) (>= 1 messages)."]
+        lines += [f"  {s.session_id}  fake" for s in listed]
+        if len(matched) > 100:
+            lines.append(f"  ... {len(matched) - 100} more")
+        return "\n".join(lines) + "\n"
+
+    return fake
+
+
+async def test_root_probe_under_cap_makes_one_unwindowed_call() -> None:
+    sessions = [
+        _FakeSession("20260723_153451_9a0929", datetime(2026, 7, 23, 15, 34, 51)),
+        _FakeSession("20260727_110342_d612f2ef", datetime(2026, 7, 27, 11, 3, 42)),
+    ]
+    calls: list[list[str]] = []
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    assert listing.session_ids == tuple(s.session_id for s in sessions)
+    assert listing.unlisted == 0
+    assert len(calls) == 1
+    assert "--after" not in calls[0]
+    assert "--before" not in calls[0]
+
+
+async def test_root_probe_over_cap_fans_out_to_union_with_no_duplicates() -> None:
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    calls: list[list[str]] = []
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    assert listing.unlisted == 0
+    assert len(listing.session_ids) == len(set(listing.session_ids))
+    assert set(listing.session_ids) == {s.session_id for s in sessions}
+    assert len(calls) > 1
+
+
+async def test_sessions_outside_the_partition_are_counted_not_dropped() -> None:
+    """A partition that misses a range returns a well-formed short list, so
+    only reconciling against the root count can notice. Pinned with a session
+    older than the partition floor -- the shape a later-dated floor would make
+    routine."""
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    sessions.append(_FakeSession("19690101_000000_a1", datetime(1969, 1, 1)))
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, []))
+    assert "19690101_000000_a1" not in listing.session_ids
+    assert len(listing.session_ids) == 130
+    assert listing.unlisted == 1
+
+
+async def test_partition_floor_reaches_far_enough_back_to_collect_old_sessions() -> None:
+    """A recent-looking floor is silently lossy rather than merely slower: a
+    session starting before it lands in no window at all."""
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    sessions.append(_FakeSession("20150601_120000_b2", datetime(2015, 6, 1, 12, 0)))
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, []))
+    assert "20150601_120000_b2" in listing.session_ids
+    assert listing.unlisted == 0
+
+
+async def test_every_probe_carries_min_messages_one() -> None:
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    calls: list[list[str]] = []
+    await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    assert len(calls) > 1
+    for call in calls:
+        assert "--min-messages" in call
+        assert call[call.index("--min-messages") + 1] == "1"
+
+
+async def test_window_bounds_are_always_whole_minutes() -> None:
+    sessions = [
+        _FakeSession(f"20260101_{i:04d}00_{i:06x}", datetime(2026, 1, 1, 0, 0) + timedelta(minutes=i))
+        for i in range(130)
+    ]
+    calls: list[list[str]] = []
+    await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    for call in calls:
+        for flag in ("--after", "--before"):
+            bound = _extract_bound(call, flag)
+            if bound is not None:
+                assert bound.second == 0
+                assert bound.microsecond == 0
+
+
+async def test_one_minute_window_still_over_cap_reports_unlisted_without_raising() -> None:
+    crowded = datetime(2026, 1, 15, 10, 0)
+    sessions = [_FakeSession(f"20260115_100000_{i:06x}", crowded) for i in range(150)]
+    calls: list[list[str]] = []
+    listing = await list_exportable_sessions(runner=_make_fake_runner(sessions, calls))
+    assert len(listing.session_ids) == 100
+    assert listing.unlisted == 50
+
+
+async def test_missing_hermes_executable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(HermesExportError):
+        await list_exportable_sessions()
