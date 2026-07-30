@@ -1972,3 +1972,40 @@ def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list()
     assert result["has"] is True, "a vendor litellm supports is missing from the second step"
     assert result["excludes_listed"] is True, "the second step re-offers what the picker already lists"
     assert result["count"] > 50
+
+
+def test_minimax_precedes_deepseek_and_carries_the_open_source_partner_marker() -> None:
+    """A deliberate placement, so a later reordering cannot drop it silently.
+
+    "open-source partner" rather than a bare "partner": in a list of vendors the
+    short form reads as paid placement. Only the API-key entry is marked -- the
+    OAuth ones are the same vendor and already carry "(OAuth)".
+    """
+    from raven.cli.onboard_commands import _CURATED_GROUPS
+
+    api_key_group = next(g for g in _CURATED_GROUPS if g["kind"] == "api_key")
+    names = [entry["name"] for entry in api_key_group["providers"]]
+    assert names.index("minimax") == names.index("deepseek") - 1
+
+    minimax = api_key_group["providers"][names.index("minimax")]
+    assert minimax["label"] == "MiniMax (open-source partner)"
+    assert minimax["label_zh"] == "MiniMax(开源合作伙伴)"
+
+    oauth_group = next(g for g in _CURATED_GROUPS if g["kind"] == "oauth")
+    for entry in oauth_group["providers"]:
+        assert "partner" not in entry["label"], entry["label"]
+        assert "合作伙伴" not in entry["label_zh"], entry["label_zh"]
+
+
+def test_no_picker_label_names_the_routing_library() -> None:
+    """LiteLLM is how Raven reaches a vendor, not something a user configures.
+
+    A label that names it leaks an implementation detail and reads as though the
+    user needed an account with it.
+    """
+    from raven.cli.onboard_commands import _CURATED_GROUPS
+
+    for group in _CURATED_GROUPS:
+        for entry in group["providers"]:
+            for text in (entry["label"], entry.get("label_zh", "")):
+                assert "litellm" not in text.lower(), f"{entry['name']}: {text}"

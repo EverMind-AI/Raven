@@ -119,6 +119,17 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
             {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
             {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
+            # Marked because EverMind and MiniMax collaborate in the open, not
+            # because it ranks differently on capability -- "open-source" rather
+            # than a bare "partner", which in a list of vendors reads as paid
+            # placement. The OAuth MiniMax entries carry no marker: the same
+            # vendor is already marked here, and stacking it on "(OAuth)" makes
+            # the row twice as long for nothing.
+            {
+                "name": "minimax",
+                "label": "MiniMax (open-source partner)",
+                "label_zh": "MiniMax(开源合作伙伴)",
+            },
             {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
             {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
             {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
@@ -126,7 +137,6 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "volcengine", "label": "VolcEngine", "label_zh": "火山方舟"},
             {"name": "siliconflow", "label": "SiliconFlow", "label_zh": "硅基流动"},
             {"name": "groq", "label": "Groq", "label_zh": "Groq"},
-            {"name": "minimax", "label": "MiniMax", "label_zh": "MiniMax"},
             {"name": "aihubmix", "label": "AiHubMix", "label_zh": "AiHubMix"},
             {"name": "azure_openai", "label": "Azure OpenAI", "label_zh": "Azure OpenAI"},
         ],
@@ -160,8 +170,8 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
         "providers": [
             {
                 "name": _PICK_LITELLM_VENDOR,
-                "label": "Another vendor LiteLLM supports (type to filter)",
-                "label_zh": "其他厂商(LiteLLM 支持的 - 输入可筛选)",
+                "label": "Another supported vendor (type to search)",
+                "label_zh": "其他支持的厂商(输入可搜索)",
             },
             {
                 "name": "custom",
@@ -582,8 +592,8 @@ def _prompt_litellm_vendor() -> Optional[str]:
 
     typed = questionary.autocomplete(
         _t(
-            f"Vendor name ({len(choices)} available - type to filter, Tab to complete, empty to go back):",
-            f"厂商名({len(choices)} 家 — 输入可筛选,Tab 补全,留空返回):",
+            f"Vendor name ({len(choices)} supported - type to search, Tab to complete, empty to go back):",
+            f"厂商名(支持 {len(choices)} 家 — 输入可搜索,Tab 补全,留空返回):",
         ),
         choices=choices,
         style=RAVEN_STYLE,
