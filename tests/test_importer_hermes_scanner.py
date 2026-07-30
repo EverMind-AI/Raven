@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,11 +43,32 @@ def _make_home(
     return home
 
 
+# Captured before the autouse guard below can replace it, so the one test that
+# needs the real runner's behaviour can still reach it explicitly.
+_REAL_DRY_RUN_RUNNER = hermes_module._run_hermes_dry_run
+
+
+@pytest.fixture(autouse=True)
+def _forbid_the_real_hermes_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make reaching the real binary a loud failure rather than a silent spawn.
+
+    `scan()` probes for conversations, which shells out. A test that forgets to
+    pass a fake would otherwise pass or fail depending on whether the developer
+    happens to have hermes installed and what sessions it holds -- so the
+    default is replaced with something that names the mistake instead.
+    """
+
+    async def _refuse(args: Sequence[str]) -> str:
+        raise AssertionError(f"test reached the real hermes CLI with {list(args)!r}; pass run_cli= or runner=")
+
+    monkeypatch.setattr(hermes_module, "_run_hermes_dry_run", _refuse)
+
+
 async def _no_conversations(args: list[str]) -> str:
     """A run_cli stub for tests that only care about memory files.
 
-    scan() always probes for conversations too, so any test that does not
-    supply its own fake here must not fall through to the real hermes binary.
+    scan() always probes for conversations too, so a test that only exercises
+    memory files still has to answer that probe.
     """
     return "Would export 0 session(s) (>= 1 messages).\n"
 
@@ -404,9 +426,11 @@ async def test_ceiling_buffer_covers_a_session_started_on_the_exact_minute(
 
 
 async def test_missing_hermes_executable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reaches for the real runner on purpose -- it is the thing under test --
+    so it uses the reference captured before the autouse guard replaced it."""
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     with pytest.raises(HermesExportError):
-        await list_exportable_sessions()
+        await list_exportable_sessions(runner=_REAL_DRY_RUN_RUNNER)
 
 
 # -- hermes_session_to_messages / strip_images ------------------------------
