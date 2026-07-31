@@ -1938,6 +1938,7 @@ class _ScriptedSelect:
         self._answers = list(answers)
         self.asked: list[str] = []
         self.offered: list[tuple[str, list[Any]]] = []
+        self.raw_choices: list[tuple[str, list[Any]]] = []
 
     def select(self, message: str, choices: list[Any] | None = None, **_kwargs: Any) -> Any:
         self.asked.append(message)
@@ -1945,6 +1946,7 @@ class _ScriptedSelect:
         # an answer by prompt text alone would still "work" if the choice that
         # produces it had been deleted from the menu.
         self.offered.append((message, [getattr(c, "value", c) for c in (choices or [])]))
+        self.raw_choices.append((message, list(choices or [])))
         for index, (needle, value) in enumerate(self._answers):
             if needle in message:
                 self._answers.pop(index)
@@ -2038,3 +2040,50 @@ def _short(message: str) -> str:
     if "Select import tier" in message:
         return "tier"
     return "mode"
+
+
+def test_tier_choices_name_the_skills_that_will_be_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skills are not ScanResults, so every count taken from the scan omits
+    them. The wizard used to offer "2 items" and then install a dozen skills
+    the user had never been shown."""
+    from raven.importer.types import Tier
+
+    monkeypatch.setattr(onboard_commands, "_importable_skill_count", lambda _p: 12)
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            ("Select import tier", "back"),
+            ("Select platform", "skip"),
+        ],
+    )
+    tier_labels = [c.title for c in _choices_of(scripted)]
+    assert any("12" in t for t in tier_labels), f"skill count missing from the tier menu: {tier_labels}"
+
+
+def test_tier_choices_omit_skills_when_the_platform_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code contributes no skills, so a count that can never move would
+    be noise rather than information."""
+    from raven.importer.types import Tier
+
+    monkeypatch.setattr(onboard_commands, "_importable_skill_count", lambda _p: 0)
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            ("Select import tier", "back"),
+            ("Select platform", "skip"),
+        ],
+    )
+    tier_labels = [c.title for c in _choices_of(scripted)]
+    assert not any("skill" in t or "技能" in t for t in tier_labels), tier_labels
+
+
+def _choices_of(scripted: _ScriptedSelect) -> list[Any]:
+    return [c for message, choices in scripted.raw_choices if "Select import tier" in message for c in choices]

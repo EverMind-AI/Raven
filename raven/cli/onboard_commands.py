@@ -3669,6 +3669,48 @@ def _print_next_steps(*, warnings: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _cell_len(text: str) -> int:
+    """Rendered width, counting a CJK glyph as two columns."""
+    from rich.text import Text
+
+    return Text(text).cell_len
+
+
+def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
+    """One menu row: what it is, what it brings, what it costs.
+
+    Names are padded to a common width so the separators line up; questionary
+    renders a plain string, so the padding has to be applied here rather than
+    left to a table.
+    """
+    return f"{name}{' ' * (width - _cell_len(name))}  ·  {contents}  · {cost}"
+
+
+def _importable_skill_count(platform: str) -> int:
+    """How many skills the import would install, or 0 when none apply.
+
+    Only Hermes contributes skills today, so every other platform gets 0 and
+    the caller drops the skill wording entirely rather than showing a count
+    that can never move.
+    """
+    import asyncio
+
+    from loguru import logger
+
+    from raven.importer.skills import SkillOrigin
+    from raven.importer.skills.hermes import HermesSkillSource
+    from raven.importer.types import Platform
+
+    if platform not in ("all", Platform.HERMES.value):
+        return 0
+    try:
+        discovered = asyncio.run(HermesSkillSource().discover())
+    except Exception as exc:
+        logger.warning("skill preview unavailable: {}", exc)
+        return 0
+    return sum(1 for s in discovered if s.origin is not SkillOrigin.BUNDLED_PRISTINE)
+
+
 def _step5_import(*, skip: bool, non_interactive: bool) -> object:
     """Step 5 — optionally import conversation history from other AI tools."""
     _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
@@ -3862,8 +3904,18 @@ def _step5_import_body(
 
         mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
         conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+        # Skills never travel as ScanResults, so every count derived from
+        # `results` omits them. Left out, the wizard offers "2 items" and then
+        # installs a dozen skills the user was never told about.
+        skills = _importable_skill_count(selected_platform)
         console.print(
             _t(
+                f"  {len(results) + skills} items selected "
+                f"({mem} memory files, {skills} skills, {conv} conversations).",
+                f"  已选 {len(results) + skills} 项（{mem} 个记忆文件，{skills} 个技能，{conv} 个对话）。",
+            )
+            if skills
+            else _t(
                 f"  {len(results)} items selected ({mem} memory files, {conv} conversations).",
                 f"  已选 {len(results)} 项（{mem} 个记忆文件，{conv} 个对话）。",
             )
@@ -3871,37 +3923,49 @@ def _step5_import_body(
 
         while True:  # tier level -- Back here returns to the platform prompt
             # -- Tier selection --
+            # One line naming the three kinds of data, then each option carrying
+            # its own contents and cost. The previous shape put two prose
+            # paragraphs above the menu, so the reader had to match each
+            # sentence back to an option by name, and both paragraphs wrapped
+            # mid-word at 80 columns.
+            console.print()
             console.print(
                 _t(
-                    "\n  [bold][accent]Memory files only[/accent][/bold]  "
-                    "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
-                    "  [bold][accent]Full import[/accent][/bold]  "
-                    "[dim]Slow (may take hours). Imports memory files + all conversation history. "
-                    "Higher LLM cost.[/dim]",
-                    "\n  [bold][accent]仅记忆文件[/accent][/bold]  "
-                    "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
-                    "  [bold][accent]完整导入[/accent][/bold]  "
-                    "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
+                    "  [dim]Memory files are preferences and project knowledge; skills are copied "
+                    "into the local skill pool; conversations are full chat history.[/dim]",
+                    "  [dim]记忆文件是偏好与项目知识，技能会复制进本地技能池，对话是完整聊天历史。[/dim]",
                 ),
                 highlight=False,
             )
             console.print()
+            file_label = _t("Memory files only", "仅记忆文件")
+            full_label = _t("Full import", "完整导入")
+            label_width = max(_cell_len(file_label), _cell_len(full_label))
+            file_contents = (
+                _t(f"{mem} memory files + {skills} skills", f"{mem} 个记忆文件 + {skills} 个技能")
+                if skills
+                else _t(f"{mem} memory files", f"{mem} 个记忆文件")
+            )
             tier_choices = []
             if mem:
                 tier_choices.append(
                     questionary.Choice(
-                        _t(
-                            f"Memory files only ({mem} items, fast)",
-                            f"仅记忆文件（{mem} 项，快速）",
+                        _tier_choice_label(
+                            file_label,
+                            label_width,
+                            file_contents,
+                            _t("minutes, low LLM cost", "分钟级，LLM 开销小"),
                         ),
                         value=Tier.MEMORY_FILES,
                     )
                 )
             tier_choices.append(
                 questionary.Choice(
-                    _t(
-                        f"Full import ({mem + conv} items, includes conversations)",
-                        f"完整导入（{mem + conv} 项，含对话）",
+                    _tier_choice_label(
+                        full_label,
+                        label_width,
+                        _t(f"all of the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
+                        _t("may take hours, higher LLM cost", "可能数小时，LLM 开销大"),
                     ),
                     value=Tier.FULL,
                 )
@@ -3982,12 +4046,14 @@ def _step5_import_body(
             f"\n  About to import:\n"
             f"    Platform: {platform_display}\n"
             f"    Tier:     {tier_display}\n"
-            f"    Items:    {len(filtered)} ({f_mem} memory files, {f_conv} conversations)\n"
+            f"    Items:    {len(filtered) + skills} ({f_mem} memory files, "
+            f"{skills} skills, {f_conv} conversations)\n"
             f"    Mode:     {mode_display}",
             f"\n  即将导入:\n"
             f"    平台:     {platform_display}\n"
             f"    档位:     {tier_display}\n"
-            f"    数量:     {len(filtered)} 项（{f_mem} 个记忆文件，{f_conv} 个对话）\n"
+            f"    数量:     {len(filtered) + skills} 项"
+            f"（{f_mem} 个记忆文件，{skills} 个技能，{f_conv} 个对话）\n"
             f"    执行方式: {mode_display}",
         )
     )
