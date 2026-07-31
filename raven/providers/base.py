@@ -31,9 +31,12 @@ _TOOL_IMAGE_REJECTION_PATTERNS = (
     "tool message content must be a string",
     "tool content must be a string",
     "tool message must be a string",
-    # OpenAI-compatible servers rejecting list content at schema validation
+    # OpenAI-compatible servers rejecting list content at schema validation.
+    # The DeepInfra wording was measured on 2026-07-31 (422, not 400):
+    # {"message":"Input should be a valid string","param":"messages.2.function..."}
     "expected string, got list",
     "expected string, got array",
+    "input should be a valid string",
     # Alibaba / DashScope
     "tool_call.content must be string",
 )

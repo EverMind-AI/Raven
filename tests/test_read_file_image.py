@@ -193,31 +193,50 @@ def test_supports_image_tool_result_is_fail_safe_for_unverified_targets() -> Non
     assert supports_image_tool_result(provider, "this-model-does-not-exist") is False
 
 
-def test_gateway_capability_follows_the_backend_not_the_gateway() -> None:
-    """OpenRouter routes to a backend named in the model string, so the second
-    segment decides. Measured live: anthropic and google carry the image (the
-    model named the test image's colour); openai does not -- gpt-4o refuses with
-    a 400 and gpt-4.1-mini silently drops it and confabulates a colour, which is
-    why the set is a whitelist of measured backends rather than a blacklist."""
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        # Measured on every host OpenRouter serves them from, each pinned with
+        # provider.only + allow_fallbacks=false.
+        ("openrouter/anthropic/claude-sonnet-4.5", True),
+        ("openrouter/google/gemini-2.5-flash", True),
+        # Same creator segment as the row above, but served only by third-party
+        # OpenAI-compatible hosts -- DeepInfra and Novita reject the list content
+        # with a 422 while Parasail and Nebius accept it, and OpenRouter picks the
+        # host per request. A creator-level whitelist would buy intermittent
+        # failure here, which is why the key is a family prefix.
+        ("openrouter/google/gemma-3-27b-it", False),
+        # Refuses loudly.
+        ("openrouter/openai/gpt-4o", False),
+        # Accepts, drops the image, confabulates an answer. Unrecoverable, hence
+        # a whitelist of what was measured rather than a blacklist.
+        ("openrouter/openai/gpt-4.1-mini", False),
+        ("openrouter/deepseek/deepseek-chat", False),
+        # A family prefix must not match mid-string.
+        ("openrouter/someone/not-anthropic/claude-clone", False),
+        # No route segment to read -> placeholder path.
+        ("openrouter/some-bare-model", False),
+    ],
+)
+def test_gateway_capability_follows_the_measured_model_family(model: str, expected: bool) -> None:
+    """A gateway hands the request to one of several serving hosts, so the model
+    family decides, not the creator segment. Both halves matter: the True rows
+    keep the feature working, and the False rows are what stops an unmeasured
+    serving stack from silently discarding a picture."""
     from raven.providers.litellm_provider import LiteLLMProvider
 
     provider = object.__new__(LiteLLMProvider)
 
-    assert supports_image_tool_result(provider, "openrouter/anthropic/claude-sonnet-4.5") is True
-    assert supports_image_tool_result(provider, "openrouter/google/gemini-2.5-flash") is True
-    assert supports_image_tool_result(provider, "openrouter/openai/gpt-4o") is False
-    assert supports_image_tool_result(provider, "openrouter/deepseek/deepseek-chat") is False
-    # No backend segment to read -> placeholder path.
-    assert supports_image_tool_result(provider, "openrouter/some-bare-model") is False
+    assert supports_image_tool_result(provider, model) is expected
 
 
-def test_gateway_backend_extraction() -> None:
-    from raven.providers.capabilities import _gateway_backend
+def test_gateway_route_extraction() -> None:
+    from raven.providers.capabilities import _gateway_route
 
-    assert _gateway_backend("openrouter/anthropic/claude-sonnet-4.5") == "anthropic"
-    assert _gateway_backend("openrouter/Google/gemini-2.5-flash") == "google"
-    assert _gateway_backend("openrouter/bare") == ""
-    assert _gateway_backend("claude-opus-4-5") == ""
+    assert _gateway_route("openrouter/anthropic/claude-sonnet-4.5") == "anthropic/claude-sonnet-4.5"
+    assert _gateway_route("openrouter/Google/Gemini-2.5-Flash") == "google/gemini-2.5-flash"
+    assert _gateway_route("openrouter/bare") == "bare"
+    assert _gateway_route("claude-opus-4-5") == ""
 
 
 def test_supports_image_tool_result_honours_an_explicit_spec_override() -> None:
