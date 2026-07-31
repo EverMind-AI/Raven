@@ -190,23 +190,6 @@ def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     return index
 
 
-def _litellm_spelling_for(slug: str) -> str:
-    """How LiteLLM spells this vendor, which is the only form usable as a prefix.
-
-    Section names are matched spelling-insensitively, so the name arriving here
-    may be underscored where LiteLLM hyphenates -- and LiteLLM rejects the
-    underscored form outright.
-    """
-    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
-    from raven.providers.registry import normalize_provider_name
-
-    wanted = normalize_provider_name(slug)
-    for name in LITELLM_PROVIDER_NAMES:
-        if normalize_provider_name(name) == wanted:
-            return name
-    return wanted
-
-
 def litellm_models_for(slug: str) -> list[str]:
     """Chat models LiteLLM knows for this provider, as ids that actually route.
 
@@ -220,7 +203,7 @@ def litellm_models_for(slug: str) -> list[str]:
     do not -- and offering a bare id would route it by keyword rather than to the
     provider the user picked.
     """
-    from raven.providers.registry import find_by_name, normalize_provider_name
+    from raven.providers.registry import find_by_name, litellm_spelling, normalize_provider_name
 
     spec = find_by_name(slug)
     if spec is None:
@@ -234,10 +217,13 @@ def litellm_models_for(slug: str) -> list[str]:
         # Bedrock's do not -- so they are normalized here rather than trusted.
         # Offering an unprefixed one would reintroduce the very thing this exists
         # to avoid.
+        # The index is keyed by LiteLLM's own spelling, so it has to be read by
+        # that spelling too -- looking it up normalized found nothing for any
+        # vendor LiteLLM hyphenates.
         index = _litellm_chat_models_by_provider()
-        prefix = _litellm_spelling_for(slug)
+        prefix = litellm_spelling(slug)
         out: list[str] = []
-        for model in index.get(normalize_provider_name(slug), ()):
+        for model in index.get(prefix, ()):
             bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
             out.append(f"{prefix}/{bare}")
         return out

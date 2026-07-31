@@ -30,11 +30,7 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
-from raven.providers.common_models import (
-    _litellm_chat_models_by_provider,
-    common_models_for,
-    litellm_models_for,
-)
+from raven.providers.common_models import common_models_for, litellm_models_for
 from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -113,6 +109,28 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     }
 
 
+async def _entry_off_loop(slug: str, current_provider: str | None) -> dict[str, Any]:
+    """Build one picker row without blocking the event loop.
+
+    Reading the candidate chain imports LiteLLM the first time, which takes
+    seconds -- long enough to stall this session's token stream. Every handler
+    that returns a row goes through here rather than warming the cache in one
+    and reading it inline in the others: the cache is cold whenever a first read
+    failed (failures are deliberately not cached), and handler order is up to
+    the client.
+    """
+    return await asyncio.to_thread(_build_provider_entry, slug, current_provider=current_provider)
+
+
+async def _entries_off_loop(current_provider: str | None) -> list[dict[str, Any]]:
+    """Build every picker row in one thread hop rather than one hop per row."""
+
+    def _build() -> list[dict[str, Any]]:
+        return [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
+
+    return await asyncio.to_thread(_build)
+
+
 def _current_selection() -> tuple[str, str | None]:
     from raven.cli._helpers import load_runtime_config
 
@@ -136,12 +154,8 @@ def _current_selection() -> tuple[str, str | None]:
 
 async def model_options(params: dict) -> dict:
     _parse(ModelOptionsParams, params)
-    # Warm the catalogue off the loop. Reading it imports LiteLLM the first time,
-    # which takes seconds -- long enough that doing it inline would stall this
-    # session's token stream while the picker opens.
-    await asyncio.to_thread(_litellm_chat_models_by_provider)
     current_model, current_provider = _current_selection()
-    entries = [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
+    entries = await _entries_off_loop(current_provider)
     return {
         "model": current_model,
         "provider": current_provider or "",
@@ -182,7 +196,7 @@ async def model_save_key(params: dict) -> dict:
 
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
@@ -203,7 +217,7 @@ async def model_add_model(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
@@ -215,7 +229,7 @@ async def model_remove_model(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 

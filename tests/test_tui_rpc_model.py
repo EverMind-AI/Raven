@@ -15,6 +15,7 @@ import pytest
 
 from raven.providers.common_models import common_models_for
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
+from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
     model_add_model,
     model_disconnect,
@@ -428,3 +429,43 @@ def test_the_catalogue_is_not_read_until_the_picker_is_opened() -> None:
     assert result["before"] is False, "importing the picker module pulled in litellm"
     assert result["after"] is True, "reading the catalogue did not import litellm; is it still the source?"
     assert result["n"] > 0
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda: model_options({}), id="options"),
+        pytest.param(lambda: model_save_key({"slug": "deepseek", "api_key": "sk-test-key"}), id="save_key"),
+        pytest.param(lambda: model_add_model({"slug": "deepseek", "model": "deepseek-chat"}), id="add_model"),
+        pytest.param(lambda: model_remove_model({"slug": "deepseek", "model": "deepseek-chat"}), id="remove_model"),
+        pytest.param(lambda: model_options({}), id="options_again"),
+    ],
+)
+async def test_no_handler_reads_the_catalogue_on_the_event_loop(fake_home: Path, monkeypatch, call) -> None:
+    """Reading it imports LiteLLM the first time, which takes seconds.
+
+    Only ``model.options`` warmed the cache off the loop; the three write
+    handlers built their response row inline. That is the stall the warm-up
+    exists to prevent, and it is reachable whenever the cache is cold -- a failed
+    read is deliberately not cached, and the client decides the call order.
+    """
+    import asyncio
+    import threading
+
+    _write_config(fake_home, {"providers": {"deepseek": {"api_key": "sk-existing"}}})
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = model_module.litellm_models_for
+
+    def _spy(slug: str):
+        seen.append(threading.get_ident())
+        return real(slug)
+
+    monkeypatch.setattr(model_module, "litellm_models_for", _spy)
+    await call()
+
+    assert seen, "the handler never consulted the catalogue, so this proves nothing"
+    on_loop = [t for t in seen if t == loop_thread]
+    assert not on_loop, f"{len(on_loop)}/{len(seen)} catalogue reads ran on the event loop"
+    assert asyncio.get_running_loop() is not None
