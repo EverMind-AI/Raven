@@ -15,6 +15,8 @@ from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,
     _build_headers,
+    _convert_messages,
+    _convert_tool_output,
     _iter_sse,
 )
 
@@ -61,3 +63,62 @@ async def test_iter_sse_per_event_idle_timeout_raises():
         async for event in _iter_sse(resp, timeout=0.05):
             events.append(event)
     assert events == [{"type": "ping"}]
+
+
+_TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+
+def test_convert_tool_output_passes_plain_string_through():
+    assert _convert_tool_output("file contents") == "file contents"
+
+
+def test_convert_tool_output_joins_text_only_blocks_without_json():
+    blocks = [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}]
+    assert _convert_tool_output(blocks) == "line one\nline two"
+
+
+def test_convert_tool_output_emits_responses_array_when_an_image_is_present():
+    blocks = [
+        {"type": "text", "text": "screenshot of the dashboard"},
+        {"type": "image_url", "image_url": {"url": _TINY_PNG_URI}},
+    ]
+    assert _convert_tool_output(blocks) == [
+        {"type": "input_text", "text": "screenshot of the dashboard"},
+        {"type": "input_image", "image_url": _TINY_PNG_URI, "detail": "auto"},
+    ]
+
+
+def test_convert_tool_output_never_serializes_base64_as_prose():
+    """Regression: the old fallback json.dumps'd the block list, so the model got
+    the image's base64 payload as text instead of a picture -- silently."""
+    blocks = [{"type": "image_url", "image_url": {"url": _TINY_PNG_URI}}]
+    out = _convert_tool_output(blocks)
+
+    assert isinstance(out, list)
+    assert not any("base64" in part.get("text", "") for part in out)
+    assert out == [{"type": "input_image", "image_url": _TINY_PNG_URI, "detail": "auto"}]
+
+
+def test_convert_tool_output_keeps_unknown_blocks_reaching_the_model():
+    blocks = [{"type": "citation", "source": "docs"}]
+    assert _convert_tool_output(blocks) == '{"type": "citation", "source": "docs"}'
+
+
+def test_convert_messages_wires_tool_output_into_function_call_output():
+    _, items = _convert_messages(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_7|fc_7",
+                "content": [
+                    {"type": "text", "text": "here it is"},
+                    {"type": "image_url", "image_url": {"url": _TINY_PNG_URI}},
+                ],
+            }
+        ]
+    )
+
+    assert len(items) == 1
+    assert items[0]["type"] == "function_call_output"
+    assert items[0]["call_id"] == "call_7"
+    assert items[0]["output"][1]["type"] == "input_image"
