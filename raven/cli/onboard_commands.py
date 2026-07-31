@@ -1594,10 +1594,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     from raven.cli._styles import RAVEN_STYLE
     from raven.providers.registry import find_by_name
 
-    choices = [
-        questionary.Choice(_provider_label(name), value=name)
-        for name in _configured_providers()
-    ]
+    choices = [questionary.Choice(_provider_label(name), value=name) for name in _configured_providers()]
     if not choices:
         return False
     provider = questionary.select(
