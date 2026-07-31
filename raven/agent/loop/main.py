@@ -184,6 +184,15 @@ _TRANSIENT_FAILURE_MARKERS = (
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
+# Marks the synthetic user message that carries images a transport cannot put in
+# a tool result. Not persisted: the tool result above it already names the file
+# path, so the only thing this message would add to the transcript is a user turn
+# saying "[image]" that the user never sent -- misleading on resume and in
+# session export. Deliberately a different key from ``_recovery_synthetic``:
+# that one marks empty-response recovery scaffolding, and collapsing the two
+# would make either meaning impossible to reason about separately.
+_ATTACHED_IMAGE_KEY = "_attached_image"
+
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
@@ -1696,6 +1705,20 @@ class AgentLoop:
                         await on_progress(thought)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
+                # Images this transport cannot carry inside a tool result.
+                # Collected across the whole batch and attached once *after* the
+                # last tool result: a user message sitting between two tool
+                # results leaves an assistant tool_call unanswered at the point
+                # the API validates the sequence. Measured on gpt-4o, 2026-07-31,
+                # two tool calls with the picture from the first:
+                #   tool(c1), user, tool(c2) -> 400 "An assistant message with
+                #     'tool_calls' must be followed by tool messages responding
+                #     to each 'tool_call_id'"
+                #   tool(c1), tool(c2), user -> 200, and the model named the
+                #     image's colour
+                # Anthropic accepts both, so this only bites on Chat Completions
+                # -- which is the only transport that takes this path at all.
+                pending_images: list[dict[str, Any]] = []
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1778,7 +1801,7 @@ class AgentLoop:
                         # existing caller or test double sees a signature change.
                         messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
                     if attach_blocks:
-                        messages.append({"role": "user", "content": attach_blocks})
+                        pending_images.extend(attach_blocks)
                     if getattr(result, "abort_action", False):
                         abort_action = True
                         # A single assistant message may contain several parallel
@@ -1839,6 +1862,13 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # After the nudge above, which needs the last message to still be
+                # the tool result it appends to. Also after the abort_action
+                # branch, which ends the turn in runtime code -- there is no
+                # further model call to show a picture to, so an aborted action
+                # deliberately drops it rather than leaving it dangling.
+                if pending_images:
+                    messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -1949,8 +1979,13 @@ class AgentLoop:
         # was retired on feature/integrate-everos; the after-turn pipeline —
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
-        if any(m.get("_recovery_synthetic") for m in messages):
-            messages = [m for m in messages if not m.get("_recovery_synthetic")]
+        # Attached-image messages are dropped here for the same reason and at the
+        # same point: the returned list feeds persistence, ``after_turn``
+        # extraction and ``backend.store`` alike, so filtering once upstream of
+        # all three is the only place that covers them.
+        _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+        if any(any(m.get(k) for k in _transient) for m in messages):
+            messages = [m for m in messages if not any(m.get(k) for k in _transient)]
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
         # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
@@ -2387,6 +2422,10 @@ class AgentLoop:
             role, content = entry.get("role"), entry.get("content")
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
+            if entry.get(_ATTACHED_IMAGE_KEY):
+                # Already filtered upstream; kept because this is the last gate
+                # before a write that cannot be undone, unlike the code above it.
+                continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool" and isinstance(content, list):

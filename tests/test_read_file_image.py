@@ -7,6 +7,7 @@ model for exactly one turn and never reaches disk.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from raven.agent.tools import media
 from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.providers.base import LLMProvider
 from raven.providers.capabilities import (
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
@@ -542,3 +544,199 @@ def test_capability_cache_is_keyed_by_model() -> None:
     loop._image_tool_result_ok["claude-opus-4-5"] = False
     assert loop._supports_image_tool_result("claude-opus-4-5") is False
     assert loop._supports_image_tool_result("claude-sonnet-4-5") is True
+
+
+# --------------------------------------------------------------------------
+# R2 / R5: batching and persistence of the attachment message
+# --------------------------------------------------------------------------
+
+
+class _TwoToolsThenAnswer(LLMProvider):
+    """One assistant message with two tool calls, the *first* returning an image.
+
+    The naive fallback appends the picture right after the first tool result,
+    leaving the second tool_call unanswered where Chat Completions validates the
+    sequence. This provider reproduces that ordering.
+    """
+
+    def __init__(self, image_path: str, text_path: str):
+        super().__init__(api_key="test")
+        self.image_path = image_path
+        self.text_path = text_path
+        self.seen: list[list[dict]] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        from raven.providers.base import LLMResponse, ToolCallRequest
+
+        self.seen.append([dict(m) for m in messages])
+        if not any(m.get("role") == "tool" for m in messages):
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="read_file", arguments={"path": self.image_path}),
+                    ToolCallRequest(id="c2", name="read_file", arguments={"path": self.text_path}),
+                ],
+                finish_reason="tool_calls",
+            )
+        return LLMResponse(content="saw both", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_attached_images_land_after_every_tool_result_in_the_batch(tmp_path: Path) -> None:
+    from raven.agent.loop import AgentLoop
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    img = _write_image(tmp_path / "a.png", (40, 40))
+    (tmp_path / "b.txt").write_text("plain\n")
+    provider = _TwoToolsThenAnswer(str(img), str(tmp_path / "b.txt"))
+    agent = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=6,
+        restrict_to_workspace=True,
+    )
+    # Force the fallback path -- the one this ordering bug lives on.
+    agent._image_tool_result_ok = {"stub": False}
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="look at a.png and b.txt",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None and out[0] == "saw both"
+
+    sent = provider.seen[-1]
+    roles = [m["role"] for m in sent]
+    # Both tool results must be adjacent; the picture comes after the last one.
+    first_tool = roles.index("tool")
+    assert roles[first_tool : first_tool + 2] == ["tool", "tool"]
+    assert roles[first_tool + 2] == "user"
+    assert any(p.get("type") == "image_url" for p in sent[first_tool + 2]["content"])
+
+
+@pytest.mark.asyncio
+async def test_the_attachment_message_is_never_persisted(tmp_path: Path) -> None:
+    """R5: it would read as the user having sent '[image]', which they did not.
+    The tool result above it already names the path, so nothing is lost."""
+    from raven.agent.loop import AgentLoop
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    img = _write_image(tmp_path / "a.png", (40, 40))
+    (tmp_path / "b.txt").write_text("plain\n")
+    provider = _TwoToolsThenAnswer(str(img), str(tmp_path / "b.txt"))
+    agent = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=6,
+        restrict_to_workspace=True,
+    )
+    agent._image_tool_result_ok = {"stub": False}
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="look at a.png",
+        ),
+        session_key="s1",
+    )
+
+    session = agent.sessions.get_or_create("s1")
+    persisted = [m for m in session.messages if m.get("role") == "user"]
+    # The real user turn survives; the synthetic image carrier does not.
+    assert any("look at a.png" in str(m.get("content", "")) for m in persisted)
+    assert not any(m.get("_attached_image") for m in session.messages)
+    assert not any(
+        isinstance(m.get("content"), list) and m["content"] == [{"type": "text", "text": "[image]"}]
+        for m in session.messages
+    )
+    # And the path is still in the transcript, via the tool result.
+    assert any("a.png" in str(m.get("content", "")) for m in session.messages)
+
+
+def test_save_turn_drops_the_attachment_message(tmp_path: Path) -> None:
+    """Direct unit cover for the last gate before an irreversible write."""
+    from unittest.mock import MagicMock
+
+    from raven.agent.loop.main import AgentLoop
+    from raven.session.manager import Session
+
+    loop = object.__new__(AgentLoop)
+    loop._now_fn = MagicMock(return_value=__import__("datetime").datetime(2026, 7, 31))
+    session = Session(key="cli:u")
+
+    loop._save_turn(
+        session,
+        [
+            {"role": "tool", "tool_call_id": "c1", "content": "[image: /w/a.png] | 40x40px"},
+            _img_msg("user", "x") | {"_attached_image": True},
+        ],
+        0,
+    )
+
+    assert [m["role"] for m in session.messages] == ["tool"]
+
+
+@pytest.mark.asyncio
+async def test_the_attachment_message_never_reaches_extraction(tmp_path: Path) -> None:
+    """The persistence guard alone is not enough: the returned message list also
+    feeds ``context_engine.after_turn`` and ``backend.store``, so the base64 has
+    to be filtered upstream of all three, not just before the JSONL write."""
+    from raven.agent.loop import AgentLoop
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    img = _write_image(tmp_path / "a.png", (40, 40))
+    (tmp_path / "b.txt").write_text("plain\n")
+    provider = _TwoToolsThenAnswer(str(img), str(tmp_path / "b.txt"))
+    agent = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=6,
+        restrict_to_workspace=True,
+    )
+    agent._image_tool_result_ok = {"stub": False}
+
+    captured: list[dict] = []
+    original = agent.context_engine.after_turn
+
+    async def spy(key, payload):
+        captured.append(payload)
+        return await original(key, payload)
+
+    agent.context_engine.after_turn = spy
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="look at a.png",
+        ),
+        session_key="s1",
+    )
+
+    assert captured, "after_turn was not called"
+    seen = captured[-1]["messages"]
+    assert not any(m.get("_attached_image") for m in seen)
+    assert "base64" not in json.dumps(seen)
