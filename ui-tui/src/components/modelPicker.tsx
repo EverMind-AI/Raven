@@ -19,6 +19,31 @@ const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
 type Stage = 'provider' | 'key' | 'model' | 'addModel' | 'disconnect'
+
+/** What a provider still needs, in the four shapes the backend reports. */
+function unconfiguredHint(authType: string | undefined): string {
+  if (authType === 'oauth') {
+    return '(sign in)'
+  }
+  if (authType === 'local') {
+    return '(no address)'
+  }
+  if (authType === 'endpoint') {
+    return '(no endpoint)'
+  }
+  return '(no key)'
+}
+
+/** A local deployment has no key to paste, and OAuth is a terminal command. */
+function unconfiguredWarning(p: ModelOptionProvider): string {
+  if (p.auth_type === 'oauth') {
+    return `run \`raven provider login ${p.slug.replace(/_/g, '-')}\``
+  }
+  if (p.auth_type === 'local') {
+    return 'enter the server address to activate'
+  }
+  return p.key_env ? `paste ${p.key_env} to activate` : 'enter a key to activate'
+}
 type KeyField = 'api_key' | 'api_base'
 
 export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPickerProps) {
@@ -112,7 +137,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         return
       }
 
-      const showBase = provider?.auth_type === 'api_key'
+      const showBase = provider?.auth_type === 'endpoint' || provider?.auth_type === 'local'
       const focusBase = showBase && keyField === 'api_base'
 
       // Tab moves between the two fields when api_base is shown.
@@ -298,7 +323,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
                         authenticated: false,
                         models: [],
                         total_models: 0,
-                        warning: p.key_env ? `paste ${p.key_env} to activate` : 'run `raven model` to configure'
+                        warning: unconfiguredWarning(p)
                       }
                     : p
                 )
@@ -350,7 +375,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         if (provider.authenticated === false) {
           // api_key providers prompt for key inline, even when key_env is null
           // (custom / azure use a generic key + required api_base).
-          if (provider.auth_type === 'api_key') {
+          if (provider.auth_type !== 'oauth') {
             setStage('key')
             setKeyInput('')
             setBaseInput('')
@@ -457,7 +482,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
   // ── Key entry stage ──────────────────────────────────────────────────
   if (stage === 'key' && provider) {
-    const showBase = provider.auth_type === 'api_key'
+    const showBase = provider.auth_type === 'endpoint' || provider.auth_type === 'local'
     const focusBase = showBase && keyField === 'api_base'
     const masked = keyInput ? '•'.repeat(Math.min(keyInput.length, 40)) : ''
     const keyLabel = provider.key_env ?? 'API key'
@@ -615,8 +640,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       const authMark = p.authenticated === false ? '○' : p.is_current ? '*' : '●'
       const modelCount = p.total_models ?? p.models?.length ?? 0
 
-      const suffix =
-        p.authenticated === false ? (p.auth_type === 'api_key' ? '(no key)' : '(needs setup)') : `${modelCount} models`
+      const suffix = p.authenticated === false ? unconfiguredHint(p.auth_type) : `${modelCount} models`
 
       return `${authMark} ${names[i]} · ${suffix}`
     })
