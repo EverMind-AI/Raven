@@ -580,9 +580,7 @@ def _select_provider() -> Optional[str]:
         if typed is not _BACK:
             return typed
         picked = _select_provider_row()
-        if picked is None or picked is _BACK:
-            return picked
-    return picked  # None on Ctrl+C
+    return picked  # _BACK on back, None on Ctrl+C
 
 
 def _litellm_vendor_choices() -> list[str]:

@@ -2617,3 +2617,61 @@ def test_a_failed_setup_calls_the_rollback(monkeypatch, tmp_path) -> None:
     assert rolled, "a failed setup did not roll back"
     assert rolled[0][0] == "deepseek"
     assert set(rolled[0][1]) == {"old_key", "old_base"}, rolled[0][1]
+
+
+def test_reconfiguring_a_local_server_is_seeded_with_its_own_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M6: the seeding fix is what stops a working address being replaced.
+
+    Seeding the registry default unconditionally meant someone whose server runs
+    somewhere other than localhost was offered localhost, and pressing Enter to
+    move past a field they had already filled in wrote it -- the same data loss as
+    the failed-setup rollback, reached by an ordinary keypress instead of a failure.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict[str, Any] = {}
+
+    class _FQ:
+        def ask(self) -> str:
+            return "http://gpu-box.lan:11434"
+
+    def _text(message: Any, *, default: Any = None, **kwargs: Any) -> Any:
+        captured["default"] = default
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "text", _text)
+    spec = find_by_name("ollama_chat")
+    assert spec is not None and spec.default_api_base
+
+    onboard_commands._prompt_local_api_base(spec, current="http://gpu-box.lan:11434")
+    assert captured["default"] == "http://gpu-box.lan:11434", (
+        "the configured address was replaced by the registry default"
+    )
+
+    onboard_commands._prompt_local_api_base(spec, current="")
+    assert captured["default"] == spec.default_api_base, "a first-time setup lost its default"
+
+
+def test_backing_out_of_the_vendor_sublist_returns_to_the_provider_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U8: an empty submit closes the sub-list the user opened, one level.
+
+    Passing its ``_BACK`` straight up dropped them on the language screen -- three
+    steps back from where they were -- so the row that opened the sub-list has to
+    be redisplayed instead.
+    """
+    rows = iter([onboard_commands._PICK_LITELLM_VENDOR, "deepseek"])
+    monkeypatch.setattr(onboard_commands, "_select_provider_row", lambda: next(rows))
+    monkeypatch.setattr(onboard_commands, "_prompt_litellm_vendor", lambda: onboard_commands._BACK)
+
+    assert onboard_commands._select_provider() == "deepseek"
+
+    # Backing out of the provider list itself still leaves the step.
+    rows = iter([onboard_commands._PICK_LITELLM_VENDOR, onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider_row", lambda: next(rows))
+    assert onboard_commands._select_provider() is onboard_commands._BACK
