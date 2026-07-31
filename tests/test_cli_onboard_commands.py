@@ -2836,3 +2836,64 @@ def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, m
     assert section.get("apiBase") == "http://new-box:9000/v1", section
     assert section.get("apiKey") == "sk-new", section
     assert seeded["default"] == "http://old-box:8000/v1", "the stored address was not offered back"
+
+
+def test_a_provider_whose_endpoint_only_the_user_knows_is_asked_for_it() -> None:
+    """Azure gives every tenant its own resource URL, so there is nothing to default to.
+
+    It was classified by name -- only "custom" counted -- so Azure was asked for a
+    key alone and stored with no endpoint, and its own client raises
+    "api_base is required" on the first call. Picking it from the curated list
+    could not produce a working provider.
+    """
+    from raven.providers.registry import PROVIDERS, find_by_name
+
+    assert (
+        onboard_commands._credential_kind("azure_openai", find_by_name("azure_openai"))
+        == onboard_commands.CRED_ENDPOINT
+    )
+    for spec in PROVIDERS:
+        expected = onboard_commands.CRED_ENDPOINT if spec.requires_api_base else None
+        if expected is not None:
+            assert onboard_commands._credential_kind(spec.name, spec) == expected, spec.name
+
+
+def test_the_wizard_and_the_model_picker_agree_on_who_needs_an_endpoint() -> None:
+    """The same question, asked in two places, and one of them was wrong.
+
+    The picker kept a literal set of the two providers; the wizard derived it from
+    the name. They drifted, and the wizard's answer was the one users hit.
+    """
+    from raven.providers.registry import PROVIDERS
+    from raven.tui_rpc.methods.model import _needs_api_base
+
+    for spec in PROVIDERS:
+        wizard = onboard_commands._credential_kind(spec.name, spec) == onboard_commands.CRED_ENDPOINT
+        assert wizard == _needs_api_base(spec.name), f"{spec.name}: wizard={wizard} picker={_needs_api_base(spec.name)}"
+
+
+def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The consequence, read back off disk rather than from the prompt count."""
+    monkeypatch.setattr(
+        onboard_commands,
+        "_collect_fields",
+        lambda prompts: ["sk-azure", "https://my-resource.openai.azure.com", "gpt-4o-deployment"],
+    )
+
+    returned = onboard_commands._collect_credentials(
+        "azure_openai",
+        is_oauth=False,
+        is_custom=True,
+        is_local=False,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+    )
+
+    section = json.loads(tmp_env.read_text())["providers"]["azure_openai"]
+    assert section["apiBase"] == "https://my-resource.openai.azure.com", section
+    assert section["apiKey"] == "sk-azure"
+    # Azure takes a deployment name where every other provider takes a model id,
+    # so the step locks it in rather than offering the picker.
+    assert returned == "gpt-4o-deployment"
