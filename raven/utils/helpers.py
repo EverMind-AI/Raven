@@ -7,7 +7,7 @@ import math
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 import tiktoken
 
@@ -25,15 +25,48 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-def image_block(data_uri: str) -> dict[str, Any]:
+class ImageURL(TypedDict):
+    url: str
+
+
+class ImagePart(TypedDict):
+    """An OpenAI-shaped image content part."""
+
+    type: Literal["image_url"]
+    image_url: ImageURL
+
+
+class TextPart(TypedDict):
+    """A text content part."""
+
+    type: Literal["text"]
+    text: str
+
+
+# What Raven *produces*. Deliberately not used to type what Raven *reads*:
+# inbound content legitimately contains parts this union does not model (an
+# Anthropic part carrying cache_control, an MCP audio block, a provider-specific
+# extension), and the pass-through code that forwards them unchanged would
+# otherwise become a type error for doing the right thing. So read-side helpers
+# keep taking ``Any`` and check shape at runtime.
+ContentPart = TextPart | ImagePart
+
+
+def image_block(data_uri: str) -> ImagePart:
     """The single place the image content-part shape is written.
 
-    Nothing in this repo type-checks a dict literal, so a mistyped key here
-    ("imageURL") would not raise -- the picture would just never reach the model,
-    with a clean log. Constructing through one function makes that a one-line
-    risk covered by a test instead of a five-site risk covered by nothing.
+    CI runs no type checker, so this annotation does not gate a merge -- but an
+    editor language server does flag a mistyped key against a TypedDict, and the
+    signature documents the shape that ``dict[str, Any]`` could not. Combined
+    with being the only constructor, a wrong key ("imageURL") stops being a
+    silent dropped picture in five places and becomes one line with a test.
     """
     return {"type": "image_url", "image_url": {"url": data_uri}}
+
+
+def text_block(text: str) -> TextPart:
+    """Counterpart to :func:`image_block` for the text half of a block list."""
+    return {"type": "text", "text": text}
 
 
 def is_image_part(part: Any) -> bool:

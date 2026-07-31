@@ -24,7 +24,7 @@ import io
 from pathlib import Path
 from typing import Any
 
-from raven.utils.helpers import estimate_image_tokens, image_block, is_image_part
+from raven.utils.helpers import ContentPart, estimate_image_tokens, image_block, is_image_part, text_block
 
 # Formats every target accepts inline. Anything else (BMP, TIFF, HEIC, SVG) is
 # converted to JPEG rather than rejected.
@@ -124,7 +124,7 @@ def to_data_uri(payload: bytes, mime: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
 
 
-def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[dict[str, Any]]]:
+def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[ContentPart]]:
     """Convert MCP ``CallToolResult.content`` to ``(model_text, blocks)``.
 
     MCP is the one place a *typed* content model already exists in this codebase
@@ -138,15 +138,15 @@ def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[dict[str, Any
     from mcp import types
 
     texts: list[str] = []
-    blocks: list[dict[str, Any]] = []
+    blocks: list[ContentPart] = []
     for block in content:
         if isinstance(block, types.TextContent):
             texts.append(block.text)
-            blocks.append({"type": "text", "text": block.text})
+            blocks.append(text_block(block.text))
         elif isinstance(block, types.ImageContent):
             note = f"[image from MCP tool: {block.mimeType}]"
             texts.append(note)
-            blocks.append({"type": "text", "text": note})
+            blocks.append(text_block(note))
             blocks.append(image_block(to_data_uri_from_b64(block.data, block.mimeType)))
         else:
             # Audio, resource links, embedded resources. Raven has no input path
@@ -156,7 +156,7 @@ def blocks_from_mcp_content(content: list[Any]) -> tuple[str, list[dict[str, Any
             mime = getattr(block, "mimeType", None)
             note = f"[unsupported MCP content: {label}{f' ({mime})' if mime else ''}]"
             texts.append(note)
-            blocks.append({"type": "text", "text": note})
+            blocks.append(text_block(note))
 
     has_image = any(is_image_part(b) for b in blocks)
     return "\n".join(texts), (blocks if has_image else [])

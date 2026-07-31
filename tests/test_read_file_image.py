@@ -447,3 +447,34 @@ def test_mcp_audio_content_is_labelled_never_stringified() -> None:
     assert payload not in text
     assert "unsupported MCP content: audio" in text
     assert "audio/wav" in text
+
+
+def test_content_part_types_describe_what_raven_produces() -> None:
+    """The TypedDicts are documentation-grade: CI runs no type checker, so they
+    are asserted at runtime here to keep them from drifting from reality."""
+    from raven.utils.helpers import ImagePart, TextPart, image_block, text_block
+
+    img = image_block("data:image/png;base64,AA")
+    txt = text_block("hello")
+
+    assert set(img) == set(ImagePart.__annotations__) == {"type", "image_url"}
+    assert set(txt) == set(TextPart.__annotations__) == {"type", "text"}
+    assert set(img["image_url"]) == {"url"}
+    assert img["type"] == "image_url" and txt["type"] == "text"
+
+
+def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
+    """Inbound content carries parts the union does not model (Anthropic
+    cache_control, MCP audio, provider extensions). Pass-through must not break."""
+    from raven.agent.loop.main import _strip_inline_images
+    from raven.utils.helpers import estimate_content_part_tokens, is_inline_image
+
+    exotic = {"type": "text", "text": "cached", "cache_control": {"type": "ephemeral"}}
+    unknown = {"type": "some_future_part", "payload": {"a": 1}}
+
+    for part in (exotic, unknown):
+        assert is_inline_image(part) is False
+        assert estimate_content_part_tokens(part) is None
+
+    # And they survive the persistence pass unchanged.
+    assert _strip_inline_images([exotic, unknown]) == [exotic, unknown]

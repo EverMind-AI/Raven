@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from raven.utils.helpers import ContentPart
+
 
 @dataclass
 class ToolResult:
@@ -34,7 +36,7 @@ class ToolResult:
     display_text: str | None = None
     retryable: bool = True
     abort_action: bool = False
-    blocks: list[dict[str, Any]] | None = None
+    blocks: list[ContentPart] | None = None
 
 
 class ToolOutput(str):
@@ -54,7 +56,7 @@ class ToolOutput(str):
     display_text: str | None
     retryable: bool
     abort_action: bool
-    blocks: list[dict[str, Any]] | None
+    blocks: list[ContentPart] | None
 
     def __new__(
         cls,
@@ -63,7 +65,7 @@ class ToolOutput(str):
         *,
         retryable: bool = True,
         abort_action: bool = False,
-        blocks: list[dict[str, Any]] | None = None,
+        blocks: list[ContentPart] | None = None,
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
