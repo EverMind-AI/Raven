@@ -1321,9 +1321,7 @@ def test_memory_required_role_back_reaches_give_up_menu(
 
     monkeypatch.setattr(questionary, "select", _FQ)
 
-    out = onboard_commands._config_everos_role(
-        section="llm", main_model=None, non_interactive=False, warnings=[]
-    )
+    out = onboard_commands._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
     assert out is onboard_commands._ABORT_EVEROS
     assert asked == ["picker", "give-up"]
 
