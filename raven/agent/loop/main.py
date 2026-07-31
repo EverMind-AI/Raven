@@ -355,8 +355,11 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
-        # Resolved lazily on the first tool result that carries an image.
-        self._image_tool_result_ok: bool | None = None
+        # Resolved lazily on the first tool result that carries an image. Keyed
+        # by model, not a single flag: the loop is a long-lived singleton and
+        # takes a per-call model (strategies rewrite it, and the model chain
+        # falls back), so one model's verdict must not answer for another's.
+        self._image_tool_result_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
@@ -758,24 +761,30 @@ class AgentLoop:
             cache_dir=workspace / "skills" / "hub",
         )
 
-    def _supports_image_tool_result(self) -> bool:
-        """Cached per loop: resolving the LiteLLM target parses the model string,
-        and this is asked once per tool call that returns an image."""
-        if self._image_tool_result_ok is None:
+    def _supports_image_tool_result(self, model: str | None = None) -> bool:
+        """Cached per model: resolving the LiteLLM target parses the model string,
+        and this is asked once per tool call that returns an image.
+
+        A ``False`` learned from a refused request (see ``should_drop_tool_images``)
+        is written into the same cache, so a static table that guessed wrong stops
+        costing a wasted call after the first one.
+        """
+        key = model or self.model
+        if key not in self._image_tool_result_ok:
             spec = None
             try:
                 from raven.providers.registry import find_by_model
 
-                spec = find_by_model(self.model)
+                spec = find_by_model(key)
             except Exception:
                 pass
-            self._image_tool_result_ok = supports_image_tool_result(self.provider, self.model, spec)
+            self._image_tool_result_ok[key] = supports_image_tool_result(self.provider, key, spec)
             logger.debug(
                 "image-in-tool-result support for {}: {}",
-                self.model,
-                self._image_tool_result_ok,
+                key,
+                self._image_tool_result_ok[key],
             )
-        return self._image_tool_result_ok
+        return self._image_tool_result_ok[key]
 
     # ── Context engine helpers ──────────────────────────────────────────
 
@@ -1750,7 +1759,7 @@ class AgentLoop:
                     blocks = getattr(result, "blocks", None)
                     attach_blocks: list[dict[str, Any]] | None = None
                     if blocks:
-                        if self._supports_image_tool_result():
+                        if self._supports_image_tool_result(call_model or effective_model):
                             pass  # blocks ride in the tool result itself
                         else:
                             # This transport cannot put an image in a tool result,

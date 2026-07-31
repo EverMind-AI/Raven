@@ -523,3 +523,22 @@ def test_read_file_empty_svg_matches_the_pre_image_branch_wording(tmp_path: Path
     out = _read(tmp_path, "empty.svg")
 
     assert str(out).startswith("(Empty file:")
+
+
+def test_capability_cache_is_keyed_by_model() -> None:
+    """The loop is a long-lived singleton taking a per-call model, so a verdict
+    learned for one model must not answer for another."""
+    from raven.agent.loop.main import AgentLoop
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    loop = object.__new__(AgentLoop)
+    loop.provider = object.__new__(LiteLLMProvider)
+    loop.model = "claude-opus-4-5"
+    loop._image_tool_result_ok = {}
+
+    assert loop._supports_image_tool_result("claude-opus-4-5") is True
+    assert loop._supports_image_tool_result("gpt-4o") is False
+    # A refusal caches False for that model only.
+    loop._image_tool_result_ok["claude-opus-4-5"] = False
+    assert loop._supports_image_tool_result("claude-opus-4-5") is False
+    assert loop._supports_image_tool_result("claude-sonnet-4-5") is True
