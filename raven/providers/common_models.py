@@ -147,17 +147,18 @@ def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     speech models, and offering those where a chat model is asked for produces a
     selection that fails on first use.
     """
-    import os
     from collections import defaultdict
-
-    # Read the copy shipped inside litellm rather than the one it fetches from
-    # GitHub on import: the remote answer is a different set (90 OpenAI models
-    # against 98) and it arrives over a 5-second-timeout request, so without this
-    # the candidate list depends on the network and costs a round trip.
-    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     from raven.providers.litellm_setup import import_litellm
 
+    # Whatever table LiteLLM itself is using, deliberately. Forcing the packaged
+    # copy here looked like it bought determinism and did not: setting the
+    # environment variable has no effect once LiteLLM has been imported, so the
+    # answer still depended on import order -- and where it did take effect it
+    # pinned the whole process to a table that is 278 entries behind, which is
+    # how `claude-sonnet-5` (this project's own default) stopped having a known
+    # context window. Candidates now agree with what pricing and context-window
+    # lookups see, which matters more than agreeing across machines.
     catalogue = import_litellm().model_cost
 
     by_provider: dict[str, list[str]] = defaultdict(list)

@@ -930,15 +930,26 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
     return bool(model and spec and spec.claims(model))
 
 
-def _format_model_for_provider(spec: Any, model_id: str) -> str:
-    """Apply the provider's model prefix to a raw ``/v1/models`` id when needed.
+def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
+    """Apply the provider's route prefix to a raw ``/v1/models`` id when needed.
 
-    ``spec`` is None for a vendor only LiteLLM knows. Those need no prefixing
-    here: the id the vendor returned already routes, because the section name
-    the user configured is the name LiteLLM routes on.
+    A vendor Raven carries no spec for still needs the prefix, and needs it most:
+    the id it returns is bare, and a bare id is routed by keyword and fallback
+    rather than to the section the user just configured. Handing one back
+    unprefixed sent the request wherever those rules landed -- configuring
+    Mistral alongside OpenAI produced "mistral-large-latest", which resolves to
+    OpenAI and spends OpenAI's key.
+
+    Its section name is LiteLLM's own name for the vendor, which is exactly the
+    prefix LiteLLM routes on, so that is what goes in front.
     """
-    if not model_id or spec is None:
+    from raven.providers.registry import normalize_provider_name
+
+    if not model_id:
         return model_id
+    if spec is None:
+        prefix = normalize_provider_name(provider)
+        return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
     if spec.name in {"minimax_global", "minimax_cn"}:
         public_prefix = spec.name.replace("_", "-")
         if model_id.startswith(f"{public_prefix}/"):
@@ -1000,7 +1011,7 @@ def _pick_model(
             model_ids = known
 
     if model_ids:
-        choices = [_format_model_for_provider(spec, mid) for mid in model_ids]
+        choices = [_format_model_for_provider(provider, spec, mid) for mid in model_ids]
         # Dedupe: the chain above already prefixes its ids, and _format_ leaves a
         # correctly-prefixed id alone, so two sources can agree on one model.
         choices = list(dict.fromkeys(choices))
@@ -1055,6 +1066,25 @@ def _pick_model(
             return default_value
         raise typer.Exit(1)
     return chosen
+
+
+def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[str], old_base: Optional[str]) -> None:
+    """Undo what this pass wrote, restoring the state read before it started.
+
+    A named function so the behaviour can be driven by a test: the two shapes
+    this replaced were both wrong in ways only a test that calls it can hold
+    down. Keying off the previous api_key skipped a local deployment entirely,
+    leaving a mistyped address where a working one had been; and asking "was it
+    configured" cleared both fields for a provider that had held only an
+    api_base, erasing an endpoint this pass never touched.
+
+    OAuth providers are skipped: their credentials live in a token file, the ops
+    layer refuses to write credential fields for them, and doing it anyway turned
+    a failed verification into a dead wizard.
+    """
+    if spec is not None and spec.is_oauth:
+        return
+    _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
 
 
 def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
@@ -1207,7 +1237,6 @@ def _configure_one_provider(
     # A provider passed by flag is used once; switching then requires the
     # interactive picker (or, in non-interactive mode, is impossible).
     flag_provider = provider
-    configured_before = set(_configured_providers())
     while True:
         if flag_provider:
             provider = _validate_provider_name(flag_provider)
@@ -1286,16 +1315,20 @@ def _configure_one_provider(
             # pass prompts rather than reusing the failed flag value), undoing
             # what this pass wrote.
             #
-            # Restore both fields, not just the key: a local deployment is
-            # configured by address and has no key at all, so keying the rollback
-            # off `old_key` skipped it entirely and a mistyped address replaced a
-            # working one for good. Clearing only the key had the same shape --
-            # it left the bad api_base behind as a section that looks configured
-            # and reaches nothing.
-            if provider not in configured_before:
-                _write_provider_fields(provider, {"api_key": "", "api_base": None})
-            else:
-                _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
+            # Put back exactly what was there, read before this pass wrote
+            # anything. One branch, because "was it configured" is the wrong
+            # question twice over: a local deployment is configured by address
+            # and has no key, so a rollback keyed off the old key skipped it and
+            # a mistyped address replaced a working one for good; and a provider
+            # that held only an api_base counts as unconfigured, so clearing
+            # both fields for a "new" provider erased an endpoint this pass had
+            # never touched.
+            #
+            # OAuth providers are left alone: their credentials live in a token
+            # file, `set_provider_fields` refuses to write credential fields for
+            # them at all, and doing so turned a failed verification into a
+            # RuntimeError that took the whole wizard down.
+            _roll_back_provider_fields(provider, spec, old_key=old_key, old_base=old_base)
             flag_provider = None
             continue
         _persist_default_model(chosen_model)
@@ -1441,7 +1474,14 @@ def _resolve_model_with_test(
         ok, status, model_ids = _verify_provider(provider, skip_test=skip_test)
         if not ok:
             options = (
-                [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
+                [
+                    (_t("Retry", "重试"), "retry"),
+                    # A local deployment that cannot be reached is usually a
+                    # wrong address, and this is the branch it lands in -- so
+                    # retry alone left the one thing worth changing unreachable.
+                    *([(_t("Re-enter server URL", "重新填服务地址"), "rebase")] if spec and spec.is_local else []),
+                    (_t("Continue anyway", "仍然继续"), "continue"),
+                ]
                 if status == "network_error"
                 else [
                     # What to offer depends on what the provider is reached by.
@@ -1636,6 +1676,19 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             continue
         if action == "update":
             target_spec = find_by_name(target)
+            if target_spec and target_spec.is_oauth:
+                # Nothing here to update: the credential is a token file, and the
+                # ops layer refuses credential writes for these -- so offering the
+                # key prompt ended the wizard instead of editing anything.
+                console.print(
+                    _t(
+                        f"  [dim]{_provider_label(target)} signs in through OAuth. "
+                        f"Run: raven provider login {target.replace('_', '-')}[/dim]",
+                        f"  [dim]{_provider_label(target)} 通过 OAuth 登录。"
+                        f"请运行: raven provider login {target.replace('_', '-')}[/dim]",
+                    )
+                )
+                continue
             if target_spec and target_spec.is_local:
                 # A local deployment holds no key; what there is to update is
                 # where it lives. Offering the key prompt wrote a credential into
@@ -1687,7 +1740,20 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     continue
             # Clear both: a local deployment counts as configured by its
             # api_base, so clearing only the key reported it removed and left it
-            # in the list, still reachable.
+            # in the list, still reachable. An OAuth provider has neither field
+            # to clear and refuses the write, so it is told where its credential
+            # actually lives instead of ending the run.
+            target_spec = find_by_name(target)
+            if target_spec and target_spec.is_oauth:
+                console.print(
+                    _t(
+                        f"  [dim]{_provider_label(target)}'s credential is an OAuth token, not a config field, "
+                        "so there is nothing here to remove.[/dim]",
+                        f"  [dim]{_provider_label(target)} 的凭据是 OAuth token,不在配置字段里,"
+                        "这里没有可移除的内容。[/dim]",
+                    )
+                )
+                continue
             _write_provider_fields(target, {"api_key": "", "api_base": None})
             if was_default_source:
                 # Clear the now-dangling default so step 1's guard forces a

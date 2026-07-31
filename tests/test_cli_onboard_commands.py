@@ -756,20 +756,25 @@ def test_format_model_for_provider_prefix_rules() -> None:
 
     # Gateway with prefix: bare id gets prefixed
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Already prefixed by us → idempotent
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Standard provider: LiteLLM knows it under our own name, so that is the prefix
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
-    assert onboard_commands._format_model_for_provider(openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider("openai", openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider("openai", openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek/deepseek-chat")
+        == "deepseek/deepseek-chat"
+    )
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    )
 
 
 def test_model_routes_to_provider_heuristic() -> None:
@@ -824,7 +829,7 @@ def test_registry_default_models_present() -> None:
 def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model: str, expected: str) -> None:
     from raven.providers.registry import find_by_name
 
-    assert onboard_commands._format_model_for_provider(find_by_name(provider), model) == expected
+    assert onboard_commands._format_model_for_provider(provider, find_by_name(provider), model) == expected
 
 
 # --------------------------------------------------------------------------- fixtures (5-step)
@@ -2156,3 +2161,150 @@ def test_the_wizard_offers_known_models_when_the_provider_cannot_be_reached(monk
     assert offered["choices"], "no candidates were offered after a failed fetch"
     assert chosen == offered["choices"][0]
     assert any(c.startswith("moonshot/") for c in offered["choices"]), offered["choices"][:3]
+
+
+def test_a_spec_less_vendors_model_id_carries_its_route_prefix() -> None:
+    """A bare id is routed by keyword and fallback, not to the section configured.
+
+    Returning the vendor's id unprefixed produced "mistral-large-latest", which
+    resolves to OpenAI when OpenAI also holds a key -- so the wizard handed back
+    a default model that spends someone else's credential.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+
+    assert _format_model_for_provider("mistral", None, "mistral-large-latest") == "mistral/mistral-large-latest"
+    # Already prefixed stays put rather than being prefixed twice.
+    assert _format_model_for_provider("mistral", None, "mistral/mistral-large-latest") == "mistral/mistral-large-latest"
+
+
+def test_that_prefix_is_what_stops_the_key_going_elsewhere() -> None:
+    """The consequence, asserted where it lands rather than on the string.
+
+    This is the assertion the crash-fix needed and did not have: the id the
+    wizard writes must resolve to the provider it was configured for, with that
+    provider's credential, even when a keyword-matching vendor is also set up.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+    from raven.config.schema import Config
+
+    model = _format_model_for_provider("mistral", None, "mistral-large-latest")
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"model": model}},
+            "providers": {"mistral": {"apiKey": "sk-MISTRAL"}, "openai": {"apiKey": "sk-OPENAI"}},
+        }
+    )
+    assert config.get_provider_name(model) == "mistral"
+    assert config.get_api_key(model) == "sk-MISTRAL"
+
+
+def test_rolling_back_a_failed_setup_restores_what_was_there(monkeypatch, tmp_path) -> None:
+    """Restores the prior state, and does not touch an OAuth provider at all.
+
+    Two shapes were wrong: keying the rollback off the previous api_key skipped a
+    local deployment entirely, leaving a mistyped address in place of a working
+    one; and writing credential fields for an OAuth provider raises, which turned
+    a failed verification into a dead wizard.
+    """
+    from raven.cli.onboard_commands import _roll_back_provider_fields, _write_provider_fields
+    from raven.config.loader import set_config_path
+    from raven.config.update_providers import get_provider_config
+    from raven.providers.registry import find_by_name
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"ollama_chat": {"apiBase": "http://my-nas:11434"}}}))
+    set_config_path(cfg)
+    try:
+        prior = get_provider_config("ollama_chat", redact_secrets=False)
+        _write_provider_fields("ollama_chat", {"api_base": "http://typo:9999"})
+        # The wizard's own rollback, called rather than re-implemented here.
+        _roll_back_provider_fields(
+            "ollama_chat",
+            find_by_name("ollama_chat"),
+            old_key=prior.get("api_key"),
+            old_base=prior.get("api_base"),
+        )
+        assert get_provider_config("ollama_chat", redact_secrets=False)["api_base"] == "http://my-nas:11434"
+
+        # And why the branch must not run for OAuth: the ops layer refuses these
+        # fields, and the wizard's wrapper turns that refusal into an exit -- so
+        # rolling back an OAuth provider ends the whole run.
+        from raven.config.update_providers import set_provider_fields
+
+        oauth = find_by_name("github_copilot")
+        assert oauth is not None and oauth.is_oauth
+        with pytest.raises(RuntimeError, match="OAuth"):
+            set_provider_fields("github_copilot", {"api_key": ""}, config_path=cfg)
+        with pytest.raises(typer.Exit):
+            _write_provider_fields("github_copilot", {"api_key": ""})
+        # So the rollback must not go near them -- calling it is a no-op.
+        _roll_back_provider_fields("github_copilot", oauth, old_key=None, old_base=None)
+    finally:
+        set_config_path(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("slug", "status", "expected", "absent"),
+    [
+        # Unreachable: a local deployment's usual cause is a wrong address, and
+        # this is the branch it lands in -- retry alone left it unreachable.
+        ("ollama_chat", "network_error", "rebase", "rekey"),
+        ("hosted_vllm", "network_error", "rebase", "rekey"),
+        # A vendor reached over the network gets retry only; the address is not
+        # the user's to change, and the key is not what failed.
+        ("deepseek", "network_error", "retry", "rebase"),
+        # Rejected credentials: the field to fix is the one the provider uses.
+        ("ollama_chat", "invalid_key", "rebase", "rekey"),
+        ("deepseek", "invalid_key", "rekey", "rebase"),
+        ("github_copilot", "invalid_key", "reauth", "rekey"),
+    ],
+)
+def test_the_failure_menu_offers_the_field_the_provider_actually_has(
+    slug: str, status: str, expected: str, absent: str, monkeypatch
+) -> None:
+    """What is worth changing after a failure depends on how the provider is reached.
+
+    A local deployment fails most often on a wrong address, and both failure
+    branches offered "re-enter key" for a provider that holds none -- so the one
+    field worth editing had no route back to it.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "_failure_choice",
+        lambda options, non_interactive: (seen.append([v for _, v in options]), "switch")[1],
+    )
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda provider, skip_test=False: (False, status, None))
+
+    result = onboard_commands._resolve_model_with_test(
+        slug,
+        find_by_name(slug),
+        is_custom=False,
+        custom_model=None,
+        user_model_flag=f"{slug}/probe",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert result is None, "switch should unwind to the picker"
+    assert seen, "the failure menu was never shown"
+    assert expected in seen[0], f"{slug}/{status}: offered {seen[0]}"
+    assert absent not in seen[0], f"{slug}/{status}: should not offer {absent}, got {seen[0]}"
+
+
+def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp_path, capsys) -> None:
+    """Update and Remove both wrote credential fields, which OAuth providers refuse.
+
+    Generalising "not every provider has a key" only as far as local deployments
+    left the OAuth ones ending the wizard from a menu meant for editing.
+    """
+    from raven.cli.onboard_commands import _roll_back_provider_fields
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("github_copilot")
+    assert spec is not None and spec.is_oauth
+    # The shared guard both menu actions now use.
+    _roll_back_provider_fields("github_copilot", spec, old_key=None, old_base=None)
