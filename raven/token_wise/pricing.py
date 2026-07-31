@@ -23,7 +23,9 @@ Non-Anthropic providers (no cache support) pass ``cache_read_tokens=0``,
 
 from __future__ import annotations
 
+import pathlib
 import time
+from functools import lru_cache
 
 import httpx
 from loguru import logger
@@ -50,6 +52,80 @@ _OPENROUTER_CACHE: dict[str, dict] = {}
 _OPENROUTER_CACHE_TIME: float = 0.0
 
 
+def _litellm_price_table() -> dict:
+    """LiteLLM's static price table, or an empty dict if it cannot be imported."""
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        return getattr(import_litellm(), "model_cost", None) or {}
+    except Exception:
+        return {}
+
+
+def _table_entry(model: str) -> dict | None:
+    """The table row keyed exactly by this model id, or None.
+
+    Deliberately no prefix-stripping fallback. It looked like a free replacement
+    for asking LiteLLM, but the ask does more than key normalization: for an
+    "openrouter/<vendor>/<model>" candidate it derives OpenRouter's own numbers,
+    which are in no table row -- and stripping to the direct row answered three
+    MiniMax models with the direct figure where LiteLLM had reported OpenRouter's.
+    The table is read here to skip the ask where the ask cannot be made; it does
+    not replace it.
+    """
+    entry = _litellm_price_table().get(model)
+    return entry if isinstance(entry, dict) else None
+
+
+@lru_cache(maxsize=1)
+def _drivers_dir() -> pathlib.Path | None:
+    """Where the installed LiteLLM keeps its per-provider drivers."""
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        return pathlib.Path(import_litellm().__file__).parent / "llms"
+    except Exception:
+        return None
+
+
+def _may_prompt(model: str) -> bool:
+    """Would handing this model to LiteLLM start an interactive login?
+
+    Three of its drivers ship a device-flow authenticator, and every entry point
+    that resolves a model reaches it -- ``get_model_info``, ``cost_per_token`` and
+    ``validate_environment`` alike. With no token file the call prints a device
+    code to stdout and blocks about a minute per attempt, three attempts per
+    candidate: one window lookup cost 410 seconds and six codes, because the bare
+    and the openrouter-prefixed candidate reach the same driver. That is why any
+    segment counts, not just the first.
+
+    Asked of the installed package rather than a snapshot of it -- a driver is one
+    that ships ``authenticator.py``. A frozen list would have to be regenerated on
+    every LiteLLM bump, and a stale one brings the hang back for the vendor it
+    missed; this cannot go stale. The check is a stat, and the callers have already
+    paid for the import.
+    """
+    drivers = _drivers_dir()
+    if drivers is None:
+        return False
+    return any((drivers / part / "authenticator.py").exists() for part in model.split("/") if part)
+
+
+def _numeric(entry: dict | None, *fields: str) -> float | None:
+    """First numeric value among ``fields``, or None.
+
+    The table ships a self-documenting sample row whose numeric-looking fields
+    hold prose, so the type check is load-bearing rather than defensive.
+    """
+    if not isinstance(entry, dict):
+        return None
+    for field in fields:
+        value = entry.get(field)
+        if isinstance(value, (int, float)) and value:
+            return float(value)
+    return None
+
+
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
@@ -69,6 +145,13 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     probe_out = output_tokens if output_tokens else 1
 
     for candidate in candidates:
+        if _may_prompt(candidate):
+            # Skipped, not read from the table: the rows these families have are
+            # priced at zero, which this function already treats as unknown, so
+            # reading them would add a branch that cannot fire. The caller falls
+            # through to the live OpenRouter catalogue and the manual table, which
+            # is what any model LiteLLM does not price already does.
+            continue
         try:
             prompt_cost, completion_cost = litellm.cost_per_token(
                 model=candidate, prompt_tokens=probe_in, completion_tokens=probe_out
@@ -179,18 +262,20 @@ def _try_litellm_context_window(model: str) -> int | None:
         candidates.insert(0, f"openrouter/{model}")
 
     for candidate in candidates:
+        # The table before the ask: it holds every model the interactive-login
+        # drivers are asked about in practice, and reading it cannot prompt.
+        window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
+        if window:
+            return int(window)
+        if _may_prompt(candidate):
+            continue
         try:
             info = litellm.get_model_info(candidate)
         except Exception:
             continue
-        if not info:
-            continue
-        window = info.get("max_input_tokens") or info.get("max_tokens")
+        window = _numeric(info, "max_input_tokens", "max_tokens")
         if window:
-            try:
-                return int(window)
-            except (TypeError, ValueError):
-                continue
+            return int(window)
     return None
 
 
