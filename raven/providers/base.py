@@ -12,6 +12,32 @@ from loguru import logger
 
 from raven.tracing import semconv, trace
 
+# Wordings providers use to reject list-type content in a tool message. Each is
+# a real 400 body, not a guess: the first group was measured against
+# OpenRouter -> OpenAI, the rest are the set Hermes accumulated across vendors
+# (agent/error_classifier.py, MIT, see LICENSES/MIT-hermes-agent.txt).
+#
+# Some are ambiguous alone -- "text is not set" says nothing about images -- and
+# that is safe here because the recovery is a no-op when no tool result actually
+# carries one, so a false match costs nothing and never retries blind.
+_TOOL_IMAGE_REJECTION_PATTERNS = (
+    # OpenAI, measured: "Invalid 'messages[2]'. Image URLs are only allowed for
+    # messages with role 'user', but this message with role 'tool' contains an
+    # image URL."
+    "only allowed for messages with role",
+    # Xiaomi MiMo: {"code":"400","message":"Param Incorrect","param":"text is not set"}
+    "text is not set",
+    # Generic "tool message must be a string" shapes
+    "tool message content must be a string",
+    "tool content must be a string",
+    "tool message must be a string",
+    # OpenAI-compatible servers rejecting list content at schema validation
+    "expected string, got list",
+    "expected string, got array",
+    # Alibaba / DashScope
+    "tool_call.content must be string",
+)
+
 
 @dataclass(frozen=True)
 class ErrorClassification:
@@ -21,6 +47,8 @@ class ErrorClassification:
       - ``retryable``       → retry the same model after backoff
       - ``should_fallback`` → a different model/provider might succeed
       - ``should_compress`` → context-window overflow; shrink then retry
+      - ``should_drop_tool_images`` → the endpoint refuses an image inside a
+        tool result; move it to a user message then retry
     ``category`` is for logging/telemetry only.
     """
 
@@ -28,6 +56,7 @@ class ErrorClassification:
     retryable: bool = False
     should_fallback: bool = False
     should_compress: bool = False
+    should_drop_tool_images: bool = False
 
 
 @dataclass
@@ -406,6 +435,21 @@ class LLMProvider(ABC):
             )
         ):
             return ErrorClassification("model_unavailable", should_fallback=True)
+
+        # An image inside a role="tool" message the endpoint won't take → resend
+        # with the picture moved to a following user message. Must precede the
+        # generic 400 bucket below, which is fatal.
+        #
+        # The first clause is that bucket's condition plus ``badrequesterror`` in
+        # the *message*: once a provider has swallowed the exception into content
+        # there is no status code or class name left to read, and LiteLLM's
+        # swallowed form reads "litellm.BadRequestError: ...". That is the
+        # substring degradation this method's docstring describes, and it is why
+        # this branch recognises a 400 the bucket below would call unknown.
+        if (
+            status == 400 or "badrequesterror" in names or has("badrequesterror", "invalid request", "invalid_request")
+        ) and has(*_TOOL_IMAGE_REJECTION_PATTERNS):
+            return ErrorClassification("tool_image_unsupported", should_drop_tool_images=True)
 
         # Generic bad request (non-context 400) → fatal; no model swap helps.
         if status == 400 or "badrequesterror" in names or has("invalid request", "invalid_request"):

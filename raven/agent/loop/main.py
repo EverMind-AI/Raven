@@ -50,7 +50,7 @@ from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
 from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens, is_inline_image
+from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
@@ -267,6 +267,10 @@ class AgentLoop:
     _TOOL_RESULT_MAX_CHARS = 16_000
     # Max emergency context shrinks per turn before a context overflow is fatal.
     _MAX_COMPRESS_RETRIES = 2
+    # Max image demotions per turn. One is enough: a refusal is deterministic for
+    # the model, and the first retry also caches the verdict, so a second attempt
+    # would mean the failure was never about images.
+    _MAX_IMAGE_DEMOTE_RETRIES = 1
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
@@ -1441,6 +1445,55 @@ class AgentLoop:
                 shrunk.append(m)
         return shrunk, elided
 
+    @staticmethod
+    def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
+        """Move images out of tool results into a following user message.
+
+        The recovery for an endpoint that refuses a picture in ``role="tool"``.
+        Produces exactly the message list a ``False`` capability verdict would
+        have built in the first place, so the retry lands on the already-tested
+        placeholder path rather than inventing a third shape.
+
+        A run of consecutive tool messages is one batch answering one assistant
+        message, so the pictures pulled out of it are attached once after the last
+        of them -- putting one between two tool results leaves a tool_call
+        unanswered where the API checks the sequence (measured, see the batching
+        comment in the tool loop).
+
+        Returns ``(new_messages, num_demoted)``; ``0`` means no tool result
+        carried an image, so the refusal was about something else and the caller
+        should not retry.
+        """
+        out: list[dict] = []
+        pending: list[dict] = []
+        demoted = 0
+
+        def flush() -> None:
+            if pending:
+                out.append({"role": "user", "content": list(pending), _ATTACHED_IMAGE_KEY: True})
+                pending.clear()
+
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "tool":
+                flush()
+                out.append(m)
+                continue
+            if not isinstance(content, list):
+                out.append(m)
+                continue
+            images = [p for p in content if is_image_part(p)]
+            if not images:
+                out.append(m)
+                continue
+            clean = dict(m)
+            clean["content"] = image_placeholder_text(content)
+            out.append(clean)
+            pending.extend(images)
+            demoted += len(images)
+        flush()
+        return out, demoted
+
     @classmethod
     def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
         """Drop inline images from all but the most recent image-bearing message.
@@ -1576,6 +1629,8 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # Image-demotion recovery: bound per turn, same reason.
+        image_demote_retries = 0
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1694,6 +1749,33 @@ class AgentLoop:
                         elided,
                         compress_retries,
                         self._MAX_COMPRESS_RETRIES,
+                    )
+                    continue
+
+            # Image-in-tool-result refused: this endpoint takes a picture only in
+            # a user message. Rebuild onto the placeholder path -- the shape a
+            # False capability verdict would have produced -- and retry this
+            # iteration. Also cache the verdict so the rest of the process stops
+            # paying for the attempt: the static table in `capabilities` guessed
+            # wrong, and this is how it self-corrects.
+            if (
+                response.finish_reason == "error"
+                and cls_ is not None
+                and cls_.should_drop_tool_images
+                and image_demote_retries < self._MAX_IMAGE_DEMOTE_RETRIES
+            ):
+                demoted_messages, demoted = self._demote_tool_images(messages)
+                if demoted > 0:
+                    messages = demoted_messages
+                    self._image_tool_result_ok[call_model or effective_model] = False
+                    image_demote_retries += 1
+                    iteration -= 1  # the refused call did no work; don't bill it
+                    logger.warning(
+                        "Endpoint refused {} image(s) in a tool result; moved them "
+                        "to a user message and retrying ({}/{})",
+                        demoted,
+                        image_demote_retries,
+                        self._MAX_IMAGE_DEMOTE_RETRIES,
                     )
                     continue
 
