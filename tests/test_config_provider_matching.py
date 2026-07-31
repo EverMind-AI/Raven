@@ -277,3 +277,48 @@ def test_the_current_name_still_wins_a_real_conflict() -> None:
     assert section is not None
     assert section.api_key == "NEW", "the current name must win where both hold a value"
     assert section.api_base == "https://old/v1", "a field only the old section had must survive"
+
+
+def test_adding_a_second_provider_does_not_take_over_the_default_model() -> None:
+    """Which provider serves the default model is decided by the model id.
+
+    A wizard-written config names its provider in the model id, and a prefix is
+    authoritative -- so configuring a gateway later cannot quietly take over. It
+    holds for a bare id too, as long as the vendor it names is the configured one.
+
+    This is why `agents.defaults.provider` stays on `auto` after onboarding: the
+    alternative, pinning the answer, makes the forced branch beat the model id, so
+    changing the model later would send the pinned provider's key to whatever
+    vendor the new id names.
+    """
+    for model in ("deepseek/deepseek-chat", "deepseek-chat"):
+        alone = Config.model_validate(
+            {
+                "agents": {"defaults": {"model": model}},
+                "providers": {"deepseek": {"apiKey": "sk-ds"}},
+            }
+        )
+        plus_gateway = Config.model_validate(
+            {
+                "agents": {"defaults": {"model": model}},
+                "providers": {"deepseek": {"apiKey": "sk-ds"}, "openrouter": {"apiKey": "sk-or-v1-x"}},
+            }
+        )
+        assert alone._match_provider()[1] == "deepseek", model
+        assert plus_gateway._match_provider()[1] == "deepseek", f"a later gateway took over {model}"
+
+
+def test_a_pinned_provider_beats_the_model_id_which_is_why_onboarding_leaves_it_auto() -> None:
+    """Documents the hazard rather than the wish.
+
+    `provider` is an override, not a hint: it is answered before the model id is
+    consulted at all. Anything that writes it on the user's behalf has to accept
+    that a later model change will be served by the pinned provider's credentials.
+    """
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"provider": "deepseek", "model": "deepseek/deepseek-chat"}},
+            "providers": {"deepseek": {"apiKey": "sk-ds"}, "openrouter": {"apiKey": "sk-or-v1-x"}},
+        }
+    )
+    assert config._match_provider("openrouter/anthropic/claude-x")[1] == "deepseek"
