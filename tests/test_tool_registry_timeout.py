@@ -99,7 +99,10 @@ async def test_long_running_tools_keep_generous_ceilings():
     from raven.agent.tools.shell import ExecTool
     from raven.agent.tools.spawn import SpawnTool
 
-    assert ExecTool.timeout_seconds >= 600
+    # ExecTool derives its backstop from the configurable per-command ceiling
+    # (max_timeout + margin), so it is per-instance now.
+    assert ExecTool().timeout_seconds >= 600
+    assert ExecTool(max_timeout=3600).timeout_seconds >= 3600
     assert VideoGenerateTool.timeout_seconds >= 600
     assert SpawnTool.timeout_seconds >= 600
     # Default-class tools inherit None -> registry default applies.

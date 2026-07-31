@@ -6,6 +6,8 @@ All tests run without boxlite installed and without KVM/Hypervisor access.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -89,6 +91,18 @@ class TestExecResultAsText:
         text = r.as_text(max_chars=100)
         assert "truncated" in text
         assert len(text) < 300  # well under original
+
+    def test_truncation_spills_full_output_to_file(self, tmp_path, monkeypatch):
+        """Truncation must not lose evidence: the full output is saved and the
+        marker names the file, so the model can grep it instead of re-running."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        long_out = "line\n" * 5_000
+        r = ExecResult(stdout=long_out, stderr="", exit_code=0)
+        text = r.as_text(max_chars=100, spill_prefix="exec")
+        assert "full output saved to" in text
+        spilled = list((tmp_path / ".raven" / "tool-output").glob("exec-*.log"))
+        assert len(spilled) == 1
+        assert long_out in spilled[0].read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -1229,3 +1243,374 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# Deny-list scope + configurability
+# ---------------------------------------------------------------------------
+
+
+class TestExecToolDenyListScope:
+    """The default deny-list is scoped at unrecoverable operations, and an
+    operator can replace it outright (deny_patterns=[] for throwaway containers)."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "rm -rf $HOME",
+            "rm -rf /important",
+            "rm -rf -- /important",
+            "rm -fr /etc/nginx",
+            "rm -r /usr/lib/python3",
+            "dd if=/dev/zero of=/dev/sda",
+            "mkfs.ext4 /dev/sdb1",
+            "shutdown -h now",
+        ],
+    )
+    async def test_unrecoverable_commands_still_blocked(self, tmp_path, command):
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute(command)
+        assert "blocked" in result, command
+        assert len(executor.calls) == 0
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -f build/*.o",
+            "rm -rf /tmp/test-clone",
+            "rm -f /var/lib/dpkg/lock-frontend",
+            "rm -f /etc/nginx/sites-enabled/default",
+            "make clean; rm -f *.o",
+            "dd if=/dev/zero of=disk.img bs=1M count=10",
+            # Deny names as flags/arguments, not invocations — observed false
+            # positives that stranded agents in eval (TB install-windows-3.11,
+            # qemu-alpine-ssh).
+            "qemu-system-x86_64 -hda win311.img -no-reboot -no-shutdown",
+            "which unsquashfs mksquashfs mkfs.ext4",
+            "ls /usr/sbin | grep mkfs",
+        ],
+    )
+    async def test_ordinary_cleanup_allowed(self, tmp_path, command):
+        """Routine destructive work below the first directory level runs: blocking
+        it strands the agent with no alternative path."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute(command)
+        assert "blocked" not in result, command
+        assert len(executor.calls) == 1
+
+    async def test_guard_error_names_pattern_and_match(self, tmp_path):
+        """A blocked command reports what matched, so the model can tell a real
+        denial from a false positive instead of retrying blind."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        result = await ExecTool(executor=executor, working_dir=str(tmp_path)).execute("shutdown -h now")
+        assert "matched deny pattern" in result
+        assert "shutdown" in result
+
+    async def test_over_limit_timeout_is_clamped_with_note(self, tmp_path):
+        """timeout above the ceiling runs clamped instead of being rejected —
+        the intent (needs longer) is valid, only the number is out of range."""
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+        result = await tool.execute("echo hi", timeout=900)
+        assert "clamped" in result
+        assert "background:true" in result
+        assert len(executor.calls) == 1
+
+    async def test_empty_deny_patterns_disables_guard(self, tmp_path):
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path), deny_patterns=[])
+        result = await tool.execute("rm -rf /")
+        assert "blocked" not in result
+        assert len(executor.calls) == 1
+
+    async def test_none_deny_patterns_keeps_defaults(self, tmp_path):
+        from raven.agent.tools.shell import ExecTool
+
+        tool = ExecTool(executor=DirectMockExecutor(), working_dir=str(tmp_path), deny_patterns=None)
+        assert tool.deny_patterns == list(ExecTool.DEFAULT_DENY_PATTERNS)
+
+    async def test_custom_deny_patterns_replace_defaults(self, tmp_path):
+        from raven.agent.tools.shell import ExecTool
+
+        executor = DirectMockExecutor()
+        tool = ExecTool(
+            executor=executor,
+            working_dir=str(tmp_path),
+            deny_patterns=[r"\bcurl\b"],
+        )
+        assert "blocked" in await tool.execute("curl http://x")
+        assert "blocked" not in await tool.execute("rm -rf /")
+
+
+# ---------------------------------------------------------------------------
+# Persistent exec sessions (stdin / background)
+# ---------------------------------------------------------------------------
+
+
+class TestExecSessions:
+    """DirectExecutor-backed pty sessions: state persists across calls, stdin can
+    be driven, and long commands keep running after exec returns."""
+
+    @pytest.fixture
+    def tools(self, tmp_path):
+        from raven.agent.tools.shell import (
+            ExecReadTool,
+            ExecSessionRegistry,
+            ExecTool,
+            ExecWriteTool,
+        )
+
+        executor = DirectExecutor()
+        registry = ExecSessionRegistry(executor)
+        return (
+            ExecTool(executor=executor, working_dir=str(tmp_path), sessions=registry),
+            ExecWriteTool(registry),
+            ExecReadTool(registry),
+            registry,
+        )
+
+    async def test_state_persists_across_calls(self, tools, tmp_path):
+        exec_tool, _, _, registry = tools
+        try:
+            await exec_tool.execute("export MARKER=persisted", session="s1", timeout=10)
+            out = await exec_tool.execute("echo value=$MARKER", session="s1", timeout=10)
+            assert "value=persisted" in out
+            assert "[session: s1]" in out
+        finally:
+            await registry.close_all()
+
+    async def test_cwd_persists_across_calls(self, tools, tmp_path):
+        exec_tool, _, _, registry = tools
+        (tmp_path / "sub").mkdir()
+        try:
+            await exec_tool.execute(f"cd {tmp_path / 'sub'}", session="s1", timeout=10)
+            out = await exec_tool.execute("pwd", session="s1", timeout=10)
+            assert "sub" in out
+        finally:
+            await registry.close_all()
+
+    async def test_exec_write_answers_a_prompt(self, tools):
+        exec_tool, write_tool, _, registry = tools
+        try:
+            await exec_tool.execute(
+                "read -p 'name? ' answer && echo got=$answer",
+                session="s1",
+                timeout=5,
+            )
+            out = await write_tool.execute(session="s1", input="raven", timeout=10)
+            assert "got=raven" in out
+        finally:
+            await registry.close_all()
+
+    async def test_background_returns_while_command_runs(self, tools):
+        exec_tool, _, read_tool, registry = tools
+        try:
+            # Sleep past _BACKGROUND_GRACE_S so the command demonstrably outlives
+            # the exec call that started it.
+            out = await exec_tool.execute("sleep 6; echo finished-later", background=True, timeout=600)
+            assert "finished-later" not in out
+            name = out.split("[session: ", 1)[1].split("]", 1)[0]
+            follow_up = await read_tool.execute(session=name, timeout=15, close=True)
+            assert "finished-later" in follow_up
+            assert registry.get(name) is None
+        finally:
+            await registry.close_all()
+
+    async def test_unknown_session_reports_open_ones(self, tools):
+        exec_tool, _, read_tool, registry = tools
+        try:
+            await exec_tool.execute("true", session="alive", timeout=10)
+            out = await read_tool.execute(session="ghost", timeout=1)
+            assert "no session named 'ghost'" in out
+            assert "alive" in out
+        finally:
+            await registry.close_all()
+
+    async def test_deny_list_applies_to_session_commands(self, tmp_path):
+        from raven.agent.tools.shell import ExecSessionRegistry, ExecTool
+
+        registry = ExecSessionRegistry(DirectExecutor())
+        tool = ExecTool(executor=DirectExecutor(), working_dir=str(tmp_path), sessions=registry)
+        try:
+            assert "blocked" in await tool.execute("rm -rf /", session="s1", timeout=5)
+            assert registry.names() == []
+        finally:
+            await registry.close_all()
+
+    async def test_session_cap_is_enforced(self, tools):
+        exec_tool, _, _, registry = tools
+        try:
+            for i in range(registry.MAX_SESSIONS):
+                await exec_tool.execute("true", session=f"s{i}", timeout=5)
+            out = await exec_tool.execute("true", session="one-too-many", timeout=5)
+            assert "too many open sessions" in out
+        finally:
+            await registry.close_all()
+
+    async def test_close_all_terminates_sessions(self, tools):
+        exec_tool, _, _, registry = tools
+        await exec_tool.execute("true", session="s1", timeout=5)
+        live = registry.get("s1")
+        assert live is not None and live.running
+        await registry.close_all()
+        assert registry.names() == []
+        assert not live.running
+
+    async def test_unsupported_backend_explains_the_fallback(self, tmp_path):
+        from raven.agent.tools.shell import ExecSessionRegistry, ExecTool
+
+        executor = DirectMockExecutor()
+        registry = ExecSessionRegistry(executor)
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path), sessions=registry)
+        out = await tool.execute("echo hi", session="s1", timeout=5)
+        assert "not available" in out
+        assert "read_file" in out
+
+
+@pytest.mark.asyncio
+class TestBackgroundJobs:
+    """Detached jobs: they outlive the agent, record an outcome that survives it,
+    and stay reclaimable rather than becoming orphans."""
+
+    @pytest.fixture
+    def jobs(self, tmp_path):
+        from raven.agent.tools.background import BackgroundJobRegistry
+
+        return BackgroundJobRegistry(DirectExecutor(), owner="test", root=tmp_path / "jobs")
+
+    async def test_a_job_is_detached_from_the_agent_process(self, jobs, tmp_path):
+        """The whole point: no controlling terminal and its own session.
+
+        A background command hosted in a pty session dies of SIGHUP when that
+        terminal closes, which is why a server started this way used to vanish the
+        moment its agent exited.
+        """
+        job = await jobs.start("svc", "sleep 30", cwd=str(tmp_path), env=None)
+        try:
+            assert job.running
+            assert os.getsid(job.pid) == job.pid, "job must lead its own session"
+            assert os.getpgid(job.pid) == job.pid, "job must lead its own process group"
+        finally:
+            await jobs.cancel("svc")
+
+    async def test_teardown_leaves_jobs_running(self, jobs, tmp_path):
+        """Shutdown reports survivors; it must never cancel them."""
+        job = await jobs.start("svc", "sleep 30", cwd=str(tmp_path), env=None)
+        try:
+            jobs.report_survivors()
+            assert [j.name for j in jobs.survivors()] == ["svc"]
+            assert job.running
+        finally:
+            await jobs.cancel("svc")
+
+    async def test_exit_status_survives_the_process_that_started_it(self, jobs, tmp_path):
+        """Outcome is read from a file, not a live handle.
+
+        A command ending in an explicit ``exit`` never reaches a line appended after
+        it, so the status is recorded from an EXIT trap.
+        """
+        await jobs.start("quick", "echo hello; exit 7", cwd=str(tmp_path), env=None)
+        job = await jobs.wait("quick", timeout=15)
+        assert not isinstance(job, str)
+        assert job.exit_code == 7
+        assert not job.running
+        assert "hello" in jobs.read("quick")
+
+    async def test_a_cancelled_job_is_not_reported_as_success(self, jobs, tmp_path):
+        """Without signal traps bash runs the EXIT trap with $? still 0, so a killed
+        server would be indistinguishable from one that finished cleanly."""
+        await jobs.start("svc", "sleep 30", cwd=str(tmp_path), env=None)
+        assert "terminated" in await jobs.cancel("svc")
+        assert jobs.get("svc").exit_code == 143
+
+    async def test_cancel_reaches_the_whole_process_group(self, jobs, tmp_path):
+        """A job is usually a shell that spawned the real workload; signalling only
+        the shell would leave that workload running."""
+        await jobs.start("svc", "sleep 30 & sleep 30; wait", cwd=str(tmp_path), env=None)
+        await asyncio.sleep(0.5)
+        job = jobs.get("svc")
+        await jobs.cancel("svc")
+        for _ in range(40):
+            await asyncio.sleep(0.1)
+            try:
+                os.killpg(job.pid, 0)
+            except ProcessLookupError:
+                break
+        else:
+            pytest.fail("process group survived cancel")
+
+    async def test_reads_return_only_new_output(self, jobs, tmp_path):
+        await jobs.start("chatty", "echo one; sleep 1; echo two", cwd=str(tmp_path), env=None)
+        # A read straight after start can legitimately land before the first write;
+        # ExecTool covers this with a grace period, so poll for it here.
+        for _ in range(50):
+            first = jobs.read("chatty")
+            if "one" in first:
+                break
+            await asyncio.sleep(0.1)
+        assert "one" in first
+        await jobs.wait("chatty", timeout=15)
+        second = jobs.read("chatty")
+        assert "two" in second
+        assert "one" not in second
+
+    async def test_the_registry_is_persisted_for_later_reaping(self, jobs, tmp_path):
+        """Leaving a job running is only safe if something can still find it."""
+        job = await jobs.start("svc", "sleep 30", cwd=str(tmp_path), env=None)
+        try:
+            record = json.loads((tmp_path / "jobs" / "registry.json").read_text())
+            assert [entry["pid"] for entry in record["test"]] == [job.pid]
+        finally:
+            await jobs.cancel("svc")
+
+    async def test_exec_background_starts_a_job_not_a_session(self, tmp_path):
+        """exec(background=true) must take the detached path, leaving no pty session
+        behind to be torn down with the agent."""
+        from raven.agent.tools.background import BackgroundJobRegistry
+        from raven.agent.tools.shell import ExecSessionRegistry, ExecTool
+
+        executor = DirectExecutor()
+        sessions = ExecSessionRegistry(executor)
+        jobs = BackgroundJobRegistry(executor, owner="test", root=tmp_path / "jobs")
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path), sessions=sessions, jobs=jobs)
+        try:
+            out = await tool.execute("sleep 30", background=True)
+            assert "[job: job1" in out
+            assert sessions.names() == [], "background must not open a pty session"
+            assert jobs.get("job1").running
+        finally:
+            await jobs.cancel("job1")
+
+    async def test_background_with_session_becomes_a_named_job(self, tmp_path):
+        """`background: true` always detaches, even with `session` set — the name
+        is used for the job. The old session-hosted reading silently killed
+        servers at agent exit (models combining the two always meant "named
+        background process", never "die with my shell")."""
+        from raven.agent.tools.background import BackgroundJobRegistry
+        from raven.agent.tools.shell import ExecSessionRegistry, ExecTool
+
+        executor = DirectExecutor()
+        sessions = ExecSessionRegistry(executor)
+        jobs = BackgroundJobRegistry(executor, owner="test", root=tmp_path / "jobs")
+        tool = ExecTool(executor=executor, working_dir=str(tmp_path), sessions=sessions, jobs=jobs)
+        try:
+            result = await tool.execute("sleep 30", session="mine", background=True, timeout=2)
+            assert "[job: mine" in result
+            assert jobs.names() == ["mine"]
+            assert sessions.names() == []
+        finally:
+            await jobs.cancel("mine")
+            await sessions.close_all()

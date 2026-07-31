@@ -61,6 +61,9 @@ def _make_loop(workspace: Path, cfg, strategies=None) -> AgentLoop:
         restrict_to_workspace=True,
         tool_search_config=cfg,
         strategies=strategies,
+        # web_search is only registered when a key is present; these tests use
+        # it as the representative cataloged domain tool.
+        brave_api_key="test-key",
     )
 
 

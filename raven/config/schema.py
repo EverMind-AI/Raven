@@ -277,6 +277,11 @@ class AgentDefaults(Base):
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
+    # System-prompt profile. "assistant" keeps the personal-assistant identity;
+    # "coding" renders a software-engineering identity (opencode-style tone,
+    # conventions and verification discipline, with raven's tool routing).
+    # Benchmark harnesses set "coding"; the product default is unchanged.
+    profile: str = "assistant"
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:
@@ -488,11 +493,19 @@ class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
     timeout: int = 60
+    # Per-command ceiling (seconds). Requests above it are clamped, not rejected.
+    # Raise for environments with long builds/tests (benchmark containers give
+    # the agent hours; a 600s cap only forces awkward workarounds).
+    max_timeout: int = 600
     path_append: str = ""
     # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
     extra_deny_patterns: list[str] = Field(default_factory=list)
+    # Replaces ExecTool's built-in deny-list. ``None`` keeps the defaults; ``[]``
+    # disables the guard, which is only appropriate when the whole filesystem is
+    # disposable (benchmark container, throwaway VM).
+    deny_patterns: list[str] | None = None
 
 
 class MediaToolConfig(Base):

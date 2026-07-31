@@ -40,7 +40,7 @@ def _scrub_runtime_pythonpath() -> None:
 
 _scrub_runtime_pythonpath()
 
-from raven.cli.commands import run
+from raven.cli.commands import run  # noqa: E402  (must import after the scrub)
 
 if __name__ == "__main__":
     run()

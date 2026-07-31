@@ -77,6 +77,7 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
+    profile: str = "assistant",
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -113,7 +114,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace),
+        IdentitySegmentBuilder(workspace, profile=profile),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
