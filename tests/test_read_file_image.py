@@ -478,3 +478,48 @@ def test_read_side_helpers_stay_permissive_about_unknown_parts() -> None:
 
     # And they survive the persistence pass unchanged.
     assert _strip_inline_images([exotic, unknown]) == [exotic, unknown]
+
+
+# --------------------------------------------------------------------------
+# R1: an extension that lies about being an image
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name,body",
+    [
+        # SVG is XML with no Pillow decoder, and it is a format agents read and
+        # edit -- it must stay readable.
+        ("diagram.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'),
+        # A .png that actually holds text: the magic bytes say so, the name lies.
+        ("stub.png", "not really a png\nsecond line\n"),
+    ],
+)
+def test_read_file_falls_back_to_text_when_the_extension_lied(tmp_path: Path, name: str, body: str) -> None:
+    """Before the image branch existed these read as text. An extension-only
+    guess that will not decode must not turn a readable file into an error."""
+    (tmp_path / name).write_text(body)
+    out = _read(tmp_path, name)
+
+    assert isinstance(out, str)
+    assert not out.startswith("Error")
+    assert body.splitlines()[0] in out
+
+
+def test_read_file_still_reports_a_corrupt_file_that_really_sniffed_as_an_image(
+    tmp_path: Path,
+) -> None:
+    """The fallback must not swallow genuine decode failures: PNG magic bytes
+    present means it *is* a PNG, so a broken one is an error, not text."""
+    (tmp_path / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"garbage")
+    out = _read(tmp_path, "broken.png")
+
+    assert isinstance(out, str)
+    assert out.startswith("Error decoding image")
+
+
+def test_read_file_empty_svg_matches_the_pre_image_branch_wording(tmp_path: Path) -> None:
+    (tmp_path / "empty.svg").write_text("")
+    out = _read(tmp_path, "empty.svg")
+
+    assert str(out).startswith("(Empty file:")

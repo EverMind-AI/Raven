@@ -26,8 +26,10 @@ from typing import Any
 
 from raven.utils.helpers import ContentPart, estimate_image_tokens, image_block, is_image_part, text_block
 
-# Formats every target accepts inline. Anything else (BMP, TIFF, HEIC, SVG) is
-# converted to JPEG rather than rejected.
+# Formats every target accepts inline. A raster format Pillow can decode (BMP,
+# TIFF, ICO) is converted to JPEG rather than rejected. Formats Pillow cannot
+# decode are not images as far as this module is concerned -- SVG is XML and HEIC
+# needs pillow-heif -- and read_file falls back to reading them as text.
 INLINE_MIME_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
 MAX_DIMENSION_PX = 2000

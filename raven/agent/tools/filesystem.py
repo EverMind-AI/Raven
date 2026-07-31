@@ -112,12 +112,16 @@ class ReadFileTool(_FsTool):
 
             with fp.open("rb") as fh:
                 head = fh.read(self._MAGIC_SNIFF_BYTES)
-            mime = detect_image_mime(head)
+            sniffed = detect_image_mime(head)
+            mime = sniffed
             if mime is None:
                 guessed = mimetypes.guess_type(fp.name)[0]
-                # Extension says image but the magic bytes did not match a format
-                # we inline (BMP/TIFF/HEIC/SVG): still an image, prepare_image
-                # converts it.
+                # Magic bytes only cover the four formats every target inlines, so
+                # a raster format Pillow can convert (BMP/TIFF/ICO) reaches this
+                # branch as an extension guess. A guess can be wrong both ways --
+                # .svg is XML with no Pillow decoder, a .png stub may hold text --
+                # so it is trusted provisionally and a decode failure falls back
+                # to the text path below rather than refusing to read the file.
                 if guessed and guessed.startswith("image/"):
                     mime = guessed
             if mime is not None:
@@ -128,7 +132,9 @@ class ReadFileTool(_FsTool):
                 except ImageTooLargeError as e:
                     return f"Error: {e}"
                 except Exception as e:
-                    return f"Error decoding image {path}: {e}"
+                    if sniffed is not None:
+                        return f"Error decoding image {path}: {e}"
+                    # An extension-only guess that would not decode: fall through.
 
             all_lines = fp.read_text(encoding="utf-8").splitlines()
             total = len(all_lines)
