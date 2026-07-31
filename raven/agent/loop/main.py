@@ -206,6 +206,21 @@ def _is_hard_tool_failure(result: object) -> bool:
     return s.lstrip().startswith("Error") or "error:" in low[:80]
 
 
+def _same_call_break_message(tool: str, n: int) -> str:
+    """Returned instead of executing a byte-identical call that keeps failing.
+
+    Starts with "Error" so the failure-streak tracking keeps the breaker armed
+    — otherwise the refusal would read as success and the next identical call
+    would execute again.
+    """
+    return (
+        f"Error: this exact `{tool}` call (same arguments) has already failed "
+        f"{n} times and was NOT executed again. Repeating it cannot succeed. "
+        "Re-read the earlier error, then change the arguments, use a different "
+        "tool, or move on to another part of the task."
+    )
+
+
 def _loop_break_nudge(tool: str, n: int) -> str:
     """Injected when the same tool fails deterministically N times running, so
     the model stops repeating a dead approach instead of adapting."""
@@ -241,6 +256,17 @@ class AgentLoop:
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
     _LOOP_BREAK_MAX = 2
+    # Same-call breaker: once a byte-identical (tool, arguments) call has
+    # hard-failed this many times running, further identical calls are refused
+    # without executing. Scoped to all-failed streaks only — identical
+    # *successful* repeats are legitimate polling (exec_read on a building
+    # session; 13 such streaks observed across passing eval tasks) and must
+    # never trip this.
+    _SAME_CALL_BREAK_THRESHOLD = 3
+    # Persist the turn-so-far every N iterations. A turn is the unit of session
+    # persistence, and benchmark tasks are one turn of hundreds of iterations —
+    # a crash mid-turn used to lose the whole trajectory.
+    _MID_TURN_CHECKPOINT_ITERS = 10
 
     def __init__(
         self,
@@ -1405,6 +1431,59 @@ class AgentLoop:
             reasoning_content="".join(reasoning_buf) or None,
         )
 
+    @staticmethod
+    def _repair_tool_pairing(messages: list[dict]) -> list[dict]:
+        """Make tool_call/result pairing consistent in loaded history.
+
+        A crash or interrupt can persist an assistant message whose tool_calls
+        never received results, or a tool result whose call is gone. Providers
+        reject such histories (or the model misreads them as pending work), so:
+        missing results get a synthetic "[aborted]" entry right after their
+        call, and orphan results are dropped.
+        """
+        repaired: list[dict] = []
+        pending: dict[str, str] = {}
+        changed = False
+
+        def flush_pending() -> None:
+            nonlocal changed
+            for cid, tname in pending.items():
+                repaired.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "name": tname,
+                        "content": "[aborted: interrupted before a result was recorded]",
+                    }
+                )
+                changed = True
+            pending.clear()
+
+        for m in messages:
+            role = m.get("role")
+            if role == "tool":
+                cid = m.get("tool_call_id")
+                if cid in pending:
+                    pending.pop(cid, None)
+                    repaired.append(m)
+                else:
+                    changed = True  # orphan result: drop
+                continue
+            if pending:
+                flush_pending()
+            repaired.append(m)
+            if role == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    cid = tc.get("id")
+                    if cid:
+                        pending[cid] = (tc.get("function") or {}).get("name", "unknown")
+        if pending:
+            flush_pending()
+        if changed:
+            logger.warning("Repaired inconsistent tool_call/result pairing in loaded history")
+            return repaired
+        return messages
+
     @classmethod
     def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
         """Elide the bodies of older tool-result messages to fit a tighter window.
@@ -1502,8 +1581,13 @@ class AgentLoop:
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
+        on_checkpoint: Callable[[list[dict]], None] | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
         """Run the agent iteration loop.
+
+        ``on_checkpoint``, when wired, is called with the messages-so-far every
+        ``_MID_TURN_CHECKPOINT_ITERS`` iterations so the caller can persist a
+        long turn incrementally.
 
         ``drain``, when wired, is called at the top of each iteration to pull
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
@@ -1533,6 +1617,10 @@ class AgentLoop:
         loop_fail_tool: str | None = None
         loop_fail_streak = 0
         loop_nudges = 0
+        # Same-call breaker state: the byte-identical failing signature and how
+        # many times running it has hard-failed.
+        same_call_sig: str | None = None
+        same_call_streak = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1677,7 +1765,14 @@ class AgentLoop:
                             },
                         )
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # #1c Same-call breaker: this exact (tool, arguments) call
+                    # has already hard-failed `threshold` times running — refuse
+                    # instead of executing a fourth identical failure.
+                    call_sig = f"{tool_call.name}\x00{args_str}"
+                    if call_sig == same_call_sig and same_call_streak >= self._SAME_CALL_BREAK_THRESHOLD:
+                        result = _same_call_break_message(tool_call.name, same_call_streak)
+                    else:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     result_str = str(result)
                     preview = result_str.replace("\n", " ")[:200]
@@ -1704,8 +1799,16 @@ class AgentLoop:
                             loop_fail_streak += 1
                         else:
                             loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                        # #1c Track the byte-identical failing signature. Only
+                        # failures advance it: identical successful repeats are
+                        # legitimate polling and reset the breaker.
+                        if call_sig == same_call_sig:
+                            same_call_streak += 1
+                        else:
+                            same_call_sig, same_call_streak = call_sig, 1
                     else:
                         loop_fail_tool, loop_fail_streak = None, 0
+                        same_call_sig, same_call_streak = None, 0
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
@@ -1723,6 +1826,13 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # Incremental persistence for long turns: a crash at iteration
+                # 300 should not lose iterations 1-299.
+                if on_checkpoint is not None and iteration % self._MID_TURN_CHECKPOINT_ITERS == 0:
+                    try:
+                        on_checkpoint(messages)
+                    except Exception:
+                        logger.warning("mid-turn checkpoint failed", exc_info=True)
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -2165,7 +2275,23 @@ class AgentLoop:
                 logger.info("Router fallback chain: {}", fallback_models)
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
+        # Repair dangling tool_call/result pairs in loaded history — a crash
+        # between mid-turn checkpoints can persist an assistant tool_call with
+        # no result, and providers reject (or models misread) such histories.
+        # Must happen before ``turn_start_idx`` is taken: repairs change length.
+        initial_messages = self._repair_tool_pairing(initial_messages)
         turn_start_idx = len(initial_messages) - 1
+
+        # Incremental persistence for long turns. ``_persisted_upto`` tracks how
+        # far into the (append-only; emergency shrink preserves length) message
+        # list the session already covers, so the final save never duplicates.
+        _persisted_upto = {"idx": turn_start_idx}
+
+        def _mid_turn_checkpoint(msgs: list[dict]) -> None:
+            self._save_turn(session, msgs, _persisted_upto["idx"])
+            self.sessions.save(session)
+            _persisted_upto["idx"] = len(msgs)
+
         final_content, _, all_msgs, outcome = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress,
@@ -2178,6 +2304,7 @@ class AgentLoop:
             on_tool_event=on_tool_event,
             usage_sink=usage_sink,
             drain=drain,
+            on_checkpoint=_mid_turn_checkpoint,
         )
         self._stash_recovery(key, outcome)
 
@@ -2202,7 +2329,7 @@ class AgentLoop:
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
 
-        self._save_turn(session, all_msgs, turn_start_idx)
+        self._save_turn(session, all_msgs, _persisted_upto["idx"])
         self.sessions.save(session)
         await self.context_engine.after_turn(
             key,
