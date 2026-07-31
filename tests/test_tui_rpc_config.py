@@ -293,3 +293,125 @@ async def test_config_get_refuses_malformed_config(fake_home: Path) -> None:
     cfg.write_text('{\n  "tui": {"theme": "dark"},\n  // bad\n}\n', encoding="utf-8")
     with pytest.raises(ConfigValidationError):
         await config_get({"keys": ["tui.theme"]})
+
+
+def _pin(home: Path, provider: str, providers: dict | None = None) -> None:
+    """Write a config with a provider pinned, as the picker leaves it."""
+    cfg = home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": providers if providers is not None else {"openai": {"api_key": "sk-openai"}},
+                "agents": {"defaults": {"model": "gpt-4o", "provider": provider}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    import raven.config.loader as loader
+
+    loader._current_config_path = None
+
+
+async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home: Path) -> None:
+    """The pin decided routing for a model that names nobody, and it was wrong.
+
+    Selecting anything from the picker pins its provider, so by the time someone
+    types `/model <name>` there is almost always one. A bare id matching no
+    provider's keywords is what a vendor Raven holds no spec for looks like, and
+    keeping the pin sent that provider's key to a different vendor.
+
+    Nothing here can tell whose model it is, so it says so rather than picking.
+    """
+    _pin(fake_home, "openai")
+
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await config_set(
+            {"key": "model", "value": "mistral-large-latest"},
+            agent_loop_factory=lambda: None,
+        )
+    assert "mistral-large-latest" in str(excinfo.value)
+
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "gpt-4o", "a refused switch must not write"
+    assert cfg["agents"]["defaults"]["provider"] == "openai"
+
+
+async def test_a_bare_id_the_pinned_provider_does_serve_keeps_the_pin(fake_home: Path) -> None:
+    """Refusing every bare id would break the case where the pin was right.
+
+    A user who configured a spec-less vendor and types one of its model names is
+    not being ambiguous -- that provider serves it. Asked of its own list and the
+    catalogue rather than assumed either way.
+    """
+    _pin(fake_home, "mistral", {"mistral": {"api_key": "sk-mistral"}})
+
+    result = await config_set(
+        {"key": "model", "value": "mistral-large-latest"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "mistral"
+    assert cfg["agents"]["defaults"]["model"] == "mistral-large-latest"
+
+
+async def test_a_local_deployment_keeps_its_pin_for_any_bare_id(fake_home: Path) -> None:
+    """Its server names whatever models it likes, and it holds no key to mis-route."""
+    _pin(fake_home, "ollama_chat", {"ollama_chat": {"api_base": "http://gpu-box:11434"}})
+
+    result = await config_set(
+        {"key": "model", "value": "some-local-build"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "ollama_chat"
+
+
+async def test_a_prefixed_id_no_spec_matches_still_hands_routing_back(fake_home: Path) -> None:
+    """Unchanged: the prefix names the vendor, so the pin has no claim on it."""
+    _pin(fake_home, "openai")
+
+    result = await config_set(
+        {"key": "model", "value": "mistral/mistral-large-latest"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "auto"
+
+
+async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> None:
+    """The picker sends one with every selection; that path must not reach the gate."""
+    _pin(fake_home, "openai")
+
+    result = await config_set(
+        {"key": "model", "value": "some-deployment", "provider": "azure_openai"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "azure_openai"
+
+
+async def test_a_bare_id_the_pinned_provider_lists_itself_keeps_the_pin(fake_home: Path) -> None:
+    """The provider's own curated list is evidence too, and it stores ids bare.
+
+    `model.add_model` writes what the user typed, so a hand-added id sits there
+    unprefixed. Reading only the catalogue's prefixed spelling would refuse a model
+    the user had already told us this provider serves.
+    """
+    _pin(
+        fake_home,
+        "mistral",
+        {"mistral": {"api_key": "sk-mistral", "models": ["some-private-tune"]}},
+    )
+
+    result = await config_set(
+        {"key": "model", "value": "some-private-tune"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "mistral"

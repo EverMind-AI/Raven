@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from raven.cli._helpers import load_runtime_config, make_provider
-from raven.providers.registry import find_by_model
+from raven.providers.registry import find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
@@ -273,6 +273,50 @@ async def config_set(
     return {"applied": True, "previous": previous}
 
 
+def _resolve_bare_model_against_pin(raw_value: str) -> str | None:
+    """Who serves this bare id, when its own text names nobody?
+
+    A bare id that matches no provider's keywords is what a vendor Raven holds no
+    spec for looks like, and the picker never produces one -- it always sends the
+    provider alongside. So this is the hand-typed path, where the only other
+    evidence is the provider currently pinned.
+
+    Rather than guess, ask whether that provider serves the model: its own curated
+    list first, then the catalogue. If it does, the pin was right and stays. A local
+    deployment stays too without asking -- its server names whatever models it
+    likes, and there is no key to mis-route.
+
+    With no such evidence the pin is not kept: it would send one vendor's key to
+    another, the mis-routing the prefix rules exist to prevent. Returning None
+    leaves the caller to say so rather than pick a vendor on the user's behalf.
+    """
+    forced = _get_nested(_load_config(), "agents.defaults.provider")
+    if not forced or forced == "auto":
+        return "auto"
+
+    spec = find_by_name(forced)
+    if spec is not None and spec.is_local:
+        return forced
+
+    from raven.config.update_providers import get_provider_config
+    from raven.providers.common_models import common_models_for, litellm_models_for
+    from raven.providers.registry import split_model_id
+
+    try:
+        configured = get_provider_config(forced, redact_secrets=True).get("models") or []
+    except KeyError:
+        configured = []
+    known = [*configured, *common_models_for(forced), *litellm_models_for(forced)]
+    for candidate in known:
+        # Stripping the prefix covers every spelling the sources use: the
+        # catalogue keys ids the way LiteLLM spells the vendor, a hand-added one
+        # sits in the provider's list bare.
+        _, bare = split_model_id(candidate)
+        if bare == raw_value or candidate == raw_value:
+            return forced
+    return None
+
+
 def _set_model(
     params: dict,
     raw_value: Any,
@@ -295,7 +339,8 @@ def _set_model(
             data={"field": "provider", "got": repr(new_provider)},
         )
     # Bare `/model <name>` carries no provider; derive it from the model so a
-    # previously-forced provider does not silently mis-route the new model.
+    # previously-forced provider does not silently mis-route the new model. The
+    # picker always sends one, so this is the hand-typed path.
     if new_provider is None:
         spec = find_by_model(raw_value)
         if spec is not None:
@@ -305,6 +350,13 @@ def _set_model(
             # keeping the previously forced provider would send that provider's
             # key to this other vendor, so hand routing back to auto-detection.
             new_provider = "auto"
+        else:
+            new_provider = _resolve_bare_model_against_pin(raw_value)
+            if new_provider is None:
+                raise ConfigValidationError(
+                    f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
+                    data={"field": "value", "got": raw_value},
+                )
 
     session_id = params.get("session_id")
     if isinstance(session_id, str) and session_id and is_turn_active(session_id):
