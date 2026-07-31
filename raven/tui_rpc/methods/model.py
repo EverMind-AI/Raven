@@ -30,7 +30,11 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
-from raven.providers.common_models import common_models_for, litellm_models_for
+from raven.providers.common_models import (
+    _litellm_chat_models_by_provider,
+    common_models_for,
+    litellm_models_for,
+)
 from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -132,6 +136,10 @@ def _current_selection() -> tuple[str, str | None]:
 
 async def model_options(params: dict) -> dict:
     _parse(ModelOptionsParams, params)
+    # Warm the catalogue off the loop. Reading it imports LiteLLM the first time,
+    # which takes seconds -- long enough that doing it inline would stall this
+    # session's token stream while the picker opens.
+    await asyncio.to_thread(_litellm_chat_models_by_provider)
     current_model, current_provider = _current_selection()
     entries = [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
     return {

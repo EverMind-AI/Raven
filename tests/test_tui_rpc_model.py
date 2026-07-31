@@ -338,6 +338,12 @@ async def test_options_direct_provider_lists_common_models_when_unconfigured(
     assert entry["total_models"] > 0
     curated = common_models_for(slug)
     assert entry["models"][: len(curated)] == curated, "the curated shortlist must stay at the top"
+    # And the tail is this provider's catalogue, not some other provider's:
+    # asserting only the prefix let the third tier be wired to a fixed slug.
+    from raven.providers.common_models import litellm_models_for
+
+    tail = entry["models"][len(curated) :]
+    assert set(tail) <= set(litellm_models_for(slug)), f"{slug}: tail holds models from elsewhere"
 
 
 async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> None:
@@ -382,8 +388,16 @@ def test_catalogue_ids_are_spelled_the_way_they_route() -> None:
     for slug in ("moonshot", "volcengine", "ollama_chat"):
         spec = find_by_name(slug)
         assert spec is not None
-        for model in litellm_models_for(slug):
-            assert model.startswith(f"{spec.model_prefix}/"), f"{slug}: {model}"
+        models = litellm_models_for(slug)
+        assert models, f"{slug}: nothing to check"
+        for model in models:
+            # Exactly one prefix, not merely one at the front: `startswith` alone
+            # reads "moonshot/moonshot/x" as correct, so it could not tell a
+            # re-prefixed id from a right one.
+            head, _, rest = model.partition("/")
+            assert head == spec.model_prefix, f"{slug}: {model}"
+            assert rest, f"{slug}: {model} has no id after the prefix"
+            assert not rest.startswith(f"{spec.model_prefix}/"), f"{slug}: double-prefixed {model}"
 
 
 def test_catalogue_offers_only_chat_models() -> None:

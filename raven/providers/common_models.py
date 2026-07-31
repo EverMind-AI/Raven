@@ -124,8 +124,20 @@ def common_models_for(slug: str) -> list[str]:
     return list(COMMON_MODELS.get(slug, []))
 
 
+def _is_priced_template(model: str) -> bool:
+    """Is this a price-book row rather than something callable?
+
+    The catalogue doubles as a price list, so it carries entries no request can
+    name: "ft:gpt-4o-..." states what a model fine-tuned from that base costs,
+    and "container" bills a code-interpreter session. Sorted alphabetically they
+    led OpenAI's candidates, so the first dozen rows a user saw were unusable.
+    """
+    bare = model.split("/", 1)[-1]
+    return bare.startswith("ft:") or bare == "container"
+
+
 @lru_cache(maxsize=1)
-def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     """LiteLLM's own catalogue, indexed by the provider it belongs to.
 
     Built once and cached: reading it imports LiteLLM, which costs about two
@@ -135,23 +147,46 @@ def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     speech models, and offering those where a chat model is asked for produces a
     selection that fails on first use.
     """
+    import os
     from collections import defaultdict
+
+    # Read the copy shipped inside litellm rather than the one it fetches from
+    # GitHub on import: the remote answer is a different set (90 OpenAI models
+    # against 98) and it arrives over a 5-second-timeout request, so without this
+    # the candidate list depends on the network and costs a round trip.
+    os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     from raven.providers.litellm_setup import import_litellm
 
-    try:
-        catalogue = import_litellm().model_cost
-    except Exception:
-        return {}
+    catalogue = import_litellm().model_cost
 
     by_provider: dict[str, list[str]] = defaultdict(list)
     for model, info in catalogue.items():
         if not isinstance(info, dict) or info.get("mode") != "chat":
             continue
+        if _is_priced_template(model):
+            continue
         provider = info.get("litellm_provider")
         if provider:
             by_provider[provider].append(model)
     return {provider: tuple(sorted(models)) for provider, models in by_provider.items()}
+
+
+def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """The cached index, except that a failure is not what gets cached.
+
+    `lru_cache` remembers whatever the call returned, so caching an empty result
+    from a transient import failure would leave the picker permanently empty for
+    the life of the process with no way to retry.
+    """
+    try:
+        index = _cached_chat_models_by_provider()
+    except Exception:
+        _cached_chat_models_by_provider.cache_clear()
+        return {}
+    if not index:
+        _cached_chat_models_by_provider.cache_clear()
+    return index
 
 
 def litellm_models_for(slug: str) -> list[str]:
@@ -167,10 +202,18 @@ def litellm_models_for(slug: str) -> list[str]:
     do not -- and offering a bare id would route it by keyword rather than to the
     provider the user picked.
     """
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, normalize_provider_name
 
     spec = find_by_name(slug)
     if spec is None:
+        return []
+    if normalize_provider_name(spec.model_prefix) not in spec.route_names:
+        # The wire prefix names somebody else -- this provider is reached through
+        # another vendor's driver. Prefixing candidates with it would hand the
+        # user ids that resolve to the driver's owner instead of to the provider
+        # they picked. Today the catalogue has no rows for those five, so the
+        # loop below would be empty anyway; the guard states the rule rather than
+        # relying on what LiteLLM happens to contain.
         return []
     index = _litellm_chat_models_by_provider()
     prefix = spec.model_prefix
