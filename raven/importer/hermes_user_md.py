@@ -23,6 +23,7 @@ includes, so a misclassification costs tokens, never visibility.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -73,6 +74,7 @@ async def import_user_md_sections(
     *,
     provider: "LLMProvider | None" = None,
     model: str = "",
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> ImportedSections:
     """Land each entry as its own H2 section, or append it into that section's
     body if the heading already exists. ``written`` holds one heading per
@@ -101,7 +103,13 @@ async def import_user_md_sections(
     its whole duration.
     """
     kept = [(entry, stripped) for entry, stripped in ((e, e.strip()) for e in entries) if stripped]
-    headings = [await _pick_heading(entry, provider=provider, model=model) for entry, _ in kept]
+    # One LLM call per entry, and the caller has no other way to tell this apart
+    # from a hang: on a real install three entries took 9.4s, all of it here.
+    headings: list[str] = []
+    for index, (entry, _) in enumerate(kept, start=1):
+        if on_progress is not None:
+            on_progress(index, len(kept))
+        headings.append(await _pick_heading(entry, provider=provider, model=model))
 
     written: list[str] = []
     skipped = 0

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import typer
 from loguru import logger
 from rich.console import Console
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgressColumn, TextColumn
 from rich.table import Table
 
 from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
@@ -77,6 +77,7 @@ async def _build_and_run(
     state: ImportState,
     *,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    on_phase: Callable[[str, int, int], None] | None = None,
     cancel_path: Path | None = None,
 ) -> ImportSummary:
     from raven.config.raven import load_raven_config
@@ -106,7 +107,7 @@ async def _build_and_run(
         # already succeeded. loguru is redirected to a file during `run`, so the
         # console line is what the user actually sees.
         try:
-            await _land_hermes_user_md(items, workspace, config)
+            await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
         except Exception as exc:
             logger.warning("hermes user.md mirror failed: {}", exc)
             console.print(
@@ -194,6 +195,7 @@ async def _land_hermes_user_md(
     items: list[tuple[Scanner, ScanResult]],
     workspace: Path,
     config: Config,
+    on_phase: Callable[[str, int, int], None] | None = None,
 ) -> None:
     """Mirror the Hermes ``user-md`` source into the native ``user.md`` profile.
 
@@ -222,6 +224,7 @@ async def _land_hermes_user_md(
             MemoryStore(workspace),
             provider=_make_hermes_provider(config),
             model=config.agents.defaults.model,
+            on_progress=(lambda i, n: on_phase("Mirroring USER.md", i, n)) if on_phase else None,
         )
         logger.info("hermes user.md mirror: {} entries landed", len(written))
         # The skill phase prints its own line, so staying silent here made a
@@ -593,7 +596,24 @@ async def _run_async(
                     description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
                 )
 
-            summary = await _build_and_run(items, state, on_progress=on_progress, cancel_path=state.cancel_path)
+            # The phases after the import run inside this same live display and
+            # are not part of its total -- mirroring USER.md is one LLM call per
+            # entry and took 9.4s for three on a real install. Without a task of
+            # their own the bar reads 100% while they work, which is
+            # indistinguishable from a hang. Keyed by label so a phase reuses
+            # its own bar instead of stacking a new one per step.
+            phase_tasks: dict[str, TaskID] = {}
+
+            def on_phase(label: str, current: int, total: int) -> None:
+                task = phase_tasks.get(label)
+                if task is None:
+                    task = progress.add_task(label, total=total)
+                    phase_tasks[label] = task
+                progress.update(task, completed=current, description=f"{label} [{current}/{total}]")
+
+            summary = await _build_and_run(
+                items, state, on_progress=on_progress, on_phase=on_phase, cancel_path=state.cancel_path
+            )
     finally:
         _logger.remove()
         _logger.add(sys.stderr, level="WARNING")
