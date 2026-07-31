@@ -554,6 +554,37 @@ def normalize_provider_name(name: str | None) -> str:
     return (name or "").strip().lower().replace("-", "_")
 
 
+CRED_OAUTH = "oauth"  # a token file, written by `raven provider login`
+CRED_LOCAL = "local"  # reached by address; there is no key
+CRED_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
+CRED_KEY = "key"  # a key alone, including vendors Raven carry no spec for
+
+
+def credential_kind(provider: str | None) -> str:
+    """Which of the four credential shapes this provider uses.
+
+    Every decision about how a provider is set up follows from this: whether to
+    ask for a key, an address, both, or neither. It lives here because it is a
+    fact about the provider, and because the two places that need it -- the
+    wizard and the model picker -- had answered it separately, with the picker
+    knowing only two shapes: it offered a local deployment a key prompt it cannot
+    use and no address field, which is the one thing it needs.
+
+    Derived rather than stored: a spec is optional metadata, and a vendor Raven
+    holds no spec for is reached with a key like most others.
+    """
+    spec = find_by_name(provider) if provider else None
+    if spec is None:
+        return CRED_KEY
+    if spec.is_oauth:
+        return CRED_OAUTH
+    if spec.is_local:
+        return CRED_LOCAL
+    if spec.requires_api_base:
+        return CRED_ENDPOINT
+    return CRED_KEY
+
+
 def litellm_spelling(name: str | None) -> str:
     """How LiteLLM spells this vendor, which is the only form usable as a prefix.
 

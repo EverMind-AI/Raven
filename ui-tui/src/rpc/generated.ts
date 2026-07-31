@@ -788,7 +788,7 @@ export interface ModelOptionsResult {
  */
 export interface ModelSaveKeyParams {
   slug: string;
-  api_key: string;
+  api_key?: string;
   api_base?: string;
   session_id?: string;
 }

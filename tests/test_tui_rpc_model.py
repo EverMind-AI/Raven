@@ -75,7 +75,7 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     curated = common_models_for("anthropic")
     assert entry["models"][2 : 2 + len(curated)] == curated
     assert entry["total_models"] > 2 + len(curated), "the catalogue tier added nothing"
-    assert entry["auth_type"] == "api_key"
+    assert entry["auth_type"] == "key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
 
 
@@ -469,3 +469,44 @@ async def test_no_handler_reads_the_catalogue_on_the_event_loop(fake_home: Path,
     on_loop = [t for t in seen if t == loop_thread]
     assert not on_loop, f"{len(on_loop)}/{len(seen)} catalogue reads ran on the event loop"
     assert asyncio.get_running_loop() is not None
+
+
+async def test_save_key_configures_a_local_deployment_by_address(fake_home: Path) -> None:
+    """It is reached by address and has no key; the handler demanded one.
+
+    `api_key` was a required field, and the picker reported every non-OAuth
+    provider as taking one, so a local deployment could not be configured from the
+    TUI at all -- and an empty key written into its section would have made it look
+    configured while nothing had been set.
+    """
+    # Seeded with a key it should never have had, so "no key" is asserted as a
+    # write rather than as an omission: leaving the field alone kept the old value.
+    _write_config(fake_home, {"providers": {"ollama_chat": {"api_key": "sk-leftover"}}})
+
+    result = await model_save_key({"slug": "ollama_chat", "api_base": "http://gpu-box:11434"})
+
+    assert result["provider"]["slug"] == "ollama_chat"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["ollama_chat"]
+    assert section.get("apiBase") == "http://gpu-box:11434"
+    assert section.get("apiKey") == "", f"a stale key survived: {section}"
+
+
+async def test_save_key_refuses_a_key_for_a_local_deployment(fake_home: Path) -> None:
+    """Said out loud rather than dropped, so it does not look accepted."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "ollama_chat", "api_key": "sk-nope", "api_base": "http://x:11434"})
+    assert "api_key" in str(excinfo.value)
+
+
+async def test_save_key_still_requires_a_key_for_a_keyed_provider(fake_home: Path) -> None:
+    """Relaxing the field for local deployments must not relax it for the rest."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "deepseek", "api_key": ""})
+    assert "api_key" in str(excinfo.value)
+
+
+async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Path) -> None:
+    """Neither field given is not a configured provider."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "ollama_chat"})
+    assert "api_base" in str(excinfo.value)

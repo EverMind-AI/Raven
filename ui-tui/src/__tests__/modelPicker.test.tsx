@@ -40,7 +40,7 @@ const ENTER = '\r'
 const DOWN = '[B'
 
 const anthropic: ModelOptionProvider = {
-  auth_type: 'api_key',
+  auth_type: 'key',
   authenticated: true,
   is_current: true,
   key_env: 'ANTHROPIC_API_KEY',
@@ -51,8 +51,21 @@ const anthropic: ModelOptionProvider = {
   total_models: 1
 }
 
+const ollama: ModelOptionProvider = {
+  auth_type: 'local',
+  authenticated: false,
+  is_current: false,
+  key_env: null,
+  models: [],
+  name: 'Ollama (local)',
+  needs_api_base: true,
+  slug: 'ollama_chat',
+  total_models: 0,
+  warning: 'enter the server address to activate'
+}
+
 const custom: ModelOptionProvider = {
-  auth_type: 'api_key',
+  auth_type: 'endpoint',
   authenticated: false,
   is_current: false,
   key_env: null,
@@ -140,6 +153,24 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
 }
 
 describe('ModelPicker', () => {
+  it('offers a local deployment its address, and says it needs no key', async () => {
+    // The picker knew two credential shapes and reported every non-OAuth provider
+    // as taking an API key, so a local deployment was offered a key prompt it
+    // cannot use and never the address it is reached by -- the one thing it needs.
+    const h = mount([anthropic, ollama])
+    await delay(60)
+
+    expect(h.frame()).toContain('(no address)')
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+
+    const frame = h.frame()
+    expect(frame).toContain('Configure Ollama (local)')
+    expect(frame).toContain('API base (required)')
+    h.unmount()
+  })
+
   it('shows the api_base field and requires it for a needs_api_base provider', async () => {
     const h = mount([anthropic, custom])
     await delay(60)
