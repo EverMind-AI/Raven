@@ -957,23 +957,6 @@ def _credential_kind(provider: str, spec: Any) -> str:
     return CRED_KEY
 
 
-def _litellm_spelling(provider: str) -> str:
-    """How LiteLLM spells this vendor, for use as a route prefix.
-
-    Config section names are matched spelling-insensitively, so the name reaching
-    here may be underscored where LiteLLM hyphenates. Only LiteLLM's own form
-    works as a prefix.
-    """
-    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
-    from raven.providers.registry import normalize_provider_name
-
-    wanted = normalize_provider_name(provider)
-    for name in LITELLM_PROVIDER_NAMES:
-        if normalize_provider_name(name) == wanted:
-            return name
-    return wanted
-
-
 def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     """Apply the provider's route prefix to a raw ``/v1/models`` id when needed.
 
@@ -996,7 +979,9 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
         # name LiteLLM routes on -- it hyphenates three vendors, and handing it
         # "nano_gpt/..." is rejected with "LLM Provider NOT provided", so the
         # provider configured fine and then could not be called.
-        prefix = _litellm_spelling(provider)
+        from raven.providers.registry import litellm_spelling
+
+        prefix = litellm_spelling(provider)
         return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
     if spec.name in {"minimax_global", "minimax_cn"}:
         public_prefix = spec.name.replace("_", "-")
@@ -1020,6 +1005,7 @@ def _pick_model(
     *,
     current_model: Optional[str],
     model_ids: Optional[list[str]],
+    probe_status: str,
     user_provided_model: Optional[str],
     non_interactive: bool,
 ) -> str:
@@ -1057,8 +1043,18 @@ def _pick_model(
 
         known = [*common_models_for(provider), *litellm_models_for(provider)]
         if known:
+            # openai / anthropic / deepseek / gemini have no /models endpoint to
+            # pre-check, so there is no list on a perfectly healthy run. Saying
+            # "couldn't reach the provider" there contradicted the line printed
+            # just above it and read as a failure to a user for whom nothing
+            # had failed.
             console.print(
                 _t(
+                    "  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]",
+                    "  [dim]该服务商没有可拉取的模型列表,先列出已知的。[/dim]",
+                )
+                if probe_status == "skipped"
+                else _t(
                     "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]",
                     "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
                 )
@@ -1292,6 +1288,20 @@ def _configure_one_provider(
     # A provider passed by flag is used once; switching then requires the
     # interactive picker (or, in non-interactive mode, is impossible).
     flag_provider = provider
+
+    def _rewind() -> None:
+        """Discard the flag values before the next pass through the picker.
+
+        All of them, not just the provider: they were typed for the provider
+        that just failed. A stale --api-key was written to the newly picked
+        provider without a prompt, a stale --base-url pointed it at the previous
+        provider's machine, and picking a local deployment -- which rejects
+        --api-key by design -- ended the whole wizard on a usage error, losing
+        the later steps this loop exists to keep.
+        """
+        nonlocal flag_provider, api_key, base_url, model
+        flag_provider = api_key = base_url = model = None
+
     while True:
         if flag_provider:
             provider = _validate_provider_name(flag_provider)
@@ -1310,7 +1320,7 @@ def _configure_one_provider(
                 provider = _validate_provider_name(picked)
             except typer.BadParameter as exc:
                 console.print(f"  [red]x[/red] {exc}")
-                flag_provider = None
+                _rewind()
                 continue
 
         spec = find_by_name(provider)
@@ -1352,8 +1362,8 @@ def _configure_one_provider(
         )
         if custom_model is _BACK:
             # User backed out of the first credential field — rewind to the
-            # provider picker (drop any flag so the picker actually shows).
-            flag_provider = None
+            # provider picker (drop the flags so the picker actually shows).
+            _rewind()
             continue
 
         chosen_model = _resolve_model_with_test(
@@ -1367,9 +1377,9 @@ def _configure_one_provider(
             skip_test=skip_test,
         )
         if chosen_model is None:
-            # "Switch provider" — re-run the picker (drop the flag so the second
-            # pass prompts rather than reusing the failed flag value), undoing
-            # what this pass wrote.
+            # "Switch provider" — re-run the picker (drop the flags so the second
+            # pass prompts rather than reusing the failed values), undoing what
+            # this pass wrote.
             #
             # Put back exactly what was there, read before this pass wrote
             # anything. One branch, because "was it configured" is the wrong
@@ -1385,7 +1395,7 @@ def _configure_one_provider(
             # them at all, and doing so turned a failed verification into a
             # RuntimeError that took the whole wizard down.
             _roll_back_provider_fields(provider, spec, old_key=old_key, old_base=old_base)
-            flag_provider = None
+            _rewind()
             continue
         _persist_default_model(chosen_model)
         return {"provider": provider, "model": chosen_model}
@@ -1613,6 +1623,7 @@ def _resolve_model_with_test(
             spec,
             current_model=current,
             model_ids=model_ids,
+            probe_status=status,
             user_provided_model=user_model_flag,
             non_interactive=non_interactive,
         )
@@ -1666,7 +1677,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     if not provider:
         raise typer.Exit(1)
     spec = find_by_name(provider)
-    ok, _status, model_ids = _verify_provider(provider)
+    ok, status, model_ids = _verify_provider(provider)
     if not ok:
         return False
     chosen = _pick_model(
@@ -1674,6 +1685,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         spec,
         current_model=None,
         model_ids=model_ids,
+        probe_status=status,
         user_provided_model=None,
         non_interactive=False,
     )
@@ -1762,6 +1774,21 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 if retyped is None:
                     continue
                 _write_provider_fields(target, {"api_base": retyped})
+            elif _credential_kind(target, target_spec) == CRED_ENDPOINT:
+                # A self-hosted endpoint is a key *and* the address it is sent
+                # to. Updating only the key left the one field that moves when
+                # the user redeploys -- the URL -- unreachable from this menu.
+                from raven.config.update_providers import get_provider_config
+
+                try:
+                    stored = get_provider_config(target, redact_secrets=False).get("api_base") or ""
+                except KeyError:
+                    stored = ""
+                retyped_key = _prompt_api_key(target)
+                retyped_url = _prompt_base_url(stored or "https://")
+                if retyped_url is None:
+                    continue
+                _write_provider_fields(target, {"api_key": retyped_key, "api_base": retyped_url})
             else:
                 _write_provider_fields(target, {"api_key": _prompt_api_key(target)})
             console.print(
