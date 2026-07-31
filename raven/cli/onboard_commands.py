@@ -853,9 +853,7 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     ``network_error`` / …) and drives the failure submenu's wording.
     """
     from raven.config.update_providers import test_provider as probe
-    from raven.providers.registry import find_by_name
 
-    spec = find_by_name(provider)
     # A local deployment has no key to verify -- what is being checked is that
     # the address answers, and saying "API key" there describes a field the user
     # was never asked for.
