@@ -280,6 +280,7 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        profile: str = "assistant",
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
@@ -394,11 +395,13 @@ class AgentLoop:
         # path" — see that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
 
+        self.profile = profile
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             llm_provider=provider,
             now_fn=now_fn,
+            profile=profile,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Tool names to omit from the registry — applied after default-tool
@@ -452,6 +455,7 @@ class AgentLoop:
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
+            profile=profile,
         )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;

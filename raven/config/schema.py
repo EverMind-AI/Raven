@@ -277,6 +277,11 @@ class AgentDefaults(Base):
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
+    # System-prompt profile. "assistant" keeps the personal-assistant identity;
+    # "coding" renders a software-engineering identity (opencode-style tone,
+    # conventions and verification discipline, with raven's tool routing).
+    # Benchmark harnesses set "coding"; the product default is unchanged.
+    profile: str = "assistant"
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:
