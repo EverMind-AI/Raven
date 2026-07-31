@@ -30,8 +30,7 @@ Raven v0.1 does not back with real functionality:
   closed loop, no manual reload trigger)
 * ``reload.env`` — hermes env-file hot-reload (Raven reads env on process
   start only)
-* ``approval.respond`` / ``sudo.respond`` / ``secret.respond`` — hermes
-  interactive approval flows (Raven v0.1 has no approval UI)
+* ``sudo.respond`` / ``secret.respond`` — hermes interactive credential flows
 * ``image.attach`` — hermes image-paste attachment
 * ``prompt.submit`` / ``prompt.background`` — hermes "stash this prompt for
   later" flow; Raven v0.1 only supports inline submit via the chat turn
@@ -148,13 +147,7 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
         "reload.env not supported in Raven v0.1",
         "Restart `raven tui` to pick up environment changes.",
     ),
-    # approval / sudo / secret response — hermes interactive approval flows.
-    # Raven v0.1 has no approval UI; users edit config directly.
-    (
-        "approval.respond",
-        "approval.respond not supported in Raven v0.1",
-        "Raven v0.1 has no interactive approval flow.",
-    ),
+    # sudo / secret response — hermes interactive credential flows.
     (
         "sudo.respond",
         "sudo.respond not supported in Raven v0.1",

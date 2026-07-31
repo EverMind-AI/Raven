@@ -529,7 +529,28 @@ export type GatewayEvent =
       session_id?: string
       type: 'clarify.request'
     }
-  | { payload: { command: string; description: string }; session_id?: string; type: 'approval.request' }
+  | {
+      payload: {
+        approval_id: string
+        command: string
+        conversation_id: string
+        description: string
+        expires_at: number
+        tool_call_id: string
+        turn_id: string
+      }
+      session_id?: string
+      type: 'approval.request'
+    }
+  | {
+      payload: {
+        approval_id: string
+        conversation_id: string
+        reason: string
+      }
+      session_id?: string
+      type: 'approval.closed'
+    }
   | { payload: { request_id: string }; session_id?: string; type: 'sudo.request' }
   | { payload: { env_var: string; prompt: string; request_id: string }; session_id?: string; type: 'secret.request' }
   | { payload: { default: boolean; prompt: string; request_id: string }; session_id?: string; type: 'confirm.request' }

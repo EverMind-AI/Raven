@@ -285,7 +285,7 @@ class TestExecToolWithMockExecutor:
             restrict_to_workspace=True,
         )
         result = await tool.execute("cat ../../../etc/passwd", working_dir=str(tmp_path))
-        assert "blocked" in result
+        assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
     async def test_non_sandboxed_deny_list_runs(self, tmp_path):
@@ -295,7 +295,7 @@ class TestExecToolWithMockExecutor:
         executor = DirectMockExecutor()
         tool = ExecTool(executor=executor, working_dir=str(tmp_path))
         result = await tool.execute("rm -rf /important")
-        assert "blocked" in result
+        assert "blocked" in result.model_text
         assert len(executor.calls) == 0
 
     # Host GUI automation (osascript / `open -a|-b`) is NOT a product default —
@@ -320,7 +320,7 @@ class TestExecToolWithMockExecutor:
             "open -a Music",
             "open -b com.apple.Music",
         ):
-            assert "blocked" in await run(cmd), f"should block: {cmd}"
+            assert "blocked" in (await run(cmd)).model_text, f"should block: {cmd}"
 
         for cmd in ("open notes.txt", "echo hi", "ls -la"):
             assert "blocked" not in await run(cmd), f"should allow: {cmd}"
@@ -328,7 +328,7 @@ class TestExecToolWithMockExecutor:
         # Known accepted collateral: the security-broad ``\bosascript\b`` also
         # trips when 'osascript' is a mere argument. Pinned so a future narrowing
         # to command-position is a deliberate change, not an accident.
-        assert "blocked" in await run("grep osascript /var/log/system.log")
+        assert "blocked" in (await run("grep osascript /var/log/system.log")).model_text
 
     async def test_gui_automation_not_blocked_by_product_default(self, tmp_path):
         """Product default (no extra_deny_patterns): osascript is NOT blocked —
