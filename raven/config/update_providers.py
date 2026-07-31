@@ -175,7 +175,7 @@ def _provider_schema_cls(name: str, *, authoritative: bool = True) -> type[BaseM
             return ProviderConfig
         raise KeyError(
             f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}. "
-            "Any other vendor LiteLLM supports also works, spelled as LiteLLM names it."
+            "Many more vendors are supported -- try the name the vendor uses for itself."
         )
     ann = _unwrap_optional(field.annotation)
     if not _is_model_class(ann):

@@ -15,6 +15,8 @@ Providers not listed here fall back to their configured list.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 COMMON_MODELS: dict[str, list[str]] = {
     # Carries the "openrouter/" prefix like this provider's default_model does.
     # Bare OpenRouter ids start with the upstream vendor ("anthropic/...",
@@ -120,3 +122,142 @@ COMMON_MODELS: dict[str, list[str]] = {
 def common_models_for(slug: str) -> list[str]:
     """Return a copy of the curated common-model shortlist for ``slug``."""
     return list(COMMON_MODELS.get(slug, []))
+
+
+def _is_priced_template(model: str) -> bool:
+    """Is this a price-book row rather than something callable?
+
+    The catalogue doubles as a price list, so it carries entries no request can
+    name: "ft:gpt-4o-..." states what a model fine-tuned from that base costs,
+    and "container" bills a code-interpreter session. Sorted alphabetically they
+    led OpenAI's candidates, so the first dozen rows a user saw were unusable.
+    """
+    bare = model.split("/", 1)[-1]
+    return bare.startswith("ft:") or bare == "container"
+
+
+@lru_cache(maxsize=1)
+def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """LiteLLM's own catalogue, indexed by the provider it belongs to.
+
+    Built once and cached: reading it imports LiteLLM, which costs about two
+    seconds, so callers must be somewhere a user is already waiting.
+
+    Only ``mode == "chat"`` survives. The catalogue also carries embedding and
+    speech models, and offering those where a chat model is asked for produces a
+    selection that fails on first use.
+    """
+    from collections import defaultdict
+
+    from raven.providers.litellm_setup import import_litellm
+
+    # Whatever table LiteLLM itself is using, deliberately. Forcing the packaged
+    # copy here looked like it bought determinism and did not: setting the
+    # environment variable has no effect once LiteLLM has been imported, so the
+    # answer still depended on import order -- and where it did take effect it
+    # pinned the whole process to a table that is 278 entries behind, which is
+    # how `claude-sonnet-5` (this project's own default) stopped having a known
+    # context window. Candidates now agree with what pricing and context-window
+    # lookups see, which matters more than agreeing across machines.
+    catalogue = import_litellm().model_cost
+
+    by_provider: dict[str, list[str]] = defaultdict(list)
+    for model, info in catalogue.items():
+        if not isinstance(info, dict) or info.get("mode") != "chat":
+            continue
+        if _is_priced_template(model):
+            continue
+        provider = info.get("litellm_provider")
+        if provider:
+            by_provider[provider].append(model)
+    return {provider: tuple(sorted(models)) for provider, models in by_provider.items()}
+
+
+def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """The cached index, except that a failure is not what gets cached.
+
+    `lru_cache` remembers whatever the call returned, so caching an empty result
+    from a transient import failure would leave the picker permanently empty for
+    the life of the process with no way to retry.
+    """
+    try:
+        index = _cached_chat_models_by_provider()
+    except Exception:
+        _cached_chat_models_by_provider.cache_clear()
+        return {}
+    if not index:
+        _cached_chat_models_by_provider.cache_clear()
+    return index
+
+
+def _litellm_spelling_for(slug: str) -> str:
+    """How LiteLLM spells this vendor, which is the only form usable as a prefix.
+
+    Section names are matched spelling-insensitively, so the name arriving here
+    may be underscored where LiteLLM hyphenates -- and LiteLLM rejects the
+    underscored form outright.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.registry import normalize_provider_name
+
+    wanted = normalize_provider_name(slug)
+    for name in LITELLM_PROVIDER_NAMES:
+        if normalize_provider_name(name) == wanted:
+            return name
+    return wanted
+
+
+def litellm_models_for(slug: str) -> list[str]:
+    """Chat models LiteLLM knows for this provider, as ids that actually route.
+
+    Looked up by every name the provider answers to, not just its own: LiteLLM
+    files vLLM under "hosted_vllm" and Ollama under "ollama", so a lookup by the
+    section name alone finds nothing for exactly the providers whose curated
+    shortlist is empty.
+
+    Ids come back spelled the way LiteLLM would have to receive them. The
+    catalogue is inconsistent -- Moonshot's entries carry their prefix, VolcEngine's
+    do not -- and offering a bare id would route it by keyword rather than to the
+    provider the user picked.
+    """
+    from raven.providers.registry import find_by_name, normalize_provider_name
+
+    spec = find_by_name(slug)
+    if spec is None:
+        # A vendor Raven carries no spec for still has rows in the catalogue --
+        # 51 for Mistral, 219 for Bedrock, 270 for Fireworks. Returning nothing
+        # left those providers with no candidates at all, which pushed the user
+        # into typing a bare id: the shape that gets routed to whoever a keyword
+        # matches.
+        #
+        # The rows are inconsistent about the prefix -- Mistral's carry it,
+        # Bedrock's do not -- so they are normalized here rather than trusted.
+        # Offering an unprefixed one would reintroduce the very thing this exists
+        # to avoid.
+        index = _litellm_chat_models_by_provider()
+        prefix = _litellm_spelling_for(slug)
+        out: list[str] = []
+        for model in index.get(normalize_provider_name(slug), ()):
+            bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
+            out.append(f"{prefix}/{bare}")
+        return out
+    if normalize_provider_name(spec.model_prefix) not in spec.route_names:
+        # The wire prefix names somebody else -- this provider is reached through
+        # another vendor's driver. Prefixing candidates with it would hand the
+        # user ids that resolve to the driver's owner instead of to the provider
+        # they picked. Today the catalogue has no rows for those five, so the
+        # loop below would be empty anyway; the guard states the rule rather than
+        # relying on what LiteLLM happens to contain.
+        return []
+    index = _litellm_chat_models_by_provider()
+    prefix = spec.model_prefix
+    out: list[str] = []
+    seen: set[str] = set()
+    for route_name in sorted(spec.route_names):
+        for model in index.get(route_name, ()):
+            bare = model.split("/", 1)[1] if "/" in model else model
+            full = f"{prefix}/{bare}" if prefix else bare
+            if full not in seen:
+                seen.add(full)
+                out.append(full)
+    return out
