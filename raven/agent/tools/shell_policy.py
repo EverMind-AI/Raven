@@ -23,6 +23,7 @@ ApprovalMatcher = Callable[[str], bool]
 _WRAPPER_OPTIONS_WITH_VALUE = {
     "command": frozenset(),
     "env": frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}),
+    "nohup": frozenset(),
     "sudo": frozenset(
         {
             "-C",
@@ -47,6 +48,10 @@ _WRAPPER_OPTIONS_WITH_VALUE = {
     ),
 }
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
+_COMMAND_BOUNDARIES = frozenset(";&|\n(){}")
+_SHELL_COMMAND_WRAPPERS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
+_SYSTEM_POWER_COMMANDS = frozenset({"poweroff", "reboot", "shutdown"})
+_MAX_EMBEDDED_SHELL_DEPTH = 4
 
 
 class CommandDecision(StrEnum):
@@ -65,12 +70,15 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     or reproduce the full shell grammar.
     """
 
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}\n")
     lexer.commenters = ""
+    # Newlines must remain visible as command boundaries. Quoted newlines are
+    # still returned inside their quoted token and therefore do not split it.
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     segment: list[str] = []
     for token in lexer:
-        if token and all(char in ";&|" for char in token):
+        if token and all(char in _COMMAND_BOUNDARIES for char in token):
             if segment:
                 yield segment
                 segment = []
@@ -80,7 +88,18 @@ def _command_segments(command: str) -> Iterator[list[str]]:
         yield segment
 
 
-def _matches_delete_command(command: str) -> bool:
+def _embedded_shell_command(segment: list[str]) -> str | None:
+    """Return the command string supplied to a recognized shell ``-c``."""
+
+    if not segment or PurePath(segment[0]).name not in _SHELL_COMMAND_WRAPPERS:
+        return None
+    for index, token in enumerate(segment[1:], start=1):
+        if token.startswith("-") and not token.startswith("--") and "c" in token[1:] and index + 1 < len(segment):
+            return segment[index + 1]
+    return None
+
+
+def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
     """Recognize direct file-deletion commands after wrapper normalization."""
 
     for segment in _command_segments(command):
@@ -91,6 +110,32 @@ def _matches_delete_command(command: str) -> bool:
         if executable in {"rm", "unlink"}:
             return True
         if executable == "find" and "-delete" in segment[1:]:
+            return True
+        embedded = _embedded_shell_command(segment)
+        if (
+            embedded is not None
+            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+            and _matches_delete_command(embedded, _depth=_depth + 1)
+        ):
+            return True
+    return False
+
+
+def _matches_system_power_command(command: str, *, _depth: int = 0) -> bool:
+    """Recognize power-control executables without matching argument text."""
+
+    for segment in _command_segments(command):
+        segment = _unwrap_command_wrappers(segment)
+        if not segment:
+            continue
+        if PurePath(segment[0]).name in _SYSTEM_POWER_COMMANDS:
+            return True
+        embedded = _embedded_shell_command(segment)
+        if (
+            embedded is not None
+            and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+            and _matches_system_power_command(embedded, _depth=_depth + 1)
+        ):
             return True
     return False
 
@@ -147,6 +192,8 @@ class ShellCommandPolicy:
         if any(pattern.search(command) for pattern in self._deny_patterns):
             return CommandDecision.HARD_DENY
         try:
+            if _matches_system_power_command(command):
+                return CommandDecision.HARD_DENY
             if any(matcher(command) for _, matcher in self._approval_matchers):
                 return CommandDecision.REQUIRE_APPROVAL
         except Exception:

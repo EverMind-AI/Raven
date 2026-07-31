@@ -27,6 +27,8 @@ def policy() -> ShellCommandPolicy:
         "find . -name '*.py'",
         "printf 'rm file.txt'",
         "echo 'find . -delete'",
+        "git grep -n shutdown",
+        "grep -rn reboot /var/log",
     ],
 )
 def test_safe_commands_are_allowed(policy: ShellCommandPolicy, command: str) -> None:
@@ -42,6 +44,9 @@ def test_safe_commands_are_allowed(policy: ShellCommandPolicy, command: str) -> 
         "rm -fr tmp",
         "echo ready && rm -rf tmp",
         "mkfs /dev/test",
+        "shutdown now",
+        "sudo -n reboot",
+        'bash -c "poweroff"',
     ],
 )
 def test_hard_denied_commands_cannot_be_approved(policy: ShellCommandPolicy, command: str) -> None:
@@ -66,6 +71,15 @@ def test_hard_denied_commands_cannot_be_approved(policy: ShellCommandPolicy, com
         "find ./tmp -delete",
         "echo ready && rm file.txt",
         "printf done | unlink file.txt",
+        "cd /tmp\nrm file.txt",
+        "cd /tmp\r\nunlink file.txt",
+        "(rm file.txt)",
+        "{ rm file.txt; }",
+        "echo $(rm file.txt)",
+        "nohup rm file.txt &",
+        'bash -c "rm file.txt"',
+        'bash --rcfile setup.sh -c "rm file.txt"',
+        'sh -lc "find tmp -delete"',
     ],
 )
 def test_delete_commands_require_approval(policy: ShellCommandPolicy, command: str) -> None:
@@ -83,6 +97,11 @@ def test_matcher_failure_is_fail_closed(policy: ShellCommandPolicy) -> None:
     policy.register_approval_matcher("broken", broken_matcher)
 
     assert policy.evaluate("echo harmless") is CommandDecision.HARD_DENY
+
+
+@pytest.mark.parametrize("command", ["echo 'unterminated", "echo trailing\\"])
+def test_shell_parse_failure_is_fail_closed(policy: ShellCommandPolicy, command: str) -> None:
+    assert policy.evaluate(command) is CommandDecision.HARD_DENY
 
 
 class _RecordingExecutor(SandboxExecutor):

@@ -71,7 +71,6 @@ class ExecTool(Tool):
             r"\b(mkfs|diskpart)\b",  # disk operations
             r"\bdd\s+if=",  # dd
             r">\s*/dev/sd",  # write to disk
-            r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",  # fork bomb
         ]
         # Operator-configurable extras (tools.exec.extra_deny_patterns), appended
