@@ -2017,8 +2017,24 @@ def test_back_at_the_execution_mode_prompt_returns_instead_of_running(monkeypatc
             ("Select platform", "hermes"),
             ("Select import tier", Tier.MEMORY_FILES),
             ("execution mode", "back"),
+            # Back is one level up, so the tier prompt comes next. Scripting the
+            # platform prompt here instead would raise "unscripted prompt".
+            ("Select import tier", back_value_sentinel()),
             ("Select platform", "skip"),
         ],
     )
     assert "back" in scripted.values_offered_for("execution mode"), "the exit must be offered, not just handled"
-    assert len([m for m in scripted.asked if "Select platform" in m]) == 2, "back returns to the platform prompt"
+    order = [m for m in scripted.asked if "Select platform" in m or "Select import tier" in m or "execution mode" in m]
+    assert [_short(m) for m in order] == ["platform", "tier", "mode", "tier", "platform"]
+
+
+def back_value_sentinel() -> str:
+    return "back"
+
+
+def _short(message: str) -> str:
+    if "Select platform" in message:
+        return "platform"
+    if "Select import tier" in message:
+        return "tier"
+    return "mode"

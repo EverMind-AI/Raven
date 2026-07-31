@@ -3790,7 +3790,11 @@ def _step5_import_body(
     back_value = "back"
     skip_value = "skip"
 
-    while True:
+    # Nested loops, one per prompt, so Back is `break` -- it lands on the prompt
+    # immediately above and keeps every choice made before it. A single flat
+    # loop would send Back from any depth to the platform prompt, silently
+    # discarding selections the user never asked to change.
+    while True:  # platform level
         # -- Platform selection --
         platform_choices = []
         for p in Platform:
@@ -3815,10 +3819,10 @@ def _step5_import_body(
                 value="all",
             )
         )
-        # Without this the only way out of the loop is Esc, which aborts the
-        # whole onboarding rather than this step. Answering "no" to the offer
-        # above skips cleanly, so changing your mind one prompt later should
-        # too.
+        # The top level has no prompt above it, so its exit leaves the step
+        # entirely. Without it the only way out is Esc, which aborts the whole
+        # onboarding; answering "no" to the offer above skips cleanly, and
+        # changing your mind one prompt later should too.
         platform_choices.append(
             questionary.Choice(
                 _t("Skip import", "跳过导入"),
@@ -3865,96 +3869,103 @@ def _step5_import_body(
             )
         )
 
-        # -- Tier selection --
-        console.print(
-            _t(
-                "\n  [bold][accent]Memory files only[/accent][/bold]  "
-                "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
-                "  [bold][accent]Full import[/accent][/bold]  "
-                "[dim]Slow (may take hours). Imports memory files + all conversation history. Higher LLM cost.[/dim]",
-                "\n  [bold][accent]仅记忆文件[/accent][/bold]  "
-                "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
-                "  [bold][accent]完整导入[/accent][/bold]  "
-                "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
-            ),
-            highlight=False,
-        )
-        console.print()
-        tier_choices = []
-        if mem:
+        while True:  # tier level -- Back here returns to the platform prompt
+            # -- Tier selection --
+            console.print(
+                _t(
+                    "\n  [bold][accent]Memory files only[/accent][/bold]  "
+                    "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
+                    "  [bold][accent]Full import[/accent][/bold]  "
+                    "[dim]Slow (may take hours). Imports memory files + all conversation history. "
+                    "Higher LLM cost.[/dim]",
+                    "\n  [bold][accent]仅记忆文件[/accent][/bold]  "
+                    "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
+                    "  [bold][accent]完整导入[/accent][/bold]  "
+                    "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
+                ),
+                highlight=False,
+            )
+            console.print()
+            tier_choices = []
+            if mem:
+                tier_choices.append(
+                    questionary.Choice(
+                        _t(
+                            f"Memory files only ({mem} items, fast)",
+                            f"仅记忆文件（{mem} 项，快速）",
+                        ),
+                        value=Tier.MEMORY_FILES,
+                    )
+                )
             tier_choices.append(
                 questionary.Choice(
                     _t(
-                        f"Memory files only ({mem} items, fast)",
-                        f"仅记忆文件（{mem} 项，快速）",
+                        f"Full import ({mem + conv} items, includes conversations)",
+                        f"完整导入（{mem + conv} 项，含对话）",
                     ),
-                    value=Tier.MEMORY_FILES,
+                    value=Tier.FULL,
                 )
             )
-        tier_choices.append(
-            questionary.Choice(
-                _t(
-                    f"Full import ({mem + conv} items, includes conversations)",
-                    f"完整导入（{mem + conv} 项，含对话）",
-                ),
-                value=Tier.FULL,
-            )
-        )
-        tier_choices.append(
-            questionary.Choice(
-                _t("Back", "返回"),
-                value=back_value,
-            )
-        )
-        selected_tier = questionary.select(
-            _t("Select import tier:", "选择导入档位："),
-            choices=tier_choices,
-            style=RAVEN_STYLE,
-            qmark=_QMARK,
-        ).ask()
-        if selected_tier is None:
-            raise typer.Exit(1)
-        if selected_tier == back_value:
-            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
-            continue
-        # -- Filter --
-        filtered = filter_by_tier(results, selected_tier)
-        if not filtered:
-            console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
-            return None
-
-        f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
-        f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
-
-        # -- Execution mode --
-        exec_mode = questionary.select(
-            _t("Select execution mode:", "选择执行方式："),
-            choices=[
-                questionary.Choice(
-                    _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
-                    value="foreground",
-                ),
-                questionary.Choice(
-                    _t(
-                        "Run in background (use raven import status to check progress)",
-                        "后台执行（用 raven import status 查看进度）",
-                    ),
-                    value="background",
-                ),
+            tier_choices.append(
                 questionary.Choice(
                     _t("Back", "返回"),
                     value=back_value,
-                ),
-            ],
-            style=RAVEN_STYLE,
-            qmark=_QMARK,
-        ).ask()
-        if exec_mode is None:
-            raise typer.Exit(1)
-        if exec_mode == back_value:
-            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
-            continue
-        break
+                )
+            )
+            selected_tier = questionary.select(
+                _t("Select import tier:", "选择导入档位："),
+                choices=tier_choices,
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if selected_tier is None:
+                raise typer.Exit(1)
+            if selected_tier == back_value:
+                _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+                break
+
+            # -- Filter --
+            filtered = filter_by_tier(results, selected_tier)
+            if not filtered:
+                console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
+                return None
+
+            f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
+            f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
+
+            # -- Execution mode --
+            exec_mode = questionary.select(
+                _t("Select execution mode:", "选择执行方式："),
+                choices=[
+                    questionary.Choice(
+                        _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
+                        value="foreground",
+                    ),
+                    questionary.Choice(
+                        _t(
+                            "Run in background (use raven import status to check progress)",
+                            "后台执行（用 raven import status 查看进度）",
+                        ),
+                        value="background",
+                    ),
+                    questionary.Choice(
+                        _t("Back", "返回"),
+                        value=back_value,
+                    ),
+                ],
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if exec_mode is None:
+                raise typer.Exit(1)
+            if exec_mode == back_value:
+                continue
+
+            break
+        # The tier level exits either by Back, which means try the platform
+        # prompt again, or by completing, which means the whole step is done.
+        if selected_tier != back_value:
+            break
 
     # Summary + confirm
     platform_display = (
