@@ -1281,6 +1281,53 @@ def test_memory_rerank_reuse_llm_provider(
     assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
+def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
+    """A seeded model with an empty api_key does not count as configured."""
+    from raven.config.update_everos import set_everos_section
+
+    assert onboard_commands._everos_role_configured("llm") is False
+    set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
+    assert onboard_commands._everos_role_configured("llm") is False
+    set_everos_section("llm", {"api_key": "sk-real"})
+    assert onboard_commands._everos_role_configured("llm") is True
+
+
+def test_memory_required_role_back_reaches_give_up_menu(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backing out of the picker must offer the give-up exit even when the
+    shipped everos.toml template already seeded a model with an empty api_key —
+    otherwise Back re-asks the provider picker forever."""
+    from raven.config.update_everos import set_everos_section
+
+    set_everos_section(
+        "llm",
+        {"model": "openai/gpt-4.1-mini", "api_key": "", "base_url": "https://openrouter.ai/api/v1"},
+    )
+
+    import questionary
+
+    asked: list[str] = []
+
+    class _FQ:
+        def __init__(self, *a: object, **kw: object) -> None:
+            values = [getattr(c, "value", None) for c in kw.get("choices", [])]  # type: ignore[union-attr]
+            self._can_abort = "abort" in values
+
+        def ask(self) -> object:
+            asked.append("give-up" if self._can_abort else "picker")
+            assert len(asked) <= 4, f"Back re-asked the picker instead of offering an exit: {asked}"
+            return "abort" if self._can_abort else onboard_commands._BACK
+
+    monkeypatch.setattr(questionary, "select", _FQ)
+
+    out = onboard_commands._config_everos_role(
+        section="llm", main_model=None, non_interactive=False, warnings=[]
+    )
+    assert out is onboard_commands._ABORT_EVEROS
+    assert asked == ["picker", "give-up"]
+
+
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
     """Compat heuristic gates whether the memory LLM can reuse the main model."""
     f = onboard_commands._model_is_openai_compatible
