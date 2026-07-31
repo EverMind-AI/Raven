@@ -2687,20 +2687,27 @@ def _everos_section(section: str) -> dict[str, Any]:
     return load_everos_config().get(section, {}) or {}
 
 
+def _everos_role_configured(section: str) -> bool:
+    """True iff the user really configured this EverOS role.
+
+    Sole criterion for "configured", shared by every caller: model AND api_key.
+    The shipped everos.toml template seeds each section's model name with an
+    empty api_key, so a model alone also holds on a fresh install — two callers
+    disagreeing on this made the wizard's Back loop on itself forever.
+    """
+    sec = _everos_section(section)
+    return bool(sec.get("model") and sec.get("api_key"))
+
+
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires both required models (llm and embedding) with api_key
-    in the EverOS toml. The seed/schema default sets model names but leaves
-    api_key empty, so checking model alone would mis-report a fresh,
-    unconfigured install as "enabled".
+    "Usable" requires both required roles (llm and embedding) configured.
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    llm = _everos_section("llm")
-    emb = _everos_section("embedding")
-    return bool(llm.get("model") and llm.get("api_key") and emb.get("model") and emb.get("api_key"))
+    return _everos_role_configured("llm") and _everos_role_configured("embedding")
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -3691,8 +3698,7 @@ def _config_everos_role(
     )
 
     while True:  # role-menu loop — a back-out of the source picker returns here
-        sec = _everos_section(section)
-        current = sec.get("model") if sec.get("api_key") else None
+        current = _everos_section(section).get("model") if _everos_role_configured(section) else None
         if current:
             choices = [
                 questionary.Choice(_t(f"Keep current: {current}", f"沿用当前:{current}"), value="keep"),
@@ -3740,10 +3746,10 @@ def _config_everos_role(
             recommendation=role.get("recommendation"),
         )
         if result is _BACK:
-            if optional or _everos_section(section).get("model"):
-                # Optional roles offer Skip; a required role that already has a
-                # value on disk falls back to its keep/reconfigure menu. Either
-                # way, re-show the role menu rather than forcing the give-up exit.
+            if optional or _everos_role_configured(section):
+                # Optional roles offer Skip; a required role already configured
+                # falls back to its keep/reconfigure menu. Either way, re-show
+                # the role menu rather than forcing the give-up exit.
                 continue
             # A required role with nothing configured has no Skip, so backing out
             # of the picker would loop forever. Offer a bounded exit: keep trying,
