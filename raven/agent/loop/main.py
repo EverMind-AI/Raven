@@ -50,7 +50,7 @@ from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
 from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.helpers import estimate_prompt_tokens, is_inline_image
 
 _ABORTED_ACTION_REPLY = (
     "The operation was not completed, and no alternative method will be attempted. "
@@ -201,9 +201,7 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
         if not isinstance(part, dict):
             out.append(part)
             continue
-        url = part.get("image_url") or {}
-        url = url.get("url", "") if isinstance(url, dict) else ""
-        if part.get("type") == "image_url" and isinstance(url, str) and url.startswith("data:image/"):
+        if is_inline_image(part):
             out.append({"type": "text", "text": "[image]"})
         else:
             out.append(part)
@@ -1442,13 +1440,7 @@ class AgentLoop:
         bearing = [
             i
             for i, m in enumerate(messages)
-            if isinstance(m.get("content"), list)
-            and any(
-                isinstance(p, dict)
-                and p.get("type") == "image_url"
-                and str((p.get("image_url") or {}).get("url", "")).startswith("data:image/")
-                for p in m["content"]
-            )
+            if isinstance(m.get("content"), list) and any(is_inline_image(p) for p in m["content"])
         ]
         if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
             return messages, 0
@@ -1463,11 +1455,7 @@ class AgentLoop:
             clean = dict(m)
             # New list: the caller's messages may still be referenced elsewhere.
             clean["content"] = [
-                {"type": "text", "text": "[image elided to fit the context window]"}
-                if isinstance(p, dict)
-                and p.get("type") == "image_url"
-                and str((p.get("image_url") or {}).get("url", "")).startswith("data:image/")
-                else p
+                {"type": "text", "text": "[image elided to fit the context window]"} if is_inline_image(p) else p
                 for p in m["content"]
             ]
             out.append(clean)

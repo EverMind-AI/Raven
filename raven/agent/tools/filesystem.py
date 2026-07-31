@@ -98,7 +98,7 @@ class ReadFileTool(_FsTool):
             display_text=f"{fp.name} ({meta['width']}x{meta['height']}, ~{meta['tokens']} tok)",
             blocks=[
                 {"type": "text", "text": summary},
-                {"type": "image_url", "image_url": {"url": media.to_data_uri(payload, out_mime)}},
+                media.image_block(media.to_data_uri(payload, out_mime)),
             ],
         )
 

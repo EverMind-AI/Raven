@@ -25,6 +25,36 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
+def image_block(data_uri: str) -> dict[str, Any]:
+    """The single place the image content-part shape is written.
+
+    Nothing in this repo type-checks a dict literal, so a mistyped key here
+    ("imageURL") would not raise -- the picture would just never reach the model,
+    with a clean log. Constructing through one function makes that a one-line
+    risk covered by a test instead of a five-site risk covered by nothing.
+    """
+    return {"type": "image_url", "image_url": {"url": data_uri}}
+
+
+def is_image_part(part: Any) -> bool:
+    """True for any image content part, inline or remote."""
+    return isinstance(part, dict) and part.get("type") == "image_url"
+
+
+def is_inline_image(part: Any) -> bool:
+    """True for a content part carrying inline base64 image bytes.
+
+    The distinction matters wherever the *payload size* is the concern -- token
+    accounting, persistence, emergency shrinking. A remote URL is a reference and
+    costs nothing to keep.
+    """
+    if not is_image_part(part):
+        return False
+    url = part.get("image_url") or {}
+    url = url.get("url", "") if isinstance(url, dict) else ""
+    return isinstance(url, str) and url.startswith("data:image/")
+
+
 # Vision models bill images by patch area, not by the size of the transport
 # encoding. Counting a data URI as text charges ~350x the real cost (a 1000x1000
 # JPEG is ~1.3k image tokens but ~460k base64 characters), which starves the
@@ -82,15 +112,13 @@ def estimate_image_tokens(width: int, height: int, cap: int = _IMAGE_TOKEN_CAP) 
 def estimate_content_part_tokens(part: Any) -> int | None:
     """Token estimate for a non-text multimodal content part, or None when the
     part carries no image and should fall through to text accounting."""
-    if not isinstance(part, dict) or part.get("type") != "image_url":
+    if not is_image_part(part):
         return None
-    url = part.get("image_url", {})
-    url = url.get("url", "") if isinstance(url, dict) else ""
-    if not isinstance(url, str) or not url.startswith("data:image/"):
+    if not is_inline_image(part):
         # A remote URL costs the model an image either way, but its dimensions
         # are unknowable without fetching it. Charge the ceiling.
         return _IMAGE_TOKEN_CAP
-    _, _, payload = url.partition(",")
+    _, _, payload = part["image_url"]["url"].partition(",")
     try:
         head = base64.b64decode(payload[:_IMAGE_HEADER_BYTES], validate=False)
     except (binascii.Error, ValueError):

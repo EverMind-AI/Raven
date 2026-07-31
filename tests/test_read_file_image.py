@@ -354,3 +354,96 @@ def test_emergency_shrink_is_a_noop_with_a_single_image() -> None:
 
     assert elided == 0
     assert out[1]["content"][1]["type"] == "image_url"
+
+
+# --------------------------------------------------------------------------
+# the shape lives in one place
+# --------------------------------------------------------------------------
+
+
+def test_image_block_is_the_only_place_the_shape_is_written() -> None:
+    """Nothing here type-checks a dict literal, so a mistyped key would silently
+    drop the picture. Construction goes through one function instead."""
+    import subprocess
+
+    from raven.utils.helpers import image_block
+
+    assert image_block("data:image/png;base64,AA") == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,AA"},
+    }
+
+    # No module outside helpers.py may hand-write the literal.
+    hits = subprocess.run(
+        ["grep", "-rn", '"type": "image_url"', "raven/", "--include=*.py"],
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    offenders = [h for h in hits if "raven/utils/helpers.py" not in h]
+    assert offenders == [], f"hand-written image block outside helpers.py: {offenders}"
+
+
+def test_is_inline_image_separates_payloads_from_references() -> None:
+    from raven.utils.helpers import is_image_part, is_inline_image
+
+    inline = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}
+    remote = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    text = {"type": "text", "text": "hi"}
+
+    # Both are images; only one carries bytes worth accounting for or stripping.
+    assert is_image_part(inline) and is_image_part(remote)
+    assert is_inline_image(inline)
+    assert not is_inline_image(remote)
+
+    for junk in (text, "not a dict", None, {"type": "image_url"}):
+        assert not is_inline_image(junk)
+
+
+# --------------------------------------------------------------------------
+# MCP content conversion
+# --------------------------------------------------------------------------
+
+
+def test_mcp_image_content_becomes_a_block_not_a_pydantic_repr() -> None:
+    """Regression: the MCP wrapper ended with str(block), and a pydantic repr
+    dumps the whole base64 payload into the prompt as prose."""
+    from mcp import types
+
+    from raven.agent.tools.media import blocks_from_mcp_content
+
+    payload = "iVBORw0KGgoAAAANSUhEUg=="
+    content = [
+        types.TextContent(type="text", text="here is the screenshot"),
+        types.ImageContent(type="image", data=payload, mimeType="image/png"),
+    ]
+    text, blocks = blocks_from_mcp_content(content)
+
+    assert payload not in text
+    assert "here is the screenshot" in text
+    assert [b["type"] for b in blocks] == ["text", "text", "image_url"]
+    assert blocks[2]["image_url"]["url"] == f"data:image/png;base64,{payload}"
+
+
+def test_mcp_text_only_result_returns_no_blocks() -> None:
+    """A text MCP tool must behave exactly as before -- plain string, no blocks."""
+    from mcp import types
+
+    from raven.agent.tools.media import blocks_from_mcp_content
+
+    text, blocks = blocks_from_mcp_content([types.TextContent(type="text", text="ok")])
+
+    assert text == "ok"
+    assert blocks == []
+
+
+def test_mcp_audio_content_is_labelled_never_stringified() -> None:
+    from mcp import types
+
+    from raven.agent.tools.media import blocks_from_mcp_content
+
+    payload = "QUJDRA=="
+    text, blocks = blocks_from_mcp_content([types.AudioContent(type="audio", data=payload, mimeType="audio/wav")])
+
+    assert payload not in text
+    assert "unsupported MCP content: audio" in text
+    assert "audio/wav" in text

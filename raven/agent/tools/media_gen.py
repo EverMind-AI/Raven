@@ -48,6 +48,7 @@ import httpx
 from loguru import logger
 
 from raven.agent.tools.base import Tool
+from raven.utils.helpers import image_block
 
 if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig
@@ -179,12 +180,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     def _image_part(self, ref: str) -> dict[str, Any]:
         """Build an OpenAI-style image_url content part from a path/URL/data URI."""
         if ref.startswith(("http://", "https://", "data:")):
-            return {"type": "image_url", "image_url": {"url": ref}}
+            return image_block(ref)
         path = Path(ref).expanduser()
         data = path.read_bytes()
         mime = _EXT_MIME.get(path.suffix.lower(), "image/png")
         b64 = base64.b64encode(data).decode("ascii")
-        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        return image_block(f"data:{mime};base64,{b64}")
 
     async def execute(
         self,

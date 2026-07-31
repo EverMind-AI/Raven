@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from raven.security.trust import wrap_untrusted
-from raven.utils.helpers import detect_image_mime
+from raven.utils.helpers import detect_image_mime, image_block
 
 if TYPE_CHECKING:
     from raven.memory_engine.backend import Memory
@@ -217,7 +217,7 @@ def build_user_content(text: str, media: list[str] | None) -> str | list[dict[st
         mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
         if mime and mime.startswith("image/"):
             b64 = base64.b64encode(raw).decode()
-            images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            images.append(image_block(f"data:{mime};base64,{b64}"))
             notes.append(f"[Image: {p.name} (path: {p}) — re-read it with read_file if you need another look]")
         else:
             notes.append(f"[Attachment: {p.name} (path: {p}) — use the understand_media tool to read its contents]")

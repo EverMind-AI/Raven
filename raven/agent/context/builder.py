@@ -12,7 +12,7 @@ from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
-from raven.utils.helpers import build_assistant_message, detect_image_mime
+from raven.utils.helpers import build_assistant_message, detect_image_mime, image_block
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -302,7 +302,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             if not mime or not mime.startswith("image/"):
                 continue
             b64 = base64.b64encode(raw).decode()
-            images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            images.append(image_block(f"data:{mime};base64,{b64}"))
             notes.append(f"[Image: {p.name} (path: {p}) — re-read it with read_file if you need another look]")
 
         if not images:
