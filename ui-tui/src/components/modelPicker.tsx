@@ -18,7 +18,10 @@ const VISIBLE = 12
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
-type Stage = 'provider' | 'key' | 'model' | 'addModel' | 'disconnect'
+type Stage = 'provider' | 'addProvider' | 'key' | 'model' | 'addModel' | 'disconnect'
+
+/** The row that opens the second level; not a provider. */
+const ADD_ROW = '__add_provider__'
 
 /** What a provider still needs, in the four shapes the backend reports. */
 function unconfiguredHint(authType: string | undefined): string {
@@ -54,6 +57,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const [providerIdx, setProviderIdx] = useState(0)
   const [modelIdx, setModelIdx] = useState(0)
   const [stage, setStage] = useState<Stage>('provider')
+  const [fromAddList, setFromAddList] = useState(false)
   const [keyInput, setKeyInput] = useState('')
   const [baseInput, setBaseInput] = useState('')
   const [keyField, setKeyField] = useState<KeyField>('api_key')
@@ -83,10 +87,14 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         const next = r.providers ?? []
         setProviders(next)
         setCurrentModel(String(r.model ?? ''))
+        // Located in the list the first screen shows, not in the whole response:
+        // the current provider's index among all of them lands past the end of
+        // the configured ones, and a selection past the end highlights no row at
+        // all -- the picker opened with no cursor on it.
         setProviderIdx(
           Math.max(
             0,
-            next.findIndex(p => p.is_current)
+            next.filter(p => p.authenticated !== false).findIndex(p => p.is_current)
           )
         )
         setModelIdx(0)
@@ -100,11 +108,30 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       })
   }, [gw, sessionId])
 
-  const provider = providers[providerIdx]
+  // Everything the picker needs is already in one response; the split is a view.
+  // A provider the user has not set up is not a model they can switch to, and
+  // listing all twenty-one of them buried the two or three that were.
+  const configured = useMemo(() => providers.filter(p => p.authenticated !== false), [providers])
+  const unconfigured = useMemo(() => providers.filter(p => p.authenticated === false), [providers])
+  // Which list the selection belongs to, kept apart from which screen is showing:
+  // deriving it from the stage meant that leaving the add list for the key screen
+  // silently re-pointed the selection at the configured list, so choosing an
+  // unconfigured provider opened the first configured one instead.
+  const rowsForStage = fromAddList ? unconfigured : configured
+  const onAddRow = stage === 'provider' && providerIdx === configured.length
+  const provider = onAddRow ? undefined : rowsForStage[providerIdx]
   const models = provider?.models ?? []
-  const names = useMemo(() => providerDisplayNames(providers), [providers])
+  const names = useMemo(() => providerDisplayNames(rowsForStage), [rowsForStage])
 
   const back = () => {
+    if (stage === 'addProvider') {
+      setStage('provider')
+      setFromAddList(false)
+      setProviderIdx(0)
+
+      return
+    }
+
     if (stage === 'addModel') {
       setStage('model')
       setModelNameInput('')
@@ -114,7 +141,11 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     }
 
     if (stage === 'model' || stage === 'key' || stage === 'disconnect') {
-      setStage('provider')
+      // Backing out of a set-up that did not happen returns to the list it was
+      // opened from, rather than one level further out than the user asked for.
+      const toAddList = stage === 'key' && fromAddList && provider?.authenticated === false
+      setStage(toAddList ? 'addProvider' : 'provider')
+      setFromAddList(toAddList)
       setModelIdx(0)
       setKeyInput('')
       setBaseInput('')
@@ -141,7 +172,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       const focusBase = showBase && keyField === 'api_base'
 
       // Tab moves between the two fields when api_base is shown.
-      if (key.tab && showBase) {
+      if (key.tab && showBase && provider?.auth_type !== 'local') {
         setKeyField(f => (f === 'api_key' ? 'api_base' : 'api_key'))
 
         return
@@ -150,7 +181,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       if (key.return) {
         // Enter on api_key advances to api_base instead of submitting, so the
         // user can fill both fields with single-key navigation.
-        if (showBase && keyField === 'api_key') {
+        if (showBase && keyField === 'api_key' && provider?.auth_type !== 'local') {
           setKeyField('api_base')
 
           return
@@ -159,7 +190,10 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         const apiKey = keyInput.trim()
         const apiBase = baseInput.trim()
 
-        if (!apiKey) {
+        // A local deployment is reached by address and has no key; demanding one
+        // here blocked the only providers whose key field means nothing, even
+        // after the backend stopped requiring it.
+        if (!apiKey && provider?.auth_type !== 'local') {
           setKeyError('API key is required')
 
           return
@@ -190,7 +224,19 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
             }
 
             // Update the provider in our list with fresh data
-            setProviders(prev => prev.map(p => (p.slug === r.provider!.slug ? r.provider! : p)))
+            const saved = r.provider!
+            setProviders(prev => prev.map(p => (p.slug === saved.slug ? saved : p)))
+            // It has just joined the configured list, so the selection moves with
+            // it rather than pointing into the list it left.
+            setFromAddList(false)
+            setProviderIdx(
+              Math.max(
+                0,
+                providers
+                  .filter(pr => pr.authenticated !== false || pr.slug === saved.slug)
+                  .findIndex(pr => pr.slug === saved.slug)
+              )
+            )
             setKeyInput('')
             setBaseInput('')
             setKeyField('api_key')
@@ -350,9 +396,11 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       return
     }
 
-    const count = stage === 'provider' ? providers.length : models.length
-    const sel = stage === 'provider' ? providerIdx : modelIdx
-    const setSel = stage === 'provider' ? setProviderIdx : setModelIdx
+    const onProviderList = stage === 'provider' || stage === 'addProvider'
+    const addRowCount = stage === 'provider' && unconfigured.length > 0 ? 1 : 0
+    const count = onProviderList ? rowsForStage.length + addRowCount : models.length
+    const sel = onProviderList ? providerIdx : modelIdx
+    const setSel = onProviderList ? setProviderIdx : setModelIdx
 
     if (key.upArrow && sel > 0) {
       setSel(v => v - 1)
@@ -367,23 +415,32 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     }
 
     if (key.return) {
-      if (stage === 'provider') {
+      if (stage === 'provider' && onAddRow) {
+        setStage('addProvider')
+        setFromAddList(true)
+        setProviderIdx(0)
+
+        return
+      }
+
+      if (onProviderList) {
         if (!provider) {
           return
         }
 
         if (provider.authenticated === false) {
-          // api_key providers prompt for key inline, even when key_env is null
-          // (custom / azure use a generic key + required api_base).
+          // Every shape but OAuth is completable here: the key stage asks for a
+          // key, an address, or both, from what the provider reports needing.
+          // OAuth is a browser flow plus a token file, so its row states the
+          // command that does it rather than pretending to.
           if (provider.auth_type !== 'oauth') {
             setStage('key')
             setKeyInput('')
             setBaseInput('')
-            setKeyField('api_key')
+            setKeyField(provider.auth_type === 'local' ? 'api_base' : 'api_key')
             setKeyError('')
           }
 
-          // OAuth / other auth types: no-op (warning tells them to run raven model)
           return
         }
 
@@ -451,7 +508,7 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     }
 
     // Disconnect: only in provider stage, only for authenticated providers
-    if (ch.toLowerCase() === 'd' && stage === 'provider' && provider?.authenticated !== false) {
+    if (ch.toLowerCase() === 'd' && stage === 'provider' && provider && provider.authenticated !== false) {
       setStage('disconnect')
 
       return
@@ -483,10 +540,16 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   // ── Key entry stage ──────────────────────────────────────────────────
   if (stage === 'key' && provider) {
     const showBase = provider.auth_type === 'endpoint' || provider.auth_type === 'local'
-    const focusBase = showBase && keyField === 'api_base'
+    // A local deployment has no key, so it gets no key field: an input the server
+    // ignores reads as something the user has to find before they can continue.
+    const showKey = provider.auth_type !== 'local'
+    const focusBase = showBase && (keyField === 'api_base' || !showKey)
     const masked = keyInput ? '•'.repeat(Math.min(keyInput.length, 40)) : ''
     const keyLabel = provider.key_env ?? 'API key'
-    const baseLabel = `API base${provider.needs_api_base ? ' (required)' : ' (optional)'}`
+    const baseLabel =
+      provider.auth_type === 'local'
+        ? 'Server address'
+        : `API base${provider.needs_api_base ? ' (required)' : ' (optional)'}`
     const caret = keySaving ? '' : '▎'
 
     return (
@@ -503,16 +566,20 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
           {' '}
         </Text>
 
-        <Text color={focusBase ? t.color.muted : t.color.accent} wrap="truncate-end">
-          {focusBase ? '  ' : '▸ '}
-          {keyLabel}:
-        </Text>
+        {showKey ? (
+          <>
+            <Text color={focusBase ? t.color.muted : t.color.accent} wrap="truncate-end">
+              {focusBase ? '  ' : '▸ '}
+              {keyLabel}:
+            </Text>
 
-        <Text color={t.color.accent} wrap="truncate-end">
-          {'  '}
-          {masked || '(empty)'}
-          {focusBase ? '' : caret}
-        </Text>
+            <Text color={t.color.accent} wrap="truncate-end">
+              {'  '}
+              {masked || '(empty)'}
+              {focusBase ? '' : caret}
+            </Text>
+          </>
+        ) : null}
 
         {showBase ? (
           <>
@@ -634,9 +701,10 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     )
   }
 
-  // ── Provider selection stage ─────────────────────────────────────────
-  if (stage === 'provider') {
-    const rows = providers.map((p, i) => {
+  // ── Provider selection stages ────────────────────────────────────────
+  if (stage === 'provider' || stage === 'addProvider') {
+    const adding = stage === 'addProvider'
+    const rows = rowsForStage.map((p, i) => {
       const authMark = p.authenticated === false ? '○' : p.is_current ? '*' : '●'
       const modelCount = p.total_models ?? p.models?.length ?? 0
 
@@ -645,16 +713,20 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       return `${authMark} ${names[i]} · ${suffix}`
     })
 
+    if (!adding && unconfigured.length > 0) {
+      rows.push(`+ add a provider · ${unconfigured.length} not set up`)
+    }
+
     const { items, offset } = windowItems(rows, providerIdx, VISIBLE)
 
     return (
       <Box flexDirection="column" width={width}>
         <Text bold color={t.color.accent} wrap="truncate-end">
-          Select provider (step 1/2)
+          {adding ? 'Add a provider' : 'Select provider (step 1/2)'}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
-          Full model IDs on the next step · Enter to continue
+          {adding ? 'Enter to set one up · Esc to go back' : 'Full model IDs on the next step · Enter to continue'}
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
@@ -670,8 +742,8 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         {Array.from({ length: VISIBLE }, (_, i) => {
           const row = items[i]
           const idx = offset + i
-          const p = providers[idx]
-          const dimmed = p?.authenticated === false
+          const p = rowsForStage[idx]
+          const dimmed = p ? p.authenticated === false : false
 
           return row ? (
             <Text
