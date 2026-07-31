@@ -279,11 +279,23 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
         lambda **kw: fake_emitter,
     )
 
+    # Load the lazily imported module before patching its attributes; otherwise
+    # this fixture can depend on test order through Python's import cache.
+    from raven.tui_rpc.methods import system as _system_module
+
+    assert _system_module is not None
     fake_confirm_broker = MagicMock()
     fake_confirm_broker.cancel_all = MagicMock()
     monkeypatch.setattr(
         "raven.tui_rpc.confirm_broker.ConfirmBroker",
         lambda **kw: fake_confirm_broker,
+    )
+
+    fake_approval_broker = MagicMock()
+    fake_approval_broker.cancel_all = MagicMock()
+    monkeypatch.setattr(
+        "raven.tui_rpc.approval_broker.ApprovalBroker",
+        lambda **kw: fake_approval_broker,
     )
 
     fake_question_broker = MagicMock()
@@ -310,16 +322,16 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     async def _fake_turn_teardown():
         pass
 
-    monkeypatch.setattr(
-        "raven.tui_rpc.spine.build_tui",
-        lambda *a, **kw: (fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown),
-    )
+    fake_build_tui = MagicMock(return_value=(fake_turn_scheduler, fake_turn_hub, fake_turn_ids, _fake_turn_teardown))
+    monkeypatch.setattr("raven.tui_rpc.spine.build_tui", fake_build_tui)
 
     monkeypatch.setattr("raven.cli._cron_handler.make_on_cron_job", MagicMock())
     monkeypatch.setattr("raven.tui_rpc.methods.turn.clear_active", MagicMock())
 
     ctx["fake_server"] = fake_server
     ctx["fake_confirm_broker"] = fake_confirm_broker
+    ctx["fake_approval_broker"] = fake_approval_broker
+    ctx["fake_build_tui"] = fake_build_tui
     ctx["dispatcher"] = fake_dispatcher
     return ctx
 
@@ -374,6 +386,17 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
+
+
+async def test_rpc_runner_wires_and_cancels_approval_broker(rpc_server_deps, monkeypatch) -> None:
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    approval_broker = rpc_server_deps["fake_approval_broker"]
+    assert rpc_server_deps["fake_build_tui"].call_args.kwargs["approval_responder"] is approval_broker
+    registration = __import__("raven.tui_rpc.methods", fromlist=["register"])
+    register_mock = registration.register_aligned_methods_except_system
+    assert register_mock.call_args.kwargs["approval_broker"] is approval_broker
+    approval_broker.cancel_all.assert_called_once_with()
 
 
 async def test_rpc_runner_stop_called_even_when_serve_raises(rpc_server_deps, monkeypatch) -> None:

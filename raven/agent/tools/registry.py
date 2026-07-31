@@ -72,12 +72,29 @@ class ToolRegistry:
             # string (which rides along on ToolOutput).
             if isinstance(result, ToolResult):
                 model_text, display_text = result.model_text, result.display_text
+                retryable, abort_action = result.retryable, result.abort_action
             else:
                 model_text, display_text = str(result), None
+                retryable, abort_action = True, False
 
             if model_text.startswith("Error"):
-                return ToolOutput(model_text + _hint, display_text)
-            return ToolOutput(model_text, display_text)
+                # ``Error:`` describes presentation, not retry semantics.
+                # Policy-aware tools return explicit control metadata so the
+                # registry does not accidentally turn a security decision into
+                # the generic invitation to find an equivalent implementation.
+                suffix = _hint if retryable else ""
+                return ToolOutput(
+                    model_text + suffix,
+                    display_text,
+                    retryable=retryable,
+                    abort_action=abort_action,
+                )
+            return ToolOutput(
+                model_text,
+                display_text,
+                retryable=retryable,
+                abort_action=abort_action,
+            )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:

@@ -487,6 +487,7 @@ async def _run_rpc_server_until_done(
     """
     # Lazy import: keeps tui_commands importable without pulling tui_rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
+    from raven.tui_rpc.approval_broker import ApprovalBroker
     from raven.tui_rpc.confirm_broker import ConfirmBroker
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.methods import register_aligned_methods_except_system
@@ -518,11 +519,12 @@ async def _run_rpc_server_until_done(
     # which can only happen post-handshake / post-serve.
     server = RpcServer(dispatcher=dispatcher, sock=conn, auth_token=auth_token)
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
-    # ConfirmBroker shares the same send_frame sink; it lets a paused
-    # cli.dispatch (typer.confirm) emit a confirm.request and await the
-    # confirm.respond. cancel_all() in the finally fail-safes any
-    # pending confirm to its default when the connection drops.
+    # Prompt brokers share the gateway's send_frame sink but retain separate
+    # semantics. Shell approval is not a conversational confirmation: it binds
+    # one exact command to one turn, has dual deadlines, and always fails closed
+    # when the transport disappears.
     confirm_broker = ConfirmBroker(send_frame=server.send_frame)
+    approval_broker = ApprovalBroker(send_frame=server.send_frame)
     # QuestionBroker shares the same send_frame sink: the ask_user tool emits a
     # clarify.request and awaits clarify.respond, mirroring ConfirmBroker.
     question_broker = QuestionBroker(send_frame=server.send_frame)
@@ -582,6 +584,7 @@ async def _run_rpc_server_until_done(
             emitter,
             on_turn_end=turn_module.clear_active,
             readback_texts=cron_readback,
+            approval_responder=approval_broker,
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -614,6 +617,7 @@ async def _run_rpc_server_until_done(
         dispatcher,
         emitter=emitter,
         agent_loop_factory=_agent_loop_factory,
+        approval_broker=approval_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=turn_scheduler,
@@ -664,9 +668,11 @@ async def _run_rpc_server_until_done(
         await proc_done.wait()
         return True
     finally:
-        # Fail-safe any pending confirm so a paused dispatch's worker thread
-        # is released when the connection drops.
+        # Release all pending UI waits before transport teardown. Approval
+        # cancellation is always denial, preserving fail-closed behavior on a
+        # disconnect; ordinary confirms retain their configured default.
         confirm_broker.cancel_all()
+        approval_broker.cancel_all()
         if agent_loop is not None and agent_loop.cron_service is not None:
             try:
                 agent_loop.cron_service.stop()

@@ -51,6 +51,12 @@ from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens
 
+_ABORTED_ACTION_REPLY = (
+    "The operation was not completed, and no alternative method will be attempted. "
+    "Would you like me to continue with the remaining parts of the task that do not "
+    "require this operation?"
+)
+
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
 # import cycle: ``raven.agent.__init__`` eagerly loads AgentLoop,
@@ -1584,6 +1590,7 @@ class AgentLoop:
                     continue
 
             if response.has_tool_calls:
+                abort_action = False
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -1599,7 +1606,7 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                for tool_call in response.tool_calls:
+                for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -1618,6 +1625,10 @@ class AgentLoop:
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
+                    if tool_call.name == "exec":
+                        exec_tool = self.tools.get("exec")
+                        if isinstance(exec_tool, ExecTool):
+                            exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -1647,6 +1658,26 @@ class AgentLoop:
                             },
                         )
                     messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if getattr(result, "abort_action", False):
+                        abort_action = True
+                        # A single assistant message may contain several parallel
+                        # tool calls (for example ``rm`` followed by a Python
+                        # fallback). Once policy terminates the action, none of
+                        # the siblings may execute. We must nevertheless append
+                        # one result for every advertised call id: OpenAI-style
+                        # providers reject conversation history containing an
+                        # assistant tool call without its matching tool result.
+                        for skipped_call in response.tool_calls[tool_call_index + 1 :]:
+                            messages = self.context.add_tool_result(
+                                messages,
+                                skipped_call.id,
+                                skipped_call.name,
+                                (
+                                    "Error: Tool call was not executed because a prior safety "
+                                    "decision terminated this action."
+                                ),
+                            )
+                        break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(model_text):
@@ -1656,6 +1687,20 @@ class AgentLoop:
                             loop_fail_tool, loop_fail_streak = tool_call.name, 1
                     else:
                         loop_fail_tool, loop_fail_streak = None, 0
+
+                if abort_action:
+                    # A normal tool result starts another model iteration. That
+                    # is specifically unsafe here: the next plan can translate
+                    # the rejected operation into an equivalent interpreter,
+                    # script, or tool call. Finish the turn in runtime code and
+                    # expose only the non-destructive continuation question.
+                    # Streaming callers need the explicit callback because no
+                    # final model response exists to generate token deltas.
+                    messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
+                    final_content = _ABORTED_ACTION_REPLY
+                    if on_token_delta is not None:
+                        await on_token_delta(_ABORTED_ACTION_REPLY)
+                    break
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to

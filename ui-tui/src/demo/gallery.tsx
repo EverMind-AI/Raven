@@ -36,8 +36,11 @@ if (!process.stdin.isTTY) {
 // ── Mock data ────────────────────────────────────────────────────────
 
 const approvalReq: ApprovalReq = {
+  approvalId: 'demo-approval',
   command: 'rm -rf dist\nnpm ci\nnpm run build',
-  description: 'run a shell command'
+  conversationId: 'demo-session',
+  description: 'run a shell command',
+  expiresAt: Date.now() + 30_000
 }
 
 const clarifyChoicesReq: ClarifyReq = {

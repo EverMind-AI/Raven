@@ -92,8 +92,12 @@ export interface DelegationStatus {
 }
 
 export interface ApprovalReq {
+  approvalId: string
   command: string
+  conversationId: string
   description: string
+  // Absolute Unix deadline in milliseconds; the gateway wire value is seconds.
+  expiresAt: number
 }
 
 export interface ConfirmReq {

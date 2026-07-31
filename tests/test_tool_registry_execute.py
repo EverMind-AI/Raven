@@ -18,9 +18,18 @@ from raven.agent.tools.registry import ToolRegistry
 
 
 class _Split(Tool):
-    def __init__(self, model_text: str, display_text: str | None) -> None:
+    def __init__(
+        self,
+        model_text: str,
+        display_text: str | None,
+        *,
+        retryable: bool = True,
+        abort_action: bool = False,
+    ) -> None:
         self._model_text = model_text
         self._display_text = display_text
+        self._retryable = retryable
+        self._abort_action = abort_action
 
     @property
     def name(self) -> str:
@@ -35,7 +44,12 @@ class _Split(Tool):
         return {"type": "object", "properties": {}, "required": []}
 
     async def execute(self, **kwargs) -> ToolResult:
-        return ToolResult(model_text=self._model_text, display_text=self._display_text)
+        return ToolResult(
+            model_text=self._model_text,
+            display_text=self._display_text,
+            retryable=self._retryable,
+            abort_action=self._abort_action,
+        )
 
 
 class _Plain(Tool):
@@ -96,6 +110,24 @@ async def test_error_prefixed_tool_result_keeps_hint_and_display():
     assert result.startswith("Error: broker unavailable")
     assert "try a different approach" in result
     assert result.display_text == "asked -> nothing"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_error_omits_hint_and_preserves_abort_signal():
+    reg = _registry(
+        _Split(
+            "Error: denied by safety policy",
+            None,
+            retryable=False,
+            abort_action=True,
+        )
+    )
+
+    result = await reg.execute("split", {})
+
+    assert "try a different approach" not in result
+    assert result.retryable is False  # type: ignore[attr-defined]
+    assert result.abort_action is True  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,8 @@ from pydantic import ValidationError
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
+from raven.providers.base import LLMResponse, ToolCallRequest
+from raven.sandbox import ExecResult, SandboxExecutor
 
 
 class _StubProvider:
@@ -30,6 +32,41 @@ class _DummyExecutor:
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
+
+
+class _RecordingExecutor(SandboxExecutor):
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    @property
+    def is_sandboxed(self) -> bool:
+        return False
+
+    async def exec(self, command: str, **kwargs) -> ExecResult:
+        self.commands.append(command)
+        return ExecResult(stdout="ok", stderr="", exit_code=0)
+
+
+class _DeleteRetryProvider(_StubProvider):
+    def __init__(self) -> None:
+        self.responses = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="call-a", name="exec", arguments={"command": "rm file.txt"}),
+                    ToolCallRequest(
+                        id="call-b",
+                        name="exec",
+                        arguments={"command": 'bash -c "rm file.txt"'},
+                    ),
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="Retried through a shell wrapper.", finish_reason="stop"),
+        ]
+
+    async def chat_with_retry(self, **kwargs) -> LLMResponse:
+        return self.responses.pop(0)
 
 
 async def _settle(predicate, *, tries: int = 2000) -> None:
@@ -88,6 +125,37 @@ async def test_gate_caps_concurrent_subagents(monkeypatch):
 async def test_gate_of_one_serializes_subagents(monkeypatch):
     peak = await _drive(monkeypatch, max_concurrent=1, spawn_n=4)
     assert peak == 1
+
+
+async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_path):
+    provider = _DeleteRetryProvider()
+    manager = SubagentManager(provider=provider, workspace=tmp_path)
+    executor = _RecordingExecutor()
+    announcements: list[dict[str, str]] = []
+
+    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
+
+    async def _capture_announcement(task_id, label, task, result, origin, status) -> None:
+        announcements.append({"result": result, "status": status})
+
+    monkeypatch.setattr(manager, "_announce_result", _capture_announcement)
+
+    await manager._run_subagent_inner(
+        "task-a",
+        "delete file.txt",
+        "delete",
+        {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
+        executor,
+    )
+
+    assert executor.commands == []
+    assert len(provider.responses) == 1
+    assert announcements == [
+        {
+            "result": manager_mod._ABORTED_ACTION_RESULT,
+            "status": "error",
+        }
+    ]
 
 
 @pytest.mark.parametrize("bad", [0, -1])

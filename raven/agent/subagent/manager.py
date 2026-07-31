@@ -24,6 +24,10 @@ from raven.utils.helpers import build_assistant_message
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
 _SPAWN_WINDOW_SECONDS = 3600
+_ABORTED_ACTION_RESULT = (
+    "The subtask stopped because a safety decision terminated the requested operation. "
+    "No alternative method was attempted."
+)
 
 
 class SubagentManager:
@@ -182,6 +186,7 @@ class SubagentManager:
             max_iterations = 15
             iteration = 0
             final_result: str | None = None
+            final_status = "ok"
 
             while iteration < max_iterations:
                 iteration += 1
@@ -220,6 +225,17 @@ class SubagentManager:
                                 "content": wrap_untrusted(result, source=tool_call.name),
                             }
                         )
+                        if getattr(result, "abort_action", False):
+                            # Subagents must enforce the same terminal safety
+                            # signal as the main loop. Returning to the model
+                            # would let it translate a rejected operation into
+                            # another command or interpreter, while continuing
+                            # this batch would execute already-proposed siblings.
+                            final_result = _ABORTED_ACTION_RESULT
+                            final_status = "error"
+                            break
+                    if final_result is not None:
+                        break
                 else:
                     final_result = response.content
                     break
@@ -227,8 +243,8 @@ class SubagentManager:
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
 
-            logger.info("Subagent [{}] completed successfully", task_id)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            logger.info("Subagent [{}] finished with status {}", task_id, final_status)
+            await self._announce_result(task_id, label, task, final_result, origin, final_status)
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"
