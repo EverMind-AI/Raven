@@ -287,12 +287,17 @@ def strip_images(content: Any) -> str:
         if part_type in _NON_TEXT_TYPES:
             non_text += 1
             continue
-        # Text parts and unrecognised ones are treated alike: take whichever
-        # text key is populated. Guessing at an unknown shape's meaning risks
-        # discarding prose, while counting it as an image would invent one.
+        # An unrecognised part gives up its text under either key if it has any.
+        # If it has none it is counted as non-text rather than dropped: the goal
+        # is to keep the words and leave a marker where the bytes were, and a
+        # part type neither we nor upstream knows is still evidence that
+        # something was attached. Dropping it silently can also empty a message
+        # whose only part it was, losing the fact that the turn happened.
         text = _first_text(part)
         if text:
             texts.append(text)
+        else:
+            non_text += 1
     if non_text:
         texts.append(_NON_TEXT_PLACEHOLDER.format(count=non_text))
     return "\n\n".join(texts)

@@ -690,11 +690,19 @@ def test_strip_images_unknown_dict_part_falls_back_to_content_field() -> None:
     assert "[image" not in out
 
 
-def test_strip_images_unknown_dict_part_with_neither_field_is_dropped_not_counted() -> None:
-    content = [{"type": "mystery", "other": "irrelevant"}]
-    out = strip_images(content)
-    assert out == ""
-    assert "[image" not in out
+def test_strip_images_unknown_part_with_no_text_still_leaves_a_marker() -> None:
+    """The goal is to keep the words and mark where the bytes were, so a part
+    type neither we nor upstream recognises is counted rather than dropped --
+    otherwise a message whose only part it was empties out and the fact that the
+    turn happened is lost."""
+    assert strip_images([{"type": "mystery", "other": "irrelevant"}]) == "[media x1]"
+    assert strip_images([{"type": "text", "text": "hi"}, {"type": "mystery"}]) == "hi\n\n[media x1]"
+
+
+def test_a_message_of_only_unknown_parts_survives_as_a_marker() -> None:
+    session = {"id": "s", "messages": [{"role": "user", "content": [{"type": "video"}], "timestamp": 1.0}]}
+    (msg,) = hermes_session_to_messages(session)
+    assert msg.content == "[media x1]"
 
 
 # -- HermesScanner conversation wiring --------------------------------------
