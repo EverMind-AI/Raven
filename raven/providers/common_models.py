@@ -190,6 +190,23 @@ def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
     return index
 
 
+def _litellm_spelling_for(slug: str) -> str:
+    """How LiteLLM spells this vendor, which is the only form usable as a prefix.
+
+    Section names are matched spelling-insensitively, so the name arriving here
+    may be underscored where LiteLLM hyphenates -- and LiteLLM rejects the
+    underscored form outright.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.registry import normalize_provider_name
+
+    wanted = normalize_provider_name(slug)
+    for name in LITELLM_PROVIDER_NAMES:
+        if normalize_provider_name(name) == wanted:
+            return name
+    return wanted
+
+
 def litellm_models_for(slug: str) -> list[str]:
     """Chat models LiteLLM knows for this provider, as ids that actually route.
 
@@ -207,7 +224,23 @@ def litellm_models_for(slug: str) -> list[str]:
 
     spec = find_by_name(slug)
     if spec is None:
-        return []
+        # A vendor Raven carries no spec for still has rows in the catalogue --
+        # 51 for Mistral, 219 for Bedrock, 270 for Fireworks. Returning nothing
+        # left those providers with no candidates at all, which pushed the user
+        # into typing a bare id: the shape that gets routed to whoever a keyword
+        # matches.
+        #
+        # The rows are inconsistent about the prefix -- Mistral's carry it,
+        # Bedrock's do not -- so they are normalized here rather than trusted.
+        # Offering an unprefixed one would reintroduce the very thing this exists
+        # to avoid.
+        index = _litellm_chat_models_by_provider()
+        prefix = _litellm_spelling_for(slug)
+        out: list[str] = []
+        for model in index.get(normalize_provider_name(slug), ()):
+            bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
+            out.append(f"{prefix}/{bare}")
+        return out
     if normalize_provider_name(spec.model_prefix) not in spec.route_names:
         # The wire prefix names somebody else -- this provider is reached through
         # another vendor's driver. Prefixing candidates with it would hand the

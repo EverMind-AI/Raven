@@ -692,9 +692,12 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
         "anthropic/claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
-    # User's pick made it into config
+    # The pick made it into config, carrying the route prefix. The user may type
+    # a bare id -- autocomplete accepts free text -- and a bare id is routed by
+    # keyword and fallback rather than to the provider just configured, so the
+    # wizard adds the prefix on the way out instead of persisting what was typed.
     data = json.loads(tmp_env.read_text())
-    assert data["agents"]["defaults"]["model"] == "claude-haiku-4-5"
+    assert data["agents"]["defaults"]["model"] == "anthropic/claude-haiku-4-5"
 
 
 def _capture_password_validate(monkeypatch: pytest.MonkeyPatch, answer: str) -> dict[str, Any]:
@@ -2358,3 +2361,121 @@ def test_a_spec_less_provider_can_have_its_default_model_changed(monkeypatch, tm
 
     assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
     assert "mistral" in offered, f"a spec-less provider was filtered out: {offered}"
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        # What a user actually types: the vendor's own name for the model.
+        ("mistral-large-latest", "mistral/mistral-large-latest"),
+        ("mistral/mistral-large-latest", "mistral/mistral-large-latest"),
+    ],
+)
+def test_every_exit_of_the_model_step_prefixes_what_it_returns(typed: str, expected: str, monkeypatch) -> None:
+    """The invariant belongs on the exits, not on one branch.
+
+    It was applied where the candidate list is built, which is the one branch a
+    spec-less vendor never reaches: nothing can pre-check it, so there is no
+    list, so the id is typed -- and typed ids went to config as typed. Three
+    rounds of review found this same defect on three different branches, so this
+    drives each exit rather than asserting the formatter in isolation.
+    """
+    from raven.cli import onboard_commands
+
+    class _Prompt:
+        def __init__(self, _label, **_kw):
+            pass
+
+        def ask(self):
+            return typed
+
+    monkeypatch.setattr(
+        onboard_commands, "_require_questionary", lambda: SimpleNamespace(autocomplete=_Prompt, text=_Prompt)
+    )
+
+    # The flag exit.
+    assert (
+        onboard_commands._pick_model(
+            "mistral",
+            None,
+            current_model=None,
+            model_ids=None,
+            user_provided_model=typed,
+            non_interactive=True,
+        )
+        == expected
+    )
+    # The typed exit, reached when there is no candidate list at all.
+    assert (
+        onboard_commands._pick_model(
+            "mistral",
+            None,
+            current_model=None,
+            model_ids=None,
+            user_provided_model=None,
+            non_interactive=False,
+        )
+        == expected
+    )
+
+
+def test_what_the_model_step_returns_is_served_by_the_provider_it_was_configured_for() -> None:
+    """The consequence, taken from the production value rather than a literal.
+
+    Every earlier test on this fed an already-prefixed id in, so none of them
+    could tell whether the wizard produces one. This takes what the step returns
+    and asks who would be billed for it.
+    """
+    from raven.cli import onboard_commands
+    from raven.config.schema import Config
+
+    produced = onboard_commands._pick_model(
+        "mistral",
+        None,
+        current_model=None,
+        model_ids=None,
+        user_provided_model="mistral-large-latest",
+        non_interactive=True,
+    )
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"model": produced}},
+            "providers": {"mistral": {"apiKey": "sk-MISTRAL"}, "openai": {"apiKey": "sk-OPENAI"}},
+        }
+    )
+    assert config.get_provider_name(produced) == "mistral"
+    assert config.get_api_key(produced) == "sk-MISTRAL"
+
+
+def test_a_hyphenated_vendor_gets_the_prefix_litellm_will_accept() -> None:
+    """Config names are matched loosely; a wire prefix cannot be.
+
+    LiteLLM hyphenates three vendors. Prefixing with the normalized form produced
+    "nano_gpt/...", which LiteLLM rejects outright -- so the provider configured
+    successfully and then could not be called.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+    from raven.providers.litellm_setup import import_litellm
+
+    for typed_name in ("nano-gpt", "nano_gpt"):
+        model = _format_model_for_provider(typed_name, None, "gpt-4o")
+        assert model == "nano-gpt/gpt-4o", typed_name
+        # And LiteLLM agrees it can route it.
+        assert import_litellm().get_llm_provider(model)[1] == "nano-gpt"
+
+
+def test_a_spec_less_vendor_is_offered_the_catalogue_rows_it_has() -> None:
+    """Returning nothing for these is what forced the id to be typed.
+
+    Every offered id carries the prefix, which the catalogue itself does not
+    guarantee: Mistral's rows have it, Bedrock's do not. Offering an unprefixed
+    one would put the bare id straight back into config.
+    """
+    from raven.providers.common_models import litellm_models_for
+
+    for slug in ("mistral", "fireworks_ai", "bedrock"):
+        models = litellm_models_for(slug)
+        assert models, f"{slug}: no candidates offered"
+        assert all(m.startswith(f"{slug}/") for m in models), [m for m in models if not m.startswith(f"{slug}/")][:3]
+        # And no id was prefixed twice on the way through.
+        assert not any(m.startswith(f"{slug}/{slug}/") for m in models)

@@ -930,6 +930,23 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
     return bool(model and spec and spec.claims(model))
 
 
+def _litellm_spelling(provider: str) -> str:
+    """How LiteLLM spells this vendor, for use as a route prefix.
+
+    Config section names are matched spelling-insensitively, so the name reaching
+    here may be underscored where LiteLLM hyphenates. Only LiteLLM's own form
+    works as a prefix.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.registry import normalize_provider_name
+
+    wanted = normalize_provider_name(provider)
+    for name in LITELLM_PROVIDER_NAMES:
+        if normalize_provider_name(name) == wanted:
+            return name
+    return wanted
+
+
 def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     """Apply the provider's route prefix to a raw ``/v1/models`` id when needed.
 
@@ -943,12 +960,16 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     Its section name is LiteLLM's own name for the vendor, which is exactly the
     prefix LiteLLM routes on, so that is what goes in front.
     """
-    from raven.providers.registry import normalize_provider_name
 
     if not model_id:
         return model_id
     if spec is None:
-        prefix = normalize_provider_name(provider)
+        # LiteLLM's own spelling, not the normalized one. A config section may be
+        # written either way and both resolve, but the wire prefix has to be the
+        # name LiteLLM routes on -- it hyphenates three vendors, and handing it
+        # "nano_gpt/..." is rejected with "LLM Provider NOT provided", so the
+        # provider configured fine and then could not be called.
+        prefix = _litellm_spelling(provider)
         return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
     if spec.name in {"minimax_global", "minimax_cn"}:
         public_prefix = spec.name.replace("_", "-")
@@ -976,14 +997,21 @@ def _pick_model(
     non_interactive: bool,
 ) -> str:
     """Decide the model string to write into ``agents.defaults.model``."""
+    # Every exit goes through the formatter, which is idempotent. Applying it
+    # only where the candidate list is built covered only the branch that has
+    # candidates -- and a vendor Raven carries no spec for reaches the others:
+    # the probe cannot pre-check it, so there is no list, so the user types the
+    # id. A typed id is bare, and a bare id is routed by keyword and fallback
+    # rather than to the provider just configured, which is how
+    # "mistral-large-latest" came to be served with OpenAI's key.
     if user_provided_model:
-        return user_provided_model
+        return _format_model_for_provider(provider, spec, user_provided_model)
 
     if non_interactive:
         default_model = spec.default_model if spec else ""
         if not default_model:
             raise typer.BadParameter(f"--model is required for provider '{provider}' (no built-in default model).")
-        return default_model
+        return _format_model_for_provider(provider, spec, default_model)
 
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
@@ -1063,9 +1091,9 @@ def _pick_model(
         # default rather than tearing down the wizard. The no-default branch
         # validates non-empty, so an empty value only reaches here with a default.
         if default_value:
-            return default_value
+            return _format_model_for_provider(provider, spec, default_value)
         raise typer.Exit(1)
-    return chosen
+    return _format_model_for_provider(provider, spec, chosen)
 
 
 def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[str], old_base: Optional[str]) -> None:
