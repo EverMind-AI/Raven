@@ -3788,6 +3788,7 @@ def _step5_import_body(
         by_platform.setdefault(r.platform.value, []).append(r)
 
     back_value = "back"
+    skip_value = "skip"
 
     while True:
         # -- Platform selection --
@@ -3814,6 +3815,16 @@ def _step5_import_body(
                 value="all",
             )
         )
+        # Without this the only way out of the loop is Esc, which aborts the
+        # whole onboarding rather than this step. Answering "no" to the offer
+        # above skips cleanly, so changing your mind one prompt later should
+        # too.
+        platform_choices.append(
+            questionary.Choice(
+                _t("Skip import", "跳过导入"),
+                value=skip_value,
+            )
+        )
         selected_platform = questionary.select(
             _t("Select platform:", "选择平台："),
             choices=platform_choices,
@@ -3822,6 +3833,9 @@ def _step5_import_body(
         ).ask()
         if selected_platform is None:
             raise typer.Exit(1)
+        if selected_platform == skip_value:
+            console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
+            return None
 
         if selected_platform.startswith("coming:"):
             coming_name = PLATFORM_DISPLAY_NAMES.get(
@@ -3903,38 +3917,44 @@ def _step5_import_body(
         if selected_tier == back_value:
             _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
             continue
-        break
+        # -- Filter --
+        filtered = filter_by_tier(results, selected_tier)
+        if not filtered:
+            console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
+            return None
 
-    # Filter
-    filtered = filter_by_tier(results, selected_tier)
-    if not filtered:
-        console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
-        return None
+        f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
+        f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
 
-    f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
-    f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
-
-    # Execution mode choice
-    exec_mode = questionary.select(
-        _t("Select execution mode:", "选择执行方式："),
-        choices=[
-            questionary.Choice(
-                _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
-                value="foreground",
-            ),
-            questionary.Choice(
-                _t(
-                    "Run in background (use raven import status to check progress)",
-                    "后台执行（用 raven import status 查看进度）",
+        # -- Execution mode --
+        exec_mode = questionary.select(
+            _t("Select execution mode:", "选择执行方式："),
+            choices=[
+                questionary.Choice(
+                    _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
+                    value="foreground",
                 ),
-                value="background",
-            ),
-        ],
-        style=RAVEN_STYLE,
-        qmark=_QMARK,
-    ).ask()
-    if exec_mode is None:
-        raise typer.Exit(1)
+                questionary.Choice(
+                    _t(
+                        "Run in background (use raven import status to check progress)",
+                        "后台执行（用 raven import status 查看进度）",
+                    ),
+                    value="background",
+                ),
+                questionary.Choice(
+                    _t("Back", "返回"),
+                    value=back_value,
+                ),
+            ],
+            style=RAVEN_STYLE,
+            qmark=_QMARK,
+        ).ask()
+        if exec_mode is None:
+            raise typer.Exit(1)
+        if exec_mode == back_value:
+            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+            continue
+        break
 
     # Summary + confirm
     platform_display = (

@@ -16,7 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
@@ -1916,3 +1918,107 @@ def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
     spec = find_by_name("zai")
     assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
     assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — import wizard navigation
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedSelect:
+    """A questionary stand-in that answers each prompt from a script.
+
+    The navigation this covers lives entirely in questionary's return values,
+    so unlike the rest of this file it cannot be exercised by stubbing a step
+    helper. Each answer is matched by a substring of the prompt so a test reads
+    as the sequence a user would actually click.
+    """
+
+    def __init__(self, answers: list[tuple[str, Any]]) -> None:
+        self._answers = list(answers)
+        self.asked: list[str] = []
+        self.offered: list[tuple[str, list[Any]]] = []
+
+    def select(self, message: str, choices: list[Any] | None = None, **_kwargs: Any) -> Any:
+        self.asked.append(message)
+        # Recorded so a test can assert a choice was actually offered: scripting
+        # an answer by prompt text alone would still "work" if the choice that
+        # produces it had been deleted from the menu.
+        self.offered.append((message, [getattr(c, "value", c) for c in (choices or [])]))
+        for index, (needle, value) in enumerate(self._answers):
+            if needle in message:
+                self._answers.pop(index)
+                return _Answer(value)
+        raise AssertionError(f"unscripted prompt: {message!r} (remaining: {self._answers})")
+
+    def values_offered_for(self, needle: str) -> list[Any]:
+        return [v for message, values in self.offered if needle in message for v in values]
+
+    @staticmethod
+    def Choice(title: str, value: Any = None, **_kwargs: Any) -> Any:  # noqa: N802
+        return SimpleNamespace(title=title, value=value)
+
+
+class _Answer:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def ask(self) -> Any:
+        return self._value
+
+
+def _import_results() -> list[Any]:
+    from raven.importer.types import Platform, ScanResult, SourceKind
+
+    return [
+        ScanResult(
+            source_key="user-md",
+            platform=Platform.HERMES,
+            kind=SourceKind.MEMORY_FILE,
+            file_paths=(Path("/fake/USER.md"),),
+            estimated_size=100,
+            mtime=1.0,
+        )
+    ]
+
+
+def _run_import_step(monkeypatch: pytest.MonkeyPatch, answers: list[tuple[str, Any]]) -> _ScriptedSelect:
+    scripted = _ScriptedSelect(answers)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr(
+        "raven.importer.scanners.scan_all",
+        AsyncMock(return_value=_import_results()),
+    )
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+    return scripted
+
+
+def test_import_step_can_be_skipped_at_the_platform_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answering the offer with yes used to be a one-way door: the platform
+    prompt had no exit, so changing your mind meant Esc, which aborts the whole
+    onboarding rather than this step."""
+    scripted = _run_import_step(
+        monkeypatch,
+        [("import conversation history", "yes"), ("Select platform", "skip")],
+    )
+    assert "skip" in scripted.values_offered_for("Select platform"), "the exit must be offered, not just handled"
+    assert not any("execution mode" in m for m in scripted.asked)
+
+
+def test_back_at_the_execution_mode_prompt_returns_instead_of_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The execution-mode prompt sat outside the navigation loop and offered no
+    way back, so it was the one step of the wizard a user could not leave."""
+    from raven.importer.types import Tier
+
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            ("Select platform", "skip"),
+        ],
+    )
+    assert "back" in scripted.values_offered_for("execution mode"), "the exit must be offered, not just handled"
+    assert len([m for m in scripted.asked if "Select platform" in m]) == 2, "back returns to the platform prompt"
