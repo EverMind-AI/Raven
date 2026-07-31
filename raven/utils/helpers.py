@@ -114,16 +114,34 @@ def _image_pixel_size(data: bytes) -> tuple[int, int] | None:
     if data[:3] == b"\xff\xd8\xff":
         # Walk JPEG segments to the first frame header; SOF carries the size.
         i = 2
-        while i + 9 < len(data):
+        while i + 1 < len(data):
             if data[i] != 0xFF:
                 return None
             marker = data[i + 1]
+            # 0xFF is a fill byte, legal in any run before a marker.
+            if marker == 0xFF:
+                i += 1
+                continue
+            # Standalone markers carry no length field, so the generic
+            # "skip the segment" step below would read their *payload* as a
+            # length and desync the walk. TEM (0x01) and RST0-7 (0xD0-0xD7)
+            # are the ones that can precede SOF.
+            if marker == 0x01 or 0xD0 <= marker <= 0xD9:
+                i += 2
+                continue
             if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                if i + 9 > len(data):
+                    return None
                 return (
                     int.from_bytes(data[i + 7 : i + 9], "big"),
                     int.from_bytes(data[i + 5 : i + 7], "big"),
                 )
-            i += 2 + int.from_bytes(data[i + 2 : i + 4], "big")
+            if i + 4 > len(data):
+                return None
+            length = int.from_bytes(data[i + 2 : i + 4], "big")
+            if length < 2:
+                return None  # malformed: a segment length includes its own 2 bytes
+            i += 2 + length
     return None
 
 

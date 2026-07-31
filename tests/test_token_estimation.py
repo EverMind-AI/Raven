@@ -231,6 +231,58 @@ def test_estimate_image_tokens_matches_anthropic_published_values() -> None:
     assert helpers.estimate_image_tokens(8000, 8000) == 1568
 
 
+def test_image_pixel_size_survives_every_real_jpeg_variant() -> None:
+    """The SOF walk must not desync on markers that carry no length field.
+
+    Reading a standalone marker's payload as a segment length used to abandon the
+    walk, which silently fell back to charging the per-image ceiling.
+    """
+    import io
+
+    from PIL import Image
+
+    def jpg(**kw) -> bytes:
+        buf = io.BytesIO()
+        Image.new("RGB", (640, 480), (1, 2, 3)).save(buf, "JPEG", **kw)
+        return buf.getvalue()
+
+    plain = jpg()
+    variants = {
+        "plain": plain,
+        "exif": jpg(exif=b"Exif\x00\x00" + b"\x00" * 64),
+        "progressive": jpg(progressive=True),
+        "restart_blocks": jpg(restart_marker_blocks=4),
+        "optimized": jpg(optimize=True),
+        # Standalone markers: TEM and RST0 have no length field.
+        "tem_marker": plain[:2] + b"\xff\x01" + plain[2:],
+        "rst_marker": plain[:2] + b"\xff\xd0" + plain[2:],
+        # Fill bytes are legal before any marker.
+        "fill_bytes": plain[:2] + b"\xff\xff\xff" + plain[2:],
+    }
+    for label, data in variants.items():
+        assert helpers._image_pixel_size(data) == (640, 480), label
+
+
+def test_image_pixel_size_returns_none_on_malformed_jpeg_without_raising() -> None:
+    """Unparseable is fine -- the caller charges the ceiling, which over-estimates
+    in the safe direction. Raising would not be fine."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (640, 480), (1, 2, 3)).save(buf, "JPEG")
+    plain = buf.getvalue()
+
+    for label, data in {
+        "truncated": plain[:40],
+        "garbage_tail": plain[:2] + b"\xff\xe0\x00\x02" + b"\x00" * 5,
+        "zero_length_segment": plain[:2] + b"\xff\xe0\x00\x00" + plain[4:],
+        "not_an_image": b"hello world",
+    }.items():
+        assert helpers._image_pixel_size(data) is None, label
+
+
 def test_image_pixel_size_parses_png_gif_and_jpeg() -> None:
     assert helpers._image_pixel_size(_png(640, 480)) == (640, 480)
 
