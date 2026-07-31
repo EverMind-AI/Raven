@@ -77,6 +77,18 @@ const custom: ModelOptionProvider = {
   warning: 'set key + base to activate'
 }
 
+const deepseek: ModelOptionProvider = {
+  auth_type: 'key',
+  authenticated: true,
+  is_current: true,
+  key_env: 'DEEPSEEK_API_KEY',
+  models: ['deepseek-chat'],
+  name: 'DeepSeek',
+  needs_api_base: false,
+  slug: 'deepseek',
+  total_models: 1
+}
+
 const oauthProvider: ModelOptionProvider = {
   auth_type: 'oauth',
   authenticated: false,
@@ -87,7 +99,7 @@ const oauthProvider: ModelOptionProvider = {
   needs_api_base: false,
   slug: 'oauthvendor',
   total_models: 0,
-  warning: 'run raven model to authenticate'
+  warning: 'run `raven provider login openai-codex` to authenticate'
 }
 
 interface Harness {
@@ -153,6 +165,71 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
 }
 
 describe('ModelPicker', () => {
+  it('opens with the cursor on the provider in use', async () => {
+    // The selection is located in the list the first screen shows. Finding it
+    // among all of them instead put it past the end of the configured ones, and
+    // a selection past the end highlights nothing -- the picker opened with no
+    // cursor. Asserted by pressing Enter with no arrow keys first: whatever the
+    // cursor is on is what opens.
+    const cfg = (slug: string, name: string, authed: boolean, cur = false): ModelOptionProvider =>
+      ({
+        auth_type: 'key',
+        authenticated: authed,
+        is_current: cur,
+        key_env: null,
+        models: authed ? [`${slug}/m1`] : [],
+        name,
+        needs_api_base: false,
+        slug,
+        total_models: authed ? 1 : 0
+      }) as ModelOptionProvider
+
+    // DeepSeek is index 3 of five, but index 1 of the two that are set up.
+    const h = mount([
+      cfg('openrouter', 'OpenRouter', true),
+      cfg('openai', 'OpenAI', false),
+      cfg('anthropic', 'Anthropic', false),
+      cfg('deepseek', 'DeepSeek', true, true),
+      cfg('gemini', 'Gemini', false)
+    ])
+    await delay(80)
+
+    await h.type(ENTER)
+    const frame = h.frame()
+    expect(frame).toContain('deepseek/m1')
+    expect(frame).not.toContain('openrouter/m1')
+    h.unmount()
+  })
+
+  it('lists what is set up, and puts the rest behind one row', async () => {
+    // Opening the picker used to mean scrolling twenty-one rows to reach the two
+    // or three that can actually serve a model. A provider with no credentials is
+    // not something to switch to, so it moves one level down.
+    const h = mount([anthropic, custom, ollama, oauthProvider])
+    await delay(60)
+
+    const first = h.frame()
+    expect(first).toContain('Anthropic')
+    expect(first).toContain('add a provider')
+    expect(first).toContain('3 not set up')
+    expect(first).not.toContain('Custom')
+    expect(first).not.toContain('Ollama')
+
+    // Down once lands on the add row -- the only other row at this level.
+    await h.type(DOWN)
+    await h.type(ENTER)
+
+    const second = h.frame()
+    expect(second).toContain('Add a provider')
+    expect(second).toContain('Ollama')
+
+    // Esc returns to level one rather than closing the picker.
+    await h.type('\u001b')
+    await delay(30)
+    expect(h.frame()).toContain('Select pr')
+    h.unmount()
+  })
+
   it('offers a local deployment its address, and says it needs no key', async () => {
     // The picker knew two credential shapes and reported every non-OAuth provider
     // as taking an API key, so a local deployment was offered a key prompt it
@@ -160,14 +237,38 @@ describe('ModelPicker', () => {
     const h = mount([anthropic, ollama])
     await delay(60)
 
-    expect(h.frame()).toContain('(no address)')
-
+    // Level one lists what is set up, so the unconfigured one is behind the row
+    // that opens level two.
+    expect(h.frame()).not.toContain('Ollama')
     await h.type(DOWN)
     await h.type(ENTER)
 
+    expect(h.frame()).toContain('(no address)')
+    await h.type(ENTER)
+
+    // Asserted on the field labels rather than the "Configure <name>" heading:
+    // at this depth the fake terminal's escape stripping eats the odd character
+    // out of the accumulated frame, and the labels are what the screen is for.
     const frame = h.frame()
-    expect(frame).toContain('Configure Ollama (local)')
-    expect(frame).toContain('API base (required)')
+    expect(frame).toContain('Ollama (local)')
+    expect(frame).toContain('Server address')
+    // No key field at all: the server ignores one, so asking reads as a blocker.
+    expect(frame).not.toContain('API key')
+
+    // And it submits with no key. The client demanded one unconditionally, so
+    // this was unreachable even after the backend stopped requiring it.
+    await h.type('http://gpu-box:11434')
+    await h.type(ENTER)
+    await delay(30)
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.save_key',
+      expect.objectContaining({ api_base: 'http://gpu-box:11434', slug: 'ollama_chat' })
+    )
+    const call = (h.gw.request as unknown as { mock: { calls: unknown[][] } }).mock.calls.find(
+      c => c[0] === 'model.save_key'
+    )
+    expect((call?.[1] as { api_key?: string }).api_key).toBe('')
     h.unmount()
   })
 
@@ -175,12 +276,13 @@ describe('ModelPicker', () => {
     const h = mount([anthropic, custom])
     await delay(60)
 
-    // Move to the custom provider (index 1) and enter the key stage.
+    // Custom is not set up, so it lives behind the add row.
     await h.type(DOWN)
+    await h.type(ENTER)
     await h.type(ENTER)
 
     const keyFrame = h.frame()
-    expect(keyFrame).toContain('Configure Custom')
+    expect(keyFrame).toContain('Custom')
     expect(keyFrame).toContain('API key')
     expect(keyFrame).toContain('API base (required)')
 
@@ -209,8 +311,9 @@ describe('ModelPicker', () => {
     await delay(60)
 
     await h.type(DOWN)
+    await h.type(ENTER)
     const providerFrame = h.frame()
-    expect(providerFrame).toContain('run raven model to authenticate')
+    expect(providerFrame).toContain('raven provider login')
 
     await h.type(ENTER)
 
