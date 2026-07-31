@@ -58,7 +58,8 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
+                suggestion = self._suggest_tool_for_params(name, params)
+                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + suggestion + _hint
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
             if tool.blocking_interaction:
@@ -74,6 +75,28 @@ class ToolRegistry:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
             return f"Error executing {name}: {str(e)}" + _hint
+
+    def _suggest_tool_for_params(self, name: str, params: dict[str, Any]) -> str:
+        """Point a mis-routed call at the tool its parameters actually fit.
+
+        Models confuse similarly named tools (exec_read called with read_file's
+        path/offset/limit was observed 6 times in one eval task). When the
+        provided parameter names satisfy another tool's schema exactly — all
+        keys known, all required keys present — say so instead of leaving the
+        model to rediscover the split by trial and error.
+        """
+        provided = set(params)
+        if not provided:
+            return ""
+        for other_name, other in self._tools.items():
+            if other_name == name:
+                continue
+            schema = other.parameters or {}
+            props = set(schema.get("properties", {}))
+            required = set(schema.get("required", []))
+            if provided <= props and required <= provided:
+                return f" These parameters match tool '{other_name}' — did you mean to call that instead?"
+        return ""
 
     @property
     def tool_names(self) -> list[str]:

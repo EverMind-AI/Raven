@@ -4,6 +4,8 @@ Sandbox package — self-contained isolated command execution for Python agents.
 Public API (import everything from here, not from sub-modules):
     SandboxInitError   — raised when a sandbox backend fails to start
     ExecResult         — result of a single exec() call
+    ExecSession        — ABC for a long-lived interactive shell
+    SessionOutput      — incremental output read from an ExecSession
     SandboxExecutor    — ABC for executor implementations
     SandboxConfig      — Pydantic config model
     DirectExecutor     — host-process fallback (no isolation)
@@ -18,7 +20,13 @@ from loguru import logger
 
 from raven.sandbox.config import SandboxConfig
 from raven.sandbox.direct_executor import DirectExecutor
-from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
+from raven.sandbox.interfaces import (
+    ExecResult,
+    ExecSession,
+    SandboxExecutor,
+    SandboxInitError,
+    SessionOutput,
+)
 
 # Warn once per process: many executors (AgentLoop + each subagent) are built
 # over a process lifetime, but the "no sandbox" caveat only needs saying once.
@@ -26,6 +34,8 @@ _warned_no_sandbox = False
 
 __all__ = [
     "ExecResult",
+    "ExecSession",
+    "SessionOutput",
     "SandboxExecutor",
     "SandboxInitError",
     "SandboxConfig",

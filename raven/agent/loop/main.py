@@ -23,6 +23,12 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.background import (
+    BackgroundJobRegistry,
+    JobCancelTool,
+    JobStatusTool,
+    JobWaitTool,
+)
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -38,7 +44,7 @@ from raven.agent.tools.media_gen import (
 )
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
@@ -539,6 +545,30 @@ class AgentLoop:
 
         self._register_default_tools()
         self._apply_disabled_tools()
+        self._log_tool_manifest()
+
+    def _log_tool_manifest(self) -> None:
+        """Log the final tool surface (names + schema fingerprint).
+
+        Which tools the model saw, under which schemas, is the first question of
+        any eval-score regression; without a recorded manifest a config drift is
+        indistinguishable from a model change. The hash covers names,
+        descriptions and parameter schemas.
+        """
+        import hashlib
+        import json as _json
+
+        try:
+            defs = sorted(self.tools.get_definitions(), key=lambda d: d["function"]["name"])
+            digest = hashlib.sha256(_json.dumps(defs, sort_keys=True).encode()).hexdigest()[:12]
+            logger.info(
+                "Tool manifest ({} tools, schema {}): {}",
+                len(defs),
+                digest,
+                ", ".join(d["function"]["name"] for d in defs),
+            )
+        except Exception as e:
+            logger.warning("Could not log tool manifest: {}", e)
 
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
@@ -573,17 +603,37 @@ class AgentLoop:
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+        self._exec_sessions = ExecSessionRegistry(self._executor)
+        self._background_jobs = BackgroundJobRegistry(self._executor)
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
                 timeout=self.exec_config.timeout,
+                max_timeout=self.exec_config.max_timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
+                deny_patterns=self.exec_config.deny_patterns,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                sessions=self._exec_sessions,
+                jobs=self._background_jobs,
             )
         )
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        self.tools.register(ExecWriteTool(self._exec_sessions))
+        self.tools.register(ExecReadTool(self._exec_sessions, jobs=self._background_jobs))
+        if self._background_jobs.supported:
+            self.tools.register(JobStatusTool(self._background_jobs))
+            self.tools.register(JobWaitTool(self._background_jobs))
+            self.tools.register(JobCancelTool(self._background_jobs))
+        # web_search only exists when it can actually run: advertising a tool
+        # whose every call fails "API key not configured" wastes turns and
+        # teaches the model a dead path (17/17 failed calls in one TB run).
+        # web_fetch stays unconditional — Jina Reader works keyless.
+        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        if web_search.api_key:
+            self.tools.register(web_search)
+        else:
+            logger.info("web_search not registered: no Serper API key configured")
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
@@ -1078,7 +1128,22 @@ class AgentLoop:
             logger.error("Failed to start sandbox debug server: %s", exc)
 
     async def close_executor(self) -> None:
-        """Tear down the sandbox executor."""
+        """Tear down the sandbox executor.
+
+        Closes interactive sessions but never background jobs: a job is started
+        precisely so it outlives the agent, so killing it here would break the
+        contract exec(background=true) advertises. Surviving jobs are reported
+        instead, which keeps them reclaimable rather than orphaned.
+        """
+        sessions = getattr(self, "_exec_sessions", None)
+        if sessions is not None:
+            try:
+                await sessions.close_all()
+            except Exception as exc:
+                logger.warning("Error closing exec sessions: %s", exc)
+        jobs = getattr(self, "_background_jobs", None)
+        if jobs is not None:
+            jobs.report_survivors()
         if self._debug_server is not None:
             try:
                 await self._debug_server.stop()
@@ -1121,6 +1186,8 @@ class AgentLoop:
             # Re-apply blacklist: MCP servers may register tool names that
             # also appear in ``disabled_tools`` (e.g. ``mcp_<server>_search``).
             self._apply_disabled_tools()
+            # The tool surface just changed; re-record it for attribution.
+            self._log_tool_manifest()
             self._mcp_connected = True
             self._mcp_connecting = False
         except Exception:

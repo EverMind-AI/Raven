@@ -10,9 +10,10 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.tools.background import BackgroundJobRegistry
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
@@ -151,6 +152,9 @@ class SubagentManager:
         origin: dict[str, str],
         executor: Any,
     ) -> None:
+        exec_sessions = ExecSessionRegistry(executor)
+        # Owner-scoped: a subagent can only see and cancel the jobs it started.
+        exec_jobs = BackgroundJobRegistry(executor, owner=f"subagent-{id(executor):x}")
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
@@ -166,9 +170,14 @@ class SubagentManager:
                     restrict_to_workspace=self.restrict_to_workspace,
                     path_append=self.exec_config.path_append,
                     executor=executor,
+                    deny_patterns=self.exec_config.deny_patterns,
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                    sessions=exec_sessions,
+                    jobs=exec_jobs,
                 )
             )
+            tools.register(ExecWriteTool(exec_sessions))
+            tools.register(ExecReadTool(exec_sessions, jobs=exec_jobs))
             tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
@@ -234,6 +243,14 @@ class SubagentManager:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
+        finally:
+            try:
+                await exec_sessions.close_all()
+            except Exception as exc:
+                logger.warning("Subagent [{}] failed to close exec sessions: {}", task_id, exc)
+            # Jobs are deliberately left running; a subagent that started a server
+            # for the parent to use must not take it down on the way out.
+            exec_jobs.report_survivors()
 
     def set_submit(self, submit) -> None:
         self._submit = submit

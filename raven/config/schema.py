@@ -488,11 +488,19 @@ class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
     timeout: int = 60
+    # Per-command ceiling (seconds). Requests above it are clamped, not rejected.
+    # Raise for environments with long builds/tests (benchmark containers give
+    # the agent hours; a 600s cap only forces awkward workarounds).
+    max_timeout: int = 600
     path_append: str = ""
     # Extra regex deny-patterns appended to ExecTool's built-in destructive-command
     # defaults. Empty by default. Operators (or eval harnesses running the agent
     # un-sandboxed) can add host-specific blocks, e.g. osascript / `open -a`.
     extra_deny_patterns: list[str] = Field(default_factory=list)
+    # Replaces ExecTool's built-in deny-list. ``None`` keeps the defaults; ``[]``
+    # disables the guard, which is only appropriate when the whole filesystem is
+    # disposable (benchmark container, throwaway VM).
+    deny_patterns: list[str] | None = None
 
 
 class MediaToolConfig(Base):
