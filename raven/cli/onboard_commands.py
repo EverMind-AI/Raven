@@ -794,7 +794,7 @@ def _run_oauth_login(provider: str) -> bool:
     from raven.providers.registry import find_by_name
 
     spec = find_by_name(provider)
-    if not spec or not spec.is_oauth:
+    if _credential_kind(provider, spec) != CRED_OAUTH:
         console.print(
             _t(
                 f"  [red]✗ {provider} is not an OAuth provider.[/red]",
@@ -855,7 +855,7 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     # A local deployment has no key to verify -- what is being checked is that
     # the address answers, and saying "API key" there describes a field the user
     # was never asked for.
-    if spec and spec.is_local:
+    if _credential_kind(provider, spec) == CRED_LOCAL:
         console.print(_t("  [dim]⏳ Reaching the server…[/dim]", "  [dim]⏳ 正在连接服务…[/dim]"))
     else:
         console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
@@ -928,6 +928,35 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
     Defers to the spec so this guard cannot disagree with the routing it guards.
     """
     return bool(model and spec and spec.claims(model))
+
+
+# How a provider proves who it is. Every decision the wizard makes about a
+# provider -- which field to prompt for, what a failure offers to change, what
+# "remove" clears, whether a rollback applies -- follows from this one question,
+# and it was being answered independently at thirteen sites off two spec flags.
+# Each of the last two review rounds found a site that disagreed with the others:
+# a rollback that wrote credentials to an OAuth provider and killed the wizard, a
+# menu that offered a key prompt to one, a prompt that half-guarded a spec it had
+# already dereferenced. Answer it once.
+CRED_OAUTH = "oauth"  # a token file, written by `raven provider login`
+CRED_LOCAL = "local"  # reached by address; there is no key
+CRED_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
+CRED_KEY = "key"  # a key alone, including vendors Raven carries no spec for
+
+
+def _credential_kind(provider: str, spec: Any) -> str:
+    """Which credential shape this provider uses.
+
+    Derived rather than stored: `spec` is optional metadata, and a vendor with no
+    spec is reached with a key like most others.
+    """
+    if spec is not None and spec.is_oauth:
+        return CRED_OAUTH
+    if spec is not None and spec.is_local:
+        return CRED_LOCAL
+    if provider == "custom":
+        return CRED_ENDPOINT
+    return CRED_KEY
 
 
 def _litellm_spelling(provider: str) -> str:
@@ -1110,7 +1139,7 @@ def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[st
     layer refuses to write credential fields for them, and doing it anyway turned
     a failed verification into a dead wizard.
     """
-    if spec is not None and spec.is_oauth:
+    if _credential_kind(provider, spec) == CRED_OAUTH:
         return
     _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
 
@@ -1287,8 +1316,9 @@ def _configure_one_provider(
                 continue
 
         spec = find_by_name(provider)
-        is_oauth = bool(spec and spec.is_oauth)
-        is_custom = provider == "custom"
+        kind = _credential_kind(provider, spec)
+        is_oauth = kind == CRED_OAUTH
+        is_custom = kind == CRED_ENDPOINT
         # The interactive picker already echoes the chosen provider; only print
         # an explicit confirmation when it came from --provider (no echo then).
         if flag_provider:
@@ -1316,7 +1346,7 @@ def _configure_one_provider(
             provider,
             is_oauth=is_oauth,
             is_custom=is_custom,
-            is_local=bool(spec and spec.is_local),
+            is_local=kind == CRED_LOCAL,
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -1507,7 +1537,11 @@ def _resolve_model_with_test(
                     # A local deployment that cannot be reached is usually a
                     # wrong address, and this is the branch it lands in -- so
                     # retry alone left the one thing worth changing unreachable.
-                    *([(_t("Re-enter server URL", "重新填服务地址"), "rebase")] if spec and spec.is_local else []),
+                    *(
+                        [(_t("Re-enter server URL", "重新填服务地址"), "rebase")]
+                        if _credential_kind(provider, spec) == CRED_LOCAL
+                        else []
+                    ),
                     (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
                 if status == "network_error"
@@ -1517,9 +1551,9 @@ def _resolve_model_with_test(
                     # left a mistyped address with no way back to the field.
                     (
                         (_t("Sign in again", "重新登录"), "reauth")
-                        if spec and spec.is_oauth
+                        if _credential_kind(provider, spec) == CRED_OAUTH
                         else (_t("Re-enter server URL", "重新填服务地址"), "rebase")
-                        if spec and spec.is_local
+                        if _credential_kind(provider, spec) == CRED_LOCAL
                         else (_t("Re-enter key", "重新填 Key"), "rekey")
                     ),
                     (_t("Switch provider", "更换服务商"), "switch"),
@@ -1591,7 +1625,7 @@ def _resolve_model_with_test(
             provider,
             non_interactive=non_interactive,
             warnings=warnings,
-            is_oauth=bool(spec and spec.is_oauth),
+            is_oauth=_credential_kind(provider, spec) == CRED_OAUTH,
         )
         if result == "switch":
             return None
@@ -1650,7 +1684,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         provider,
         non_interactive=False,
         warnings=[],
-        is_oauth=bool(spec and spec.is_oauth),
+        is_oauth=_credential_kind(provider, spec) == CRED_OAUTH,
     )
     if result == "reauth":
         return _run_oauth_login(provider)
@@ -1703,7 +1737,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             continue
         if action == "update":
             target_spec = find_by_name(target)
-            if target_spec and target_spec.is_oauth:
+            if _credential_kind(target, target_spec) == CRED_OAUTH:
                 # Nothing here to update: the credential is a token file, and the
                 # ops layer refuses credential writes for these -- so offering the
                 # key prompt ended the wizard instead of editing anything.
@@ -1716,7 +1750,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     )
                 )
                 continue
-            if target_spec and target_spec.is_local:
+            if _credential_kind(target, target_spec) == CRED_LOCAL:
                 # A local deployment holds no key; what there is to update is
                 # where it lives. Offering the key prompt wrote a credential into
                 # a provider that never reads one, and left the address alone.
@@ -1771,7 +1805,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             # to clear and refuses the write, so it is told where its credential
             # actually lives instead of ending the run.
             target_spec = find_by_name(target)
-            if target_spec and target_spec.is_oauth:
+            if _credential_kind(target, target_spec) == CRED_OAUTH:
                 console.print(
                     _t(
                         f"  [dim]{_provider_label(target)}'s credential is an OAuth token, not a config field, "

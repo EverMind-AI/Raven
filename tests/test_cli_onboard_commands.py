@@ -2479,3 +2479,141 @@ def test_a_spec_less_vendor_is_offered_the_catalogue_rows_it_has() -> None:
         assert all(m.startswith(f"{slug}/") for m in models), [m for m in models if not m.startswith(f"{slug}/")][:3]
         # And no id was prefixed twice on the way through.
         assert not any(m.startswith(f"{slug}/{slug}/") for m in models)
+
+
+def test_only_credential_kind_reads_the_spec_auth_flags() -> None:
+    """One answer to "how is this provider reached", not thirteen.
+
+    Every decision the wizard makes about a provider follows from that question,
+    and it was being derived independently at thirteen sites off two spec flags.
+    Each of the last two review rounds found a site that disagreed with the rest:
+    a rollback that wrote credential fields to an OAuth provider and ended the
+    run, a menu that offered it a key prompt, a prompt that guarded a spec on one
+    line and dereferenced it on the next. Deriving it again anywhere reopens that.
+    """
+    import ast
+    import re
+    from pathlib import Path as _Path
+
+    path = _Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
+    source = path.read_text()
+    tree = ast.parse(source)
+    owner = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_credential_kind"
+    )
+    allowed = range(owner.lineno, (owner.end_lineno or owner.lineno) + 1)
+
+    offenders = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(source.splitlines(), 1)
+        if re.search(r"\bspec\.is_(oauth|local)\b", line) and not line.lstrip().startswith("#") and i not in allowed
+    ]
+    assert not offenders, "derive it from _credential_kind instead:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        ("github_copilot", "oauth"),
+        ("openai_codex", "oauth"),
+        ("minimax_global", "oauth"),
+        ("ollama_chat", "local"),
+        ("hosted_vllm", "local"),
+        ("custom", "endpoint"),
+        ("anthropic", "key"),
+        ("mistral", "key"),  # no spec at all
+    ],
+)
+def test_credential_kind_covers_every_shape(provider: str, expected: str) -> None:
+    from raven.cli.onboard_commands import _credential_kind
+    from raven.providers.registry import find_by_name
+
+    assert _credential_kind(provider, find_by_name(provider)) == expected
+
+
+def test_every_registered_provider_has_exactly_one_credential_kind() -> None:
+    """Sweep, so a provider added later cannot fall through the classification."""
+    from raven.cli.onboard_commands import CRED_ENDPOINT, CRED_KEY, CRED_LOCAL, CRED_OAUTH, _credential_kind
+    from raven.providers.registry import PROVIDERS
+
+    known = {CRED_OAUTH, CRED_LOCAL, CRED_ENDPOINT, CRED_KEY}
+    for spec in PROVIDERS:
+        assert _credential_kind(spec.name, spec) in known, spec.name
+
+
+def test_the_picker_result_goes_through_the_same_gate_as_the_flag(monkeypatch, tmp_path) -> None:
+    """N1: the joint that let 117 vendors crash, and stayed uncovered for three rounds.
+
+    The flag path validated its input; the picker path assigned it. Deleting the
+    validation call restores the original defect -- a typed name reaching the
+    config layer as an uncaught KeyError mid-setup -- so the call itself is what
+    needs holding down, not the validator in isolation.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    validated: list[str] = []
+    real = onboard_commands._validate_provider_name
+
+    def spy(name: str) -> str:
+        validated.append(name)
+        return real(name)
+
+    monkeypatch.setattr(onboard_commands, "_validate_provider_name", spy)
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "mistrall")  # a typo
+    printed: list[str] = []
+    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **k: printed.append(str(a[0]) if a else ""))
+    # Second pass: back out so the loop ends.
+    calls = {"n": 0}
+
+    def picker():
+        calls["n"] += 1
+        return "mistrall" if calls["n"] == 1 else onboard_commands._BACK
+
+    monkeypatch.setattr(onboard_commands, "_select_provider", picker)
+
+    assert (
+        onboard_commands._configure_one_provider(
+            provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+        )
+        is None
+    )
+    assert validated == ["mistrall"], "the picker result bypassed the gate"
+    assert any("mistrall" in line for line in printed), "the typo was not reported to the user"
+
+
+def test_a_failed_setup_calls_the_rollback(monkeypatch, tmp_path) -> None:
+    """N2: deleting this call silently undoes both rollback fixes.
+
+    `_roll_back_provider_fields` has its own tests, but nothing asserted the
+    failure path reaches it -- so removing the call left a mistyped address in
+    place of a working one with CI green.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    rolled: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "_roll_back_provider_fields",
+        lambda provider, spec, **kw: rolled.append((provider, kw)),
+    )
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", lambda provider, **kw: None)
+    # The model step reports "switch provider", which is the failure path.
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda provider, spec, **kw: None)
+    calls = {"n": 0}
+
+    def picker():
+        calls["n"] += 1
+        return "deepseek" if calls["n"] == 1 else onboard_commands._BACK
+
+    monkeypatch.setattr(onboard_commands, "_select_provider", picker)
+
+    onboard_commands._configure_one_provider(
+        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+    )
+    assert rolled, "a failed setup did not roll back"
+    assert rolled[0][0] == "deepseek"
+    assert set(rolled[0][1]) == {"old_key", "old_base"}, rolled[0][1]
