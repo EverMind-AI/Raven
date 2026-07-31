@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -532,7 +533,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     monkeypatch.setattr(
         onboard_commands,
         "_pick_model",
-        lambda spec, **_: spec.default_model,
+        lambda provider, spec, **_: spec.default_model,
     )
     # Optional steps 2-4 are covered separately; no-op them here so the
     # interactive Step 1 path can be asserted without driving every screen.
@@ -1538,7 +1539,7 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_pick_language", lambda: None)
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-back-test")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
@@ -1584,7 +1585,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     picks = iter(["anthropic", "openai"])
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: f"sk-{provider}")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # On the failure submenu, choose "switch".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
@@ -1619,7 +1620,7 @@ def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(entry_answers)))
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "anthropic")
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-second")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
 
     onboard_commands._step1_provider(
         provider=None,
@@ -1671,7 +1672,7 @@ def test_configure_existing_model_happy_path_persists_and_returns_true(
     monkeypatch.setattr(
         onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", ["minimax-global/MiniMax-M3"])
     )
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     persisted: list[str] = []
     monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "ok")
@@ -1697,7 +1698,7 @@ def test_configure_existing_model_reauth_delegates_to_oauth_login(monkeypatch: p
     """A probe asking for re-auth hands off to the OAuth login and returns its result."""
     _patch_single_provider_pick(monkeypatch, "minimax_global")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", []))
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: None)
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "reauth")
     login_calls: list[str] = []
@@ -2057,3 +2058,101 @@ def test_a_local_deployment_without_an_address_says_so(monkeypatch, tmp_path) ->
             model=None,
             non_interactive=True,
         )
+
+
+def test_a_vendor_with_no_spec_is_configured_by_the_wizard_not_rejected(monkeypatch, tmp_path) -> None:
+    """The second picker step offers 117 vendors Raven carries no spec for.
+
+    Every one of them used to reach `spec.name` on a None and tear the wizard
+    down after the key was already on disk. The gate that produced that -- "the
+    wizard does not cover this" -- was the older limitation: credentials go in
+    under the vendor's name and the model list comes from the vendor itself, so
+    a spec is metadata here, not permission.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+
+    assert onboard_commands._validate_provider_name("mistral") == "mistral"
+    assert find_by_name("mistral") is None, "mistral gained a spec; pick another spec-less vendor"
+
+
+def test_a_typo_in_the_vendor_step_is_a_message_not_a_traceback(monkeypatch, tmp_path) -> None:
+    """Both entrances share one gate.
+
+    The flag path validated; the picker path assigned the raw string, so a
+    mistyped vendor name reached the config layer as an uncaught KeyError.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(typer.BadParameter, match="mistrall"):
+        onboard_commands._validate_provider_name("mistrall")
+
+
+def test_resolve_model_with_test_runs_for_a_provider_with_no_spec(monkeypatch, tmp_path) -> None:
+    """Drives the path that crashed, rather than asserting a constant about it.
+
+    Thirteen tests asserted what the picker lists and none walked into it, which
+    is why a crash on every one of those vendors shipped green.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    monkeypatch.setattr(
+        onboard_commands,
+        "_verify_provider",
+        lambda provider, skip_test=False: (True, "valid", ["mistral-large-latest"]),
+    )
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+
+    chosen = onboard_commands._resolve_model_with_test(
+        "mistral",
+        None,  # no spec, which is the whole point
+        is_custom=False,
+        custom_model=None,
+        user_model_flag="mistral/mistral-large-latest",
+        non_interactive=True,
+        warnings=[],
+        skip_test=True,
+    )
+    assert chosen == "mistral/mistral-large-latest"
+
+
+def test_the_wizard_offers_known_models_when_the_provider_cannot_be_reached(monkeypatch, tmp_path) -> None:
+    """A failed fetch must not leave the user typing an id from memory.
+
+    Deleting this fallback left all 86 onboard tests green, so half of what the
+    candidate chain is for had nothing asserting it.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    offered: dict[str, Any] = {}
+
+    class _Stub:
+        def __init__(self, label, **kw):
+            offered["choices"] = list(kw.get("choices") or [])
+
+        def ask(self):
+            return offered["choices"][0]
+
+    fake_questionary = SimpleNamespace(autocomplete=_Stub, text=_Stub)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: fake_questionary)
+
+    chosen = onboard_commands._pick_model(
+        "moonshot",
+        find_by_name("moonshot"),
+        current_model=None,
+        model_ids=None,  # the fetch came back empty
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert offered["choices"], "no candidates were offered after a failed fetch"
+    assert chosen == offered["choices"][0]
+    assert any(c.startswith("moonshot/") for c in offered["choices"]), offered["choices"][:3]
