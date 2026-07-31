@@ -547,7 +547,9 @@ class ModelOptionsResult(_Strict):
 
 class ModelSaveKeyParams(_Strict):
     slug: str
-    api_key: str
+    # Empty for a local deployment, which is reached by address and has no key.
+    # The handler rejects an empty one for every other credential shape.
+    api_key: str = ""
     api_base: str | None = None
     session_id: str | None = None
 

@@ -2530,37 +2530,27 @@ def test_a_spec_less_vendor_is_offered_the_catalogue_rows_it_has() -> None:
         assert not any(m.startswith(f"{slug}/{slug}/") for m in models)
 
 
-def test_only_credential_kind_reads_the_spec_auth_flags() -> None:
-    """One answer to "how is this provider reached", not thirteen.
+def test_the_wizard_never_reads_a_spec_auth_flag_itself() -> None:
+    """One answer to "how is this provider reached", and it does not live here.
 
     Every decision the wizard makes about a provider follows from that question,
-    and it was being derived independently at thirteen sites off two spec flags.
-    Each of the last two review rounds found a site that disagreed with the rest:
-    a rollback that wrote credential fields to an OAuth provider and ended the
-    run, a menu that offered it a key prompt, a prompt that guarded a spec on one
-    line and dereferenced it on the next. Deriving it again anywhere reopens that.
+    and it was derived independently at thirteen sites off the spec flags. Each of
+    two review rounds found a site that disagreed with the rest: a rollback that
+    wrote credential fields to an OAuth provider and ended the run, a menu that
+    offered it a key prompt, a prompt that guarded a spec on one line and
+    dereferenced it on the next. It is a registry function now, because the model
+    picker needed the same answer and had been keeping a coarser one of its own.
     """
-    import ast
     import re
     from pathlib import Path as _Path
 
     path = _Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
-    source = path.read_text()
-    tree = ast.parse(source)
-    owner = next(
-        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_credential_kind"
-    )
-    allowed = range(owner.lineno, (owner.end_lineno or owner.lineno) + 1)
-
     offenders = [
         f"line {i}: {line.strip()}"
-        for i, line in enumerate(source.splitlines(), 1)
-        # Any receiver, not just one spelled `spec`: `target_spec.is_oauth` has no
-        # word boundary before "spec", so a name-anchored pattern read as a
-        # guarantee while missing the manage menu entirely.
-        if re.search(r"\.is_(oauth|local)\b", line) and not line.lstrip().startswith("#") and i not in allowed
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        if re.search(r"\.is_(oauth|local)\b|\.requires_api_base\b", line) and not line.lstrip().startswith("#")
     ]
-    assert not offenders, "derive it from _credential_kind instead:\n" + "\n".join(offenders)
+    assert not offenders, "ask credential_kind() instead:\n" + "\n".join(offenders)
 
 
 @pytest.mark.parametrize(
@@ -2577,20 +2567,18 @@ def test_only_credential_kind_reads_the_spec_auth_flags() -> None:
     ],
 )
 def test_credential_kind_covers_every_shape(provider: str, expected: str) -> None:
-    from raven.cli.onboard_commands import _credential_kind
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import credential_kind
 
-    assert _credential_kind(provider, find_by_name(provider)) == expected
+    assert credential_kind(provider) == expected
 
 
 def test_every_registered_provider_has_exactly_one_credential_kind() -> None:
     """Sweep, so a provider added later cannot fall through the classification."""
-    from raven.cli.onboard_commands import CRED_ENDPOINT, CRED_KEY, CRED_LOCAL, CRED_OAUTH, _credential_kind
-    from raven.providers.registry import PROVIDERS
+    from raven.providers.registry import CRED_ENDPOINT, CRED_KEY, CRED_LOCAL, CRED_OAUTH, PROVIDERS, credential_kind
 
     known = {CRED_OAUTH, CRED_LOCAL, CRED_ENDPOINT, CRED_KEY}
     for spec in PROVIDERS:
-        assert _credential_kind(spec.name, spec) in known, spec.name
+        assert credential_kind(spec.name) in known, spec.name
 
 
 def test_the_picker_result_goes_through_the_same_gate_as_the_flag(monkeypatch, tmp_path) -> None:
@@ -2891,30 +2879,32 @@ def test_a_provider_whose_endpoint_only_the_user_knows_is_asked_for_it() -> None
     "api_base is required" on the first call. Picking it from the curated list
     could not produce a working provider.
     """
-    from raven.providers.registry import PROVIDERS, find_by_name
+    from raven.providers.registry import CRED_ENDPOINT, PROVIDERS, credential_kind
 
-    assert (
-        onboard_commands._credential_kind("azure_openai", find_by_name("azure_openai"))
-        == onboard_commands.CRED_ENDPOINT
-    )
+    assert credential_kind("azure_openai") == CRED_ENDPOINT
     for spec in PROVIDERS:
-        expected = onboard_commands.CRED_ENDPOINT if spec.requires_api_base else None
+        expected = CRED_ENDPOINT if spec.requires_api_base else None
         if expected is not None:
-            assert onboard_commands._credential_kind(spec.name, spec) == expected, spec.name
+            assert credential_kind(spec.name) == expected, spec.name
 
 
-def test_the_wizard_and_the_model_picker_agree_on_who_needs_an_endpoint() -> None:
-    """The same question, asked in two places, and one of them was wrong.
+def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> None:
+    """The picker knew only two shapes and offered a local deployment a key prompt.
 
-    The picker kept a literal set of the two providers; the wizard derived it from
-    the name. They drifted, and the wizard's answer was the one users hit.
+    It kept its own literal list of who needs an endpoint, and reported every
+    non-OAuth provider as taking an API key -- so Ollama was asked for a key it
+    cannot use and never asked for the address it needs. The RPC surface reports
+    the shared answer now; this reads it back off the payload rather than
+    re-deriving it.
     """
-    from raven.providers.registry import PROVIDERS
-    from raven.tui_rpc.methods.model import _needs_api_base
+    from raven.providers.registry import CRED_ENDPOINT, CRED_LOCAL, PROVIDERS, credential_kind
+    from raven.tui_rpc.methods.model import _build_provider_entry
 
     for spec in PROVIDERS:
-        wizard = onboard_commands._credential_kind(spec.name, spec) == onboard_commands.CRED_ENDPOINT
-        assert wizard == _needs_api_base(spec.name), f"{spec.name}: wizard={wizard} picker={_needs_api_base(spec.name)}"
+        entry = _build_provider_entry(spec.name, current_provider=None)
+        kind = credential_kind(spec.name)
+        assert entry["auth_type"] == kind, spec.name
+        assert entry["needs_api_base"] is (kind in (CRED_ENDPOINT, CRED_LOCAL)), spec.name
 
 
 def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -31,7 +31,15 @@ from raven.config.update_providers import (
     set_provider_fields,
 )
 from raven.providers.common_models import common_models_for, litellm_models_for
-from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
+from raven.providers.registry import (
+    CRED_ENDPOINT,
+    CRED_LOCAL,
+    CRED_OAUTH,
+    canonical_provider_name,
+    credential_kind,
+    find_by_model,
+    find_by_name,
+)
 from raven.tui_rpc.errors import (
     ConfigValidationError,
     NotSupportedInV01Error,
@@ -46,17 +54,6 @@ from raven.tui_rpc.models import (
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
-
-
-def _needs_api_base(slug: str) -> bool:
-    """Does this provider have no usable endpoint until the user gives one?
-
-    Read from the registry rather than listed here: the wizard answered the same
-    question from the spec and the two drifted, leaving Azure configurable with no
-    endpoint at all.
-    """
-    spec = find_by_name(slug)
-    return bool(spec is not None and spec.requires_api_base)
 
 
 def _parse(model_cls: type, params: dict) -> Any:
@@ -96,7 +93,8 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     providers = {p["name"]: p for p in list_providers()}
     info = providers.get(slug, {})
 
-    is_oauth = bool(spec and spec.is_oauth)
+    kind = credential_kind(slug)
+    is_oauth = kind == CRED_OAUTH
     configured = bool(info.get("configured"))
     warning = ""
     if is_oauth and not configured:
@@ -108,11 +106,11 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
         "name": info.get("display_name") or (spec.label if spec else slug),
         "authenticated": configured,
         "is_current": slug == current_provider,
-        "auth_type": "oauth" if is_oauth else "api_key",
+        "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "models": models,
         "total_models": len(models),
-        "needs_api_base": _needs_api_base(slug),
+        "needs_api_base": kind in (CRED_ENDPOINT, CRED_LOCAL),
         "warning": warning,
     }
 
@@ -185,13 +183,30 @@ async def model_save_key(params: dict) -> dict:
             f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
-    if _needs_api_base(parsed.slug) and not parsed.api_base:
+    kind = credential_kind(parsed.slug)
+    if kind in (CRED_ENDPOINT, CRED_LOCAL) and not parsed.api_base:
         raise ConfigValidationError(
             f"{label} requires an api_base",
             data={"slug": parsed.slug, "field": "api_base"},
         )
+    if kind == CRED_LOCAL and parsed.api_key:
+        # Said out loud rather than dropped: a local deployment writes no key, so
+        # storing one silently would look like it had been accepted.
+        raise ConfigValidationError(
+            f"{label} is a local deployment and takes no api_key; send api_base instead",
+            data={"slug": parsed.slug, "field": "api_key"},
+        )
+    if kind != CRED_LOCAL and not parsed.api_key:
+        raise ConfigValidationError(
+            f"{label} requires an api_key",
+            data={"slug": parsed.slug, "field": "api_key"},
+        )
 
-    fields: dict[str, Any] = {"api_key": parsed.api_key}
+    # A local deployment is reached by address and has no key, said explicitly
+    # rather than by omission: leaving the field alone kept whatever was there,
+    # so a section that once held a key would still be sending it to the user's
+    # own server.
+    fields: dict[str, Any] = {"api_key": "" if kind == CRED_LOCAL else parsed.api_key}
     if parsed.api_base:
         fields["api_base"] = parsed.api_base
 
