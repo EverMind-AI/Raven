@@ -197,17 +197,66 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
 
         if role == "tool":
             call_id, _ = _split_tool_call_id(msg.get("tool_call_id"))
-            output_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
             input_items.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": output_text,
+                    "output": _convert_tool_output(content),
                 }
             )
             continue
 
     return system_prompt, input_items
+
+
+def _convert_tool_output(content: Any) -> Any:
+    """Tool result -> Responses ``function_call_output.output``.
+
+    A plain string passes through. A multimodal block list becomes the array
+    form (``input_text`` / ``input_image``), which the Responses API accepts for
+    tool output -- unlike Chat Completions, whose ``role:"tool"`` content is
+    typed ``string | ChatCompletionContentPartText[]`` and so cannot carry an
+    image at all.
+
+    The important part is what this does NOT do: ``json.dumps`` a block list.
+    That used to serialize an image's whole base64 payload into the output as
+    prose -- the model saw megabytes of gibberish instead of a picture, and
+    nothing errored.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return json.dumps(content, ensure_ascii=False)
+
+    texts: list[str] = []
+    parts: list[dict[str, Any]] = []
+    has_image = False
+    for item in content:
+        if not isinstance(item, dict):
+            texts.append(str(item))
+            parts.append({"type": "input_text", "text": str(item)})
+            continue
+        if item.get("type") == "text":
+            text = item.get("text", "")
+            texts.append(text)
+            parts.append({"type": "input_text", "text": text})
+        elif item.get("type") == "image_url":
+            url = (item.get("image_url") or {}).get("url")
+            if url:
+                has_image = True
+                parts.append({"type": "input_image", "image_url": url, "detail": "auto"})
+        else:
+            # Unknown block: serializing it is fine (it carries no base64), but
+            # it must still reach the model rather than being dropped.
+            blob = json.dumps(item, ensure_ascii=False)
+            texts.append(blob)
+            parts.append({"type": "input_text", "text": blob})
+
+    if has_image:
+        return parts
+    # No image to preserve, so keep the simpler string form the API has always
+    # accepted rather than gratuitously switching shape.
+    return "\n".join(texts)
 
 
 def _convert_user_message(content: Any) -> dict[str, Any]:

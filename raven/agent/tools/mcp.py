@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from loguru import logger
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools import media
+from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.registry import ToolRegistry
 from raven.sandbox import SandboxInitError
 
@@ -38,9 +39,7 @@ class MCPToolWrapper(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._parameters
 
-    async def execute(self, **kwargs: Any) -> str:
-        from mcp import types
-
+    async def execute(self, **kwargs: Any) -> str | ToolResult:
         try:
             result = await asyncio.wait_for(
                 self._session.call_tool(self._original_name, arguments=kwargs),
@@ -66,13 +65,14 @@ class MCPToolWrapper(Tool):
             )
             return f"(MCP tool call failed: {type(exc).__name__})"
 
-        parts = []
-        for block in result.content:
-            if isinstance(block, types.TextContent):
-                parts.append(block.text)
-            else:
-                parts.append(str(block))
-        return "\n".join(parts) or "(no output)"
+        # str(block) on a pydantic model yields its repr, so an ImageContent used
+        # to put its entire base64 payload into the prompt as prose -- the model
+        # saw gibberish instead of a picture and nothing errored. Convert per
+        # content type instead, and never stringify a payload-bearing block.
+        text, blocks = media.blocks_from_mcp_content(result.content)
+        if blocks:
+            return ToolResult(model_text=text or "(no output)", blocks=blocks)
+        return text or "(no output)"
 
 
 async def connect_mcp_servers(

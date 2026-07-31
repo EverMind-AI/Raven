@@ -263,7 +263,14 @@ class TestRenderAttachments:
         out = render.build_user_content("look", [str(png)])
         assert isinstance(out, list)
         assert out[0]["type"] == "image_url"
-        assert out[-1] == {"type": "text", "text": "look"}
+        assert out[0]["image_url"]["url"].startswith("data:image/png;base64,")
+        # The user's own text comes first, then the path. The base64 survives
+        # only this turn (the session keeps a placeholder), so the path is what
+        # lets a later turn re-read the picture.
+        text_block = out[-1]["text"]
+        assert text_block.startswith("look\n\n")
+        assert f"(path: {png})" in text_block
+        assert "read_file" in text_block
 
     def test_mixed_image_and_doc(self, tmp_path: Path) -> None:
         import base64 as _b64
@@ -288,6 +295,29 @@ class TestRenderAttachments:
         from raven.context_engine.segments import render
 
         assert render.build_user_content("hi", None) == "hi"
+
+    def test_legacy_builder_names_the_image_path_too(self, tmp_path: Path) -> None:
+        """There are two content builders (context engine and legacy
+        ContextBuilder); a path dropped in either one is a path the model cannot
+        use to re-read the picture."""
+        import base64 as _b64
+
+        from raven.agent.context.builder import ContextBuilder
+
+        png = tmp_path / "a.png"
+        png.write_bytes(
+            _b64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+        )
+        out = ContextBuilder._build_user_content(object.__new__(ContextBuilder), "look", [str(png)])
+
+        assert isinstance(out, list)
+        assert out[0]["type"] == "image_url"
+        text_block = out[-1]["text"]
+        assert text_block.startswith("look\n\n")
+        assert f"(path: {png})" in text_block
+        assert "read_file" in text_block
 
 
 # ---------------------------------------------------------------------------

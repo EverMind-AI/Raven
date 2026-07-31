@@ -42,6 +42,7 @@ logs/
 .DS_Store
 .claude/
 tmp.sh
+.work_context/
 # Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
 

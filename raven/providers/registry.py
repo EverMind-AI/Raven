@@ -78,6 +78,18 @@ class ProviderSpec:
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
 
+    # Whether a tool result may carry an image block. None = decide by probing
+    # the resolved LiteLLM target (see supports_image_tool_result); set it only
+    # to override that, e.g. a gateway whose backend is known to be Anthropic.
+    #
+    # This is an API-shape property, not a model property: a vision model still
+    # cannot see an image delivered in a tool result if the wire format has
+    # nowhere to put one. OpenAI's Chat Completions types `role:"tool"` content
+    # as `string | ChatCompletionContentPartText[]` — image is excluded at the
+    # schema level, so the fallback is to hand the model a text placeholder and
+    # attach the picture to a following user message.
+    image_tool_result_override: bool | None = None
+
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 

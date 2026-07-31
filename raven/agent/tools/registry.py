@@ -69,19 +69,24 @@ class ToolRegistry:
 
             # Unwrap ToolResult here, at the boundary: `execute` promises model
             # text to every caller, and only the agent loop wants the display
-            # string (which rides along on ToolOutput).
+            # string and multimodal blocks (which ride along on ToolOutput).
             if isinstance(result, ToolResult):
                 model_text, display_text = result.model_text, result.display_text
                 retryable, abort_action = result.retryable, result.abort_action
+                blocks = result.blocks
             else:
                 model_text, display_text = str(result), None
                 retryable, abort_action = True, False
+                blocks = None
 
             if model_text.startswith("Error"):
                 # ``Error:`` describes presentation, not retry semantics.
                 # Policy-aware tools return explicit control metadata so the
                 # registry does not accidentally turn a security decision into
                 # the generic invitation to find an equivalent implementation.
+                #
+                # An error also replaces the result, so any blocks it came with
+                # are no longer what the model should be looking at.
                 suffix = _hint if retryable else ""
                 return ToolOutput(
                     model_text + suffix,
@@ -94,6 +99,7 @@ class ToolRegistry:
                 display_text,
                 retryable=retryable,
                 abort_action=abort_action,
+                blocks=blocks,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
