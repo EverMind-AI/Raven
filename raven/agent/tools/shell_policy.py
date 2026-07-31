@@ -48,9 +48,11 @@ _WRAPPER_OPTIONS_WITH_VALUE = {
     ),
 }
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
-_COMMAND_BOUNDARIES = frozenset(";&|\n(){}")
+_COMMAND_BOUNDARIES = frozenset(";&|\n(){}`")
 _SHELL_COMMAND_WRAPPERS = frozenset({"bash", "dash", "ksh", "sh", "zsh"})
-_SYSTEM_POWER_COMMANDS = frozenset({"poweroff", "reboot", "shutdown"})
+_SYSTEM_POWER_COMMANDS = frozenset({"halt", "poweroff", "reboot", "shutdown"})
+_POWER_MULTIPLEXERS = frozenset({"busybox", "init", "loginctl", "systemctl", "telinit"})
+_POWER_MULTIPLEXER_ACTIONS = _SYSTEM_POWER_COMMANDS | {"0", "6"}
 _MAX_EMBEDDED_SHELL_DEPTH = 4
 
 
@@ -70,7 +72,7 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     or reproduce the full shell grammar.
     """
 
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}\n")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|(){}`\n")
     lexer.commenters = ""
     # Newlines must remain visible as command boundaries. Quoted newlines are
     # still returned inside their quoted token and therefore do not split it.
@@ -94,7 +96,14 @@ def _embedded_shell_command(segment: list[str]) -> str | None:
     if not segment or PurePath(segment[0]).name not in _SHELL_COMMAND_WRAPPERS:
         return None
     for index, token in enumerate(segment[1:], start=1):
-        if token.startswith("-") and not token.startswith("--") and "c" in token[1:] and index + 1 < len(segment):
+        if not token.startswith("-") or token.startswith("--"):
+            continue
+        command_option = token.find("c", 1)
+        if command_option == -1:
+            continue
+        if command_option + 1 < len(token):
+            return token[command_option + 1 :]
+        if index + 1 < len(segment):
             return segment[index + 1]
     return None
 
@@ -109,8 +118,24 @@ def _matches_delete_command(command: str, *, _depth: int = 0) -> bool:
         executable = PurePath(segment[0]).name
         if executable in {"rm", "unlink"}:
             return True
-        if executable == "find" and "-delete" in segment[1:]:
-            return True
+        if executable == "find":
+            if "-delete" in segment[1:]:
+                return True
+            for index, token in enumerate(segment[1:], start=1):
+                if token not in {"-exec", "-execdir"}:
+                    continue
+                executed = _unwrap_command_wrappers(segment[index + 1 :])
+                if not executed:
+                    continue
+                if PurePath(executed[0]).name in {"rm", "unlink"}:
+                    return True
+                embedded_exec = _embedded_shell_command(executed)
+                if (
+                    embedded_exec is not None
+                    and _depth < _MAX_EMBEDDED_SHELL_DEPTH
+                    and _matches_delete_command(embedded_exec, _depth=_depth + 1)
+                ):
+                    return True
         embedded = _embedded_shell_command(segment)
         if (
             embedded is not None
@@ -128,7 +153,10 @@ def _matches_system_power_command(command: str, *, _depth: int = 0) -> bool:
         segment = _unwrap_command_wrappers(segment)
         if not segment:
             continue
-        if PurePath(segment[0]).name in _SYSTEM_POWER_COMMANDS:
+        executable = PurePath(segment[0]).name
+        if executable in _SYSTEM_POWER_COMMANDS:
+            return True
+        if executable in _POWER_MULTIPLEXERS and any(arg in _POWER_MULTIPLEXER_ACTIONS for arg in segment[1:]):
             return True
         embedded = _embedded_shell_command(segment)
         if (

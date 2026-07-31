@@ -29,6 +29,10 @@ def policy() -> ShellCommandPolicy:
         "echo 'find . -delete'",
         "git grep -n shutdown",
         "grep -rn reboot /var/log",
+        "man shutdown",
+        "systemctl show reboot.target",
+        "grep -rn 'systemctl poweroff' docs/",
+        "bash -lc 'ls'",
     ],
 )
 def test_safe_commands_are_allowed(policy: ShellCommandPolicy, command: str) -> None:
@@ -45,8 +49,19 @@ def test_safe_commands_are_allowed(policy: ShellCommandPolicy, command: str) -> 
         "echo ready && rm -rf tmp",
         "mkfs /dev/test",
         "shutdown now",
+        "halt",
         "sudo -n reboot",
         'bash -c "poweroff"',
+        "systemctl poweroff",
+        "systemctl reboot",
+        "sudo systemctl reboot",
+        "busybox poweroff",
+        "loginctl poweroff",
+        "systemctl -i poweroff",
+        "init 0",
+        "init 6",
+        "telinit 0",
+        "telinit 6",
     ],
 )
 def test_hard_denied_commands_cannot_be_approved(policy: ShellCommandPolicy, command: str) -> None:
@@ -76,10 +91,16 @@ def test_hard_denied_commands_cannot_be_approved(policy: ShellCommandPolicy, com
         "(rm file.txt)",
         "{ rm file.txt; }",
         "echo $(rm file.txt)",
+        "echo `rm file.txt`",
         "nohup rm file.txt &",
         'bash -c "rm file.txt"',
+        "bash -c'rm file.txt'",
+        'bash -c"rm file.txt"',
         'bash --rcfile setup.sh -c "rm file.txt"',
         'sh -lc "find tmp -delete"',
+        'find . -name "*.log" -exec rm {} \\;',
+        'find . -name "*.log" -execdir unlink {} \\;',
+        'find . -exec sh -c "rm \\"$1\\"" _ {} \\;',
     ],
 )
 def test_delete_commands_require_approval(policy: ShellCommandPolicy, command: str) -> None:
