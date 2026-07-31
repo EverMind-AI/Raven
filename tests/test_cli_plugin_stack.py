@@ -9,10 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-pytest.importorskip("raven.plugin.memory.everos")
-
 from raven.cli._plugin_stack import (
     build_plugin_registry,
     maybe_build_memory_backend,

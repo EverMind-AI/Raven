@@ -632,7 +632,7 @@ On Linux without `/dev/kvm` the entire file is **automatically skipped** — no 
 
 **First run — pre-pull OCI images:**
 
-A session-scoped fixture in `test_sandbox_integration.py` pre-pulls all required images
+A session-scoped fixture in `test_sandbox_real_vm.py` pre-pulls all required images
 (`ubuntu:22.04` and `node:20-slim`) before the first test. On a fast connection this takes
 ~30–60 s on first run and is instant on subsequent runs (images are cached by boxlite).
 
@@ -646,18 +646,18 @@ SKIPPED  OCI image pull failed for 'ubuntu:22.04' — likely a network issue, no
 **Run all integration tests:**
 
 ```bash
-uv run python -m pytest tests/test_sandbox_integration.py -v
+uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
 ```
 
 Expected output:
 
 ```
-tests/test_sandbox_integration.py::TestBoxliteExecutorIntegration::test_exec_echo              PASSED
-tests/test_sandbox_integration.py::TestBoxliteExecutorIntegration::test_exec_timeout          PASSED
-tests/test_sandbox_integration.py::TestBoxliteExecutorIntegration::test_exec_cwd              PASSED
-tests/test_sandbox_integration.py::TestBoxliteExecutorIntegration::test_volume_mount_file_visible_in_vm  PASSED
-tests/test_sandbox_integration.py::TestBoxliteExecutorIntegration::test_lifecycle_context_manager        PASSED
-tests/test_sandbox_integration.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything          PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteExecutorIntegration::test_exec_echo              PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteExecutorIntegration::test_exec_timeout          PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteExecutorIntegration::test_exec_cwd              PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteExecutorIntegration::test_volume_mount_file_visible_in_vm  PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteExecutorIntegration::test_lifecycle_context_manager        PASSED
+tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything          PASSED
 
 6 passed in ~55s
 ```
@@ -670,13 +670,13 @@ on each run (~15 s), then starts the MCP server and validates the full `initiali
 **Run unit and integration tests together:**
 
 ```bash
-uv run python -m pytest tests/test_sandbox_unit.py tests/test_sandbox_integration.py -v
+uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
 ```
 
 **Run the full project test suite** (all test files, excluding integration):
 
 ```bash
-uv run python -m pytest tests/ --ignore=tests/test_sandbox_integration.py -q
+uv run python -m pytest tests/ --ignore=tests/integration/test_sandbox_real_vm.py -q
 ```
 
 ---
@@ -688,7 +688,7 @@ uv run python -m pytest tests/ --ignore=tests/test_sandbox_integration.py -q
 uv run python -m pytest "tests/test_sandbox_unit.py::TestBoxliteTranslateCwd::test_subdir_translates_correctly" -v
 
 # A single integration test
-uv run python -m pytest "tests/test_sandbox_integration.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
+uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
 ```
 
 ---
@@ -768,5 +768,5 @@ python -c "from raven.sandbox import build_executor, SandboxConfig; print('sandb
 To verify end-to-end (requires KVM / Apple Silicon):
 
 ```bash
-uv run python -m pytest tests/test_sandbox_integration.py -v
+uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
 ```

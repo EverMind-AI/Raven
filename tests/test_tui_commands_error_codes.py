@@ -19,6 +19,20 @@ from raven.tui_rpc.errors import InternalError, RpcError
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_preagentloop(monkeypatch):
+    """Isolate the AgentLoop-ctor error path from ambient config.
+
+    _build_tui_agent_loop builds a lazy provider before constructing AgentLoop;
+    with no provider configured (clean CI, or a prior test that reset config
+    state) make_lazy_provider raises typer.Exit(1) before AgentLoop is reached,
+    so the ctor-error classification under test never runs. Stub it so these
+    tests exercise only what they claim to."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("raven.cli._helpers.make_lazy_provider", lambda *a, **k: MagicMock())
+
+
 def _patch_agent_loop_to_raise(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> None:
     """Replace ``AgentLoop`` constructor so that calling it raises ``exc``.
 

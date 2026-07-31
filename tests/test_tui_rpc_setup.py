@@ -68,6 +68,58 @@ async def test_setup_status_provider_auto_returns_false(fake_home: Path) -> None
     assert result == {"provider_configured": False}
 
 
+async def test_setup_status_minimax_oauth_token_returns_true(
+    fake_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    cfg_dir = fake_home / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"provider": "auto", "model": "minimax-global/MiniMax-M3"}}})
+    )
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+
+    assert await setup_status({}) == {"provider_configured": True}
+
+
+async def test_setup_status_ignores_minimax_token_for_other_model(
+    fake_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    cfg_dir = fake_home / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"provider": "auto", "model": "anthropic/claude-sonnet-4-5"}}})
+    )
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+
+    assert await setup_status({}) == {"provider_configured": False}
+
+
 async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
@@ -78,3 +130,23 @@ async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     register_setup_methods(d)
     resp = await d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "setup.status", "params": {}})
     assert resp["result"]["provider_configured"] is True
+
+
+def test_minimax_oauth_is_detected_from_either_spelling_of_the_prefix(monkeypatch) -> None:
+    """The region is read off the model-id prefix, which arrives underscored.
+
+    The check used to compare against hyphenated literals, so a saved
+    "minimax_global/..." matched nothing and a logged-in user read as unconfigured.
+    """
+    import raven.tui_rpc.methods.setup as setup
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        "raven.providers.minimax_oauth.load_token",
+        lambda region: seen.append(region) or object(),
+    )
+    for model in ("minimax_global/abab6.5", "minimax-global/abab6.5"):
+        seen.clear()
+        payload = {"agents": {"defaults": {"model": model}}}
+        assert setup._detect_provider_configured(payload) is True
+        assert seen == ["global"], model

@@ -74,7 +74,7 @@ def test_merge_preserves_user_confirmed_status(tmp_path: Path):
     assert store.upgrade("dow1-h09-meeting", confirmed_at_ms=_NOW_MS + 60_000) is True
     # Second merge with refreshed stats — status should stay active
     refreshed = _routine(occurrence_count=8, weight=8.0, keywords=("meeting",))
-    merged = store.merge([refreshed], now_ms=_NOW_MS + 120_000)
+    store.merge([refreshed], now_ms=_NOW_MS + 120_000)
 
     persisted = store.get("dow1-h09-meeting")
     assert persisted is not None

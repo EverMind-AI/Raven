@@ -12,6 +12,7 @@ import type { DetailsMode, Msg, SectionVisibility } from '../types.js'
 import { toggleTodoCollapsed, useTurnSelector } from '../app/turnStore.js'
 import { $uiState } from '../app/uiStore.js'
 import { appendToolShelfMessage } from '../lib/liveProgress.js'
+import { EpisodeView } from './episodeView.js'
 import { MessageLine } from './messageLine.js'
 import { TodoPanel } from './todoPanel.js'
 
@@ -31,10 +32,19 @@ export const StreamingAssistant = memo(function StreamingAssistant({
   const streamPendingTools = useTurnSelector(state => state.streamPendingTools)
   const streaming = useTurnSelector(state => state.streaming)
   const activeTools = useTurnSelector(state => state.tools)
+  const episodes = useTurnSelector(state => state.episodes)
   const showStreamingArea = Boolean(streaming)
 
-  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length) {
+  if (!progress.showProgressArea && !showStreamingArea && !activeTools.length && !episodes.length) {
     return null
+  }
+
+  // Episodes mode: one live, drilldown view of the running turn instead of the
+  // flat segment/tool/stream stack.
+  if (ui.transcript === 'episodes') {
+    return (
+      <EpisodeView cols={cols} compact={compact} episodes={episodes} live t={ui.theme} text={streaming || undefined} />
+    )
   }
 
   return (

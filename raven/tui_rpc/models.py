@@ -139,6 +139,15 @@ class MessageStartEvent(_Strict):
     payload: MessageStartPayload
 
 
+class EpisodeStartPayload(_Strict):
+    index: int
+
+
+class EpisodeStartEvent(_Strict):
+    type: Literal["episode.start"]
+    payload: EpisodeStartPayload
+
+
 class TokenDeltaPayload(_Strict):
     text: str
 
@@ -161,6 +170,7 @@ class ToolStartPayload(_Strict):
     tool_call_id: str
     name: str
     arguments: dict[str, JsonValue]
+    display: str | None = None
 
 
 class ToolStartEvent(_Strict):
@@ -226,6 +236,7 @@ class CronDeliveredEvent(_Strict):
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
+        EpisodeStartEvent,
         TokenDeltaEvent,
         ThinkingDeltaEvent,
         ToolStartEvent,
@@ -897,6 +908,7 @@ __all__ = [
     "SessionExportParams",
     "SessionExportResult",
     "MessageStartEvent",
+    "EpisodeStartEvent",
     "TokenDeltaEvent",
     "ThinkingDeltaEvent",
     "ToolStartEvent",

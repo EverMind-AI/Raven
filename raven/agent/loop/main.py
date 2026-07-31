@@ -317,9 +317,7 @@ class AgentLoop:
         r"(\b\d+\s+passed\b|^OK\b|\bOK\s*\()",
         re.MULTILINE,
     )
-    _GATE_DOC_PATH_RE = re.compile(
-        r"(\.(md|rst|txt)$|(^|/)docs?(/|$))", re.IGNORECASE
-    )
+    _GATE_DOC_PATH_RE = re.compile(r"(\.(md|rst|txt)$|(^|/)docs?(/|$))", re.IGNORECASE)
     _TEST_GATE_STALE_NUDGE_TMPL = (
         "NOTE (shown once, before you finish): after your most recent test run\n"
         "(`{cmd}`) you edited these files without re-running any test:\n"
@@ -1674,6 +1672,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
         on_checkpoint: Callable[[list[dict]], None] | None = None,
@@ -1746,6 +1745,11 @@ class AgentLoop:
                 self.max_iterations,
                 effective_model,
             )
+
+            # Mark the episode boundary (one per model call) so an outlet can
+            # group this call's reasoning + text + tools into a single step.
+            if on_episode_start is not None:
+                await on_episode_start(iteration - 1)
 
             # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
             # iteration's LLM call. Media-carrying injects keep their file
@@ -1865,12 +1869,15 @@ class AgentLoop:
                     # second emit here would double it.
                     emit_tool_event = on_tool_event is not None and tool_call.name != "message"
                     if emit_tool_event:
+                        _tool = self.tools.get(tool_call.name)
                         await on_tool_event(
                             "start",
                             {
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                # Tool-authored call label; None -> UI derives one.
+                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
                     tool_t0 = time.monotonic()
@@ -1883,10 +1890,15 @@ class AgentLoop:
                     else:
                         result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    result_str = str(result)
+                    # The registry already unwrapped any ToolResult: `result` is
+                    # the model-facing text, with the optional display string
+                    # riding along on it (ToolOutput). The model always gets the
+                    # model text; the UI preview prefers the display string.
+                    model_text = str(result)
+                    display_src = getattr(result, "display_text", None) or model_text
                     if test_gate_enabled and tool_call.name == "exec":
                         cmd = str((tool_call.arguments or {}).get("command", ""))
-                        plain_out = self._ANSI_RE.sub("", result_str)
+                        plain_out = self._ANSI_RE.sub("", model_text)
                         if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(plain_out):
                             if not real_test_evidence:
                                 real_test_evidence = True
@@ -1897,7 +1909,7 @@ class AgentLoop:
                     elif (
                         (gate_stale_enabled or gate_red_enabled)
                         and tool_call.name in ("write_file", "edit_file")
-                        and not _is_hard_tool_failure(result)
+                        and not _is_hard_tool_failure(model_text)
                     ):
                         path = str((tool_call.arguments or {}).get("path", ""))
                         if (
@@ -1907,12 +1919,15 @@ class AgentLoop:
                         ):
                             if path not in edits_since_test:
                                 edits_since_test.append(path)
-                    preview = result_str.replace("\n", " ")[:200]
+                    # The log stays one line; the UI event keeps newlines so a
+                    # tool that reports several items (e.g. ask_user's
+                    # question -> answer pairs) renders one row each.
+                    preview = display_src[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
                         duration_ms,
-                        preview,
+                        preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
                         await on_tool_event(
@@ -1920,13 +1935,13 @@ class AgentLoop:
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
-                                "truncated": len(result_str) > 200,
+                                "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
+                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(result):
+                    if _is_hard_tool_failure(model_text):
                         if tool_call.name == loop_fail_tool:
                             loop_fail_streak += 1
                         else:
@@ -2067,13 +2082,15 @@ class AgentLoop:
                         "test-evidence gate: stale reminder (edits after last test: {})",
                         edits_since_test,
                     )
-                    messages.append({
-                        "role": "user",
-                        "content": self._TEST_GATE_STALE_NUDGE_TMPL.format(
-                            cmd=last_test_cmd,
-                            files="\n".join(f"- {p}" for p in edits_since_test[:10]),
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._TEST_GATE_STALE_NUDGE_TMPL.format(
+                                cmd=last_test_cmd,
+                                files="\n".join(f"- {p}" for p in edits_since_test[:10]),
+                            ),
+                        }
+                    )
                     prev_had_tool_calls = False
                     continue
                 if (
@@ -2089,13 +2106,15 @@ class AgentLoop:
                         "test-evidence gate: red inquiry (last test failed: {})",
                         last_test_detail,
                     )
-                    messages.append({
-                        "role": "user",
-                        "content": self._TEST_GATE_RED_NUDGE_TMPL.format(
-                            cmd=last_test_cmd,
-                            detail=last_test_detail or "(failure summary present in the test output)",
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._TEST_GATE_RED_NUDGE_TMPL.format(
+                                cmd=last_test_cmd,
+                                detail=last_test_detail or "(failure summary present in the test output)",
+                            ),
+                        }
+                    )
                     prev_had_tool_calls = False
                     continue
                 final_content = clean
@@ -2243,6 +2262,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2496,6 +2516,7 @@ class AgentLoop:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
+            on_episode_start=on_episode_start,
             usage_sink=usage_sink,
             drain=drain,
             on_checkpoint=_mid_turn_checkpoint,
@@ -2696,6 +2717,7 @@ class AgentLoop:
         """
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
+            EpisodeStart,
             MediaOut,
             Notice,
             NoticeKind,
@@ -2743,6 +2765,9 @@ class AgentLoop:
             if text:
                 await emit(Reasoning(content=text))
 
+        async def on_episode(index: int) -> None:
+            await emit(EpisodeStart(index=index))
+
         async def on_tool(phase: str, info: dict[str, Any]) -> None:
             if phase == "start":
                 await emit(
@@ -2751,6 +2776,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        display=info.get("display"),
                     )
                 )
             else:
@@ -2853,6 +2879,7 @@ class AgentLoop:
                 on_token_delta=on_token if stream else None,
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
+                on_episode_start=on_episode if stream else None,
                 usage_sink=usage_sink,
                 origin=req.origin,
                 drain=drain,

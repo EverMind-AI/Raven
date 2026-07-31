@@ -16,6 +16,7 @@ jobs:
   pre-commit:
     name: pre-commit diff
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -46,9 +47,10 @@ jobs:
           fi
           uv run pre-commit run --from-ref "$BASE" --to-ref HEAD
 
-  python:
-    name: python checks
+  lint-python:
+    name: python lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -67,12 +69,42 @@ jobs:
       - name: Focused Python lint
         run: make lint-python
 
-      - name: Focused Python tests
-        run: make test-python
+  unit:
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+
+      - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
+        # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
+        # set, and the highlighter then splits option names with escape codes, so
+        # `"--flag" in result.stdout` assertions fail only on CI.
+        env:
+          TERM: dumb
+        run: uv run --all-extras pytest -q
 
   windows-upgrade:
     name: Windows self-upgrade
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -83,11 +115,15 @@ jobs:
         run: uv python install 3.12
 
       - name: Test real uv self-upgrade
-        run: uvx --python 3.12 --from "pytest>=8,<10" pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
+        # pytest-asyncio is needed even though this file has no async test: the
+        # isolated interpreter still reads the project's pytest config, whose
+        # --strict-config turns the then-unknown asyncio_mode into a hard error.
+        run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
   tui:
     name: TUI checks
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -114,6 +150,7 @@ jobs:
   bridge:
     name: bridge checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 

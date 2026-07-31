@@ -105,29 +105,30 @@ _CURATED_PROVIDERS: list[dict[str, Any]] = [
         "name": "openrouter",
         "label": "OpenRouter (recommended — one key, many models)",
         "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
-        "is_oauth": False,
     },
-    {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI", "is_oauth": False},
-    {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic", "is_oauth": False},
-    {"name": "gemini", "label": "Gemini", "label_zh": "Gemini", "is_oauth": False},
-    {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek", "is_oauth": False},
+    {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
+    {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
+    {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
+    {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
+    {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
+    {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
+    {"name": "groq", "label": "Groq", "label_zh": "Groq"},
     {
         "name": "github_copilot",
         "label": "GitHub Copilot (OAuth)",
         "label_zh": "GitHub Copilot(OAuth 登录)",
-        "is_oauth": True,
     },
+    {"name": "openai_codex", "label": "Codex (OAuth)", "label_zh": "Codex(OAuth 登录)"},
     {
-        "name": "openai_codex",
-        "label": "Codex (OAuth)",
-        "label_zh": "Codex(OAuth 登录)",
-        "is_oauth": True,
+        "name": "minimax_global",
+        "label": "MiniMax Global (OAuth)",
+        "label_zh": "MiniMax Global(OAuth 登录)",
     },
+    {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
     {
         "name": "custom",
         "label": "Other (OpenAI-compatible endpoint)",
         "label_zh": "其他(OpenAI 兼容端点)",
-        "is_oauth": False,
     },
 ]
 
@@ -284,10 +285,10 @@ def _load_raw_config() -> dict[str, Any]:
 
 
 def _configured_providers() -> list[str]:
-    """Names of providers that currently have an api_key set on disk."""
-    data = _load_raw_config()
-    providers = data.get("providers") or {}
-    return [name for name, p in providers.items() if isinstance(p, dict) and p.get("apiKey")]
+    """Names of providers with a usable API key or OAuth token."""
+    from raven.config.update_providers import list_providers
+
+    return [row["name"] for row in list_providers() if row["configured"]]
 
 
 def _is_config_populated() -> bool:
@@ -297,10 +298,14 @@ def _is_config_populated() -> bool:
     satisfied: a provider key plus ``agents.defaults.model``. Either alone is
     not enough to talk to a model.
     """
+    from raven.providers.registry import split_model_id
+
     data = _load_raw_config()
-    providers = data.get("providers") or {}
-    has_provider = any(isinstance(p, dict) and p.get("apiKey") for p in providers.values())
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
+    configured = _configured_providers()
+    model_prefix, _ = split_model_id(str(model or ""))
+    has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
+    has_provider = has_non_minimax_provider or model_prefix in configured
     return bool(has_provider and model)
 
 
@@ -384,15 +389,30 @@ def _provider_label(name: str) -> str:
 
 
 def _validate_provider_name(name: str) -> str:
-    """Resolve a user-supplied provider name (kebab or snake) to a registry key."""
+    """Resolve a user-supplied provider name (kebab or snake) to a registry key.
+
+    The wizard needs a registry entry to guide anyone: a default model to fall
+    back on, whether the provider takes a key or an OAuth login, a label to
+    print. A vendor that only LiteLLM knows has none of that, so point at the
+    command that does configure it rather than walking off a missing spec.
+    """
     from raven.config.update_providers import provider_field_specs
+    from raven.providers.registry import find_by_name
 
     candidate = name.replace("-", "_")
     try:
         provider_field_specs(candidate)
     except KeyError as exc:
         raise typer.BadParameter(str(exc))
-    return candidate
+    spec = find_by_name(candidate)
+    if spec is None:
+        raise typer.BadParameter(
+            f"The wizard does not cover '{name}'. Configure it directly: raven provider set {name} --api-key <key>"
+        )
+    # Return the current name: everything downstream compares and stores by it,
+    # and a former name would have the wizard reading one section and writing
+    # another.
+    return spec.name
 
 
 def _back_placeholder(allow_back: bool, label: Optional[str] = None) -> Any:
@@ -713,25 +733,23 @@ def _load_current_default_model() -> Optional[str]:
 
 
 def _model_routes_to_provider(model: str, spec: Any) -> bool:
-    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``."""
-    if not model or not spec:
-        return False
-    model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
-    if "/" in model_lower:
-        prefix = model_lower.split("/", 1)[0].replace("-", "_")
-        return prefix == spec.name
-    return any(
-        kw.lower() in model_lower or kw.lower().replace("-", "_") in model_normalized
-        for kw in (getattr(spec, "keywords", None) or ())
-    )
+    """True if ``model`` would auto-route to ``spec`` under ``provider='auto'``.
+
+    Defers to the spec so this guard cannot disagree with the routing it guards.
+    """
+    return bool(model and spec and spec.claims(model))
 
 
 def _format_model_for_provider(spec: Any, model_id: str) -> str:
-    """Apply ``spec.litellm_prefix`` to a raw ``/v1/models`` id when needed."""
+    """Apply the provider's model prefix to a raw ``/v1/models`` id when needed."""
     if not model_id:
         return model_id
-    prefix = getattr(spec, "litellm_prefix", "") or ""
+    if spec.name in {"minimax_global", "minimax_cn"}:
+        public_prefix = spec.name.replace("_", "-")
+        if model_id.startswith(f"{public_prefix}/"):
+            return model_id
+        return f"{public_prefix}/{model_id.split('/')[-1]}"
+    prefix = getattr(spec, "model_prefix", "") or ""
     if not prefix:
         return model_id
     if model_id.startswith(f"{prefix}/"):
@@ -880,7 +898,14 @@ def _failure_choice(options: list[tuple[str, str]], *, non_interactive: bool) ->
     return chosen
 
 
-def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str], allow_repick: bool = True) -> str:
+def _run_test_probe(
+    provider: str,
+    *,
+    non_interactive: bool,
+    warnings: list[str],
+    allow_repick: bool = True,
+    is_oauth: bool = False,
+) -> str:
     """Send a one-shot test message; on failure offer recovery options.
 
     Returns one of ``"ok"`` / ``"continue"`` / ``"repick"`` / ``"rekey"`` /
@@ -910,17 +935,23 @@ def _run_test_probe(provider: str, *, non_interactive: bool, warnings: list[str]
         options = [(_t("Retry", "重试"), "retry")]
         if allow_repick:
             options.append((_t("Re-pick model", "重新选模型"), "repick"))
+        options.append(
+            (_t("Sign in again", "重新登录"), "reauth") if is_oauth else (_t("Re-enter key", "重新填 Key"), "rekey")
+        )
         options += [
-            (_t("Re-enter key", "重新填 Key"), "rekey"),
             (_t("Switch provider", "更换服务商"), "switch"),
             (_t("Continue anyway", "仍然继续"), "continue"),
         ]
         choice = _failure_choice(options, non_interactive=non_interactive)
         if choice == "retry":
             return _run_test_probe(
-                provider, non_interactive=non_interactive, warnings=warnings, allow_repick=allow_repick
+                provider,
+                non_interactive=non_interactive,
+                warnings=warnings,
+                allow_repick=allow_repick,
+                is_oauth=is_oauth,
             )
-        if choice in ("repick", "rekey", "switch"):
+        if choice in ("repick", "rekey", "reauth", "switch"):
             return choice
         warnings.append("provider test message")
         return "continue"
@@ -991,9 +1022,15 @@ def _configure_one_provider(
         # Snapshot the stored key before _collect_credentials overwrites it, so a
         # failed re-configuration of an existing provider can be rolled back to
         # its prior working key (rather than left holding the just-typed bad one).
-        _prev = (_load_raw_config().get("providers") or {}).get(provider) or {}
-        old_key = _prev.get("apiKey")
-        old_base = _prev.get("apiBase")
+        # Read through the ops library: it folds in a section still stored under
+        # the provider's pre-rename name, which a raw lookup by the typed name
+        # misses -- and the write below consolidates onto the current name, so a
+        # rollback would otherwise restore nothing over a real key.
+        from raven.config.update_providers import get_provider_config
+
+        _prev = get_provider_config(provider, redact_secrets=False)
+        old_key = _prev.get("api_key")
+        old_base = _prev.get("api_base")
 
         custom_model = _collect_credentials(
             provider,
@@ -1141,7 +1178,11 @@ def _resolve_model_with_test(
                 [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
                 if status == "network_error"
                 else [
-                    (_t("Re-enter key", "重新填 Key"), "rekey"),
+                    (
+                        (_t("Sign in again", "重新登录"), "reauth")
+                        if spec.is_oauth
+                        else (_t("Re-enter key", "重新填 Key"), "rekey")
+                    ),
                     (_t("Switch provider", "更换服务商"), "switch"),
                     (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
@@ -1152,6 +1193,10 @@ def _resolve_model_with_test(
             if choice == "rekey" and not non_interactive:
                 _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
                 continue
+            if choice == "reauth" and not non_interactive:
+                if _run_oauth_login(spec.name):
+                    continue
+                return None
             if choice == "switch":
                 return None
             warnings.append("provider connectivity")
@@ -1187,7 +1232,12 @@ def _resolve_model_with_test(
         _persist_default_model(chosen)
         if skip_test:
             return chosen
-        result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings)
+        result = _run_test_probe(
+            spec.name,
+            non_interactive=non_interactive,
+            warnings=warnings,
+            is_oauth=spec.is_oauth,
+        )
         if result == "switch":
             return None
         if result == "rekey":
@@ -1196,11 +1246,63 @@ def _resolve_model_with_test(
             current = chosen
             user_model_flag = None
             continue
+        if result == "reauth":
+            if not _run_oauth_login(spec.name):
+                return None
+            current = chosen
+            user_model_flag = None
+            continue
         if result == "repick":
             current = chosen
             user_model_flag = None
             continue
         return chosen  # ok / continue
+
+
+def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
+    """Choose a model for an already-authenticated provider without re-login."""
+    if non_interactive:
+        return False
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+    from raven.providers.registry import find_by_name
+
+    choices = [
+        questionary.Choice(_provider_label(name), value=name)
+        for name in _configured_providers()
+        if find_by_name(name) is not None
+    ]
+    if not choices:
+        return False
+    provider = questionary.select(
+        _t("Choose the provider for the default model:", "选择默认模型对应的服务商:"),
+        choices=choices,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if not provider:
+        raise typer.Exit(1)
+    spec = find_by_name(provider)
+    ok, _status, model_ids = _verify_provider(provider)
+    if not ok:
+        return False
+    chosen = _pick_model(
+        spec,
+        current_model=None,
+        model_ids=model_ids,
+        user_provided_model=None,
+        non_interactive=False,
+    )
+    _persist_default_model(chosen)
+    result = _run_test_probe(
+        provider,
+        non_interactive=False,
+        warnings=[],
+        is_oauth=spec.is_oauth,
+    )
+    if result == "reauth":
+        return _run_oauth_login(provider)
+    return result in {"ok", "continue"}
 
 
 # ---------------------------------------------------------------------------
@@ -1256,10 +1358,18 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
             )
         elif action == "remove":
             current = _load_current_default_model()
-            from raven.providers.registry import find_by_name
+            from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
 
             spec = find_by_name(target)
-            was_default_source = bool(current and spec and _model_routes_to_provider(current, spec))
+            if spec is not None:
+                was_default_source = bool(current and _model_routes_to_provider(current, spec))
+            else:
+                # A vendor with no spec of ours is reached by its prefix alone, so
+                # that is the whole test. Treating "no spec" as "not the source"
+                # skipped the guard and left a default model pointing at a
+                # provider whose key had just been removed.
+                prefix, _ = split_model_id(current or "")
+                was_default_source = bool(current and prefix == normalize_provider_name(target))
             if was_default_source:
                 confirm = questionary.confirm(
                     _t(
@@ -1335,6 +1445,7 @@ def _step1_provider(
             ),
             choices=[
                 questionary.Choice(_t("Done, continue", "完成,继续"), value="done"),
+                questionary.Choice(_t("Choose default model", "选择默认模型"), value="model"),
                 questionary.Choice(_t("Add another provider", "新增一个服务商"), value="add"),
                 questionary.Choice(_t("Edit / remove a provider", "编辑 / 移除服务商"), value="edit"),
             ],
@@ -1355,6 +1466,15 @@ def _step1_provider(
                 )
                 continue
             return None
+        if action == "model":
+            if _configure_existing_provider_model(non_interactive=False):
+                continue
+            console.print(
+                _t(
+                    "  [yellow]Could not configure a default model. Choose a provider and try again.[/yellow]",
+                    "  [yellow]无法配置默认模型,请重新选择服务商。[/yellow]",
+                )
+            )
         if action == "add":
             _configure_one_provider(
                 provider=None,
@@ -2150,10 +2270,12 @@ def _resolve_model_provider(model: str) -> Optional[str]:
     prefix, so an unrecognized head falls back to ``"custom"`` when a custom
     provider is actually configured with a key. Returns ``None`` when no match.
     """
+    from raven.providers.registry import split_model_id
+
     if not model:
         return None
-    head = model.split("/", 1)[0].replace("-", "_")
-    if "/" in model:
+    head, _ = split_model_id(model)
+    if head:
         from raven.config.update_providers import provider_field_specs
 
         try:
@@ -2195,23 +2317,34 @@ def _resolve_reuse_llm_creds(main_model: str) -> dict[str, Optional[str]]:
         registry ``default_api_base`` → a known fallback);
       - carry the provider's stored api_key.
     """
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, normalize_provider_name, split_model_id
 
-    provider = _resolve_model_provider(main_model) or main_model.split("/", 1)[0].replace("-", "_")
+    provider = _resolve_model_provider(main_model) or split_model_id(main_model)[0]
     spec = find_by_name(provider)
-    prov_cfg = (_load_raw_config().get("providers") or {}).get(provider, {})
+    # Through the ops library, so a section still stored under the provider's
+    # pre-rename name is found -- a raw lookup by the resolved name is not.
+    from raven.config.update_providers import get_provider_config
 
-    # Strip the litellm routing prefix to the bare model id the upstream
-    # endpoint expects. Direct providers (openai / deepseek / gemini) carry a
-    # ``{provider}/`` route prefix that litellm consumes but the raw OpenAI
-    # client must not see; gateways (openrouter) carry their litellm_prefix.
-    # Custom endpoints store a bare id already, so no prefix matches → unchanged.
+    # No `if spec` gate: LiteLLM-only vendors have no spec of ours yet their
+    # section holds real credentials, and gating on the spec silently handed the
+    # probe an empty api_key while the main model was working fine.
+    try:
+        _resolved = get_provider_config(provider, redact_secrets=False)
+    except KeyError:
+        _resolved = {}
+    prov_cfg = {"apiKey": _resolved.get("api_key"), "apiBase": _resolved.get("api_base")} if _resolved else {}
+
+    # Strip the routing prefix to the bare model id the upstream endpoint
+    # expects: litellm consumes it, the raw OpenAI client must not see it. Only
+    # a prefix naming this provider is stripped -- a custom endpoint stores a
+    # bare id already, and anything else is part of the vendor's own model id.
     bare_model = main_model
-    litellm_prefix = getattr(spec, "litellm_prefix", "") if spec else ""
-    for prefix in (litellm_prefix, provider):
-        if prefix and bare_model.startswith(f"{prefix}/"):
-            bare_model = bare_model.split("/", 1)[1]
-            break
+    head, rest = split_model_id(main_model)
+    known_prefixes = set(spec.route_names) if spec else {normalize_provider_name(provider)}
+    if spec:
+        known_prefixes.add(normalize_provider_name(spec.model_prefix))
+    if head and head in known_prefixes:
+        bare_model = rest
 
     base_url = (
         prov_cfg.get("apiBase")

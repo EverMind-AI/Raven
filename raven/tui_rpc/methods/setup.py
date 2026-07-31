@@ -66,11 +66,26 @@ def _detect_provider_configured(payload: dict) -> bool:
 
     provider = defaults.get("provider")
     if isinstance(provider, str) and provider and provider != _AUTO_SENTINEL:
+        if provider in {"minimax_global", "minimax_cn"}:
+            from raven.providers.minimax_oauth import load_token
+
+            region = "global" if provider == "minimax_global" else "cn"
+            return load_token(region) is not None
         return True
 
     providers = payload.get("providers")
-    if isinstance(providers, dict) and any(isinstance(v, dict) and v.get("apiKey") for v in providers.values()):
-        return True
+    if isinstance(providers, dict):
+        if any(isinstance(v, dict) and v.get("apiKey") for v in providers.values()):
+            return True
+
+    from raven.providers.registry import split_model_id
+
+    model_prefix, _ = split_model_id(model)
+    if model_prefix in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import load_token
+
+        region = "global" if model_prefix == "minimax_global" else "cn"
+        return load_token(region) is not None
 
     return False
 

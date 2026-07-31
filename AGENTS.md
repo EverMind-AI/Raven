@@ -235,46 +235,16 @@ After pushing a new feature branch, **proactively ask** whether to open the PR w
 
 **Description must be all English** (same as §3.1.1): no other languages / full-width punctuation / `§` numbering anywhere (subject + body + tables + checklist).
 
-**Description structure: use the repo PR template** at `.github/pull_request_template.md` if present (`gh pr create` picks it up automatically); otherwise fill the structure below into `--body` by hand (all English):
-
-```markdown
-## Change description
-
-> Description here
-
-## Type of change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Document
-- [ ] Others
-
-## Related issues (if there is)
-
-> Fix [#1]()
-
-## Checklists
-
-### Development
-
-- [ ] Lint rules pass locally
-- [ ] Application changes have been tested thoroughly
-- [ ] Automated tests covering modified code pass
-
-### Security
-
-- [ ] Security impact of change has been considered
-- [ ] Code follows security best practices and guidelines
-
-### Code review
-
-- [ ] Pull request has a descriptive title and context useful to a reviewer. Screenshots or screencasts are attached as necessary
-```
+**Description structure:** the sections come from `.github/pull_request_template.md` — read that file, do not work from a copy. `gh pr create` fills it in for you; writing `--body` by hand means reproducing its headings exactly.
 
 Filling rules:
-- `Change description` — the PR's overall goal + key decisions (summarize the phase evolution for multi-commit PRs);
-- `Type of change` — check what applies;
+- `Summary` — the PR's overall goal + key decisions (summarize the phase evolution for multi-commit PRs);
+- `Type` — one box, mirroring the commit type (`feat`→Feature, `fix`→Fix, `docs`→Docs, `refactor`→Refactor, `ci`/`build`→CI / tooling, else Other). The checkbox is not a fresh judgement call;
+- `Verification` — the exact commands you ran and their result, not a claim that you ran them;
+- `Risk` — user-visible behaviour changes, and how to roll back;
+- `Related Issues` — `Fixes #NNN` for what this closes, a bare `#NNN` to reference without closing, `N/A` when there is none;
 - check only the boxes you actually satisfied — leave the rest blank and explain in the description; never blanket-check;
-- anything the template doesn't cover but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Change description`.
+- anything the template has no section for but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Summary`.
 
 **Trailer** (with §3.3):
 - squash-merge → GitHub auto-collects each commit's `Co-authored-by` into the squash commit, so keep the trailer in your commit and **don't add it to the PR description** (that duplicates it);

@@ -164,6 +164,36 @@ def test_onboard_help_lists_all_flags() -> None:
         assert flag in out, f"missing flag in help: {flag}"
 
 
+# --------------------------------------------------------------------------- curated provider list
+
+
+def test_curated_providers_all_exist_in_registry() -> None:
+    from raven.providers.registry import find_by_name
+
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert find_by_name(entry["name"]) is not None, f"unknown provider: {entry['name']}"
+
+
+def test_curated_providers_cover_the_seeded_picker_providers() -> None:
+    """Every provider seeded in the model picker must be pickable in the wizard.
+
+    The two lists drifted apart once already: zhipu / dashscope / groq carried a
+    curated shortlist and a default_model, yet the wizard offered no way to
+    choose them short of --provider or "Other".
+    """
+    from tests.test_provider_catalog import _SEEDED_DIRECT_PROVIDERS
+
+    curated = {entry["name"] for entry in onboard_commands._CURATED_PROVIDERS}
+    assert set(_SEEDED_DIRECT_PROVIDERS) <= curated
+
+
+def test_curated_providers_do_not_restate_registry_flags() -> None:
+    # is_oauth lives on the ProviderSpec; a copy here would be a second source
+    # of truth that silently goes stale.
+    for entry in onboard_commands._CURATED_PROVIDERS:
+        assert "is_oauth" not in entry
+
+
 # --------------------------------------------------------------------------- non-interactive happy path
 
 
@@ -651,14 +681,14 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
 
-    # Catalog feeds the picker. The schema's pre-existing default model
-    # (``anthropic/claude-opus-4-5``) routes to anthropic by prefix, so it
-    # gets prepended as the "keep current" candidate.
+    # Catalog feeds the picker, every id carrying the provider's route prefix.
+    # The schema's pre-existing default (``anthropic/claude-opus-4-5``) is one of
+    # them rather than a fourth entry: while bare and prefixed spellings coexisted
+    # the same model appeared twice, once in each form.
     assert captured_choices["choices"] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-sonnet-4-5",
         "anthropic/claude-opus-4-5",
-        "claude-haiku-4-5",
-        "claude-sonnet-4-5",
-        "claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
     # User's pick made it into config
@@ -716,7 +746,7 @@ def test_prompt_api_key_empty_is_back_but_whitespace_rejected(monkeypatch: pytes
 
 
 def test_format_model_for_provider_prefix_rules() -> None:
-    """Provider's ``litellm_prefix`` is applied unless model_id already has one."""
+    """The provider's model prefix is applied unless the id already carries one."""
     from raven.providers.registry import find_by_name
 
     openrouter = find_by_name("openrouter")
@@ -733,8 +763,9 @@ def test_format_model_for_provider_prefix_rules() -> None:
         onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
-    # Direct provider with empty prefix → pass-through
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "gpt-4o-mini"
+    # Standard provider: LiteLLM knows it under our own name, so that is the prefix
+    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider(openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
     assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
@@ -774,10 +805,25 @@ def test_registry_default_models_present() -> None:
         "deepseek",
         "github_copilot",
         "openai_codex",
+        "minimax_global",
+        "minimax_cn",
     ):
         spec = find_by_name(name)
         assert spec is not None, f"missing provider in registry: {name}"
         assert spec.default_model, f"{name} has empty default_model"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("minimax_global", "MiniMax-M3", "minimax-global/MiniMax-M3"),
+        ("minimax_cn", "MiniMax-M3", "minimax-cn/MiniMax-M3"),
+    ],
+)
+def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model: str, expected: str) -> None:
+    from raven.providers.registry import find_by_name
+
+    assert onboard_commands._format_model_for_provider(find_by_name(provider), model) == expected
 
 
 # --------------------------------------------------------------------------- fixtures (5-step)
@@ -817,6 +863,30 @@ def test_is_config_populated_requires_provider_and_model(tmp_env: Path) -> None:
     if not data.get("agents", {}).get("defaults", {}).get("model"):
         assert onboard_commands._is_config_populated() is False
     set_default_model("openai/gpt-4o-mini")
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_accepts_minimax_oauth_token(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config.update import set_default_model
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+    set_default_model("minimax-global/MiniMax-M3")
+
+    assert "minimax_global" in onboard_commands._configured_providers()
     assert onboard_commands._is_config_populated() is True
 
 
@@ -1565,6 +1635,112 @@ def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPa
     assert data["providers"]["anthropic"]["apiKey"] == "sk-second"
 
 
+def test_configure_existing_model_non_interactive_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Headless callers can't pick a model interactively, so the helper bails."""
+    called = {"verify": False}
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: called.__setitem__("verify", True))
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=True) is False
+    assert called["verify"] is False
+
+
+def test_configure_existing_model_no_configured_provider_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With nothing configured the provider list is empty, so there's nothing to pick."""
+    monkeypatch.setattr(onboard_commands, "_configured_providers", lambda: [])
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is False
+
+
+def _patch_single_provider_pick(monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+    """Make the provider ``select`` return ``provider`` and list it as configured."""
+    import questionary
+
+    class _FQ:
+        def ask(self) -> str:
+            return provider
+
+    monkeypatch.setattr(onboard_commands, "_configured_providers", lambda: [provider])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+
+def test_configure_existing_model_happy_path_persists_and_returns_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify ok -> pick model -> persist -> test probe ok -> True."""
+    _patch_single_provider_pick(monkeypatch, "minimax_global")
+    monkeypatch.setattr(
+        onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", ["minimax-global/MiniMax-M3"])
+    )
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    persisted: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+    monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "ok")
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
+    assert persisted == ["minimax-global/MiniMax-M3"]
+
+
+def test_configure_existing_model_verify_failure_returns_false_without_persist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed connectivity check aborts before any model is written."""
+    _patch_single_provider_pick(monkeypatch, "openai")
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (False, "invalid_key", None))
+    persisted: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is False
+    assert persisted == []
+
+
+def test_configure_existing_model_reauth_delegates_to_oauth_login(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe asking for re-auth hands off to the OAuth login and returns its result."""
+    _patch_single_provider_pick(monkeypatch, "minimax_global")
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", []))
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: None)
+    monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "reauth")
+    login_calls: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_run_oauth_login", lambda p: login_calls.append(p) or True)
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
+    assert login_calls == ["minimax_global"]
+
+
+def test_step1_model_action_invokes_existing_model_config(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The step-1 'Choose default model' action routes to the helper, then 'done' exits."""
+    _seed_provider("openai", "sk-seed", "openai/gpt-4o-mini")
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a: str) -> None:
+            self._a = a
+
+        def ask(self) -> str:
+            return self._a
+
+    entry_answers = iter(["model", "done"])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(entry_answers)))
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "_configure_existing_provider_model",
+        lambda *, non_interactive: calls.append(non_interactive) or True,
+    )
+
+    onboard_commands._step1_provider(
+        provider=None,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert calls == [False]
+
+
 def test_skip_memory_disables_backend_effective(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
     """BUG-3 regression: --skip-memory leaves effective memory.backend=None
     (schema default is 'everos', which would activate EverOS without models)."""
@@ -1727,3 +1903,16 @@ def test_load_raw_config_raises_on_malformed(tmp_env: Path) -> None:
     tmp_env.write_text("{  // comment => invalid JSON\n}", encoding="utf-8")
     with pytest.raises(ConfigReadError):
         onboard_commands._load_raw_config()
+
+
+def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
+    """The guard exists to stop a removal from orphaning the default model.
+
+    A model id written before the provider was renamed routes to the very
+    provider being removed, which is exactly when the warning has to fire.
+    """
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("zai")
+    assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
+    assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True

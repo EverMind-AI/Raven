@@ -9,6 +9,35 @@ from __future__ import annotations
 import pytest
 
 
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """On CI, hard-exit past interpreter finalization once the run is over.
+
+    A fully green run still exited 139 on Linux: the suite finalizes with
+    native state live (asyncio subprocess transports collected during GC),
+    and Py_FinalizeEx segfaults on it, masking the recorded status. The CLI
+    routes its exit through the same helper, but on a different trigger --
+    see raven.cli._exit for the lancedb-specific gate it uses, which is not
+    what fires here.
+
+    Local runs keep normal semantics so nothing masks an exit-time error, and
+    the recorded status is preserved either way -- a failing run still exits
+    non-zero.
+    """
+    import os
+
+    if not os.environ.get("CI"):
+        return
+
+    from raven.cli._exit import flush_and_hard_exit
+
+    flush_and_hard_exit(int(getattr(config, "_raven_exitstatus", 0)))
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
+
+
 @pytest.fixture(autouse=True)
 def _restore_loguru_enabled_state():
     """Undo any ``loguru.logger.disable("raven")`` left over from a
@@ -25,6 +54,24 @@ def _restore_loguru_enabled_state():
 
     yield
     logger.enable("raven")
+
+
+@pytest.fixture(autouse=True)
+def _no_update_check(tmp_path, monkeypatch):
+    """Keep the startup update check off the network and off the real disk.
+
+    ``raven tui`` fires ``maybe_refresh_async()`` and ``session.create`` reads
+    the cache, so any test reaching either path would otherwise fetch the
+    GitHub releases API and write ``<cache dir>/update_check.json`` under the
+    real home. Redirecting the cache dir alone still leaves an empty cache,
+    which is exactly the state that spawns the fetch -- so opt out by env for
+    the whole suite. Tests that exercise the notice clear the variable.
+    """
+    from raven.cli import update_notice
+
+    monkeypatch.setenv(update_notice._OPT_OUT_ENV, "1")
+    monkeypatch.setattr(update_notice, "_cache_path", lambda: tmp_path / "update_check.json")
+    yield
 
 
 @pytest.fixture(autouse=True)

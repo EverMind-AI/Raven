@@ -1,4 +1,4 @@
-"""SR-4 — EverosSkillSource wraps MemoryBackend.recall + emits RouterHit."""
+"""EverosSkillSource wraps MemoryBackend.recall + emits RouterHit."""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ class TestRecallCall:
         assert all(c["user_id"] is None for c in backend.recall_calls)
 
     async def test_history_not_forwarded(self, source, backend) -> None:
-        """For SR-4 we deliberately don't pass history through; the
+        """This source deliberately does not pass history through; the
         MemoryBackend Protocol has no field for it. Test pins the
         decision so future changes are conscious."""
         history = [{"role": "user", "content": "earlier"}]

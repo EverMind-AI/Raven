@@ -1,4 +1,4 @@
-"""EM-1 — everos plugin skeleton + end-to-end plugin discovery.
+"""everos plugin skeleton + end-to-end plugin discovery.
 
 The EverOS backend ships **bundled** inside raven at
 ``raven/plugin/memory/everos/`` (not as an external entry-point

@@ -206,7 +206,71 @@ export const stripInlineMarkup = (v: string) =>
     .replace(/(?<!\$)\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\$)/g, '$1')
     .replace(/\\\(([^\n]+?)\\\)/g, '$1')
 
-const renderTable = (k: number, rows: string[][], t: Theme) => {
+// Hard-wrap to a display-cell width. Terminal word-wrap breaks on spaces only,
+// so CJK (which has none) becomes one unbreakable "word" and overflows its
+// column — the cause of tables bleeding across columns. Break per character,
+// preferring a space boundary when the line has one (so latin still wraps by
+// word).
+// Clip to a display-cell width. Table cells stay ONE line on purpose: the
+// transcript's virtual-scroll height estimate counts one row per markdown table
+// line, so a wrapping cell would render taller than its reserved slot and leave
+// stale cells behind (visible as garbled overdraw). Alignment beats completeness
+// here — widen the terminal to see more.
+const clipWidth = (raw: string, width: number): string => {
+  const text = raw.replace(/\s+/g, ' ').trim()
+
+  if (width <= 0 || stringWidth(text) <= width) {
+    return text
+  }
+
+  let out = ''
+  let w = 0
+
+  for (const ch of text) {
+    const cw = stringWidth(ch)
+
+    if (w + cw > width - 1) {
+      break
+    }
+
+    out += ch
+    w += cw
+  }
+
+  return `${out}…`
+}
+
+// Fit content widths into the available budget: scale down proportionally, then
+// shave the widest column until it fits. Keeps every column present (min 6
+// cells) instead of letting the row overflow the terminal.
+const fitWidths = (content: number[], budget: number): number[] => {
+  const total = content.reduce((a, b) => a + b, 0)
+
+  if (total <= budget) {
+    return content
+  }
+
+  const min = 6
+  const scale = budget / total
+  const widths = content.map(c => Math.max(min, Math.floor(c * scale)))
+
+  let over = widths.reduce((a, b) => a + b, 0) - budget
+
+  while (over > 0) {
+    const widest = widths.indexOf(Math.max(...widths))
+
+    if (widths[widest]! <= min) {
+      break
+    }
+
+    widths[widest] = widths[widest]! - 1
+    over--
+  }
+
+  return widths
+}
+
+const renderTable = (k: number, rows: string[][], t: Theme, avail?: number) => {
   // Column widths in *display cells*, not UTF-16 code units.  CJK
   // glyphs and most emoji render as two cells but `String#length`
   // counts them as one, which collapses Chinese / Japanese / Korean
@@ -215,7 +279,11 @@ const renderTable = (k: number, rows: string[][], t: Theme) => {
   // @hermes/ink) returns the actual cell count.
   const cellWidth = (raw: string) => stringWidth(stripInlineMarkup(raw))
 
-  const widths = rows[0]!.map((_, ci) => Math.max(...rows.map(r => cellWidth(r[ci] ?? ''))))
+  const GAP = 2
+  const content = rows[0]!.map((_, ci) => Math.max(...rows.map(r => cellWidth(r[ci] ?? ''))))
+  // paddingLeft(2) + the transcript gutter/scrollbar margin come off the top.
+  const room = (avail ?? process.stdout.columns ?? 80) - 8 - GAP * (content.length - 1)
+  const widths = fitWidths(content, Math.max(content.length * 6, room))
 
   // Thin divider under the header.  Without it tables look like prose
   // with extra spacing because the header is just accent-coloured text
@@ -223,25 +291,43 @@ const renderTable = (k: number, rows: string[][], t: Theme) => {
   // from `stringWidth(...)`, so the dividers and the row content stay
   // in sync on CJK / emoji tables; tab-style column gaps still read
   // cleanly without the boxed look.
-  const sep = widths.map(w => '─'.repeat(Math.max(1, w))).join('  ')
+  // Each cell is a fixed-width but *shrinkable* box, so a table wider than the
+  // terminal shrinks its columns instead of letting rows wrap raggedly across
+  // column boundaries (which also tore the divider into fragments). Text wraps
+  // inside its own column, keeping rows aligned; `minWidth={0}` is what allows
+  // a flex child to shrink below its content width at all.
+  const cells = (render: (w: number, ci: number) => ReactNode) =>
+    widths.map((w, ci) => (
+      <Fragment key={ci}>
+        {ci > 0 ? <Box flexShrink={0} width={GAP} /> : null}
+        <Box flexShrink={0} width={w}>
+          {render(w, ci)}
+        </Box>
+      </Fragment>
+    ))
 
   return (
     <Box flexDirection="column" key={k} paddingLeft={2}>
       {rows.map((row, ri) => (
         <Fragment key={ri}>
           <Box>
-            {widths.map((w, ci) => (
-              <Text bold={ri === 0} color={ri === 0 ? t.color.accent : undefined} key={ci}>
-                <MdInline t={t} text={row[ci] ?? ''} />
-                {' '.repeat(Math.max(0, w - cellWidth(row[ci] ?? '')))}
-                {ci < widths.length - 1 ? '  ' : ''}
+            {/* Cells are pre-wrapped to their own column width, so inline
+                markup is stripped rather than rendered via MdInline: a nested
+                <Text> would re-wrap on spaces and undo the CJK-aware wrap. */}
+            {cells((w, ci) => (
+              <Text bold={ri === 0} color={ri === 0 ? t.color.accent : undefined}>
+                {clipWidth(stripInlineMarkup(row[ci] ?? ''), w)}
               </Text>
             ))}
           </Box>
           {ri === 0 && rows.length > 1 ? (
-            <Text color={t.color.muted} dimColor>
-              {sep}
-            </Text>
+            <Box>
+              {cells(w => (
+                <Text color={t.color.muted} dimColor wrap="truncate-end">
+                  {'─'.repeat(Math.max(1, w))}
+                </Text>
+              ))}
+            </Box>
           ) : null}
         </Fragment>
       ))}
@@ -401,10 +487,10 @@ const cacheSet = (b: Map<string, ReactNode[]>, key: string, v: ReactNode[]) => {
   }
 }
 
-function MdImpl({ compact, t, text }: MdProps) {
+function MdImpl({ avail, compact, t, text }: MdProps) {
   const nodes = useMemo(() => {
     const bucket = cacheBucket(t)
-    const cacheKey = `${compact ? '1' : '0'}|${text}`
+    const cacheKey = `${compact ? '1' : '0'}|${avail ?? 0}|${text}`
     const cached = cacheGet(bucket, cacheKey)
 
     if (cached) {
@@ -791,7 +877,7 @@ function MdImpl({ compact, t, text }: MdProps) {
           rows.push(splitRow(lines[i]!))
         }
 
-        nodes.push(renderTable(key, rows, t))
+        nodes.push(renderTable(key, rows, t, avail))
 
         continue
       }
@@ -844,7 +930,7 @@ function MdImpl({ compact, t, text }: MdProps) {
         }
 
         if (rows.length) {
-          nodes.push(renderTable(key, rows, t))
+          nodes.push(renderTable(key, rows, t, avail))
         }
 
         continue
@@ -858,7 +944,7 @@ function MdImpl({ compact, t, text }: MdProps) {
     cacheSet(bucket, cacheKey, nodes)
 
     return nodes
-  }, [compact, t, text])
+  }, [avail, compact, t, text])
 
   return <Box flexDirection="column">{nodes}</Box>
 }
@@ -868,6 +954,9 @@ export const Md = memo(MdImpl)
 type Kind = 'blank' | 'code' | 'heading' | 'list' | 'paragraph' | 'quote' | 'rule' | 'table' | null
 
 interface MdProps {
+  // Display cells available for layout. Only tables need it (to fit their
+  // columns); omitted, they fall back to the terminal width.
+  avail?: number
   compact?: boolean
   t: Theme
   text: string

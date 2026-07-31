@@ -991,6 +991,14 @@ def tui(
         )
         raise typer.Exit(code=1)
 
+    # Refresh the cached latest-release version in the background (once per
+    # launch, throttled, best-effort) so the status bar can nudge
+    # `raven upgrade`. The gateway reads that cache when it builds the session
+    # info bundle.
+    from raven.cli.update_notice import maybe_refresh_async
+
+    maybe_refresh_async()
+
     # `--dev` runs tsx from the source tree, so it requires the ui-tui/ checkout.
     # The production path resolves a packaged or source-built bundle separately
     # (see resolve_dist_entry), so it must NOT hard-require the source tree —

@@ -150,6 +150,36 @@ def test_provider_login_github_copilot_error_exits_1(monkeypatch: pytest.MonkeyP
     assert "Authentication error" in r.stdout
 
 
+@pytest.mark.parametrize(
+    ("provider", "region", "label"),
+    [
+        ("minimax-global", "global", "MiniMax Global"),
+        ("minimax-cn", "cn", "MiniMax CN"),
+    ],
+)
+def test_provider_login_minimax_success(
+    provider: str,
+    region: str,
+    label: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    seen: dict[str, object] = {}
+
+    def fake_login(actual_region: str, **kwargs):
+        seen["region"] = actual_region
+        seen.update(kwargs)
+        return SimpleNamespace(access="access")
+
+    monkeypatch.setattr("raven.providers.minimax_oauth.login", fake_login)
+    r = runner.invoke(app, ["provider", "login", provider])
+
+    assert r.exit_code == 0
+    assert seen["region"] == region
+    assert f"Authenticated with {label}" in r.stdout
+
+
 def test_provider_help_lists_all_subcommands() -> None:
     r = runner.invoke(app, ["provider", "--help"])
     assert r.exit_code == 0
@@ -259,6 +289,31 @@ def test_reset_oauth_idempotent_when_no_token_file(
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
+
+
+def test_reset_clears_minimax_oauth_token(
+    tmp_config: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.providers.minimax_oauth import MiniMaxOAuthToken, save_token
+
+    token_file = tmp_path / "minimax_global.json"
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path))
+    save_token(
+        "global",
+        MiniMaxOAuthToken(
+            "access",
+            "refresh",
+            4_000_000_000_000,
+            "https://api.minimax.io/anthropic/v1",
+        ),
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "minimax_global", "--yes"])
+
+    assert r.exit_code == 0, r.stdout
+    assert not token_file.exists()
 
 
 def test_get_unknown_provider_exits_1(tmp_config: Path) -> None:

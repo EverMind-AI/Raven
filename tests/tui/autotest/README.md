@@ -1,143 +1,135 @@
-# tui-autotest — Phase 1 MVP
+# tui-autotest — real-terminal smoke for `raven tui`
 
-> TUI 自动测试 harness. Lets Claude Code (or any `Bash()`-driven caller) black-box drive `raven tui` and other TUI subprocesses reproducibly. **Tier 1 backend** = `tui-use` npm CLI thin wrap (selected via 2026-05-20 Day 0 spike per `docs/openspec/changes/tui-auto-test/design.md` §D7).
+A black-box harness that drives `raven tui` (or any TUI subprocess) through a real
+PTY, wrapping the [`tui-use`](https://github.com/onesuper/tui-use) npm CLI.
 
-## Quick start
+## What this tier is for, and what it cannot do
+
+It proves **the front door opens**: the Python parent spawns the Node child, the
+unix socket RPC connects, Ink renders into an alt-screen, and keystrokes arrive.
+Nothing else in the repo can prove that -- vitest mocks the gateway, and pytest
+never renders Ink.
+
+It is a smoke tier, not a safety net:
+
+- **It reads a 120x40 character screen.** It can see that a table appeared, not
+  that the numbers in it are right. Wrong model resolved, wrong session id,
+  wrong permission decision -- invisible unless the visible text changes.
+- **A real run is not a real check.** Every assertion in this tier was once
+  satisfied by the composer echoing the typed command, so it stayed green for
+  months while three commands in the whitelist did not even exist (#228).
+- **Tight assertions are brittle, loose ones are vacuous.** Screen text depends
+  on terminal size, local state (how many skills / cron jobs exist), and timing.
+  That tension does not go away; it is only ever managed.
+- **It runs on one machine.** No CI job runs this tier, and in practice it runs
+  on macOS only, so platform-specific behaviour (see #205, Windows terminal
+  restore) is out of reach by construction.
+
+Behaviour coverage belongs one layer down: `ui-tui/src/__tests__/` for TUI logic
+(mock the gateway, render with `ink-testing-library`), `tests/test_tui_rpc_*.py`
+for the RPC and dispatch layers.
+
+## Prerequisites
+
+Three, and missing any of them fails in a way that looks like a product bug:
 
 ```bash
-# Install backend (one-time, system-level)
-npm install -g tui-use
+npm install -g tui-use            # the PTY backend, must be on PATH
+npm ci && (cd ui-tui && npm ci)   # repo root AND ui-tui
+(cd ui-tui && npm run build)      # dist/entry.js is what `raven tui` loads
+```
 
-# Install Python deps (already in dev group)
-uv sync
+## Running
 
-# Run all tui-autotest tests
-uv run pytest tests/tui/autotest/tests/
-
-# Unit tests only (no real subprocesses)
-uv run pytest tests/tui/autotest/tests/ -m "not e2e"
-
-# Ad-hoc smoke (no pytest)
+```bash
+uv run pytest tests/tui/autotest -m e2e          # real subprocesses, spends LLM turns
+uv run pytest tests/tui/autotest -m "not e2e"    # harness unit tests only
 uv run python -m tests.tui.autotest smoke "uv run raven tui --check"
 ```
 
-## Harness API (see also: `specs/tui-autotest.md` §S3)
+A bare `uv run pytest` skips this tier: `pyproject.toml` sets
+`addopts = -m "not integration and not e2e"`.
+
+## Writing a test
+
+Use the `harness` fixture; it kills the session on teardown either way.
 
 ```python
 import re
-from tests.tui.autotest.runner import Harness
 
-h = Harness(cols=120, rows=40)
-try:
-    h.env_set({"FORCE_COLOR": "1"})
-    h.spawn("uv run raven tui")
-    assert h.wait(r"Raven", timeout=25.0)
-    h.type("/status")
-    h.press("enter")
-    assert h.wait(re.compile(r"OpenRouter|Model:"), timeout=10.0)
-    h.press("escape")  # dismiss overlay
-    h.press("ctrl+c")  # exit
-    assert h.expect_exit(0, timeout=10.0)
-finally:
-    h.kill()  # idempotent
-```
+import pytest
 
-Or via the `harness` pytest fixture (auto-kills on teardown):
+from tests.tui.autotest.raven_ux import READY_RE, exit_tui
 
-```python
-def test_status(harness):
+_EXPECTED = r"Raven Status"
+
+
+@pytest.mark.e2e
+def test_status_round_trip(harness):
     harness.spawn("uv run raven tui")
-    assert harness.wait(r"Raven", timeout=25.0)
+
+    # 1. Readiness is the status bar, NOT the banner. The banner paints while
+    #    the app still drops keystrokes.
+    assert harness.wait(READY_RE, timeout=60.0), f"never ready; screen=\n{harness.screen()}"
+
+    # 2. The pattern must not already be on screen, or the assertion below
+    #    proves nothing. The welcome frame carries "OpenRouter", the tool list
+    #    carries "cron", and the composer echoes whatever you type.
+    assert not re.search(_EXPECTED, harness.screen())
+
+    # 3. Confirm the composer took the text before submitting.
     harness.type("/status")
+    assert harness.wait(r"/status", timeout=10.0)
     harness.press("enter")
-    assert harness.wait(r"OpenRouter|Model:", timeout=10.0)
-    harness.press("escape")
-    harness.press("ctrl+c")
+
+    assert harness.wait(_EXPECTED, timeout=30.0)
+
+    # 4. Ctrl+C is a ladder, not an exit key: busy cancels the turn, a
+    #    non-empty composer clears the input, and only then does it quit. Press
+    #    until the process is gone.
+    exit_tui(harness)
     assert harness.expect_exit(0, timeout=10.0)
 ```
 
-## Best practices
+Those four points are the whole lesson of #228. Each one was a defect in every
+file in this tier at the same time, and points 2 and 3 are why nobody noticed.
 
-### Readiness patterns
-
-`tui-use snapshot` returns alt-screen rendered text only — content in scrollback (incl. pre-Ink ANSI sequences and the 🦞 emoji) is NOT visible. Use alt-screen-visible patterns for `wait()` readiness:
-
-- ✅ `Raven` (brand text in main panel)
-- ✅ `claude-sonnet-4-6` (provider+model header)
-- ✅ `Session: tui:default`
-- ❌ `🦞` (in byte stream but lost on alt-screen entry)
-
-### Exit sequences
-
-Raven TUI exit UX is **context-dependent**:
-
-- **Inline-output commands** (e.g., command that prints + returns): one Ctrl+C exits.
-- **Overlay-output commands** (status panel, picker, decision list): Esc dismisses overlay; Ctrl+C exits.
-- **Mid-typing**: first Ctrl+C cancels input, second Ctrl+C exits.
-
-Robust template:
+## Harness API
 
 ```python
-from tests.tui.autotest.runner import BackendError
-
-for key in ("escape", "ctrl+c"):
-    try:
-        harness.press(key)
-    except BackendError:
-        break  # session already exited inline — fine
-    time.sleep(0.5)
+h = Harness(cols=120, rows=40)
+h.env_set({"FORCE_COLOR": "1"})   # before spawn only
+h.spawn("uv run raven tui")       # one subprocess per Harness
+h.type("text"); h.press("enter")  # tui-use verbs
+h.wait(pattern, timeout=...)      # poll snapshots for a regex -> bool
+h.screen(); h.dump()              # rendered text (frame rows stripped)
+h.expect_exit(0, timeout=...)     # -> bool
+h.kill()                          # idempotent
 ```
 
-A handful of overlays still resist (`channels status`, `sentinel routines`, etc.) — those are marked `@pytest.mark.xfail(strict=False)` in `test_dogfood_whitelist.py` pending tui-chat UX wiring (which is touching Cancel anyway).
+Constraints worth knowing:
 
-### Shell-quoted args don't survive tui-use
+- **Snapshots are alt-screen only.** Anything in scrollback, including pre-Ink
+  ANSI output, is invisible to `wait()`.
+- **The tui-use daemon addresses one "current" session.** `spawn` makes its
+  session current and the verbs carry no session id, so two pytest processes
+  driving the daemon at once would fight over it. Do not run this tier in
+  parallel.
+- **Shell-quoted args do not survive `tui-use start`.** It goes through a shell,
+  so `-m "two words"` loses its quotes. Type slash commands into the TUI
+  instead, which exercises the fuller path anyway.
+- **`HOME` is the only isolation knob** for a destructive test (`env_set({"HOME":
+  str(tmp_path)})`); everos honours neither `RAVEN_HOME` nor XDG.
 
-`tui-use start` invokes the user's shell, so multi-word `-m "args here"` args lose quotes during shell re-tokenization. Workarounds:
+## Cost
 
-- Use slash commands typed into the TUI (`harness.type("/cmd")` + `press("enter")`), which exercise the full cli.dispatch RPC round-trip without going through shell argv.
-- Avoid shell-special chars (`?` glob, `*` glob, `[ ]` brackets) in CLI args.
+`test_e2e_raven_tui_chat.py` runs live model turns (four per full run) against
+whatever provider `~/.raven/config.json` names. Everything else is free.
 
-### LLM-dependent tests
-
-The `agent`/`chat` round-trip costs ~$0.0001 per test (Qwen 3.6 Plus via OpenRouter). Mark with `@pytest.mark.e2e` and run only when chat-flow regressions are suspected.
-
-`test_e2e_raven_tui_chat.py` (TUI chat) and `test_e2e_raven_chat_cli.py` (chat CLI) are `xfail-strict` until L2-A `tui-chat` wires the streaming RPC path. They will start passing the day tui-chat merges; strict=True will then fail the marker, prompting its removal.
-
-### Destructive pairing (Phase 2 reserved, documentation only)
-
-```python
-def test_with_isolated_home(harness, tmp_path):
-    harness.env_set({"HOME": str(tmp_path), "FORCE_COLOR": "1"})
-    harness.spawn("uv run raven tui")
-    # ... destructive test body ...
-    # cleanup via tmp_path teardown (pytest auto)
-```
-
-EC does NOT honor `RAVEN_HOME` / XDG (verified 2026-05-20 spike) — `HOME` env override is the only working isolation path. Destructive commands are NOT yet wired into TUI whitelist; pattern is documented for future L2s adding them.
-
-## Exit codes (CLI / pytest both)
+## Exit codes (`python -m tests.tui.autotest`)
 
 | Code | Meaning |
 |---|---|
-| 0 | spawn ok + readiness matched + subprocess exit 0 |
-| 1 | spawn ok but readiness timeout OR subprocess exit != 0 |
-| 2 | harness self-error (tui-use missing / spawn pipeline broken) |
-
-## Out of scope (Phase 1)
-
-- DSL `.tape` file format — dropped 2026-05-20 (Path B pivot). See `docs/RepoMem/temp/tui-auto-test/dsl-decision-rationale.md` for rationale.
-- MatchSnapshot golden-file diff — Phase 2 Python method.
-- MCP server / interactive REPL — Phase 3.
-- pytest plugin / GH Actions runner / asciinema record-replay — Phase 4.
-- Windows support.
-- Mock LLM provider — Phase 2 spike (currently EC has no `mock_response` integration).
-
-## References
-
-- proposal: `docs/openspec/changes/tui-auto-test/proposal.md`
-- design: `docs/openspec/changes/tui-auto-test/design.md`
-- tasks: `docs/openspec/changes/tui-auto-test/tasks.md`
-- spec: `docs/openspec/changes/tui-auto-test/specs/tui-autotest.md`
-- spike data: `docs/RepoMem/temp/tui-auto-test/spike-findings.md`
-- DSL decision rationale: `docs/RepoMem/temp/tui-auto-test/dsl-decision-rationale.md`
-- backend: <https://github.com/onesuper/tui-use> (MIT, npm `tui-use`)
+| 0 | spawn ok, readiness matched, subprocess exited 0 |
+| 1 | spawn ok but readiness timed out, or subprocess exit != 0 |
+| 2 | harness self-error (`tui-use` missing, spawn pipeline broken) |

@@ -16,26 +16,31 @@ Providers not listed here fall back to their configured list.
 from __future__ import annotations
 
 COMMON_MODELS: dict[str, list[str]] = {
+    # Carries the "openrouter/" prefix like this provider's default_model does.
+    # Bare OpenRouter ids start with the upstream vendor ("anthropic/...",
+    # "deepseek/..."), which auto-detection reads as a request for that vendor
+    # direct -- so a model picked from this list would quietly leave OpenRouter
+    # as soon as the user also held that vendor's key.
     "openrouter": [
-        "anthropic/claude-opus-4.8",
-        "anthropic/claude-opus-4.7",
-        "anthropic/claude-sonnet-5",
-        "anthropic/claude-fable-5",
-        "openai/gpt-5.5",
-        "openai/gpt-5.4-mini",
-        "google/gemini-3.5-flash",
-        "google/gemini-3-flash-preview",
-        "x-ai/grok-4.3",
-        "meta-llama/llama-4-maverick",
-        "mistralai/mistral-medium-3-5",
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
-        "xiaomi/mimo-v2.5",
-        "minimax/minimax-m3",
-        "z-ai/glm-5.2",
-        "tencent/hy3",
-        "moonshotai/kimi-k2.6",
-        "qwen/qwen3.7-max",
+        "openrouter/anthropic/claude-opus-4.8",
+        "openrouter/anthropic/claude-opus-4.7",
+        "openrouter/anthropic/claude-sonnet-5",
+        "openrouter/anthropic/claude-fable-5",
+        "openrouter/openai/gpt-5.5",
+        "openrouter/openai/gpt-5.4-mini",
+        "openrouter/google/gemini-3.5-flash",
+        "openrouter/google/gemini-3-flash-preview",
+        "openrouter/x-ai/grok-4.3",
+        "openrouter/meta-llama/llama-4-maverick",
+        "openrouter/mistralai/mistral-medium-3-5",
+        "openrouter/deepseek/deepseek-v4-flash",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "openrouter/xiaomi/mimo-v2.5",
+        "openrouter/minimax/minimax-m3",
+        "openrouter/z-ai/glm-5.2",
+        "openrouter/tencent/hy3",
+        "openrouter/moonshotai/kimi-k2.6",
+        "openrouter/qwen/qwen3.7-max",
     ],
     "openai": [
         "openai/gpt-5.5",
@@ -75,7 +80,17 @@ COMMON_MODELS: dict[str, list[str]] = {
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
     ],
-    "zhipu": [
+    "minimax_global": [
+        "minimax-global/MiniMax-M3",
+        "minimax-global/MiniMax-M2.7",
+        "minimax-global/MiniMax-M2.7-highspeed",
+    ],
+    "minimax_cn": [
+        "minimax-cn/MiniMax-M3",
+        "minimax-cn/MiniMax-M2.7",
+        "minimax-cn/MiniMax-M2.7-highspeed",
+    ],
+    "zai": [
         "zai/glm-5.2",
         "zai/glm-5.1",
         "zai/glm-5",

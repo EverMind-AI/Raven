@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytest.importorskip("telegram")
+
 from raven.channels.adapters.telegram.channel import (
     TelegramChannel,
     _inbound_ext,

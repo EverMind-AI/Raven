@@ -98,13 +98,9 @@ tools = [
     "readability-lxml>=0.8.4,<1.0.0",
     "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
-retrieval = [
-    "torch>=2.0.0",
-    "transformers>=4.45.0",
-]
 sandbox = [
-    "boxlite==0.9.5",
     "anyio>=4.0",
+    "boxlite==0.9.5 ; sys_platform != 'win32'",
 ]
 dev = [
     "pytest>=8.0,<10.0",
@@ -255,9 +251,19 @@ ignore = ["E501"]
 "benchmarks/proactivity_eval/runners/synthesizers/keyword.py" = ["E741"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = ["tests/integration", "*.egg", ".*", "build", "dist"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m",
+    "not integration and not e2e",
+]
+asyncio_mode = "auto"
 markers = [
+    "integration: needs a real external resource (LLM / RPC subprocess / VM / network); deselected by default, run with '-m integration' or by pointing at tests/integration",
+    "e2e: spawns real subprocesses / drives the full stack (slow); deselected by default, run with '-m e2e' (e.g. tests/tui/autotest)",
     "real_llm: hits a real everos runtime (LLM + embedding); skipped unless EVEROS_LLM__API_KEY / EVEROS_EMBEDDING__MODEL are configured",
     "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
 ]

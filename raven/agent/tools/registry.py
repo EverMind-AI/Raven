@@ -3,7 +3,7 @@
 import asyncio
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.tracing import semconv, trace
 
 
@@ -81,9 +81,15 @@ class ToolRegistry:
             else:
                 result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
 
-            if isinstance(result, str):
-                return note + result
-            return result
+            # Unwrap ToolResult here, at the boundary: `execute` promises model
+            # text to every caller, and only the agent loop wants the display
+            # string (which rides along on ToolOutput). Tool-authored errors
+            # carry their own targeted guidance, so no generic hint is added.
+            if isinstance(result, ToolResult):
+                model_text, display_text = result.model_text, result.display_text
+            else:
+                model_text, display_text = str(result), None
+            return ToolOutput(note + model_text, display_text)
         except asyncio.TimeoutError:
             return note + f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:

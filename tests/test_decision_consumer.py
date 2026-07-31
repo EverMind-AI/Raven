@@ -298,7 +298,7 @@ async def test_error_status_renders_user_facing_apology(pending_store):
 
 
 @pytest.mark.asyncio
-async def test_decision_consumer_short_circuits_agent_loop(pending_store):
+async def test_decision_consumer_short_circuits_agent_loop(pending_store, tmp_path):
     """Smoke test the decision_consumer hook on AgentLoop. We mock the
     consumer to check only that it's wired and short-circuits the
     process_message path without running the full LLM pipeline."""
@@ -317,7 +317,7 @@ async def test_decision_consumer_short_circuits_agent_loop(pending_store):
             channel=req.source.channel, chat_id=req.source.chat_id, content="✓ consumed by decision_consumer"
         )
 
-    workspace = Path("/tmp") / f"ec-test-{_NOW_MS}"
+    workspace = tmp_path / "ws"
     workspace.mkdir(parents=True, exist_ok=True)
 
     loop = AgentLoop(
@@ -334,7 +334,7 @@ async def test_decision_consumer_short_circuits_agent_loop(pending_store):
 
 
 @pytest.mark.asyncio
-async def test_decision_consumer_falls_through_on_none(pending_store):
+async def test_decision_consumer_falls_through_on_none(pending_store, tmp_path):
     """If consumer returns None, AgentLoop continues with normal flow.
     We can't easily test the full normal flow here without a full LLM
     setup — settle for verifying the hook is called and the result is
@@ -347,7 +347,7 @@ async def test_decision_consumer_falls_through_on_none(pending_store):
         calls["n"] += 1
         return None
 
-    workspace = Path("/tmp") / f"ec-test-noconsume-{_NOW_MS}"
+    workspace = tmp_path / "ws"
     workspace.mkdir(parents=True, exist_ok=True)
 
     class _FakeProvider:
@@ -376,8 +376,12 @@ async def test_decision_consumer_falls_through_on_none(pending_store):
     msg = _msg("hello")
     try:
         await loop._process_message(msg)
+    except AssertionError:
+        # Never swallow an assertion: the fakes use them to signal "this must
+        # not be reached", so hiding one would turn a real failure into a pass.
+        raise
     except Exception:
-        # The fake provider may throw mid-flow; that's fine — we only
-        # care that the consumer was called once before the failure.
+        # Anything else from the full turn path is tolerated: this test only
+        # pins that the consumer hook fired before the turn continued.
         pass
     assert calls["n"] == 1

@@ -202,9 +202,15 @@ class RavenSentinelBackend(AgentBackend):
             )
 
         from raven.proactive_engine.sentinel.planner import ProactivePlanner
-        from raven.providers.custom_provider import CustomProvider
+        from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
-        provider = CustomProvider(api_key=api_key, api_base=api_base, default_model=self._model)
+        provider = LiteLLMProvider(
+            api_key=api_key,
+            api_base=api_base,
+            default_model=self._model,
+            provider_name="custom",
+            extra_headers=session_affinity_headers(),
+        )
         self._planner = ProactivePlanner(provider, self._model)
 
     async def run_one(
