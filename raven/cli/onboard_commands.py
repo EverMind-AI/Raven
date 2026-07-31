@@ -952,7 +952,11 @@ def _credential_kind(provider: str, spec: Any) -> str:
         return CRED_OAUTH
     if spec is not None and spec.is_local:
         return CRED_LOCAL
-    if provider == "custom":
+    if spec is not None and spec.requires_api_base:
+        # Not a name check any more: Azure needs the same pair and was asked only
+        # for a key, so it was configured with no endpoint and could not be
+        # called. The TUI already knew -- it kept its own list of the two -- which
+        # is the same fact answered twice, once wrongly.
         return CRED_ENDPOINT
     return CRED_KEY
 

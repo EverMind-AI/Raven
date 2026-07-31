@@ -98,6 +98,13 @@ class ProviderSpec:
     # over OAuth). They take no LiteLLM route prefix.
     bypasses_litellm: bool = False
 
+    # The endpoint is the user's to supply and there is no default that works:
+    # Azure gives every tenant its own resource URL, a self-hosted endpoint is
+    # wherever the user put it. Distinct from `default_api_base`, which is a
+    # working address the user may override, and from `is_local`, which needs an
+    # address but no key.
+    requires_api_base: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -173,6 +180,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # empty).
         via_driver="openai",
         is_gateway=True,
+        requires_api_base=True,
         default_api_base="http://localhost:8000/v1",
     ),
     # === Azure OpenAI ======================================================
@@ -185,6 +193,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_key="",
         display_name="Azure OpenAI",
         bypasses_litellm=True,
+        requires_api_base=True,
     ),
     # === Gateways (detected by api_key / api_base, not model name) =========
     # Gateways can route any model, so they win in fallback.

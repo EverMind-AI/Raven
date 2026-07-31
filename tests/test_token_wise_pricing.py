@@ -241,6 +241,19 @@ def _litellm_miss(_model):
     raise Exception("This model isn't mapped yet")
 
 
+def _patch_litellm_blind(monkeypatch):
+    """Make LiteLLM miss for real: the price table is consulted before the ask.
+
+    Stubbing ``get_model_info`` alone stopped being enough once the table is read
+    first -- a model the table keys exactly is answered there and never reaches
+    the OpenRouter tier, which is the point of reading it first.
+    """
+    import litellm
+
+    monkeypatch.setattr(litellm, "model_cost", {})
+    _patch_litellm_info(monkeypatch, _litellm_miss)
+
+
 def test_resolve_context_window_from_litellm_no_network(monkeypatch):
     """Tier 1: a LiteLLM-mapped model's window comes from LiteLLM, no OpenRouter hit."""
     _patch_litellm_info(monkeypatch, lambda m: {"max_input_tokens": 200000})
@@ -261,7 +274,7 @@ def test_resolve_context_window_from_openrouter_when_litellm_misses(monkeypatch)
 
 def test_resolve_context_window_non_openrouter_via_catalog(monkeypatch):
     """Tier 2: a bare provider model LiteLLM misses resolves via the OpenRouter catalog."""
-    _patch_litellm_info(monkeypatch, _litellm_miss)
+    _patch_litellm_blind(monkeypatch)
     _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
     assert resolve_context_window("deepseek/deepseek-v4-pro") == 163840
@@ -273,6 +286,162 @@ def test_resolve_context_window_unknown_returns_none(monkeypatch):
     _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
 
     assert resolve_context_window("openrouter/some/model-not-listed") is None
+
+
+_COPILOT_MODELS = [
+    {
+        "id": "github_copilot/gpt-4.1",
+        "pricing": {"prompt": "0.000002", "completion": "0.000008"},
+        "context_length": 128000,
+    }
+]
+
+
+def _forbid(recorder: list):
+    """A stub that records the call and misses.
+
+    Recorded rather than raised: both lookups swallow exceptions to move to the
+    next candidate, so a probe that raises is caught and proves nothing. That is
+    how the first version of these tests passed against the unfixed code.
+    """
+
+    def _stub(*args, **kwargs):
+        recorder.append(kwargs.get("model") or (args[0] if args else "?"))
+        raise Exception("unmapped")
+
+    return _stub
+
+
+def test_the_window_of_a_login_prompting_model_comes_from_the_table(monkeypatch):
+    """Asking LiteLLM about a Copilot model starts a GitHub device flow.
+
+    It resolves the model's credentials on the way to its metadata, so with no
+    token file on disk one lookup printed six device codes to stdout and blocked
+    for 410 seconds -- two three-attempt login cycles, because the bare and the
+    openrouter-prefixed candidate reach the same driver. session.create runs this
+    before the first turn, so the symptom was a gateway that hung on opening.
+    """
+    import litellm
+
+    asked: list[str] = []
+    monkeypatch.setattr(litellm, "get_model_info", _forbid(asked))
+    counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    assert resolve_context_window("github_copilot/gpt-4.1") == 128000
+    assert not asked, f"a login-prompting model was handed to LiteLLM: {asked}"
+    assert counter["calls"] == 0
+
+
+def test_the_rates_of_a_login_prompting_model_skip_litellm(monkeypatch):
+    """The same hang, on the path that runs after every single call.
+
+    ``cost_per_token`` resolves credentials too, so the cost estimate blocked on
+    the same device flow. Fixing only the window lookup left this one, and
+    answering "can this be handed to LiteLLM" separately in each place is what
+    made the first attempt at this wrong.
+
+    The estimate still lands: the live catalogue prices the model. Asking LiteLLM
+    is what is skipped, not estimating.
+    """
+    import litellm
+
+    asked: list[str] = []
+    monkeypatch.setattr(litellm, "cost_per_token", _forbid(asked))
+    _patch_openrouter(monkeypatch, lambda req: _models_response(_COPILOT_MODELS))
+
+    cost = estimate_cost_usd("github_copilot/gpt-4.1", 1000, 100)
+    assert cost is not None and cost > 0
+    assert not asked, f"a login-prompting model was handed to LiteLLM: {asked}"
+
+
+def test_a_login_prompting_model_the_table_does_not_price_is_never_asked(monkeypatch):
+    """No row and no safe way to ask: degrade, do not prompt.
+
+    Both lookups fall through to what they already do for an unknown model -- the
+    caller keeps its configured window, and the cost estimate is None. A read that
+    runs every turn is not worth a login prompt.
+    """
+    import litellm
+
+    asked: list[str] = []
+    monkeypatch.setattr(litellm, "get_model_info", _forbid(asked))
+    monkeypatch.setattr(litellm, "cost_per_token", _forbid(asked))
+    _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    assert resolve_context_window("github_copilot/not-a-real-model") is None
+    assert estimate_cost_usd("github_copilot/not-a-real-model", 1000, 100) is None
+    assert not asked, f"asked anyway: {asked}"
+
+
+def test_reading_the_table_does_not_replace_asking_litellm(monkeypatch):
+    """The ask does more than key normalization, so it stays for everything else.
+
+    "anthropic/claude-sonnet-4-5" is absent from the table -- it keys that model
+    bare -- and prefixed ids are the form Raven stores. Stripping the prefix to
+    read the table instead looked free and was not: for an openrouter-prefixed
+    candidate LiteLLM derives OpenRouter's own numbers, which are in no row, and
+    stripping answered three MiniMax models with the direct figure instead.
+    """
+    import litellm
+
+    assert "anthropic/claude-sonnet-4-5" not in getattr(litellm, "model_cost", {}), (
+        "premise changed; this test proves nothing"
+    )
+    _patch_litellm_info(monkeypatch, lambda m: {"max_input_tokens": 200000})
+    counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    assert resolve_context_window("anthropic/claude-sonnet-4-5") == 200000
+    assert counter["calls"] == 0
+
+
+def test_prose_in_a_numeric_field_is_not_read_as_a_number():
+    """LiteLLM ships a self-documenting row whose numeric fields hold sentences."""
+    from raven.token_wise.pricing import _numeric
+
+    prose = {"max_input_tokens": "max input tokens, if the provider specifies it"}
+    assert _numeric(prose, "max_input_tokens") is None
+    assert _numeric({"max_input_tokens": 128000}, "max_input_tokens") == 128000
+    assert _numeric({"max_tokens": 8192}, "max_input_tokens", "max_tokens") == 8192
+    assert _numeric(None, "max_tokens") is None
+
+
+def test_which_drivers_can_prompt_is_read_from_the_installed_litellm():
+    """Derived, not snapshotted, so a LiteLLM bump cannot make it stale.
+
+    A frozen list would need regenerating on every bump, and a stale one brings
+    the hang back for the vendor it missed. The driver ships ``authenticator.py``
+    or it does not.
+    """
+    from raven.token_wise.pricing import _may_prompt
+
+    assert _may_prompt("github_copilot/gpt-4.1")
+    assert _may_prompt("openrouter/github_copilot/gpt-4.1"), "any segment counts"
+    assert _may_prompt("chatgpt/gpt-5.1")
+    assert _may_prompt("gigachat/GigaChat-2-Max")
+    for safe in ("openai/gpt-4o", "anthropic/claude-sonnet-4-5", "deepseek/deepseek-v4-pro", "gpt-4o"):
+        assert not _may_prompt(safe), safe
+
+
+def test_one_place_decides_whether_a_model_can_be_handed_to_litellm():
+    """Both lookups reach the same authenticator, so both consult one answer.
+
+    The first attempt at this guarded the metadata lookup only, and would have
+    needed the same decision again for the pricing call -- and again for
+    ``validate_environment``, which turned out to prompt as well.
+    """
+    import ast
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parents[1] / "raven" / "token_wise" / "pricing.py").read_text()
+    tree = ast.parse(source)
+    owner = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_may_prompt")
+    allowed = range(owner.lineno, (owner.end_lineno or owner.lineno) + 1)
+    offenders = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(source.splitlines(), 1)
+        if "authenticator.py" in line and i not in allowed
+    ]
+    assert not offenders, "ask _may_prompt instead:\n" + "\n".join(offenders)
 
 
 # --- Disk persistence of the OpenRouter catalog ---

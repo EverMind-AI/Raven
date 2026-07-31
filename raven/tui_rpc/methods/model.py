@@ -48,7 +48,15 @@ if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
 
 
-_NEEDS_API_BASE = {"custom", "azure_openai"}
+def _needs_api_base(slug: str) -> bool:
+    """Does this provider have no usable endpoint until the user gives one?
+
+    Read from the registry rather than listed here: the wizard answered the same
+    question from the spec and the two drifted, leaving Azure configurable with no
+    endpoint at all.
+    """
+    spec = find_by_name(slug)
+    return bool(spec is not None and spec.requires_api_base)
 
 
 def _parse(model_cls: type, params: dict) -> Any:
@@ -104,7 +112,7 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
         "key_env": (spec.env_key or None) if spec else None,
         "models": models,
         "total_models": len(models),
-        "needs_api_base": slug in _NEEDS_API_BASE,
+        "needs_api_base": _needs_api_base(slug),
         "warning": warning,
     }
 
@@ -177,7 +185,7 @@ async def model_save_key(params: dict) -> dict:
             f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
-    if parsed.slug in _NEEDS_API_BASE and not parsed.api_base:
+    if _needs_api_base(parsed.slug) and not parsed.api_base:
         raise ConfigValidationError(
             f"{label} requires an api_base",
             data={"slug": parsed.slug, "field": "api_base"},
