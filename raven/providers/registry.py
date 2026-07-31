@@ -533,6 +533,24 @@ def normalize_provider_name(name: str | None) -> str:
     return (name or "").strip().lower().replace("-", "_")
 
 
+def litellm_spelling(name: str | None) -> str:
+    """How LiteLLM spells this vendor, which is the only form usable as a prefix.
+
+    Names are matched spelling-insensitively everywhere else, so the one arriving
+    here may be underscored where LiteLLM hyphenates -- and LiteLLM rejects the
+    underscored form outright ("nano_gpt/..." comes back as "LLM Provider NOT
+    provided"), which turns a provider that configured cleanly into one that
+    cannot be called.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+
+    wanted = normalize_provider_name(name)
+    for candidate in LITELLM_PROVIDER_NAMES:
+        if normalize_provider_name(candidate) == wanted:
+            return candidate
+    return wanted
+
+
 def names_same_provider(key: str, name: str) -> bool:
     """Do these two strings name the same provider?
 

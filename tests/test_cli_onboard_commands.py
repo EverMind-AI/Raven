@@ -2157,6 +2157,7 @@ def test_the_wizard_offers_known_models_when_the_provider_cannot_be_reached(monk
         find_by_name("moonshot"),
         current_model=None,
         model_ids=None,  # the fetch came back empty
+        probe_status="network_error",
         user_provided_model=None,
         non_interactive=False,
     )
@@ -2400,6 +2401,7 @@ def test_every_exit_of_the_model_step_prefixes_what_it_returns(typed: str, expec
             None,
             current_model=None,
             model_ids=None,
+            probe_status="skipped",
             user_provided_model=typed,
             non_interactive=True,
         )
@@ -2412,6 +2414,7 @@ def test_every_exit_of_the_model_step_prefixes_what_it_returns(typed: str, expec
             None,
             current_model=None,
             model_ids=None,
+            probe_status="skipped",
             user_provided_model=None,
             non_interactive=False,
         )
@@ -2434,6 +2437,7 @@ def test_what_the_model_step_returns_is_served_by_the_provider_it_was_configured
         None,
         current_model=None,
         model_ids=None,
+        probe_status="skipped",
         user_provided_model="mistral-large-latest",
         non_interactive=True,
     )
@@ -2506,7 +2510,10 @@ def test_only_credential_kind_reads_the_spec_auth_flags() -> None:
     offenders = [
         f"line {i}: {line.strip()}"
         for i, line in enumerate(source.splitlines(), 1)
-        if re.search(r"\bspec\.is_(oauth|local)\b", line) and not line.lstrip().startswith("#") and i not in allowed
+        # Any receiver, not just one spelled `spec`: `target_spec.is_oauth` has no
+        # word boundary before "spec", so a name-anchored pattern read as a
+        # guarantee while missing the manage menu entirely.
+        if re.search(r"\.is_(oauth|local)\b", line) and not line.lstrip().startswith("#") and i not in allowed
     ]
     assert not offenders, "derive it from _credential_kind instead:\n" + "\n".join(offenders)
 
@@ -2675,3 +2682,157 @@ def test_backing_out_of_the_vendor_sublist_returns_to_the_provider_list(
     rows = iter([onboard_commands._PICK_LITELLM_VENDOR, onboard_commands._BACK])
     monkeypatch.setattr(onboard_commands, "_select_provider_row", lambda: next(rows))
     assert onboard_commands._select_provider() is onboard_commands._BACK
+
+
+def test_switching_provider_discards_every_flag_not_just_the_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag values belong to the pass they were typed for.
+
+    They were carried into the next one, so switching from a failed keyed
+    provider to a local deployment hit the guard that rejects --api-key for one
+    and ended the wizard on a usage error, losing the steps this loop exists to
+    keep. The quieter halves of the same bug: the stale key was written to the
+    newly picked provider with no prompt, and the stale base URL pointed it at
+    the previous provider's machine.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    seen: list[tuple[str, Any, Any, Any]] = []
+
+    def _collect(provider: str, **kw: Any) -> Any:
+        seen.append((provider, kw.get("api_key"), kw.get("base_url"), kw.get("model")))
+        return onboard_commands._BACK if provider == "ollama_chat" else None
+
+    picks = iter(["ollama_chat", onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **k: None)
+
+    # No exception: reaching the local deployment used to raise BadParameter here.
+    assert (
+        onboard_commands._configure_one_provider(
+            provider="deepseek",
+            api_key="sk-stale",
+            base_url="http://previous-box:1234",
+            model="deepseek-chat",
+            non_interactive=False,
+            warnings=[],
+        )
+        is None
+    )
+    assert seen[0] == ("deepseek", "sk-stale", "http://previous-box:1234", "deepseek-chat"), (
+        "the flags have to apply on the pass they were given for"
+    )
+    assert seen[1] == ("ollama_chat", None, None, None), f"a flag survived the switch: {seen[1]}"
+
+
+def test_no_rewind_clears_the_flags_by_hand() -> None:
+    """One answer to "what does a rewind discard", three call sites.
+
+    Each of the three used to answer it separately and all three answered it the
+    same incomplete way -- only the provider flag -- which is the shape of bug
+    this branch exists to remove.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    path = _Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
+    source = path.read_text()
+    tree = ast.parse(source)
+    outer = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_configure_one_provider"
+    )
+    rewind = next(node for node in ast.walk(outer) if isinstance(node, ast.FunctionDef) and node.name == "_rewind")
+    lines = source.splitlines()
+    allowed = range(rewind.lineno, (rewind.end_lineno or rewind.lineno) + 1)
+    body = range(outer.lineno, (outer.end_lineno or outer.lineno) + 1)
+
+    offenders = [
+        f"line {i}: {lines[i - 1].strip()}"
+        for i in body
+        if "flag_provider = " in lines[i - 1] and "flag_provider = provider" not in lines[i - 1] and i not in allowed
+    ]
+    assert not offenders, "call _rewind() instead:\n" + "\n".join(offenders)
+
+
+def test_a_provider_with_no_model_endpoint_is_not_reported_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """openai / anthropic / deepseek / gemini reach this with nothing wrong.
+
+    They ship no api_base, so the pre-check is skipped rather than failed and
+    there is no model list on a healthy run. The step printed "couldn't reach the
+    provider" straight after the line saying the check had been skipped, so the
+    first thing the user saw on the happy path was two contradictory sentences.
+    """
+    from raven.providers.registry import find_by_name
+
+    offered: dict[str, Any] = {}
+
+    class _Stub:
+        def __init__(self, label: Any, **kw: Any) -> None:
+            offered["choices"] = list(kw.get("choices") or [])
+
+        def ask(self) -> Any:
+            return offered["choices"][0]
+
+    monkeypatch.setattr(
+        onboard_commands, "_require_questionary", lambda: SimpleNamespace(autocomplete=_Stub, text=_Stub)
+    )
+
+    for status, unreachable_expected in (("skipped", False), ("network_error", True)):
+        capsys.readouterr()
+        onboard_commands._pick_model(
+            "anthropic",
+            find_by_name("anthropic"),
+            current_model=None,
+            model_ids=None,
+            probe_status=status,
+            user_provided_model=None,
+            non_interactive=False,
+        )
+        out = capsys.readouterr().out.lower()
+        assert ("couldn't reach" in out or "could not reach" in out) is unreachable_expected, (
+            f"status={status!r} printed: {out.strip()}"
+        )
+
+
+def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key plus the address it is sent to; the menu only re-asked for the key.
+
+    The URL is the field that moves when the user redeploys, and it was the one
+    this menu could not reach -- leaving the stored address pointing at a machine
+    that is gone, with no way out but editing the config file.
+    """
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("custom", {"api_key": "sk-old", "api_base": "http://old-box:8000/v1"})
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a: Any) -> None:
+            self._a = a
+
+        def ask(self) -> Any:
+            return self._a
+
+    select_answers = iter(["custom", "update", onboard_commands._BACK])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-new")
+
+    seeded: dict[str, Any] = {}
+
+    def _base_url(default: str = "https://", **kw: Any) -> Any:
+        seeded["default"] = default
+        return "http://new-box:9000/v1"
+
+    monkeypatch.setattr(onboard_commands, "_prompt_base_url", _base_url)
+
+    onboard_commands._manage_existing_providers(non_interactive=False)
+
+    section = json.loads(tmp_env.read_text())["providers"]["custom"]
+    assert section.get("apiBase") == "http://new-box:9000/v1", section
+    assert section.get("apiKey") == "sk-new", section
+    assert seeded["default"] == "http://old-box:8000/v1", "the stored address was not offered back"
