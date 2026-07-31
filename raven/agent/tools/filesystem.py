@@ -77,9 +77,9 @@ class ReadFileTool(_FsTool):
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return f"Error: File not found: {path}"
+                return f"Error: File not found: {path}. Check the location with list_dir or find before retrying."
             if not fp.is_file():
-                return f"Error: Not a file: {path}"
+                return f"Error: Not a file: {path}. Use list_dir to view a directory."
 
             all_lines = fp.read_text(encoding="utf-8").splitlines()
             total = len(all_lines)
@@ -229,7 +229,7 @@ class EditFileTool(_FsTool):
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return f"Error: File not found: {path}"
+                return f"Error: File not found: {path}. To create a new file use write_file instead."
 
             raw = fp.read_bytes()
             uses_crlf = b"\r\n" in raw
@@ -348,9 +348,9 @@ class ListDirTool(_FsTool):
         try:
             dp = self._resolve(path)
             if not dp.exists():
-                return f"Error: Directory not found: {path}"
+                return f"Error: Directory not found: {path}. Check the parent with list_dir or locate it with find."
             if not dp.is_dir():
-                return f"Error: Not a directory: {path}"
+                return f"Error: Not a directory: {path}. Use read_file to view a file."
 
             cap = max_entries or self._DEFAULT_MAX
             items: list[str] = []

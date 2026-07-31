@@ -81,3 +81,29 @@ async def test_plain_invalid_params_get_no_false_suggestion():
 async def test_valid_params_execute_without_suggestion():
     reg = _registry()
     assert await reg.execute("exec_read", {"session": "s1"}) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_mangled_tool_name_is_repaired_and_executed():
+    reg = _registry()
+    result = await reg.execute("Read_File", {"path": "/etc/hosts"})
+    assert "resolved to 'read_file'" in result
+    assert result.endswith("ok")
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_name_still_lists_available():
+    reg = _registry()
+    result = await reg.execute("fetch_url", {})
+    assert "not found" in result
+    assert "read_file" in result
+
+
+@pytest.mark.asyncio
+async def test_validation_error_carries_no_generic_hint():
+    """Targeted guidance (did-you-mean) replaces the generic change-approach
+    suffix; stacking both buries the actionable part."""
+    reg = _registry()
+    result = await reg.execute("exec_read", {"path": "/etc/hosts"})
+    assert "did you mean" in result
+    assert "Analyze the error above" not in result

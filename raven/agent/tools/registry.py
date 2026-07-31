@@ -45,11 +45,24 @@ class ToolRegistry:
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(self, name: str, params: dict[str, Any]) -> str:
         """Execute a tool by name with given parameters."""
+        # Generic change-approach hint, appended only where the error text
+        # cannot carry its own next step (timeouts, unexpected exceptions).
+        # Tool-authored errors and validation errors carry targeted guidance;
+        # stacking a generic suffix on top of those is noise.
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
+        note = ""
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            repaired = self._repair_tool_name(name)
+            if repaired is None:
+                return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            # Models emit case/format-mangled names (Read_File, execRead).
+            # Executing the obvious match costs nothing; failing the call
+            # costs a turn.
+            tool = self._tools[repaired]
+            note = f"[note: tool name {name!r} resolved to {repaired!r}]\n"
+            name = repaired
 
         try:
             # Attempt to cast parameters to match schema types
@@ -59,7 +72,7 @@ class ToolRegistry:
             errors = tool.validate_params(params)
             if errors:
                 suggestion = self._suggest_tool_for_params(name, params)
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + suggestion + _hint
+                return note + f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + suggestion
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
             if tool.blocking_interaction:
@@ -68,13 +81,30 @@ class ToolRegistry:
             else:
                 result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
 
-            if isinstance(result, str) and result.startswith("Error"):
-                return result + _hint
+            if isinstance(result, str):
+                return note + result
             return result
         except asyncio.TimeoutError:
-            return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
+            return note + f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _hint
+            return note + f"Error executing {name}: {str(e)}" + _hint
+
+    @staticmethod
+    def _normalize_tool_name(name: str) -> str:
+        return name.casefold().replace("_", "").replace("-", "")
+
+    def _repair_tool_name(self, name: str) -> str | None:
+        """Map a case/format-mangled tool name onto the registered one.
+
+        Only unambiguous normalization matches (casefold, dropped ``_``/``-``)
+        are repaired; anything fuzzier risks executing a tool the model did
+        not intend.
+        """
+        wanted = self._normalize_tool_name(name)
+        matches = [n for n in self._tools if self._normalize_tool_name(n) == wanted]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def _suggest_tool_for_params(self, name: str, params: dict[str, Any]) -> str:
         """Point a mis-routed call at the tool its parameters actually fit.
