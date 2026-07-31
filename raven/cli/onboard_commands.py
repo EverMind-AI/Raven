@@ -701,7 +701,7 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
 
     url = questionary.text(
         _t(f"{spec.label} server URL:", f"{spec.label} 服务地址:"),
-        default=current or (spec.default_api_base if spec else "") or "",
+        default=current or spec.default_api_base or "",
         validate=_validate,
         placeholder=_back_placeholder(allow_back),
         style=RAVEN_STYLE,
@@ -1513,7 +1513,10 @@ def _resolve_model_with_test(
                     stored = ""
                 retyped = _prompt_local_api_base(spec, current=stored)
                 if retyped is None:
-                    return None
+                    # Ctrl+C means quit, as it does in the sibling "re-enter key"
+                    # branch. Returning None here would have been read as "switch
+                    # provider" and silently rolled the setup back instead.
+                    raise typer.Exit(1)
                 _write_provider_fields(provider, {"api_base": retyped})
                 continue
             if choice == "reauth" and not non_interactive:
@@ -1594,7 +1597,6 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     choices = [
         questionary.Choice(_provider_label(name), value=name)
         for name in _configured_providers()
-        if find_by_name(name) is not None
     ]
     if not choices:
         return False
@@ -1623,7 +1625,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         provider,
         non_interactive=False,
         warnings=[],
-        is_oauth=spec.is_oauth,
+        is_oauth=bool(spec and spec.is_oauth),
     )
     if result == "reauth":
         return _run_oauth_login(provider)

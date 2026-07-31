@@ -2308,3 +2308,53 @@ def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp
     assert spec is not None and spec.is_oauth
     # The shared guard both menu actions now use.
     _roll_back_provider_fields("github_copilot", spec, old_key=None, old_base=None)
+
+
+def test_a_spec_less_provider_can_have_its_default_model_changed(monkeypatch, tmp_path) -> None:
+    """Configuring a vendor and then editing its default model are one capability.
+
+    The "choose default model" menu filtered out anything without a registry
+    entry, so the new gate let a vendor be configured and then refused to let its
+    model be changed -- the only way back was to re-enter the key through "add a
+    provider". Removing that filter requires the spec dereference further down to
+    be guarded, or the menu crashes on the very providers it just started
+    offering; the two must move together, which is what this asserts.
+    """
+    from raven.cli import onboard_commands
+
+    cfg_dir = tmp_path / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"providers": {"mistral": {"apiKey": "sk-m"}, "openai": {"apiKey": "sk-o"}}})
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    offered: list[str] = []
+
+    class _Choice:
+        def __init__(self, _title, value=None):
+            self.value = value
+
+    class _Select:
+        def __init__(self, _label, **kw):
+            offered.extend(c.value for c in kw.get("choices") or [])
+
+        def ask(self):
+            return "mistral"
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_require_questionary",
+        lambda: SimpleNamespace(select=_Select, autocomplete=_Select, Choice=_Choice),
+    )
+    monkeypatch.setattr(
+        onboard_commands, "_verify_provider", lambda provider: (True, "valid", ["mistral-large-latest"])
+    )
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: f"{provider}/probe")
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    # Reaching this without an AttributeError is the second half of the fix: the
+    # probe is told whether the provider is OAuth, read off a spec that is None.
+    monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda provider, **kw: "ok")
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
+    assert "mistral" in offered, f"a spec-less provider was filtered out: {offered}"
