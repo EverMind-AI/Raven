@@ -712,7 +712,11 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
         qmark=_QMARK,
     ).ask()
     if url is None:
-        return None
+        # Same as every other prompt here: Ctrl+C quits. Returning None instead
+        # made each caller hold a different contract -- one translated it to an
+        # exit, the other to a menu redraw -- and a reader checking the module
+        # found two of three prompts raising and wrote the rule down wrong.
+        raise typer.Exit(1)
     url = url.strip()
     if allow_back and not url:
         return _BACK
@@ -1567,11 +1571,6 @@ def _resolve_model_with_test(
                 except KeyError:
                     stored = ""
                 retyped = _prompt_local_api_base(spec, current=stored)
-                if retyped is None:
-                    # Ctrl+C means quit, as it does in the sibling "re-enter key"
-                    # branch. Returning None here would have been read as "switch
-                    # provider" and silently rolled the setup back instead.
-                    raise typer.Exit(1)
                 _write_provider_fields(provider, {"api_base": retyped})
                 continue
             if choice == "reauth" and not non_interactive:
@@ -1756,8 +1755,6 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 except KeyError:
                     stored = ""
                 retyped = _prompt_local_api_base(target_spec, current=stored)
-                if retyped is None:
-                    continue
                 _write_provider_fields(target, {"api_base": retyped})
             elif credential_kind(target) == CRED_ENDPOINT:
                 # A self-hosted endpoint is a key *and* the address it is sent

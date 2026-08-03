@@ -2988,9 +2988,13 @@ def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
     assert result is not None, "a retyped address must not read as 'switch provider'"
     assert attempts[-1] == "http://gpu-box:11434", "the retyped address was not re-verified"
 
-    # Ctrl+C at that prompt quits, as it does in the sibling re-enter-key branch.
-    # Returning None would be read as "switch provider" and roll the setup back.
-    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", lambda *a, **kw: None)
+    # Ctrl+C at that prompt quits, the one contract every prompt in the module
+    # holds. It used to return None here and the caller translated it, which is
+    # how two call sites came to hold two different meanings for the same value.
+    def _cancelled(*a: Any, **kw: Any) -> Any:
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", _cancelled)
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, **kw: "rebase")
     monkeypatch.setattr(
         "raven.config.update_providers.test_provider",
@@ -3079,3 +3083,43 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     assert "default model" in asked[0].lower() or "默认模型" in asked[0]
     # Declined, so the key is still there.
     assert json.loads(tmp_env.read_text())["providers"]["mistral"].get("apiKey") == "sk-mistral"
+
+
+def test_every_prompt_in_the_wizard_means_the_same_thing_by_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One contract, so no call site has to remember which one it is holding.
+
+    Two of the three raised and one returned None, and each of its callers
+    translated that None differently -- an exit in one branch, a menu redraw in
+    the other. The divergence also read as absent to anyone who checked the module
+    and found two prompts agreeing.
+    """
+    from types import SimpleNamespace
+
+    from raven.providers.registry import find_by_name
+
+    class _Cancelled:
+        def ask(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_require_questionary",
+        lambda: SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled()),
+    )
+
+    for call in (
+        lambda: onboard_commands._prompt_api_key("deepseek"),
+        lambda: onboard_commands._prompt_base_url(),
+        lambda: onboard_commands._prompt_custom_model(),
+        lambda: onboard_commands._prompt_local_api_base(find_by_name("ollama_chat")),
+    ):
+        with pytest.raises(typer.Exit):
+            call()
+
+
+def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
+    """The translations the divergence made necessary are gone, not relocated."""
+    import inspect
+
+    source = inspect.getsource(onboard_commands)
+    assert "retyped is None" not in source, "a caller is still translating the prompt's cancellation; it raises now"
