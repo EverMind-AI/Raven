@@ -2,7 +2,7 @@
 
 The backend is the host's :class:`MemoryBackend` implementation,
 delegating to a running EverOS server over HTTP
-(``POST /api/v1/memory/{search,add,...}``).
+(``POST /api/v2/memory/{search,add,...}``).
 
 Constructor accepts an explicit ``adapter`` so tests can inject a
 fake without monkeypatching module-level imports. Production wiring
@@ -120,17 +120,22 @@ def _jsonify(obj: Any) -> Any:
 
 _DEFAULT_HTTP_TIMEOUT_S: float = 60.0
 _MEMORIZE_TIMEOUT_S: float = 360.0
+# Health is a local, in-process check; a slow answer means the server is wedged,
+# and waiting on it would only delay the recall it is meant to inform.
+_HEALTH_TIMEOUT_S: float = 5.0
 
 
 class _HttpEverosAdapter:
     """Adapter that talks to a remote EverOS service over HTTP.
 
-    Endpoints (per the EverOS v1 API brief, see
-    ``everos/entrypoints/api/routes/{search,memorize}.py``):
+    Endpoints (see ``everos/entrypoints/api/routes/{search,memorize}.py``).
+    ``/api/v2`` is the canonical prefix as of everos 1.2.0; ``/api/v1`` still
+    resolves to the same handlers but is documented as a legacy alias that a
+    future major release may drop:
 
-    - ``POST /api/v1/memory/search`` — request body ``SearchRequest``,
+    - ``POST /api/v2/memory/search`` — request body ``SearchRequest``,
       response ``{request_id, data: SearchData}``.
-    - ``POST /api/v1/memory/add`` — request body ``MemorizeAddRequest``,
+    - ``POST /api/v2/memory/add`` — request body ``MemorizeAddRequest``,
       response ``{request_id, data: AddResponseData}``.
 
     The adapter constructs an :class:`httpx.AsyncClient` per-instance by
@@ -154,6 +159,7 @@ class _HttpEverosAdapter:
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
         )
+        self._needs_llm_rerank: bool | None = None
 
     async def aclose(self) -> None:
         """Close the underlying client if we own it. Idempotent."""
@@ -164,6 +170,40 @@ class _HttpEverosAdapter:
         if self._api_key:
             return {"Authorization": f"Bearer {self._api_key}"}
         return {}
+
+    async def _agent_track_needs_llm_rerank(self) -> bool:
+        """Whether agent-track search has to fall back to the LLM rerank lane.
+
+        Agent-track HYBRID fuses ``agent_case`` / ``agent_skill`` through a
+        rerank cross-encoder. With no rerank provider the server refuses the
+        request outright -- 422 since everos 1.2.1, an opaque 500 before -- and
+        ``recall`` swallows that into an empty result, so the whole agent track
+        goes silently dead. ``enable_llm_rerank`` is the documented fallback,
+        but it spends one LLM call per recall, so it is only worth taking when
+        the cross-encoder is genuinely absent.
+
+        Answered from ``/health``, which reports ``capabilities`` as of everos
+        1.2.1. A server that does not report them is left alone: it predates
+        the field, and its ``SearchRequest`` forbids extra keys, so guessing
+        would turn a working request into a validation error. Cached for the
+        adapter's lifetime -- everos documents a tier change as requiring a
+        server restart, and the adapter does not outlive one.
+        """
+        if self._needs_llm_rerank is None:
+            self._needs_llm_rerank = await self._probe_rerank_missing()
+        return self._needs_llm_rerank
+
+    async def _probe_rerank_missing(self) -> bool:
+        try:
+            r = await self._client.get(f"{self._base_url}/health", timeout=_HEALTH_TIMEOUT_S)
+            r.raise_for_status()
+            capabilities = (r.json() or {}).get("capabilities")
+        except Exception as exc:
+            logger.warning("everos health probe failed (%s); leaving agent-track rerank untouched", exc)
+            return False
+        if not isinstance(capabilities, dict):
+            return False
+        return capabilities.get("rerank") is False
 
     async def search(
         self,
@@ -186,7 +226,9 @@ class _HttpEverosAdapter:
             body["include_profile"] = True
         if agent_id is not None:
             body["agent_id"] = agent_id
-        url = f"{self._base_url}/api/v1/memory/search"
+            if await self._agent_track_needs_llm_rerank():
+                body["enable_llm_rerank"] = True
+        url = f"{self._base_url}/api/v2/memory/search"
         r = await self._client.post(url, json=body, headers=self._headers())
         r.raise_for_status()
         payload = r.json() or {}
@@ -212,7 +254,7 @@ class _HttpEverosAdapter:
             body["app_id"] = app_id
         if project_id is not None:
             body["project_id"] = project_id
-        url = f"{self._base_url}/api/v1/memory/add"
+        url = f"{self._base_url}/api/v2/memory/add"
         r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
         r.raise_for_status()
         if is_final:
@@ -221,7 +263,7 @@ class _HttpEverosAdapter:
                 flush_body["app_id"] = app_id
             if project_id is not None:
                 flush_body["project_id"] = project_id
-            flush_url = f"{self._base_url}/api/v1/memory/flush"
+            flush_url = f"{self._base_url}/api/v2/memory/flush"
             fr = await self._client.post(
                 flush_url,
                 json=flush_body,
