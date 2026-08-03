@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -197,3 +198,45 @@ async def test_each_endpoint_sends_its_own_api_base(monkeypatch):
         ("openai/small", "http://a/v1", "KA"),
         ("openai/large", "http://b/v1", "KB"),
     ]
+
+
+def test_building_knn_endpoints_leaves_the_process_environment_alone(monkeypatch) -> None:
+    """Several endpoints in one process must not fight over a shared env var.
+
+    Each endpoint's provider is built with ``provider_name="custom"``, and
+    ``custom`` is a gateway -- so it takes ``_setup_env``'s branch that *overwrites*
+    an existing variable rather than the one that defers to it. The only thing
+    stopping N endpoints from each writing their own key into one variable, last
+    one winning, is that the custom spec declares no ``env_key``.
+
+    That is a single empty field holding up a correctness property, and nothing
+    else asserts it: filling it in with "OPENAI_API_KEY" looks entirely
+    reasonable, and every other test would stay green.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "PRE-EXISTING")
+
+    fallback = LiteLLMProvider(api_key="FALLBACK", default_model="fb", provider_name="openrouter")
+    endpoints = [
+        ModelEndpoint(model="small", api_key="KEY-SMALL", api_base="http://small/v1"),
+        ModelEndpoint(model="large", api_key="KEY-LARGE", api_base="http://large/v1"),
+    ]
+
+    provider = PerModelProvider(endpoints, fallback)
+
+    assert os.environ["OPENAI_API_KEY"] == "PRE-EXISTING", "an endpoint key leaked into the process environment"
+    # Each endpoint still carries its own credentials, per call rather than per
+    # process -- which is what made one process able to hold several at all.
+    assert provider._by_model["small"].api_key == "KEY-SMALL"
+    assert provider._by_model["large"].api_key == "KEY-LARGE"
+
+
+def test_the_custom_spec_declares_no_env_var_to_write() -> None:
+    """States the field the test above depends on, so a change to it fails here
+    with the reason rather than somewhere unrelated."""
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("custom")
+    assert spec is not None
+    assert spec.is_gateway is True, "if custom stopped being a gateway, re-derive which _setup_env branch applies"
+    assert spec.env_key == "", "custom must name no env var: knn builds one provider per endpoint under this spec"
+    assert spec.env_extras == ()

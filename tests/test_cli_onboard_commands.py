@@ -534,7 +534,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     monkeypatch.setattr(
         onboard_commands,
         "_pick_model",
-        lambda spec, **_: spec.default_model,
+        lambda provider, spec, **_: spec.default_model,
     )
     # Optional steps 2-4 are covered separately; no-op them here so the
     # interactive Step 1 path can be asserted without driving every screen.
@@ -693,9 +693,12 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
         "anthropic/claude-opus-4-5",
     ]
     assert captured_choices["default"] == "anthropic/claude-opus-4-5"
-    # User's pick made it into config
+    # The pick made it into config, carrying the route prefix. The user may type
+    # a bare id -- autocomplete accepts free text -- and a bare id is routed by
+    # keyword and fallback rather than to the provider just configured, so the
+    # wizard adds the prefix on the way out instead of persisting what was typed.
     data = json.loads(tmp_env.read_text())
-    assert data["agents"]["defaults"]["model"] == "claude-haiku-4-5"
+    assert data["agents"]["defaults"]["model"] == "anthropic/claude-haiku-4-5"
 
 
 def _capture_password_validate(monkeypatch: pytest.MonkeyPatch, answer: str) -> dict[str, Any]:
@@ -757,20 +760,25 @@ def test_format_model_for_provider_prefix_rules() -> None:
 
     # Gateway with prefix: bare id gets prefixed
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Already prefixed by us → idempotent
     assert (
-        onboard_commands._format_model_for_provider(openrouter, "openrouter/anthropic/claude-sonnet-4-5")
+        onboard_commands._format_model_for_provider("openrouter", openrouter, "openrouter/anthropic/claude-sonnet-4-5")
         == "openrouter/anthropic/claude-sonnet-4-5"
     )
     # Standard provider: LiteLLM knows it under our own name, so that is the prefix
-    assert onboard_commands._format_model_for_provider(openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
-    assert onboard_commands._format_model_for_provider(openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider("openai", openai, "gpt-4o-mini") == "openai/gpt-4o-mini"
+    assert onboard_commands._format_model_for_provider("openai", openai, "openai/gpt-4o-mini") == "openai/gpt-4o-mini"
     # skip_prefixes match → no double-prefix
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek/deepseek-chat") == "deepseek/deepseek-chat"
-    assert onboard_commands._format_model_for_provider(deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek/deepseek-chat")
+        == "deepseek/deepseek-chat"
+    )
+    assert (
+        onboard_commands._format_model_for_provider("deepseek", deepseek, "deepseek-chat") == "deepseek/deepseek-chat"
+    )
 
 
 def test_model_routes_to_provider_heuristic() -> None:
@@ -825,7 +833,7 @@ def test_registry_default_models_present() -> None:
 def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model: str, expected: str) -> None:
     from raven.providers.registry import find_by_name
 
-    assert onboard_commands._format_model_for_provider(find_by_name(provider), model) == expected
+    assert onboard_commands._format_model_for_provider(provider, find_by_name(provider), model) == expected
 
 
 # --------------------------------------------------------------------------- fixtures (5-step)
@@ -1274,6 +1282,51 @@ def test_memory_rerank_reuse_llm_provider(
     assert everos["rerank"]["base_url"] == "https://api.deepinfra.com/v1/inference"
 
 
+def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Path) -> None:
+    """A seeded model with an empty api_key does not count as configured."""
+    from raven.config.update_everos import set_everos_section
+
+    assert onboard_commands._everos_role_configured("llm") is False
+    set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
+    assert onboard_commands._everos_role_configured("llm") is False
+    set_everos_section("llm", {"api_key": "sk-real"})
+    assert onboard_commands._everos_role_configured("llm") is True
+
+
+def test_memory_required_role_back_reaches_give_up_menu(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backing out of the picker must offer the give-up exit even when the
+    shipped everos.toml template already seeded a model with an empty api_key —
+    otherwise Back re-asks the provider picker forever."""
+    from raven.config.update_everos import set_everos_section
+
+    set_everos_section(
+        "llm",
+        {"model": "openai/gpt-4.1-mini", "api_key": "", "base_url": "https://openrouter.ai/api/v1"},
+    )
+
+    import questionary
+
+    asked: list[str] = []
+
+    class _FQ:
+        def __init__(self, *a: object, **kw: object) -> None:
+            values = [getattr(c, "value", None) for c in kw.get("choices", [])]  # type: ignore[union-attr]
+            self._can_abort = "abort" in values
+
+        def ask(self) -> object:
+            asked.append("give-up" if self._can_abort else "picker")
+            assert len(asked) <= 4, f"Back re-asked the picker instead of offering an exit: {asked}"
+            return "abort" if self._can_abort else onboard_commands._BACK
+
+    monkeypatch.setattr(questionary, "select", _FQ)
+
+    out = onboard_commands._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
+    assert out is onboard_commands._ABORT_EVEROS
+    assert asked == ["picker", "give-up"]
+
+
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
     """Compat heuristic gates whether the memory LLM can reuse the main model."""
     f = onboard_commands._model_is_openai_compatible
@@ -1540,7 +1593,7 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_pick_language", lambda: None)
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-back-test")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
@@ -1586,7 +1639,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     picks = iter(["anthropic", "openai"])
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: f"sk-{provider}")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # On the failure submenu, choose "switch".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
@@ -1621,7 +1674,7 @@ def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(entry_answers)))
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "anthropic")
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-second")
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
 
     onboard_commands._step1_provider(
         provider=None,
@@ -1673,7 +1726,7 @@ def test_configure_existing_model_happy_path_persists_and_returns_true(
     monkeypatch.setattr(
         onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", ["minimax-global/MiniMax-M3"])
     )
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     persisted: list[str] = []
     monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "ok")
@@ -1699,7 +1752,7 @@ def test_configure_existing_model_reauth_delegates_to_oauth_login(monkeypatch: p
     """A probe asking for re-auth hands off to the OAuth login and returns its result."""
     _patch_single_provider_pick(monkeypatch, "minimax_global")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", []))
-    monkeypatch.setattr(onboard_commands, "_pick_model", lambda spec, **_: "minimax-global/MiniMax-M3")
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: None)
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "reauth")
     login_calls: list[str] = []
@@ -2087,3 +2140,965 @@ def test_tier_choices_omit_skills_when_the_platform_has_none(monkeypatch: pytest
 
 def _choices_of(scripted: _ScriptedSelect) -> list[Any]:
     return [c for message, choices in scripted.raw_choices if "Select import tier" in message for c in choices]
+
+
+def test_the_wizard_offers_every_provider_the_registry_carries() -> None:
+    """The picker must not be a hand-picked subset of the registry.
+
+    Eight providers were configurable through the CLI and absent from the wizard,
+    so a new user could not reach them and had to guess at the generic
+    OpenAI-compatible flow instead.
+    """
+    from raven.cli.onboard_commands import _CURATED_PROVIDERS
+    from raven.providers.registry import PROVIDERS
+
+    offered = {entry["name"] for entry in _CURATED_PROVIDERS}
+    registered = {spec.name for spec in PROVIDERS}
+    assert registered - offered == set(), f"registry providers missing from the wizard: {sorted(registered - offered)}"
+    assert offered - registered == set(), f"wizard offers providers with no spec: {sorted(offered - registered)}"
+
+
+def test_the_curated_groups_cover_the_flat_list_and_carry_both_fallbacks() -> None:
+    """Grouping is what keeps twenty rows readable; the fallbacks close the set."""
+    from raven.cli.onboard_commands import _CURATED_GROUPS, _PICK_LITELLM_VENDOR
+
+    kinds = [group["kind"] for group in _CURATED_GROUPS]
+    assert kinds == ["api_key", "oauth", "local", "fallback"]
+    fallback = {entry["name"] for entry in _CURATED_GROUPS[-1]["providers"]}
+    assert fallback == {_PICK_LITELLM_VENDOR, "custom"}
+    # Local deployments are offered, which they were not: reaching Ollama meant
+    # the custom-endpoint path, which routes through the generic OpenAI driver
+    # and so loses the behaviour litellm applies to "ollama_chat/".
+    local = {entry["name"] for group in _CURATED_GROUPS if group["kind"] == "local" for entry in group["providers"]}
+    assert local == {"ollama_chat", "hosted_vllm"}
+
+
+def test_the_vendor_step_offers_litellm_names_the_picker_does_not_already_list() -> None:
+    """The second step exists so the first one stays short.
+
+    It must not re-offer what the picker already shows, and it must not import
+    LiteLLM to build the list -- that costs two seconds on a path that only
+    renders choices.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, json\n"
+        "from raven.cli.onboard_commands import _litellm_vendor_choices\n"
+        "rest = _litellm_vendor_choices()\n"
+        "print(json.dumps({'litellm': 'litellm' in sys.modules, 'count': len(rest), 'has': 'mistral' in rest,"
+        " 'excludes_listed': 'openai' not in rest}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["litellm"] is False, "building the vendor list imported litellm"
+    assert result["has"] is True, "a vendor litellm supports is missing from the second step"
+    assert result["excludes_listed"] is True, "the second step re-offers what the picker already lists"
+    assert result["count"] > 50
+
+
+def test_minimax_precedes_deepseek_and_carries_the_open_source_partner_marker() -> None:
+    """A deliberate placement, so a later reordering cannot drop it silently.
+
+    "open-source partner" rather than a bare "partner": in a list of vendors the
+    short form reads as paid placement. Only the API-key entry is marked -- the
+    OAuth ones are the same vendor and already carry "(OAuth)".
+    """
+    from raven.cli.onboard_commands import _CURATED_GROUPS
+
+    api_key_group = next(g for g in _CURATED_GROUPS if g["kind"] == "api_key")
+    names = [entry["name"] for entry in api_key_group["providers"]]
+    assert names.index("minimax") == names.index("deepseek") - 1
+
+    minimax = api_key_group["providers"][names.index("minimax")]
+    assert minimax["label"] == "MiniMax (open-source partner)"
+    assert minimax["label_zh"] == "MiniMax(开源合作伙伴)"
+
+    oauth_group = next(g for g in _CURATED_GROUPS if g["kind"] == "oauth")
+    for entry in oauth_group["providers"]:
+        assert "partner" not in entry["label"], entry["label"]
+        assert "合作伙伴" not in entry["label_zh"], entry["label_zh"]
+
+
+def test_no_picker_label_names_the_routing_library() -> None:
+    """LiteLLM is how Raven reaches a vendor, not something a user configures.
+
+    A label that names it leaks an implementation detail and reads as though the
+    user needed an account with it.
+    """
+    from raven.cli.onboard_commands import _CURATED_GROUPS
+
+    for group in _CURATED_GROUPS:
+        for entry in group["providers"]:
+            for text in (entry["label"], entry.get("label_zh", "")):
+                assert "litellm" not in text.lower(), f"{entry['name']}: {text}"
+
+
+def test_a_local_deployment_is_configured_by_address_not_by_key(tmp_path, monkeypatch) -> None:
+    """Ollama and vLLM authenticate on nothing; they are reached by URL.
+
+    Sending them through the api_key prompt stopped the user at a minimum-length
+    check for a credential that does not exist, which is what made offering them
+    in the picker impossible before.
+    """
+    from raven.cli import onboard_commands
+
+    (tmp_path / ".raven").mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    written: dict[str, Any] = {}
+    monkeypatch.setattr(onboard_commands, "_write_provider_fields", lambda p, f: written.update({p: f}))
+
+    result = onboard_commands._collect_credentials(
+        "ollama_chat",
+        is_oauth=False,
+        is_custom=False,
+        is_local=True,
+        api_key=None,
+        base_url="http://127.0.0.1:11434",
+        model=None,
+        non_interactive=True,
+    )
+
+    assert result is None
+    assert written == {"ollama_chat": {"api_base": "http://127.0.0.1:11434"}}
+    assert "api_key" not in written["ollama_chat"], "a local deployment was asked for a key"
+
+
+def test_a_local_deployment_without_an_address_says_so(monkeypatch, tmp_path) -> None:
+    """The address is the one thing it cannot be configured without."""
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(typer.BadParameter, match="base-url"):
+        onboard_commands._collect_credentials(
+            "ollama_chat",
+            is_oauth=False,
+            is_custom=False,
+            is_local=True,
+            api_key=None,
+            base_url=None,
+            model=None,
+            non_interactive=True,
+        )
+
+
+def test_a_vendor_with_no_spec_is_configured_by_the_wizard_not_rejected(monkeypatch, tmp_path) -> None:
+    """The second picker step offers 117 vendors Raven carries no spec for.
+
+    Every one of them used to reach `spec.name` on a None and tear the wizard
+    down after the key was already on disk. The gate that produced that -- "the
+    wizard does not cover this" -- was the older limitation: credentials go in
+    under the vendor's name and the model list comes from the vendor itself, so
+    a spec is metadata here, not permission.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+
+    assert onboard_commands._validate_provider_name("mistral") == "mistral"
+    assert find_by_name("mistral") is None, "mistral gained a spec; pick another spec-less vendor"
+
+
+def test_a_typo_in_the_vendor_step_is_a_message_not_a_traceback(monkeypatch, tmp_path) -> None:
+    """Both entrances share one gate.
+
+    The flag path validated; the picker path assigned the raw string, so a
+    mistyped vendor name reached the config layer as an uncaught KeyError.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    with pytest.raises(typer.BadParameter, match="mistrall"):
+        onboard_commands._validate_provider_name("mistrall")
+
+
+def test_resolve_model_with_test_runs_for_a_provider_with_no_spec(monkeypatch, tmp_path) -> None:
+    """Drives the path that crashed, rather than asserting a constant about it.
+
+    Thirteen tests asserted what the picker lists and none walked into it, which
+    is why a crash on every one of those vendors shipped green.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    monkeypatch.setattr(
+        onboard_commands,
+        "_verify_provider",
+        lambda provider, skip_test=False: (True, "valid", ["mistral-large-latest"]),
+    )
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+
+    chosen = onboard_commands._resolve_model_with_test(
+        "mistral",
+        None,  # no spec, which is the whole point
+        is_custom=False,
+        custom_model=None,
+        user_model_flag="mistral/mistral-large-latest",
+        non_interactive=True,
+        warnings=[],
+        skip_test=True,
+    )
+    assert chosen == "mistral/mistral-large-latest"
+
+
+def test_the_wizard_offers_known_models_when_the_provider_cannot_be_reached(monkeypatch, tmp_path) -> None:
+    """A failed fetch must not leave the user typing an id from memory.
+
+    Deleting this fallback left all 86 onboard tests green, so half of what the
+    candidate chain is for had nothing asserting it.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    offered: dict[str, Any] = {}
+
+    class _Stub:
+        def __init__(self, label, **kw):
+            offered["choices"] = list(kw.get("choices") or [])
+
+        def ask(self):
+            return offered["choices"][0]
+
+    fake_questionary = SimpleNamespace(autocomplete=_Stub, text=_Stub)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: fake_questionary)
+
+    chosen = onboard_commands._pick_model(
+        "moonshot",
+        find_by_name("moonshot"),
+        current_model=None,
+        model_ids=None,  # the fetch came back empty
+        probe_status="network_error",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert offered["choices"], "no candidates were offered after a failed fetch"
+    assert chosen == offered["choices"][0]
+    assert any(c.startswith("moonshot/") for c in offered["choices"]), offered["choices"][:3]
+
+
+def test_a_spec_less_vendors_model_id_carries_its_route_prefix() -> None:
+    """A bare id is routed by keyword and fallback, not to the section configured.
+
+    Returning the vendor's id unprefixed produced "mistral-large-latest", which
+    resolves to OpenAI when OpenAI also holds a key -- so the wizard handed back
+    a default model that spends someone else's credential.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+
+    assert _format_model_for_provider("mistral", None, "mistral-large-latest") == "mistral/mistral-large-latest"
+    # Already prefixed stays put rather than being prefixed twice.
+    assert _format_model_for_provider("mistral", None, "mistral/mistral-large-latest") == "mistral/mistral-large-latest"
+
+
+def test_that_prefix_is_what_stops_the_key_going_elsewhere() -> None:
+    """The consequence, asserted where it lands rather than on the string.
+
+    This is the assertion the crash-fix needed and did not have: the id the
+    wizard writes must resolve to the provider it was configured for, with that
+    provider's credential, even when a keyword-matching vendor is also set up.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+    from raven.config.schema import Config
+
+    model = _format_model_for_provider("mistral", None, "mistral-large-latest")
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"model": model}},
+            "providers": {"mistral": {"apiKey": "sk-MISTRAL"}, "openai": {"apiKey": "sk-OPENAI"}},
+        }
+    )
+    assert config.get_provider_name(model) == "mistral"
+    assert config.get_api_key(model) == "sk-MISTRAL"
+
+
+def test_rolling_back_a_failed_setup_restores_what_was_there(monkeypatch, tmp_path) -> None:
+    """Restores the prior state, and does not touch an OAuth provider at all.
+
+    Two shapes were wrong: keying the rollback off the previous api_key skipped a
+    local deployment entirely, leaving a mistyped address in place of a working
+    one; and writing credential fields for an OAuth provider raises, which turned
+    a failed verification into a dead wizard.
+    """
+    from raven.cli.onboard_commands import _roll_back_provider_fields, _write_provider_fields
+    from raven.config.loader import set_config_path
+    from raven.config.update_providers import get_provider_config
+    from raven.providers.registry import find_by_name
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"ollama_chat": {"apiBase": "http://my-nas:11434"}}}))
+    set_config_path(cfg)
+    try:
+        prior = get_provider_config("ollama_chat", redact_secrets=False)
+        _write_provider_fields("ollama_chat", {"api_base": "http://typo:9999"})
+        # The wizard's own rollback, called rather than re-implemented here.
+        _roll_back_provider_fields(
+            "ollama_chat",
+            find_by_name("ollama_chat"),
+            old_key=prior.get("api_key"),
+            old_base=prior.get("api_base"),
+        )
+        assert get_provider_config("ollama_chat", redact_secrets=False)["api_base"] == "http://my-nas:11434"
+
+        # And why the branch must not run for OAuth: the ops layer refuses these
+        # fields, and the wizard's wrapper turns that refusal into an exit -- so
+        # rolling back an OAuth provider ends the whole run.
+        from raven.config.update_providers import set_provider_fields
+
+        oauth = find_by_name("github_copilot")
+        assert oauth is not None and oauth.is_oauth
+        with pytest.raises(RuntimeError, match="OAuth"):
+            set_provider_fields("github_copilot", {"api_key": ""}, config_path=cfg)
+        with pytest.raises(typer.Exit):
+            _write_provider_fields("github_copilot", {"api_key": ""})
+        # So the rollback must not go near them -- calling it is a no-op.
+        _roll_back_provider_fields("github_copilot", oauth, old_key=None, old_base=None)
+    finally:
+        set_config_path(None)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("slug", "status", "expected", "absent"),
+    [
+        # Unreachable: a local deployment's usual cause is a wrong address, and
+        # this is the branch it lands in -- retry alone left it unreachable.
+        ("ollama_chat", "network_error", "rebase", "rekey"),
+        ("hosted_vllm", "network_error", "rebase", "rekey"),
+        # A vendor reached over the network gets retry only; the address is not
+        # the user's to change, and the key is not what failed.
+        ("deepseek", "network_error", "retry", "rebase"),
+        # Rejected credentials: the field to fix is the one the provider uses.
+        ("ollama_chat", "invalid_key", "rebase", "rekey"),
+        ("deepseek", "invalid_key", "rekey", "rebase"),
+        ("github_copilot", "invalid_key", "reauth", "rekey"),
+    ],
+)
+def test_the_failure_menu_offers_the_field_the_provider_actually_has(
+    slug: str, status: str, expected: str, absent: str, monkeypatch
+) -> None:
+    """What is worth changing after a failure depends on how the provider is reached.
+
+    A local deployment fails most often on a wrong address, and both failure
+    branches offered "re-enter key" for a provider that holds none -- so the one
+    field worth editing had no route back to it.
+    """
+    from raven.cli import onboard_commands
+    from raven.providers.registry import find_by_name
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "_failure_choice",
+        lambda options, non_interactive: (seen.append([v for _, v in options]), "switch")[1],
+    )
+    monkeypatch.setattr(onboard_commands, "_verify_provider", lambda provider, skip_test=False: (False, status, None))
+
+    result = onboard_commands._resolve_model_with_test(
+        slug,
+        find_by_name(slug),
+        is_custom=False,
+        custom_model=None,
+        user_model_flag=f"{slug}/probe",
+        non_interactive=False,
+        warnings=[],
+    )
+
+    assert result is None, "switch should unwind to the picker"
+    assert seen, "the failure menu was never shown"
+    assert expected in seen[0], f"{slug}/{status}: offered {seen[0]}"
+    assert absent not in seen[0], f"{slug}/{status}: should not offer {absent}, got {seen[0]}"
+
+
+def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp_path, capsys) -> None:
+    """Update and Remove both wrote credential fields, which OAuth providers refuse.
+
+    Generalising "not every provider has a key" only as far as local deployments
+    left the OAuth ones ending the wizard from a menu meant for editing.
+    """
+    from raven.cli.onboard_commands import _roll_back_provider_fields
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name("github_copilot")
+    assert spec is not None and spec.is_oauth
+    # The shared guard both menu actions now use.
+    _roll_back_provider_fields("github_copilot", spec, old_key=None, old_base=None)
+
+
+def test_a_spec_less_provider_can_have_its_default_model_changed(monkeypatch, tmp_path) -> None:
+    """Configuring a vendor and then editing its default model are one capability.
+
+    The "choose default model" menu filtered out anything without a registry
+    entry, so the new gate let a vendor be configured and then refused to let its
+    model be changed -- the only way back was to re-enter the key through "add a
+    provider". Removing that filter requires the spec dereference further down to
+    be guarded, or the menu crashes on the very providers it just started
+    offering; the two must move together, which is what this asserts.
+    """
+    from raven.cli import onboard_commands
+
+    cfg_dir = tmp_path / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"providers": {"mistral": {"apiKey": "sk-m"}, "openai": {"apiKey": "sk-o"}}})
+    )
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    offered: list[str] = []
+
+    class _Choice:
+        def __init__(self, _title, value=None):
+            self.value = value
+
+    class _Select:
+        def __init__(self, _label, **kw):
+            offered.extend(c.value for c in kw.get("choices") or [])
+
+        def ask(self):
+            return "mistral"
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_require_questionary",
+        lambda: SimpleNamespace(select=_Select, autocomplete=_Select, Choice=_Choice),
+    )
+    monkeypatch.setattr(
+        onboard_commands, "_verify_provider", lambda provider: (True, "valid", ["mistral-large-latest"])
+    )
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: f"{provider}/probe")
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    # Reaching this without an AttributeError is the second half of the fix: the
+    # probe is told whether the provider is OAuth, read off a spec that is None.
+    monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda provider, **kw: "ok")
+
+    assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
+    assert "mistral" in offered, f"a spec-less provider was filtered out: {offered}"
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        # What a user actually types: the vendor's own name for the model.
+        ("mistral-large-latest", "mistral/mistral-large-latest"),
+        ("mistral/mistral-large-latest", "mistral/mistral-large-latest"),
+    ],
+)
+def test_every_exit_of_the_model_step_prefixes_what_it_returns(typed: str, expected: str, monkeypatch) -> None:
+    """The invariant belongs on the exits, not on one branch.
+
+    It was applied where the candidate list is built, which is the one branch a
+    spec-less vendor never reaches: nothing can pre-check it, so there is no
+    list, so the id is typed -- and typed ids went to config as typed. Three
+    rounds of review found this same defect on three different branches, so this
+    drives each exit rather than asserting the formatter in isolation.
+    """
+    from raven.cli import onboard_commands
+
+    class _Prompt:
+        def __init__(self, _label, **_kw):
+            pass
+
+        def ask(self):
+            return typed
+
+    monkeypatch.setattr(
+        onboard_commands, "_require_questionary", lambda: SimpleNamespace(autocomplete=_Prompt, text=_Prompt)
+    )
+
+    # The flag exit.
+    assert (
+        onboard_commands._pick_model(
+            "mistral",
+            None,
+            current_model=None,
+            model_ids=None,
+            probe_status="skipped",
+            user_provided_model=typed,
+            non_interactive=True,
+        )
+        == expected
+    )
+    # The typed exit, reached when there is no candidate list at all.
+    assert (
+        onboard_commands._pick_model(
+            "mistral",
+            None,
+            current_model=None,
+            model_ids=None,
+            probe_status="skipped",
+            user_provided_model=None,
+            non_interactive=False,
+        )
+        == expected
+    )
+
+
+def test_what_the_model_step_returns_is_served_by_the_provider_it_was_configured_for() -> None:
+    """The consequence, taken from the production value rather than a literal.
+
+    Every earlier test on this fed an already-prefixed id in, so none of them
+    could tell whether the wizard produces one. This takes what the step returns
+    and asks who would be billed for it.
+    """
+    from raven.cli import onboard_commands
+    from raven.config.schema import Config
+
+    produced = onboard_commands._pick_model(
+        "mistral",
+        None,
+        current_model=None,
+        model_ids=None,
+        probe_status="skipped",
+        user_provided_model="mistral-large-latest",
+        non_interactive=True,
+    )
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"model": produced}},
+            "providers": {"mistral": {"apiKey": "sk-MISTRAL"}, "openai": {"apiKey": "sk-OPENAI"}},
+        }
+    )
+    assert config.get_provider_name(produced) == "mistral"
+    assert config.get_api_key(produced) == "sk-MISTRAL"
+
+
+def test_a_hyphenated_vendor_gets_the_prefix_litellm_will_accept() -> None:
+    """Config names are matched loosely; a wire prefix cannot be.
+
+    LiteLLM hyphenates three vendors. Prefixing with the normalized form produced
+    "nano_gpt/...", which LiteLLM rejects outright -- so the provider configured
+    successfully and then could not be called.
+    """
+    from raven.cli.onboard_commands import _format_model_for_provider
+    from raven.providers.litellm_setup import import_litellm
+
+    for typed_name in ("nano-gpt", "nano_gpt"):
+        model = _format_model_for_provider(typed_name, None, "gpt-4o")
+        assert model == "nano-gpt/gpt-4o", typed_name
+        # And LiteLLM agrees it can route it.
+        assert import_litellm().get_llm_provider(model)[1] == "nano-gpt"
+
+
+def test_a_spec_less_vendor_is_offered_the_catalogue_rows_it_has() -> None:
+    """Returning nothing for these is what forced the id to be typed.
+
+    Every offered id carries the prefix, which the catalogue itself does not
+    guarantee: Mistral's rows have it, Bedrock's do not. Offering an unprefixed
+    one would put the bare id straight back into config.
+    """
+    from raven.providers.common_models import litellm_models_for
+
+    for slug in ("mistral", "fireworks_ai", "bedrock"):
+        models = litellm_models_for(slug)
+        assert models, f"{slug}: no candidates offered"
+        assert all(m.startswith(f"{slug}/") for m in models), [m for m in models if not m.startswith(f"{slug}/")][:3]
+        # And no id was prefixed twice on the way through.
+        assert not any(m.startswith(f"{slug}/{slug}/") for m in models)
+
+
+def test_the_wizard_never_reads_a_spec_auth_flag_itself() -> None:
+    """One answer to "how is this provider reached", and it does not live here.
+
+    Every decision the wizard makes about a provider follows from that question,
+    and it was derived independently at thirteen sites off the spec flags. Each of
+    two review rounds found a site that disagreed with the rest: a rollback that
+    wrote credential fields to an OAuth provider and ended the run, a menu that
+    offered it a key prompt, a prompt that guarded a spec on one line and
+    dereferenced it on the next. It is a registry function now, because the model
+    picker needed the same answer and had been keeping a coarser one of its own.
+    """
+    import re
+    from pathlib import Path as _Path
+
+    path = _Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
+    offenders = [
+        f"line {i}: {line.strip()}"
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        if re.search(r"\.is_(oauth|local)\b|\.requires_api_base\b", line) and not line.lstrip().startswith("#")
+    ]
+    assert not offenders, "ask credential_kind() instead:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        ("github_copilot", "oauth"),
+        ("openai_codex", "oauth"),
+        ("minimax_global", "oauth"),
+        ("ollama_chat", "local"),
+        ("hosted_vllm", "local"),
+        ("custom", "endpoint"),
+        ("anthropic", "key"),
+        ("mistral", "key"),  # no spec at all
+    ],
+)
+def test_credential_kind_covers_every_shape(provider: str, expected: str) -> None:
+    from raven.providers.registry import credential_kind
+
+    assert credential_kind(provider) == expected
+
+
+def test_every_registered_provider_has_exactly_one_credential_kind() -> None:
+    """Sweep, so a provider added later cannot fall through the classification."""
+    from raven.providers.registry import CRED_ENDPOINT, CRED_KEY, CRED_LOCAL, CRED_OAUTH, PROVIDERS, credential_kind
+
+    known = {CRED_OAUTH, CRED_LOCAL, CRED_ENDPOINT, CRED_KEY}
+    for spec in PROVIDERS:
+        assert credential_kind(spec.name) in known, spec.name
+
+
+def test_the_picker_result_goes_through_the_same_gate_as_the_flag(monkeypatch, tmp_path) -> None:
+    """N1: the joint that let 117 vendors crash, and stayed uncovered for three rounds.
+
+    The flag path validated its input; the picker path assigned it. Deleting the
+    validation call restores the original defect -- a typed name reaching the
+    config layer as an uncaught KeyError mid-setup -- so the call itself is what
+    needs holding down, not the validator in isolation.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    validated: list[str] = []
+    real = onboard_commands._validate_provider_name
+
+    def spy(name: str) -> str:
+        validated.append(name)
+        return real(name)
+
+    monkeypatch.setattr(onboard_commands, "_validate_provider_name", spy)
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "mistrall")  # a typo
+    printed: list[str] = []
+    monkeypatch.setattr(onboard_commands.console, "print", lambda *a, **k: printed.append(str(a[0]) if a else ""))
+    # Second pass: back out so the loop ends.
+    calls = {"n": 0}
+
+    def picker():
+        calls["n"] += 1
+        return "mistrall" if calls["n"] == 1 else onboard_commands._BACK
+
+    monkeypatch.setattr(onboard_commands, "_select_provider", picker)
+
+    assert (
+        onboard_commands._configure_one_provider(
+            provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+        )
+        is None
+    )
+    assert validated == ["mistrall"], "the picker result bypassed the gate"
+    assert any("mistrall" in line for line in printed), "the typo was not reported to the user"
+
+
+def test_a_failed_setup_calls_the_rollback(monkeypatch, tmp_path) -> None:
+    """N2: deleting this call silently undoes both rollback fixes.
+
+    `_roll_back_provider_fields` has its own tests, but nothing asserted the
+    failure path reaches it -- so removing the call left a mistyped address in
+    place of a working one with CI green.
+    """
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    rolled: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        onboard_commands,
+        "_roll_back_provider_fields",
+        lambda provider, spec, **kw: rolled.append((provider, kw)),
+    )
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", lambda provider, **kw: None)
+    # The model step reports "switch provider", which is the failure path.
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda provider, spec, **kw: None)
+    calls = {"n": 0}
+
+    def picker():
+        calls["n"] += 1
+        return "deepseek" if calls["n"] == 1 else onboard_commands._BACK
+
+    monkeypatch.setattr(onboard_commands, "_select_provider", picker)
+
+    onboard_commands._configure_one_provider(
+        provider=None, api_key=None, base_url=None, model=None, non_interactive=False, warnings=[]
+    )
+    assert rolled, "a failed setup did not roll back"
+    assert rolled[0][0] == "deepseek"
+    assert set(rolled[0][1]) == {"old_key", "old_base"}, rolled[0][1]
+
+
+def test_reconfiguring_a_local_server_is_seeded_with_its_own_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M6: the seeding fix is what stops a working address being replaced.
+
+    Seeding the registry default unconditionally meant someone whose server runs
+    somewhere other than localhost was offered localhost, and pressing Enter to
+    move past a field they had already filled in wrote it -- the same data loss as
+    the failed-setup rollback, reached by an ordinary keypress instead of a failure.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict[str, Any] = {}
+
+    class _FQ:
+        def ask(self) -> str:
+            return "http://gpu-box.lan:11434"
+
+    def _text(message: Any, *, default: Any = None, **kwargs: Any) -> Any:
+        captured["default"] = default
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "text", _text)
+    spec = find_by_name("ollama_chat")
+    assert spec is not None and spec.default_api_base
+
+    onboard_commands._prompt_local_api_base(spec, current="http://gpu-box.lan:11434")
+    assert captured["default"] == "http://gpu-box.lan:11434", (
+        "the configured address was replaced by the registry default"
+    )
+
+    onboard_commands._prompt_local_api_base(spec, current="")
+    assert captured["default"] == spec.default_api_base, "a first-time setup lost its default"
+
+
+def test_backing_out_of_the_vendor_sublist_returns_to_the_provider_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U8: an empty submit closes the sub-list the user opened, one level.
+
+    Passing its ``_BACK`` straight up dropped them on the language screen -- three
+    steps back from where they were -- so the row that opened the sub-list has to
+    be redisplayed instead.
+    """
+    rows = iter([onboard_commands._PICK_LITELLM_VENDOR, "deepseek"])
+    monkeypatch.setattr(onboard_commands, "_select_provider_row", lambda: next(rows))
+    monkeypatch.setattr(onboard_commands, "_prompt_litellm_vendor", lambda: onboard_commands._BACK)
+
+    assert onboard_commands._select_provider() == "deepseek"
+
+    # Backing out of the provider list itself still leaves the step.
+    rows = iter([onboard_commands._PICK_LITELLM_VENDOR, onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider_row", lambda: next(rows))
+    assert onboard_commands._select_provider() is onboard_commands._BACK
+
+
+def test_switching_provider_discards_every_flag_not_just_the_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Flag values belong to the pass they were typed for.
+
+    They were carried into the next one, so switching from a failed keyed
+    provider to a local deployment hit the guard that rejects --api-key for one
+    and ended the wizard on a usage error, losing the steps this loop exists to
+    keep. The quieter halves of the same bug: the stale key was written to the
+    newly picked provider with no prompt, and the stale base URL pointed it at
+    the previous provider's machine.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    (tmp_path / ".raven").mkdir()
+    seen: list[tuple[str, Any, Any, Any]] = []
+
+    def _collect(provider: str, **kw: Any) -> Any:
+        seen.append((provider, kw.get("api_key"), kw.get("base_url"), kw.get("model")))
+        return onboard_commands._BACK if provider == "ollama_chat" else None
+
+    picks = iter(["ollama_chat", onboard_commands._BACK])
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+    monkeypatch.setattr(onboard_commands, "_collect_credentials", _collect)
+    monkeypatch.setattr(onboard_commands, "_resolve_model_with_test", lambda *a, **k: None)
+
+    # No exception: reaching the local deployment used to raise BadParameter here.
+    assert (
+        onboard_commands._configure_one_provider(
+            provider="deepseek",
+            api_key="sk-stale",
+            base_url="http://previous-box:1234",
+            model="deepseek-chat",
+            non_interactive=False,
+            warnings=[],
+        )
+        is None
+    )
+    assert seen[0] == ("deepseek", "sk-stale", "http://previous-box:1234", "deepseek-chat"), (
+        "the flags have to apply on the pass they were given for"
+    )
+    assert seen[1] == ("ollama_chat", None, None, None), f"a flag survived the switch: {seen[1]}"
+
+
+def test_no_rewind_clears_the_flags_by_hand() -> None:
+    """One answer to "what does a rewind discard", three call sites.
+
+    Each of the three used to answer it separately and all three answered it the
+    same incomplete way -- only the provider flag -- which is the shape of bug
+    this branch exists to remove.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    path = _Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py"
+    source = path.read_text()
+    tree = ast.parse(source)
+    outer = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_configure_one_provider"
+    )
+    rewind = next(node for node in ast.walk(outer) if isinstance(node, ast.FunctionDef) and node.name == "_rewind")
+    lines = source.splitlines()
+    allowed = range(rewind.lineno, (rewind.end_lineno or rewind.lineno) + 1)
+    body = range(outer.lineno, (outer.end_lineno or outer.lineno) + 1)
+
+    offenders = [
+        f"line {i}: {lines[i - 1].strip()}"
+        for i in body
+        if "flag_provider = " in lines[i - 1] and "flag_provider = provider" not in lines[i - 1] and i not in allowed
+    ]
+    assert not offenders, "call _rewind() instead:\n" + "\n".join(offenders)
+
+
+def test_a_provider_with_no_model_endpoint_is_not_reported_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """openai / anthropic / deepseek / gemini reach this with nothing wrong.
+
+    They ship no api_base, so the pre-check is skipped rather than failed and
+    there is no model list on a healthy run. The step printed "couldn't reach the
+    provider" straight after the line saying the check had been skipped, so the
+    first thing the user saw on the happy path was two contradictory sentences.
+    """
+    from raven.providers.registry import find_by_name
+
+    offered: dict[str, Any] = {}
+
+    class _Stub:
+        def __init__(self, label: Any, **kw: Any) -> None:
+            offered["choices"] = list(kw.get("choices") or [])
+
+        def ask(self) -> Any:
+            return offered["choices"][0]
+
+    monkeypatch.setattr(
+        onboard_commands, "_require_questionary", lambda: SimpleNamespace(autocomplete=_Stub, text=_Stub)
+    )
+
+    for status, unreachable_expected in (("skipped", False), ("network_error", True)):
+        capsys.readouterr()
+        onboard_commands._pick_model(
+            "anthropic",
+            find_by_name("anthropic"),
+            current_model=None,
+            model_ids=None,
+            probe_status=status,
+            user_provided_model=None,
+            non_interactive=False,
+        )
+        out = capsys.readouterr().out.lower()
+        assert ("couldn't reach" in out or "could not reach" in out) is unreachable_expected, (
+            f"status={status!r} printed: {out.strip()}"
+        )
+
+
+def test_updating_a_self_hosted_endpoint_can_change_its_address(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key plus the address it is sent to; the menu only re-asked for the key.
+
+    The URL is the field that moves when the user redeploys, and it was the one
+    this menu could not reach -- leaving the stored address pointing at a machine
+    that is gone, with no way out but editing the config file.
+    """
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("custom", {"api_key": "sk-old", "api_base": "http://old-box:8000/v1"})
+
+    import questionary
+
+    class _FQ:
+        def __init__(self, a: Any) -> None:
+            self._a = a
+
+        def ask(self) -> Any:
+            return self._a
+
+    select_answers = iter(["custom", "update", onboard_commands._BACK])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "sk-new")
+
+    seeded: dict[str, Any] = {}
+
+    def _base_url(default: str = "https://", **kw: Any) -> Any:
+        seeded["default"] = default
+        return "http://new-box:9000/v1"
+
+    monkeypatch.setattr(onboard_commands, "_prompt_base_url", _base_url)
+
+    onboard_commands._manage_existing_providers(non_interactive=False)
+
+    section = json.loads(tmp_env.read_text())["providers"]["custom"]
+    assert section.get("apiBase") == "http://new-box:9000/v1", section
+    assert section.get("apiKey") == "sk-new", section
+    assert seeded["default"] == "http://old-box:8000/v1", "the stored address was not offered back"
+
+
+def test_a_provider_whose_endpoint_only_the_user_knows_is_asked_for_it() -> None:
+    """Azure gives every tenant its own resource URL, so there is nothing to default to.
+
+    It was classified by name -- only "custom" counted -- so Azure was asked for a
+    key alone and stored with no endpoint, and its own client raises
+    "api_base is required" on the first call. Picking it from the curated list
+    could not produce a working provider.
+    """
+    from raven.providers.registry import CRED_ENDPOINT, PROVIDERS, credential_kind
+
+    assert credential_kind("azure_openai") == CRED_ENDPOINT
+    for spec in PROVIDERS:
+        expected = CRED_ENDPOINT if spec.requires_api_base else None
+        if expected is not None:
+            assert credential_kind(spec.name) == expected, spec.name
+
+
+def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> None:
+    """The picker knew only two shapes and offered a local deployment a key prompt.
+
+    It kept its own literal list of who needs an endpoint, and reported every
+    non-OAuth provider as taking an API key -- so Ollama was asked for a key it
+    cannot use and never asked for the address it needs. The RPC surface reports
+    the shared answer now; this reads it back off the payload rather than
+    re-deriving it.
+    """
+    from raven.providers.registry import CRED_ENDPOINT, CRED_LOCAL, PROVIDERS, credential_kind
+    from raven.tui_rpc.methods.model import _build_provider_entry
+
+    for spec in PROVIDERS:
+        entry = _build_provider_entry(spec.name, current_provider=None)
+        kind = credential_kind(spec.name)
+        assert entry["auth_type"] == kind, spec.name
+        assert entry["needs_api_base"] is (kind in (CRED_ENDPOINT, CRED_LOCAL)), spec.name
+
+
+def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The consequence, read back off disk rather than from the prompt count."""
+    monkeypatch.setattr(
+        onboard_commands,
+        "_collect_fields",
+        lambda prompts: ["sk-azure", "https://my-resource.openai.azure.com", "gpt-4o-deployment"],
+    )
+
+    returned = onboard_commands._collect_credentials(
+        "azure_openai",
+        is_oauth=False,
+        is_custom=True,
+        is_local=False,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+    )
+
+    section = json.loads(tmp_env.read_text())["providers"]["azure_openai"]
+    assert section["apiBase"] == "https://my-resource.openai.azure.com", section
+    assert section["apiKey"] == "sk-azure"
+    # Azure takes a deployment name where every other provider takes a model id,
+    # so the step locks it in rather than offering the picker.
+    assert returned == "gpt-4o-deployment"

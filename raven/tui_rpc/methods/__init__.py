@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from raven.tui_rpc.methods._stubs import register_stub_methods
+from raven.tui_rpc.methods.approval import register_approval_methods
 from raven.tui_rpc.methods.cli_dispatch import register_cli_methods
 from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
@@ -45,6 +46,7 @@ from raven.tui_rpc.methods.turn import register_turn_methods
 
 if TYPE_CHECKING:
     from raven.spine.scheduler import Scheduler
+    from raven.tui_rpc.approval_broker import ApprovalBroker
     from raven.tui_rpc.confirm_broker import ConfirmBroker
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.errors import RpcError
@@ -58,6 +60,7 @@ def register_aligned_methods(
     *,
     emitter: "SubscriptionEmitter | None" = None,
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    approval_broker: "ApprovalBroker | None" = None,
     confirm_broker: "ConfirmBroker | None" = None,
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
@@ -75,13 +78,16 @@ def register_aligned_methods(
     ``emitter`` is ``None`` the ``turn.*`` group is skipped (the demo runner
     path that does not own a streaming subscription channel still works without
     them); ``agent_loop_factory`` is forwarded to the session methods.
-    ``confirm_broker`` is forwarded to :func:`register_confirm_methods`.
+    ``confirm_broker`` is forwarded to :func:`register_confirm_methods`;
+    ``approval_broker`` gates the shell approval response surface so callers
+    without an interactive broker do not expose an unusable approval method.
     """
     register_system_methods(dispatcher)
     register_aligned_methods_except_system(
         dispatcher,
         emitter=emitter,
         agent_loop_factory=agent_loop_factory,
+        approval_broker=approval_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=scheduler,
@@ -95,6 +101,7 @@ def register_aligned_methods_except_system(
     *,
     emitter: "SubscriptionEmitter | None" = None,
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    approval_broker: "ApprovalBroker | None" = None,
     confirm_broker: "ConfirmBroker | None" = None,
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
@@ -133,6 +140,10 @@ def register_aligned_methods_except_system(
     # come AFTER register_stub_methods so session.status's real handler
     # supersedes the (now-removed) hermes-only stub entry.
     register_slash_routing_methods(dispatcher, confirm_broker=confirm_broker)
+    # Unlike generic stubs, approval.respond is a capability-bearing endpoint.
+    # Register it only when this gateway owns an interactive approval broker.
+    if approval_broker is not None:
+        register_approval_methods(dispatcher, approval_broker=approval_broker)
     # turn.{send,subscribe,unsubscribe,cancel}. The handlers
     # need a SubscriptionEmitter to push streaming events; when the caller
     # has not built one (demo runner / production path pre-wire) we skip
@@ -175,6 +186,7 @@ __all__ = [
     "register_model_methods",
     "register_slash_routing_methods",
     "register_turn_methods",
+    "register_approval_methods",
     "register_confirm_methods",
     "register_question_methods",
 ]

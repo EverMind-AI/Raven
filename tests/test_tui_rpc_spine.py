@@ -1,6 +1,8 @@
 from dataclasses import replace
 
 from raven.agent.tools.message import MessageTool
+from raven.agent.tools.shell import ExecTool
+from raven.sandbox import ExecResult, SandboxExecutor
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -70,6 +72,40 @@ class _RunTurnLoop:
         return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
 
+class _DirectRecordingExecutor(SandboxExecutor):
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    @property
+    def is_sandboxed(self) -> bool:
+        return False
+
+    async def exec(self, command: str, **kwargs) -> ExecResult:
+        self.commands.append(command)
+        return ExecResult(stdout="ok", stderr="", exit_code=0)
+
+
+class _ApprovalResponder:
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.requests: list[dict] = []
+
+    async def await_approval(self, **request) -> bool:
+        self.requests.append(request)
+        return self.answer
+
+
+class _ApprovalRunLoop:
+    def __init__(self, tool: ExecTool) -> None:
+        self.tools = {"exec": tool}
+        self.result = ""
+
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        self.tools["exec"].set_tool_call_id("call-a")
+        self.result = await self.tools["exec"].execute("rm file.txt")
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
 def _collect():
     events: list = []
 
@@ -109,6 +145,51 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     # for the sink to attach to message.complete.
     assert usages["tui:c1"] == rich
     assert outcome.explicit_reply is True
+
+
+async def test_user_turn_receives_tui_approval_capability(tmp_path):
+    executor = _DirectRecordingExecutor()
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    loop = _ApprovalRunLoop(tool)
+    responder = _ApprovalResponder(True)
+    runner = TuiTurnRunner(
+        loop,
+        FakeEmitter(),
+        {},
+        {"tui:c1": "turn-a"},
+        {},
+        approval_responder=responder,
+    )
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="delete", conversation="tui:c1")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert executor.commands == ["rm file.txt"]
+    assert responder.requests[0]["turn_id"] == "turn-a"
+
+
+async def test_cron_turn_does_not_receive_tui_approval_capability(tmp_path):
+    executor = _DirectRecordingExecutor()
+    tool = ExecTool(executor=executor, working_dir=str(tmp_path))
+    loop = _ApprovalRunLoop(tool)
+    responder = _ApprovalResponder(True)
+    runner = TuiTurnRunner(
+        loop,
+        FakeEmitter(),
+        {},
+        {"cron:c1": "turn-a"},
+        {},
+        approval_responder=responder,
+    )
+    req = TurnRequest(origin=Origin.CRON, source=_src(), text="delete", conversation="cron:c1")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert "requires user approval" in loop.result.model_text
+    assert executor.commands == []
+    assert responder.requests == []
 
 
 async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():

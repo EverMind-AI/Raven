@@ -17,6 +17,7 @@ import type {
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
 import { TYPING_IDLE_MS } from '../config/timing.js'
+import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
@@ -138,9 +139,18 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (overlay.approval) {
-      return gateway
-        .rpc<ApprovalRespondResponse>('approval.respond', { choice: 'deny', session_id: getUiState().sid })
-        .then(r => r && (patchOverlayState({ approval: null }), patchTurnState({ outcome: 'denied' })))
+      const approval = overlay.approval
+      // Ctrl+C is a local fail-closed action. Clear the overlay before awaiting
+      // RPC so a disconnected backend cannot leave a stale prompt accepting a
+      // later keypress. The captured ids still let the best-effort response
+      // resolve a live backend request when the connection is healthy.
+      patchOverlayState({ approval: null })
+      patchTurnState({ outcome: 'denied' })
+
+      return gateway.rpc<ApprovalRespondResponse>(
+        'approval.respond',
+        buildApprovalRespond(approval.approvalId, approval.conversationId, 'deny')
+      )
     }
 
     if (overlay.sudo) {

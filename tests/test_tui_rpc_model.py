@@ -15,6 +15,7 @@ import pytest
 
 from raven.providers.common_models import common_models_for
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
+from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
     model_add_model,
     model_disconnect,
@@ -67,10 +68,14 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     result = await model_options({})
     entry = _entry(result, "anthropic")
     assert entry["authenticated"] is True
-    # Configured models rank first; the curated shortlist follows (deduped).
+    # Configured models rank first, then the curated shortlist, then LiteLLM's
+    # catalogue (deduped). The order is the contract: recommendations stay at the
+    # top of a list the catalogue makes long.
     assert entry["models"][:2] == ["claude-opus-4-8", "claude-sonnet-4-5"]
-    assert entry["total_models"] == 2 + len(common_models_for("anthropic"))
-    assert entry["auth_type"] == "api_key"
+    curated = common_models_for("anthropic")
+    assert entry["models"][2 : 2 + len(curated)] == curated
+    assert entry["total_models"] > 2 + len(curated), "the catalogue tier added nothing"
+    assert entry["auth_type"] == "key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
 
 
@@ -81,8 +86,9 @@ async def test_options_unauthed_provider_marked(fake_home: Path) -> None:
     assert entry["authenticated"] is False
     # Curated shortlist is shown regardless of auth (as openrouter always has),
     # so the picker is never empty; the unauthed state is conveyed separately.
-    assert entry["models"] == common_models_for("openai")
-    assert entry["total_models"] == len(common_models_for("openai"))
+    curated = common_models_for("openai")
+    assert entry["models"][: len(curated)] == curated
+    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
 
 
 async def test_options_current_provider_marked(fake_home: Path) -> None:
@@ -274,8 +280,9 @@ async def test_options_openrouter_seeds_common_models(fake_home: Path) -> None:
         },
     )
     entry = _entry(await model_options({}), "openrouter")
-    assert entry["models"] == common_models_for("openrouter")
-    assert entry["total_models"] == len(common_models_for("openrouter"))
+    curated = common_models_for("openrouter")
+    assert entry["models"][: len(curated)] == curated
+    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
 
 
 async def test_options_config_models_rank_before_common_and_dedup(fake_home: Path) -> None:
@@ -330,7 +337,14 @@ async def test_options_direct_provider_lists_common_models_when_unconfigured(
     )
     entry = _entry(await model_options({}), slug)
     assert entry["total_models"] > 0
-    assert entry["models"] == common_models_for(slug)
+    curated = common_models_for(slug)
+    assert entry["models"][: len(curated)] == curated, "the curated shortlist must stay at the top"
+    # And the tail is this provider's catalogue, not some other provider's:
+    # asserting only the prefix let the third tier be wired to a fixed slug.
+    from raven.providers.common_models import litellm_models_for
+
+    tail = entry["models"][len(curated) :]
+    assert set(tail) <= set(litellm_models_for(slug)), f"{slug}: tail holds models from elsewhere"
 
 
 async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> None:
@@ -345,3 +359,154 @@ async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> No
 
     assert result["provider"]["slug"] == "mistral"
     assert result["provider"]["authenticated"] is True
+
+
+@pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
+def test_litellm_catalogue_fills_providers_with_no_curated_shortlist(slug: str) -> None:
+    """Eleven providers had no shortlist, so the picker offered them nothing.
+
+    Ollama is the case that proves the lookup has to go through every name the
+    provider answers to: LiteLLM files its models under "ollama" while the
+    section is "ollama_chat", so a lookup by section name alone finds none.
+    """
+    from raven.providers.common_models import common_models_for, litellm_models_for
+
+    assert not common_models_for(slug), f"{slug} now has a shortlist; pick another provider for this test"
+    models = litellm_models_for(slug)
+    assert models, f"{slug}: the catalogue tier found nothing"
+    assert all("/" in m for m in models), models[:3]
+
+
+def test_catalogue_ids_are_spelled_the_way_they_route() -> None:
+    """The catalogue is inconsistent about prefixes; the picker must not be.
+
+    Moonshot's entries carry their prefix and VolcEngine's do not. An id offered
+    bare would be routed by keyword instead of to the provider the user picked.
+    """
+    from raven.providers.common_models import litellm_models_for
+    from raven.providers.registry import find_by_name
+
+    for slug in ("moonshot", "volcengine", "ollama_chat"):
+        spec = find_by_name(slug)
+        assert spec is not None
+        models = litellm_models_for(slug)
+        assert models, f"{slug}: nothing to check"
+        for model in models:
+            # Exactly one prefix, not merely one at the front: `startswith` alone
+            # reads "moonshot/moonshot/x" as correct, so it could not tell a
+            # re-prefixed id from a right one.
+            head, _, rest = model.partition("/")
+            assert head == spec.model_prefix, f"{slug}: {model}"
+            assert rest, f"{slug}: {model} has no id after the prefix"
+            assert not rest.startswith(f"{spec.model_prefix}/"), f"{slug}: double-prefixed {model}"
+
+
+def test_catalogue_offers_only_chat_models() -> None:
+    """Embeddings and speech share the catalogue and fail as a chat default."""
+    from raven.providers.common_models import litellm_models_for
+
+    offered = {m for slug in ("minimax", "volcengine") for m in litellm_models_for(slug)}
+    assert offered, "nothing to check"
+    assert not [m for m in offered if "embedding" in m or "speech" in m], sorted(offered)
+
+
+def test_the_catalogue_is_not_read_until_the_picker_is_opened() -> None:
+    """Reading it imports LiteLLM, which is two seconds Raven must not spend at
+    startup. Importing the module that offers it must stay free."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, json\n"
+        "import raven.tui_rpc.methods.model  # noqa: F401\n"
+        "before = 'litellm' in sys.modules\n"
+        "from raven.providers.common_models import litellm_models_for\n"
+        "n = len(litellm_models_for('moonshot'))\n"
+        "print(json.dumps({'before': before, 'after': 'litellm' in sys.modules, 'n': n}))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result["before"] is False, "importing the picker module pulled in litellm"
+    assert result["after"] is True, "reading the catalogue did not import litellm; is it still the source?"
+    assert result["n"] > 0
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda: model_options({}), id="options"),
+        pytest.param(lambda: model_save_key({"slug": "deepseek", "api_key": "sk-test-key"}), id="save_key"),
+        pytest.param(lambda: model_add_model({"slug": "deepseek", "model": "deepseek-chat"}), id="add_model"),
+        pytest.param(lambda: model_remove_model({"slug": "deepseek", "model": "deepseek-chat"}), id="remove_model"),
+        pytest.param(lambda: model_options({}), id="options_again"),
+    ],
+)
+async def test_no_handler_reads_the_catalogue_on_the_event_loop(fake_home: Path, monkeypatch, call) -> None:
+    """Reading it imports LiteLLM the first time, which takes seconds.
+
+    Only ``model.options`` warmed the cache off the loop; the three write
+    handlers built their response row inline. That is the stall the warm-up
+    exists to prevent, and it is reachable whenever the cache is cold -- a failed
+    read is deliberately not cached, and the client decides the call order.
+    """
+    import asyncio
+    import threading
+
+    _write_config(fake_home, {"providers": {"deepseek": {"api_key": "sk-existing"}}})
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    real = model_module.litellm_models_for
+
+    def _spy(slug: str):
+        seen.append(threading.get_ident())
+        return real(slug)
+
+    monkeypatch.setattr(model_module, "litellm_models_for", _spy)
+    await call()
+
+    assert seen, "the handler never consulted the catalogue, so this proves nothing"
+    on_loop = [t for t in seen if t == loop_thread]
+    assert not on_loop, f"{len(on_loop)}/{len(seen)} catalogue reads ran on the event loop"
+    assert asyncio.get_running_loop() is not None
+
+
+async def test_save_key_configures_a_local_deployment_by_address(fake_home: Path) -> None:
+    """It is reached by address and has no key; the handler demanded one.
+
+    `api_key` was a required field, and the picker reported every non-OAuth
+    provider as taking one, so a local deployment could not be configured from the
+    TUI at all -- and an empty key written into its section would have made it look
+    configured while nothing had been set.
+    """
+    # Seeded with a key it should never have had, so "no key" is asserted as a
+    # write rather than as an omission: leaving the field alone kept the old value.
+    _write_config(fake_home, {"providers": {"ollama_chat": {"api_key": "sk-leftover"}}})
+
+    result = await model_save_key({"slug": "ollama_chat", "api_base": "http://gpu-box:11434"})
+
+    assert result["provider"]["slug"] == "ollama_chat"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["ollama_chat"]
+    assert section.get("apiBase") == "http://gpu-box:11434"
+    assert section.get("apiKey") == "", f"a stale key survived: {section}"
+
+
+async def test_save_key_refuses_a_key_for_a_local_deployment(fake_home: Path) -> None:
+    """Said out loud rather than dropped, so it does not look accepted."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "ollama_chat", "api_key": "sk-nope", "api_base": "http://x:11434"})
+    assert "api_key" in str(excinfo.value)
+
+
+async def test_save_key_still_requires_a_key_for_a_keyed_provider(fake_home: Path) -> None:
+    """Relaxing the field for local deployments must not relax it for the rest."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "deepseek", "api_key": ""})
+    assert "api_key" in str(excinfo.value)
+
+
+async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Path) -> None:
+    """Neither field given is not a configured provider."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "ollama_chat"})
+    assert "api_base" in str(excinfo.value)

@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.9"
+version = "0.1.10"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -47,6 +47,11 @@ dependencies = [
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
     # working if upstream ever drops it.
     "numpy>=2.0,<3.0",
+    # Image downscale/recompress for read_file (agent/tools/media.py). Reaches
+    # us anyway via everos[multimodal] -> everalgo-parser, but that is a
+    # three-hop transitive path — pinning it directly so reading an image keeps
+    # working if any link in that chain drops it.
+    "pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]

@@ -704,7 +704,8 @@
         },
         {
           "name": "api_key",
-          "required": true,
+          "description": "Empty for a local deployment, which is reached by address and has no key. Required for every other credential shape, and refused for a local one.",
+          "required": false,
           "schema": { "type": "string" }
         },
         {

@@ -78,6 +78,18 @@ class ProviderSpec:
     # Provider supports cache_control on content blocks (e.g. Anthropic prompt caching)
     supports_prompt_caching: bool = False
 
+    # Whether a tool result may carry an image block. None = decide by probing
+    # the resolved LiteLLM target (see supports_image_tool_result); set it only
+    # to override that, e.g. a gateway whose backend is known to be Anthropic.
+    #
+    # This is an API-shape property, not a model property: a vision model still
+    # cannot see an image delivered in a tool result if the wire format has
+    # nowhere to put one. OpenAI's Chat Completions types `role:"tool"` content
+    # as `string | ChatCompletionContentPartText[]` — image is excluded at the
+    # schema level, so the fallback is to hand the model a text placeholder and
+    # attach the picture to a following user message.
+    image_tool_result_override: bool | None = None
+
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 
@@ -85,6 +97,13 @@ class ProviderSpec:
     # needs an api-version and a deployment name; Codex speaks the Responses API
     # over OAuth). They take no LiteLLM route prefix.
     bypasses_litellm: bool = False
+
+    # The endpoint is the user's to supply and there is no default that works:
+    # Azure gives every tenant its own resource URL, a self-hosted endpoint is
+    # wherever the user put it. Distinct from `default_api_base`, which is a
+    # working address the user may override, and from `is_local`, which needs an
+    # address but no key.
+    requires_api_base: bool = False
 
     @property
     def label(self) -> str:
@@ -161,6 +180,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         # empty).
         via_driver="openai",
         is_gateway=True,
+        requires_api_base=True,
         default_api_base="http://localhost:8000/v1",
     ),
     # === Azure OpenAI ======================================================
@@ -173,6 +193,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_key="",
         display_name="Azure OpenAI",
         bypasses_litellm=True,
+        requires_api_base=True,
     ),
     # === Gateways (detected by api_key / api_base, not model name) =========
     # Gateways can route any model, so they win in fallback.
@@ -531,6 +552,55 @@ def normalize_provider_name(name: str | None) -> str:
     (see `ProvidersConfig.get`).
     """
     return (name or "").strip().lower().replace("-", "_")
+
+
+CRED_OAUTH = "oauth"  # a token file, written by `raven provider login`
+CRED_LOCAL = "local"  # reached by address; there is no key
+CRED_ENDPOINT = "endpoint"  # a key plus a base URL the user supplies
+CRED_KEY = "key"  # a key alone, including vendors Raven carry no spec for
+
+
+def credential_kind(provider: str | None) -> str:
+    """Which of the four credential shapes this provider uses.
+
+    Every decision about how a provider is set up follows from this: whether to
+    ask for a key, an address, both, or neither. It lives here because it is a
+    fact about the provider, and because the two places that need it -- the
+    wizard and the model picker -- had answered it separately, with the picker
+    knowing only two shapes: it offered a local deployment a key prompt it cannot
+    use and no address field, which is the one thing it needs.
+
+    Derived rather than stored: a spec is optional metadata, and a vendor Raven
+    holds no spec for is reached with a key like most others.
+    """
+    spec = find_by_name(provider) if provider else None
+    if spec is None:
+        return CRED_KEY
+    if spec.is_oauth:
+        return CRED_OAUTH
+    if spec.is_local:
+        return CRED_LOCAL
+    if spec.requires_api_base:
+        return CRED_ENDPOINT
+    return CRED_KEY
+
+
+def litellm_spelling(name: str | None) -> str:
+    """How LiteLLM spells this vendor, which is the only form usable as a prefix.
+
+    Names are matched spelling-insensitively everywhere else, so the one arriving
+    here may be underscored where LiteLLM hyphenates -- and LiteLLM rejects the
+    underscored form outright ("nano_gpt/..." comes back as "LLM Provider NOT
+    provided"), which turns a provider that configured cleanly into one that
+    cannot be called.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+
+    wanted = normalize_provider_name(name)
+    for candidate in LITELLM_PROVIDER_NAMES:
+        if normalize_provider_name(candidate) == wanted:
+            return candidate
+    return wanted
 
 
 def names_same_provider(key: str, name: str) -> bool:

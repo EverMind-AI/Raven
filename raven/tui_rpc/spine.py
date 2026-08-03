@@ -21,6 +21,7 @@ from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
+from raven.agent.tools.shell import ApprovalResponder, ExecTool
 from raven.spine import (
     Deliverable,
     EpisodeStart,
@@ -70,15 +71,29 @@ class TuiTurnRunner(AgentTurnRunner):
         usages: dict[str, dict[str, Any]],
         turn_ids: dict[str, str],
         readback_texts: dict[str, str],
+        approval_responder: ApprovalResponder | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
         self._usages = usages
         self._turn_ids = turn_ids
         self._readback_texts = readback_texts
+        self._approval_responder = approval_responder
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = _conversation_id(req)
+        tools = getattr(self._loop, "tools", None)
+        exec_tool = tools.get("exec") if tools is not None else None
+        if isinstance(exec_tool, ExecTool):
+            # Approval capability is rebound for every turn. Only USER origin
+            # receives the TUI responder; CRON and other background origins can
+            # share this process but must still fail closed as non-interactive.
+            # The IDs bind any response to this exact conversation and turn.
+            exec_tool.start_approval_turn(
+                self._approval_responder if req.origin is Origin.USER else None,
+                conversation_id=cid,
+                turn_id=self._turn_ids.get(cid, ""),
+            )
         # A CRON turn is not a user turn: it runs non-streaming (one reply, not a
         # token stream) and its reply text is captured for the cron fan-out, which
         # delivers a cron.delivered event to every session (the cron:<job_id>
@@ -266,6 +281,7 @@ def build_tui(
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
     readback_texts: dict[str, str] | None = None,
+    approval_responder: ApprovalResponder | None = None,
     user_pool: int = 1,
     system_pool: int = 1,
 ) -> tuple[Scheduler, DeliveryHub, dict[str, str], Callable[[], Awaitable[None]]]:
@@ -280,7 +296,11 @@ def build_tui(
     ``readback_texts`` is the cron read-back map (conversation -> reply text): the
     runner stores a CRON turn's reply there so the cron fan-out can deliver it as a
     cron.delivered event. Pass the same dict the cron callback reads; defaults to a
-    private map when cron is not wired (e.g. tests)."""
+    private map when cron is not wired (e.g. tests).
+
+    ``approval_responder`` is an interactive capability, not a process-wide
+    permission. The runner binds it only to USER-origin turns and explicitly
+    revokes it for background origins."""
     hub = DeliveryHub()
     outlet = TuiOutlet(channel, emitter)
     hub.register(outlet)
@@ -289,7 +309,14 @@ def build_tui(
     if readback_texts is None:
         readback_texts = {}
     scheduler = Scheduler(
-        TuiTurnRunner(agent_loop, emitter, usages, turn_ids, readback_texts),
+        TuiTurnRunner(
+            agent_loop,
+            emitter,
+            usages,
+            turn_ids,
+            readback_texts,
+            approval_responder=approval_responder,
+        ),
         OriginPools(user=user_pool, system=system_pool),
         _make_tui_sink(hub, outlet, channel, turn_ids, usages, on_turn_end),
     )

@@ -42,6 +42,12 @@ from raven.cli._helpers import (
     send_probe,
 )
 from raven.cli._theme import POINTER, QMARK
+from raven.providers.registry import (
+    CRED_ENDPOINT,
+    CRED_LOCAL,
+    CRED_OAUTH,
+    credential_kind,
+)
 
 
 class _ThemedConsole(Console):
@@ -100,36 +106,91 @@ def _t(en: str, zh: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Sentinel entries the picker renders as its own step rather than a provider.
+_PICK_LITELLM_VENDOR = "__litellm_vendor__"
+
+# Every provider we carry a spec for, grouped the way the picker shows them.
+# Ordered by expected use inside each group; the groups themselves are what a
+# user scans for, so a provider is never hidden the way eight of them were when
+# this list was a hand-picked subset of the registry.
+_CURATED_GROUPS: list[dict[str, Any]] = [
+    {
+        "kind": "api_key",
+        "providers": [
+            {
+                "name": "openrouter",
+                "label": "OpenRouter (recommended - one key, many models)",
+                "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
+            },
+            {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
+            {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
+            {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
+            # Marked because EverMind and MiniMax collaborate in the open, not
+            # because it ranks differently on capability -- "open-source" rather
+            # than a bare "partner", which in a list of vendors reads as paid
+            # placement. The OAuth MiniMax entries carry no marker: the same
+            # vendor is already marked here, and stacking it on "(OAuth)" makes
+            # the row twice as long for nothing.
+            {
+                "name": "minimax",
+                "label": "MiniMax (open-source partner)",
+                "label_zh": "MiniMax(开源合作伙伴)",
+            },
+            {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
+            {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
+            {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
+            {"name": "moonshot", "label": "Moonshot", "label_zh": "Moonshot(月之暗面)"},
+            {"name": "volcengine", "label": "VolcEngine", "label_zh": "火山方舟"},
+            {"name": "siliconflow", "label": "SiliconFlow", "label_zh": "硅基流动"},
+            {"name": "groq", "label": "Groq", "label_zh": "Groq"},
+            {"name": "aihubmix", "label": "AiHubMix", "label_zh": "AiHubMix"},
+            {"name": "azure_openai", "label": "Azure OpenAI", "label_zh": "Azure OpenAI"},
+        ],
+    },
+    {
+        "kind": "oauth",
+        "providers": [
+            {
+                "name": "github_copilot",
+                "label": "GitHub Copilot (OAuth)",
+                "label_zh": "GitHub Copilot(OAuth 登录)",
+            },
+            {"name": "openai_codex", "label": "OpenAI Codex (OAuth)", "label_zh": "OpenAI Codex(OAuth 登录)"},
+            {
+                "name": "minimax_global",
+                "label": "MiniMax Global (OAuth)",
+                "label_zh": "MiniMax Global(OAuth 登录)",
+            },
+            {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
+        ],
+    },
+    {
+        "kind": "local",
+        "providers": [
+            {"name": "ollama_chat", "label": "Ollama (local)", "label_zh": "Ollama(本地)"},
+            {"name": "hosted_vllm", "label": "vLLM / self-hosted", "label_zh": "vLLM / 自托管"},
+        ],
+    },
+    {
+        "kind": "fallback",
+        "providers": [
+            {
+                "name": _PICK_LITELLM_VENDOR,
+                "label": "Another supported vendor (type to search)",
+                "label_zh": "其他支持的厂商(输入可搜索)",
+            },
+            {
+                "name": "custom",
+                "label": "Self-hosted OpenAI-compatible endpoint",
+                "label_zh": "自建 OpenAI 兼容端点",
+            },
+        ],
+    },
+]
+
+# Flat view for callers that only need "which providers does the wizard offer".
 _CURATED_PROVIDERS: list[dict[str, Any]] = [
-    {
-        "name": "openrouter",
-        "label": "OpenRouter (recommended — one key, many models)",
-        "label_zh": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
-    },
-    {"name": "openai", "label": "OpenAI", "label_zh": "OpenAI"},
-    {"name": "anthropic", "label": "Anthropic", "label_zh": "Anthropic"},
-    {"name": "gemini", "label": "Gemini", "label_zh": "Gemini"},
-    {"name": "deepseek", "label": "DeepSeek", "label_zh": "DeepSeek"},
-    {"name": "zai", "label": "Z.ai (Zhipu)", "label_zh": "Z.ai(智谱)"},
-    {"name": "dashscope", "label": "DashScope", "label_zh": "阿里云百炼"},
-    {"name": "groq", "label": "Groq", "label_zh": "Groq"},
-    {
-        "name": "github_copilot",
-        "label": "GitHub Copilot (OAuth)",
-        "label_zh": "GitHub Copilot(OAuth 登录)",
-    },
-    {"name": "openai_codex", "label": "Codex (OAuth)", "label_zh": "Codex(OAuth 登录)"},
-    {
-        "name": "minimax_global",
-        "label": "MiniMax Global (OAuth)",
-        "label_zh": "MiniMax Global(OAuth 登录)",
-    },
-    {"name": "minimax_cn", "label": "MiniMax CN (OAuth)", "label_zh": "MiniMax CN(OAuth 登录)"},
-    {
-        "name": "custom",
-        "label": "Other (OpenAI-compatible endpoint)",
-        "label_zh": "其他(OpenAI 兼容端点)",
-    },
+    entry for group in _CURATED_GROUPS for entry in group["providers"] if entry["name"] != _PICK_LITELLM_VENDOR
 ]
 
 _QUESTIONARY_INSTALL_HINT = (
@@ -391,13 +452,14 @@ def _provider_label(name: str) -> str:
 def _validate_provider_name(name: str) -> str:
     """Resolve a user-supplied provider name (kebab or snake) to a registry key.
 
-    The wizard needs a registry entry to guide anyone: a default model to fall
-    back on, whether the provider takes a key or an OAuth login, a label to
-    print. A vendor that only LiteLLM knows has none of that, so point at the
-    command that does configure it rather than walking off a missing spec.
+    A vendor LiteLLM routes to but Raven carries no spec for is configurable
+    too: the wizard has no default model or OAuth flow to offer it, but it does
+    not need one -- the credentials go in under the vendor's name and the model
+    list comes from the vendor itself. Callers must therefore treat the spec as
+    optional metadata, not as permission.
     """
     from raven.config.update_providers import provider_field_specs
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, normalize_provider_name
 
     candidate = name.replace("-", "_")
     try:
@@ -406,9 +468,9 @@ def _validate_provider_name(name: str) -> str:
         raise typer.BadParameter(str(exc))
     spec = find_by_name(candidate)
     if spec is None:
-        raise typer.BadParameter(
-            f"The wizard does not cover '{name}'. Configure it directly: raven provider set {name} --api-key <key>"
-        )
+        # No spec, but provider_field_specs above already confirmed LiteLLM
+        # routes to it, which is all configuring it takes.
+        return normalize_provider_name(candidate)
     # Return the current name: everything downstream compares and stores by it,
     # and a former name would have the wizard reading one section and writing
     # another.
@@ -469,32 +531,117 @@ def _collect_fields(prompts: list[Callable[[], Any]]) -> Optional[list[Any]]:
     return values
 
 
+def _select_provider_row() -> Optional[str]:
+    """Render the grouped provider list once and return the raw choice.
+
+    Separate from `_select_provider` so backing out of the vendor sub-list can
+    show this list again rather than unwinding the whole step.
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    choices: list[Any] = []
+    for group in _CURATED_GROUPS:
+        # A rule between groups, so the API-key providers, the OAuth ones, the
+        # local deployments and the two fallbacks read as four decisions rather
+        # than one list of twenty.
+        if choices:
+            choices.append(questionary.Separator())
+        for entry in group["providers"]:
+            choices.append(
+                questionary.Choice(
+                    _t(entry["label"], entry.get("label_zh", entry["label"])),
+                    value=entry["name"],
+                )
+            )
+    choices.append(questionary.Separator())
+    choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
+
+    return questionary.select(
+        _t("Provider:", "服务商:"),
+        choices=choices,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()  # None on Ctrl+C
+
+
 def _select_provider() -> Optional[str]:
     """Interactive provider picker built from the curated catalogue.
 
     Returns the provider name, ``_BACK`` if the user chose the back sentinel,
     or ``None`` on Ctrl+C.
     """
+    picked = _select_provider_row()
+    while picked == _PICK_LITELLM_VENDOR:
+        # Second step rather than a hundred more rows: LiteLLM routes to far more
+        # vendors than anyone wants to scroll, and typing the name is how someone
+        # who already knows which one they want gets there.
+        #
+        # Backing out of it returns to this list, not out of the step: the user
+        # opened a sub-list, so empty-submit means "close the sub-list". Passing
+        # its _BACK straight up sent them to the language screen instead.
+        typed = _prompt_litellm_vendor()
+        if typed is None:
+            return None
+        if typed is not _BACK:
+            return typed
+        picked = _select_provider_row()
+    return picked  # _BACK on back, None on Ctrl+C
+
+
+def _litellm_vendor_choices() -> list[str]:
+    """Vendor names for the second step: the ones the picker does not already show.
+
+    Read from the packaged snapshot rather than LiteLLM itself, so offering them
+    costs no import on a path that only renders choices.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+    from raven.providers.registry import find_by_name, normalize_provider_name
+
+    # Every name a listed provider answers to, not just the one shown: LiteLLM
+    # knows "ollama" and "vllm", which are the pre-rename spellings of two rows
+    # already on the list, so matching on the displayed name alone offered them
+    # a second time under a name that resolves to the same section.
+    already_listed: set[str] = set()
+    for entry in _CURATED_PROVIDERS:
+        spec = find_by_name(entry["name"])
+        already_listed |= set(spec.route_names) if spec else {normalize_provider_name(entry["name"])}
+    return sorted(n for n in LITELLM_PROVIDER_NAMES if normalize_provider_name(n) not in already_listed)
+
+
+def _prompt_litellm_vendor() -> Optional[str]:
+    """Ask for a vendor by name, completing against the ones LiteLLM routes to.
+
+    Returns the provider name, ``_BACK`` to rewind to the picker, or ``None`` on
+    Ctrl+C. The names come from the packaged snapshot, so offering them costs no
+    LiteLLM import.
+    """
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
+    from raven.providers.registry import normalize_provider_name
 
-    choices: list[Any] = [
-        questionary.Choice(
-            _t(entry["label"], entry.get("label_zh", entry["label"])),
-            value=entry["name"],
-        )
-        for entry in _CURATED_PROVIDERS
-    ]
-    choices.append(questionary.Separator())
-    choices.append(questionary.Choice(_t("Back", "返回"), value=_BACK))
+    choices = _litellm_vendor_choices()
 
-    picked = questionary.select(
-        _t("Provider:", "服务商:"),
+    typed = questionary.autocomplete(
+        _t(
+            f"Vendor name ({len(choices)} supported - type to search, Tab to complete, empty to go back):",
+            f"厂商名(支持 {len(choices)} 家 — 输入可搜索,Tab 补全,留空返回):",
+        ),
         choices=choices,
         style=RAVEN_STYLE,
         qmark=_QMARK,
+        ignore_case=True,
+        match_middle=True,
     ).ask()
-    return picked  # None on Ctrl+C
+    if typed is None:
+        return None
+    typed = typed.strip()
+    if not typed:
+        return _BACK
+    # Validation happens where the name is used, not here: the caller runs it
+    # through the same gate the --provider flag goes through, which is what turns
+    # a typo into a message instead of a traceback.
+    return normalize_provider_name(typed)
 
 
 def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Optional[str] = None) -> Any:
@@ -531,6 +678,45 @@ def _prompt_api_key(provider: str, *, allow_back: bool = False, back_label: Opti
     if not key:
         raise typer.Exit(1)
     return key
+
+
+def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = False) -> Any:
+    """Ask a local deployment for its server URL. Returns ``_BACK`` on empty submit.
+
+    A local deployment is reached by address, not by key -- there is nothing to
+    authenticate against a server the user is running.
+
+    The field is seeded with the address already configured, falling back to the
+    registry default for a first-time setup. Seeding the default unconditionally
+    meant reconfiguring a server at some other address offered localhost, and
+    pressing Enter to move on replaced a working address with it.
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    def _validate(v: str) -> Any:
+        if allow_back and v.strip() == "":
+            return True
+        return (
+            True
+            if v.strip().startswith(("http://", "https://"))
+            else _t("URL must start with http:// or https://", "地址需以 http:// 或 https:// 开头")
+        )
+
+    url = questionary.text(
+        _t(f"{spec.label} server URL:", f"{spec.label} 服务地址:"),
+        default=current or spec.default_api_base or "",
+        validate=_validate,
+        placeholder=_back_placeholder(allow_back),
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if url is None:
+        return None
+    url = url.strip()
+    if allow_back and not url:
+        return _BACK
+    return url
 
 
 def _prompt_base_url(default: str = "https://", *, allow_back: bool = False) -> Any:
@@ -612,7 +798,7 @@ def _run_oauth_login(provider: str) -> bool:
     from raven.providers.registry import find_by_name
 
     spec = find_by_name(provider)
-    if not spec or not spec.is_oauth:
+    if credential_kind(provider) != CRED_OAUTH:
         console.print(
             _t(
                 f"  [red]✗ {provider} is not an OAuth provider.[/red]",
@@ -668,7 +854,13 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     """
     from raven.config.update_providers import test_provider as probe
 
-    console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
+    # A local deployment has no key to verify -- what is being checked is that
+    # the address answers, and saying "API key" there describes a field the user
+    # was never asked for.
+    if credential_kind(provider) == CRED_LOCAL:
+        console.print(_t("  [dim]⏳ Reaching the server…[/dim]", "  [dim]⏳ 正在连接服务…[/dim]"))
+    else:
+        console.print(_t("  [dim]⏳ Verifying your API key…[/dim]", "  [dim]⏳ 正在验证 API Key…[/dim]"))
     result = probe(provider)
     if result["ok"]:
         models = result.get("models_count")
@@ -740,10 +932,42 @@ def _model_routes_to_provider(model: str, spec: Any) -> bool:
     return bool(model and spec and spec.claims(model))
 
 
-def _format_model_for_provider(spec: Any, model_id: str) -> str:
-    """Apply the provider's model prefix to a raw ``/v1/models`` id when needed."""
+# How a provider proves who it is. Every decision the wizard makes about a
+# provider -- which field to prompt for, what a failure offers to change, what
+# "remove" clears, whether a rollback applies -- follows from this one question,
+# and it was being answered independently at thirteen sites off two spec flags.
+# Each of the last two review rounds found a site that disagreed with the others:
+# a rollback that wrote credentials to an OAuth provider and killed the wizard, a
+# menu that offered a key prompt to one, a prompt that half-guarded a spec it had
+# already dereferenced. Answer it once.
+
+
+def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
+    """Apply the provider's route prefix to a raw ``/v1/models`` id when needed.
+
+    A vendor Raven carries no spec for still needs the prefix, and needs it most:
+    the id it returns is bare, and a bare id is routed by keyword and fallback
+    rather than to the section the user just configured. Handing one back
+    unprefixed sent the request wherever those rules landed -- configuring
+    Mistral alongside OpenAI produced "mistral-large-latest", which resolves to
+    OpenAI and spends OpenAI's key.
+
+    Its section name is LiteLLM's own name for the vendor, which is exactly the
+    prefix LiteLLM routes on, so that is what goes in front.
+    """
+
     if not model_id:
         return model_id
+    if spec is None:
+        # LiteLLM's own spelling, not the normalized one. A config section may be
+        # written either way and both resolve, but the wire prefix has to be the
+        # name LiteLLM routes on -- it hyphenates three vendors, and handing it
+        # "nano_gpt/..." is rejected with "LLM Provider NOT provided", so the
+        # provider configured fine and then could not be called.
+        from raven.providers.registry import litellm_spelling
+
+        prefix = litellm_spelling(provider)
+        return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
     if spec.name in {"minimax_global", "minimax_cn"}:
         public_prefix = spec.name.replace("_", "-")
         if model_id.startswith(f"{public_prefix}/"):
@@ -761,34 +985,72 @@ def _format_model_for_provider(spec: Any, model_id: str) -> str:
 
 
 def _pick_model(
+    provider: str,
     spec: Any,
     *,
     current_model: Optional[str],
     model_ids: Optional[list[str]],
+    probe_status: str,
     user_provided_model: Optional[str],
     non_interactive: bool,
 ) -> str:
     """Decide the model string to write into ``agents.defaults.model``."""
+    # Every exit goes through the formatter, which is idempotent. Applying it
+    # only where the candidate list is built covered only the branch that has
+    # candidates -- and a vendor Raven carries no spec for reaches the others:
+    # the probe cannot pre-check it, so there is no list, so the user types the
+    # id. A typed id is bare, and a bare id is routed by keyword and fallback
+    # rather than to the provider just configured, which is how
+    # "mistral-large-latest" came to be served with OpenAI's key.
     if user_provided_model:
-        return user_provided_model
+        return _format_model_for_provider(provider, spec, user_provided_model)
 
     if non_interactive:
-        if not spec.default_model:
-            raise typer.BadParameter(
-                f"--model is required for provider '{spec.name}' (no built-in default model in registry)."
-            )
-        return spec.default_model
+        default_model = spec.default_model if spec else ""
+        if not default_model:
+            raise typer.BadParameter(f"--model is required for provider '{provider}' (no built-in default model).")
+        return _format_model_for_provider(provider, spec, default_model)
 
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
-    if current_model and _model_routes_to_provider(current_model, spec):
+    if current_model and spec and _model_routes_to_provider(current_model, spec):
         default_value = current_model
     else:
-        default_value = spec.default_model or ""
+        default_value = (spec.default_model if spec else "") or ""
+
+    # A live fetch is the best answer when there is one; when there is not, the
+    # same chain the TUI picker offers beats an empty prompt. Eleven providers
+    # carry no curated shortlist, so before this a failed fetch left the user
+    # typing a model id from memory.
+    if not model_ids:
+        from raven.providers.common_models import common_models_for, litellm_models_for
+
+        known = [*common_models_for(provider), *litellm_models_for(provider)]
+        if known:
+            # openai / anthropic / deepseek / gemini have no /models endpoint to
+            # pre-check, so there is no list on a perfectly healthy run. Saying
+            # "couldn't reach the provider" there contradicted the line printed
+            # just above it and read as a failure to a user for whom nothing
+            # had failed.
+            console.print(
+                _t(
+                    "  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]",
+                    "  [dim]该服务商没有可拉取的模型列表,先列出已知的。[/dim]",
+                )
+                if probe_status == "skipped"
+                else _t(
+                    "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]",
+                    "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
+                )
+            )
+            model_ids = known
 
     if model_ids:
-        choices = [_format_model_for_provider(spec, mid) for mid in model_ids]
+        choices = [_format_model_for_provider(provider, spec, mid) for mid in model_ids]
+        # Dedupe: the chain above already prefixes its ids, and _format_ leaves a
+        # correctly-prefixed id alone, so two sources can agree on one model.
+        choices = list(dict.fromkeys(choices))
         if default_value and default_value not in choices:
             choices.insert(0, default_value)
         prompt_label = _t(
@@ -823,7 +1085,7 @@ def _pick_model(
             ).ask()
         else:
             chosen = questionary.text(
-                _t(f"Default model id for {spec.name}:", f"{spec.name} 的默认模型 id:"),
+                _t(f"Default model id for {provider}:", f"{provider} 的默认模型 id:"),
                 validate=lambda v: True if v.strip() else _t("Model id is required.", "必须指定模型 id。"),
                 style=RAVEN_STYLE,
                 qmark=_QMARK,
@@ -837,9 +1099,28 @@ def _pick_model(
         # default rather than tearing down the wizard. The no-default branch
         # validates non-empty, so an empty value only reaches here with a default.
         if default_value:
-            return default_value
+            return _format_model_for_provider(provider, spec, default_value)
         raise typer.Exit(1)
-    return chosen
+    return _format_model_for_provider(provider, spec, chosen)
+
+
+def _roll_back_provider_fields(provider: str, spec: Any, *, old_key: Optional[str], old_base: Optional[str]) -> None:
+    """Undo what this pass wrote, restoring the state read before it started.
+
+    A named function so the behaviour can be driven by a test: the two shapes
+    this replaced were both wrong in ways only a test that calls it can hold
+    down. Keying off the previous api_key skipped a local deployment entirely,
+    leaving a mistyped address where a working one had been; and asking "was it
+    configured" cleared both fields for a provider that had held only an
+    api_base, erasing an endpoint this pass never touched.
+
+    OAuth providers are skipped: their credentials live in a token file, the ops
+    layer refuses to write credential fields for them, and doing it anyway turned
+    a failed verification into a dead wizard.
+    """
+    if credential_kind(provider) == CRED_OAUTH:
+        return
+    _write_provider_fields(provider, {"api_key": old_key or "", "api_base": old_base})
 
 
 def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
@@ -992,7 +1273,20 @@ def _configure_one_provider(
     # A provider passed by flag is used once; switching then requires the
     # interactive picker (or, in non-interactive mode, is impossible).
     flag_provider = provider
-    configured_before = set(_configured_providers())
+
+    def _rewind() -> None:
+        """Discard the flag values before the next pass through the picker.
+
+        All of them, not just the provider: they were typed for the provider
+        that just failed. A stale --api-key was written to the newly picked
+        provider without a prompt, a stale --base-url pointed it at the previous
+        provider's machine, and picking a local deployment -- which rejects
+        --api-key by design -- ended the whole wizard on a usage error, losing
+        the later steps this loop exists to keep.
+        """
+        nonlocal flag_provider, api_key, base_url, model
+        flag_provider = api_key = base_url = model = None
+
     while True:
         if flag_provider:
             provider = _validate_provider_name(flag_provider)
@@ -1004,11 +1298,20 @@ def _configure_one_provider(
                 raise typer.Exit(1)
             if picked is _BACK:
                 return None
-            provider = picked
+            # Same gate as the flag path: the vendor step lets the user type a
+            # name, and a typo there used to reach the config layer as an
+            # uncaught KeyError that tore down the wizard mid-setup.
+            try:
+                provider = _validate_provider_name(picked)
+            except typer.BadParameter as exc:
+                console.print(f"  [red]x[/red] {exc}")
+                _rewind()
+                continue
 
         spec = find_by_name(provider)
-        is_oauth = bool(spec and spec.is_oauth)
-        is_custom = provider == "custom"
+        kind = credential_kind(provider)
+        is_oauth = kind == CRED_OAUTH
+        is_custom = kind == CRED_ENDPOINT
         # The interactive picker already echoes the chosen provider; only print
         # an explicit confirmation when it came from --provider (no echo then).
         if flag_provider:
@@ -1036,6 +1339,7 @@ def _configure_one_provider(
             provider,
             is_oauth=is_oauth,
             is_custom=is_custom,
+            is_local=kind == CRED_LOCAL,
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -1043,11 +1347,12 @@ def _configure_one_provider(
         )
         if custom_model is _BACK:
             # User backed out of the first credential field — rewind to the
-            # provider picker (drop any flag so the picker actually shows).
-            flag_provider = None
+            # provider picker (drop the flags so the picker actually shows).
+            _rewind()
             continue
 
         chosen_model = _resolve_model_with_test(
+            provider,
             spec,
             is_custom=is_custom,
             custom_model=custom_model,
@@ -1057,16 +1362,25 @@ def _configure_one_provider(
             skip_test=skip_test,
         )
         if chosen_model is None:
-            # "Switch provider" — re-run the picker (drop the flag so the second
-            # pass prompts rather than reusing the failed flag value). Roll back
-            # the just-written key: clear it if this provider was newly added this
-            # pass, or restore the prior key if we were reconfiguring an existing
-            # one (so a failed edit doesn't clobber a working provider).
-            if provider not in configured_before:
-                _write_provider_fields(provider, {"api_key": ""})
-            elif old_key:
-                _write_provider_fields(provider, {"api_key": old_key, "api_base": old_base})
-            flag_provider = None
+            # "Switch provider" — re-run the picker (drop the flags so the second
+            # pass prompts rather than reusing the failed values), undoing what
+            # this pass wrote.
+            #
+            # Put back exactly what was there, read before this pass wrote
+            # anything. One branch, because "was it configured" is the wrong
+            # question twice over: a local deployment is configured by address
+            # and has no key, so a rollback keyed off the old key skipped it and
+            # a mistyped address replaced a working one for good; and a provider
+            # that held only an api_base counts as unconfigured, so clearing
+            # both fields for a "new" provider erased an endpoint this pass had
+            # never touched.
+            #
+            # OAuth providers are left alone: their credentials live in a token
+            # file, `set_provider_fields` refuses to write credential fields for
+            # them at all, and doing so turned a failed verification into a
+            # RuntimeError that took the whole wizard down.
+            _roll_back_provider_fields(provider, spec, old_key=old_key, old_base=old_base)
+            _rewind()
             continue
         _persist_default_model(chosen_model)
         return {"provider": provider, "model": chosen_model}
@@ -1077,6 +1391,7 @@ def _collect_credentials(
     *,
     is_oauth: bool,
     is_custom: bool,
+    is_local: bool = False,
     api_key: Optional[str],
     base_url: Optional[str],
     model: Optional[str],
@@ -1109,6 +1424,40 @@ def _collect_credentials(
             if choice == "retry":
                 continue
             return _BACK
+
+    if is_local:
+        # A local deployment authenticates on nothing: it is reached by address.
+        # Routing it through the api_key prompt would stop the user at a
+        # minimum-length check for a credential that does not exist.
+        from raven.providers.registry import find_by_name
+
+        spec = find_by_name(provider)
+        if api_key:
+            # Said out loud rather than dropped: a local deployment writes no
+            # api_key, so silently ignoring the flag looks like it was accepted.
+            raise typer.BadParameter(
+                f"{provider} is a local deployment and takes no --api-key; pass --base-url instead"
+            )
+        if base_url and not base_url.strip().startswith(("http://", "https://")):
+            # The interactive prompt validates this; the flag path did not, so a
+            # scheme-less address went into the config and failed at first use.
+            raise typer.BadParameter(f"--base-url must start with http:// or https:// (got {base_url!r})")
+        if not base_url:
+            if non_interactive:
+                raise typer.BadParameter(f"--base-url is required for {provider} in non-interactive mode")
+            from raven.config.update_providers import get_provider_config
+
+            try:
+                stored = get_provider_config(provider, redact_secrets=False).get("api_base") or ""
+            except KeyError:
+                stored = ""
+            base_url = _prompt_local_api_base(spec, current=stored, allow_back=True)
+            if base_url is _BACK:
+                return _BACK
+            if base_url is None:
+                raise typer.Exit(1)
+        _write_provider_fields(provider, {"api_base": base_url})
+        return None
 
     # Pure interactive path (no creds came from flags): prompt field-by-field
     # with empty-submit = back; backing out of the first field rewinds to the
@@ -1154,6 +1503,7 @@ def _collect_credentials(
 
 
 def _resolve_model_with_test(
+    provider: str,
     spec: Any,
     *,
     is_custom: bool,
@@ -1172,15 +1522,31 @@ def _resolve_model_with_test(
     provider" (the caller rewinds to the picker).
     """
     while True:
-        ok, status, model_ids = _verify_provider(spec.name, skip_test=skip_test)
+        ok, status, model_ids = _verify_provider(provider, skip_test=skip_test)
         if not ok:
             options = (
-                [(_t("Retry", "重试"), "retry"), (_t("Continue anyway", "仍然继续"), "continue")]
+                [
+                    (_t("Retry", "重试"), "retry"),
+                    # A local deployment that cannot be reached is usually a
+                    # wrong address, and this is the branch it lands in -- so
+                    # retry alone left the one thing worth changing unreachable.
+                    *(
+                        [(_t("Re-enter server URL", "重新填服务地址"), "rebase")]
+                        if credential_kind(provider) == CRED_LOCAL
+                        else []
+                    ),
+                    (_t("Continue anyway", "仍然继续"), "continue"),
+                ]
                 if status == "network_error"
                 else [
+                    # What to offer depends on what the provider is reached by.
+                    # A local deployment has no key to re-enter, so offering that
+                    # left a mistyped address with no way back to the field.
                     (
                         (_t("Sign in again", "重新登录"), "reauth")
-                        if spec.is_oauth
+                        if credential_kind(provider) == CRED_OAUTH
+                        else (_t("Re-enter server URL", "重新填服务地址"), "rebase")
+                        if credential_kind(provider) == CRED_LOCAL
                         else (_t("Re-enter key", "重新填 Key"), "rekey")
                     ),
                     (_t("Switch provider", "更换服务商"), "switch"),
@@ -1191,10 +1557,25 @@ def _resolve_model_with_test(
             if choice == "retry":
                 continue
             if choice == "rekey" and not non_interactive:
-                _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+                _write_provider_fields(provider, {"api_key": _prompt_api_key(provider)})
+                continue
+            if choice == "rebase" and not non_interactive:
+                from raven.config.update_providers import get_provider_config
+
+                try:
+                    stored = get_provider_config(provider, redact_secrets=False).get("api_base") or ""
+                except KeyError:
+                    stored = ""
+                retyped = _prompt_local_api_base(spec, current=stored)
+                if retyped is None:
+                    # Ctrl+C means quit, as it does in the sibling "re-enter key"
+                    # branch. Returning None here would have been read as "switch
+                    # provider" and silently rolled the setup back instead.
+                    raise typer.Exit(1)
+                _write_provider_fields(provider, {"api_base": retyped})
                 continue
             if choice == "reauth" and not non_interactive:
-                if _run_oauth_login(spec.name):
+                if _run_oauth_login(provider):
                     continue
                 return None
             if choice == "switch":
@@ -1212,20 +1593,22 @@ def _resolve_model_with_test(
         if skip_test:
             return custom_model
         while True:
-            result = _run_test_probe(spec.name, non_interactive=non_interactive, warnings=warnings, allow_repick=False)
+            result = _run_test_probe(provider, non_interactive=non_interactive, warnings=warnings, allow_repick=False)
             if result == "switch":
                 return None
             if result == "rekey":
-                _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+                _write_provider_fields(provider, {"api_key": _prompt_api_key(provider)})
                 continue
             return custom_model  # ok / continue
 
     current = _load_current_default_model()
     while True:
         chosen = _pick_model(
+            provider,
             spec,
             current_model=current,
             model_ids=model_ids,
+            probe_status=status,
             user_provided_model=user_model_flag,
             non_interactive=non_interactive,
         )
@@ -1233,21 +1616,21 @@ def _resolve_model_with_test(
         if skip_test:
             return chosen
         result = _run_test_probe(
-            spec.name,
+            provider,
             non_interactive=non_interactive,
             warnings=warnings,
-            is_oauth=spec.is_oauth,
+            is_oauth=credential_kind(provider) == CRED_OAUTH,
         )
         if result == "switch":
             return None
         if result == "rekey":
-            _write_provider_fields(spec.name, {"api_key": _prompt_api_key(spec.name)})
+            _write_provider_fields(provider, {"api_key": _prompt_api_key(provider)})
             # Re-test the same model with the new key (picker defaults to it).
             current = chosen
             user_model_flag = None
             continue
         if result == "reauth":
-            if not _run_oauth_login(spec.name):
+            if not _run_oauth_login(provider):
                 return None
             current = chosen
             user_model_flag = None
@@ -1267,11 +1650,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     from raven.cli._styles import RAVEN_STYLE
     from raven.providers.registry import find_by_name
 
-    choices = [
-        questionary.Choice(_provider_label(name), value=name)
-        for name in _configured_providers()
-        if find_by_name(name) is not None
-    ]
+    choices = [questionary.Choice(_provider_label(name), value=name) for name in _configured_providers()]
     if not choices:
         return False
     provider = questionary.select(
@@ -1283,13 +1662,15 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
     if not provider:
         raise typer.Exit(1)
     spec = find_by_name(provider)
-    ok, _status, model_ids = _verify_provider(provider)
+    ok, status, model_ids = _verify_provider(provider)
     if not ok:
         return False
     chosen = _pick_model(
+        provider,
         spec,
         current_model=None,
         model_ids=model_ids,
+        probe_status=status,
         user_provided_model=None,
         non_interactive=False,
     )
@@ -1298,7 +1679,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         provider,
         non_interactive=False,
         warnings=[],
-        is_oauth=spec.is_oauth,
+        is_oauth=credential_kind(provider) == CRED_OAUTH,
     )
     if result == "reauth":
         return _run_oauth_login(provider)
@@ -1314,6 +1695,7 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
     """Edit/remove submenu for already-configured providers (interactive only)."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
+    from raven.providers.registry import find_by_name
 
     while True:
         configured = _configured_providers()
@@ -1349,7 +1731,51 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
         if action is None or action is _BACK:
             continue
         if action == "update":
-            _write_provider_fields(target, {"api_key": _prompt_api_key(target)})
+            target_spec = find_by_name(target)
+            if credential_kind(target) == CRED_OAUTH:
+                # Nothing here to update: the credential is a token file, and the
+                # ops layer refuses credential writes for these -- so offering the
+                # key prompt ended the wizard instead of editing anything.
+                console.print(
+                    _t(
+                        f"  [dim]{_provider_label(target)} signs in through OAuth. "
+                        f"Run: raven provider login {target.replace('_', '-')}[/dim]",
+                        f"  [dim]{_provider_label(target)} 通过 OAuth 登录。"
+                        f"请运行: raven provider login {target.replace('_', '-')}[/dim]",
+                    )
+                )
+                continue
+            if credential_kind(target) == CRED_LOCAL:
+                # A local deployment holds no key; what there is to update is
+                # where it lives. Offering the key prompt wrote a credential into
+                # a provider that never reads one, and left the address alone.
+                from raven.config.update_providers import get_provider_config
+
+                try:
+                    stored = get_provider_config(target, redact_secrets=False).get("api_base") or ""
+                except KeyError:
+                    stored = ""
+                retyped = _prompt_local_api_base(target_spec, current=stored)
+                if retyped is None:
+                    continue
+                _write_provider_fields(target, {"api_base": retyped})
+            elif credential_kind(target) == CRED_ENDPOINT:
+                # A self-hosted endpoint is a key *and* the address it is sent
+                # to. Updating only the key left the one field that moves when
+                # the user redeploys -- the URL -- unreachable from this menu.
+                from raven.config.update_providers import get_provider_config
+
+                try:
+                    stored = get_provider_config(target, redact_secrets=False).get("api_base") or ""
+                except KeyError:
+                    stored = ""
+                retyped_key = _prompt_api_key(target)
+                retyped_url = _prompt_base_url(stored or "https://")
+                if retyped_url is None:
+                    continue
+                _write_provider_fields(target, {"api_key": retyped_key, "api_base": retyped_url})
+            else:
+                _write_provider_fields(target, {"api_key": _prompt_api_key(target)})
             console.print(
                 _t(
                     f"  [green]✓ Updated {_provider_label(target)}.[/green]",
@@ -1383,7 +1809,23 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 ).ask()
                 if not confirm:
                     continue
-            _write_provider_fields(target, {"api_key": ""})
+            # Clear both: a local deployment counts as configured by its
+            # api_base, so clearing only the key reported it removed and left it
+            # in the list, still reachable. An OAuth provider has neither field
+            # to clear and refuses the write, so it is told where its credential
+            # actually lives instead of ending the run.
+            target_spec = find_by_name(target)
+            if credential_kind(target) == CRED_OAUTH:
+                console.print(
+                    _t(
+                        f"  [dim]{_provider_label(target)}'s credential is an OAuth token, not a config field, "
+                        "so there is nothing here to remove.[/dim]",
+                        f"  [dim]{_provider_label(target)} 的凭据是 OAuth token,不在配置字段里,"
+                        "这里没有可移除的内容。[/dim]",
+                    )
+                )
+                continue
+            _write_provider_fields(target, {"api_key": "", "api_base": None})
             if was_default_source:
                 # Clear the now-dangling default so step 1's guard forces a
                 # re-pick instead of leaving a model whose provider has no key.
@@ -2230,20 +2672,27 @@ def _everos_section(section: str) -> dict[str, Any]:
     return load_everos_config().get(section, {}) or {}
 
 
+def _everos_role_configured(section: str) -> bool:
+    """True iff the user really configured this EverOS role.
+
+    Sole criterion for "configured", shared by every caller: model AND api_key.
+    The shipped everos.toml template seeds each section's model name with an
+    empty api_key, so a model alone also holds on a fresh install — two callers
+    disagreeing on this made the wizard's Back loop on itself forever.
+    """
+    sec = _everos_section(section)
+    return bool(sec.get("model") and sec.get("api_key"))
+
+
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires both required models (llm and embedding) with api_key
-    in the EverOS toml. The seed/schema default sets model names but leaves
-    api_key empty, so checking model alone would mis-report a fresh,
-    unconfigured install as "enabled".
+    "Usable" requires both required roles (llm and embedding) configured.
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    llm = _everos_section("llm")
-    emb = _everos_section("embedding")
-    return bool(llm.get("model") and llm.get("api_key") and emb.get("model") and emb.get("api_key"))
+    return _everos_role_configured("llm") and _everos_role_configured("embedding")
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -3234,8 +3683,7 @@ def _config_everos_role(
     )
 
     while True:  # role-menu loop — a back-out of the source picker returns here
-        sec = _everos_section(section)
-        current = sec.get("model") if sec.get("api_key") else None
+        current = _everos_section(section).get("model") if _everos_role_configured(section) else None
         if current:
             choices = [
                 questionary.Choice(_t(f"Keep current: {current}", f"沿用当前:{current}"), value="keep"),
@@ -3283,10 +3731,10 @@ def _config_everos_role(
             recommendation=role.get("recommendation"),
         )
         if result is _BACK:
-            if optional or _everos_section(section).get("model"):
-                # Optional roles offer Skip; a required role that already has a
-                # value on disk falls back to its keep/reconfigure menu. Either
-                # way, re-show the role menu rather than forcing the give-up exit.
+            if optional or _everos_role_configured(section):
+                # Optional roles offer Skip; a required role already configured
+                # falls back to its keep/reconfigure menu. Either way, re-show
+                # the role menu rather than forcing the give-up exit.
                 continue
             # A required role with nothing configured has no Skip, so backing out
             # of the picker would loop forever. Offer a bounded exit: keep trying,
@@ -4360,7 +4808,11 @@ def register(app: typer.Typer) -> None:
     def onboard(
         provider: Optional[str] = typer.Option(None, "--provider", help="LLM provider name (skips Step 1's prompt)"),
         api_key: Optional[str] = typer.Option(None, "--api-key", help="API key for the chosen provider"),
-        base_url: Optional[str] = typer.Option(None, "--base-url", help="Custom OpenAI-compatible base URL"),
+        base_url: Optional[str] = typer.Option(
+            None,
+            "--base-url",
+            help="Server URL: required for a local deployment (ollama_chat / hosted_vllm), or a custom OpenAI-compatible endpoint",
+        ),
         model: Optional[str] = typer.Option(None, "--model", help="Default model id (e.g. 'openai/gpt-4o-mini')"),
         channel: Optional[str] = typer.Option(None, "--channel", help="Channel to enable in Step 3"),
         skip_sandbox: bool = typer.Option(False, "--skip-sandbox", help="Skip Step 2 (run location)"),

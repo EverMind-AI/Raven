@@ -44,12 +44,19 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
 from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
+
+_ABORTED_ACTION_REPLY = (
+    "The operation was not completed, and no alternative method will be attempted. "
+    "Would you like me to continue with the remaining parts of the task that do not "
+    "require this operation?"
+)
 
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
@@ -177,6 +184,38 @@ _TRANSIENT_FAILURE_MARKERS = (
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
+# Marks the synthetic user message that carries images a transport cannot put in
+# a tool result. Not persisted: the tool result above it already names the file
+# path, so the only thing this message would add to the transcript is a user turn
+# saying "[image]" that the user never sent -- misleading on resume and in
+# session export. Deliberately a different key from ``_recovery_synthetic``:
+# that one marks empty-response recovery scaffolding, and collapsing the two
+# would make either meaning impossible to reason about separately.
+_ATTACHED_IMAGE_KEY = "_attached_image"
+
+
+def _strip_inline_images(content: list[Any]) -> list[Any]:
+    """Replace inline base64 images with a text placeholder, for persistence.
+
+    Images live for exactly the turn that produced them. Keeping the bytes would
+    bloat the session JSONL by megabytes per picture, and every later turn would
+    replay them to the model — paying for an image nobody asked about again.
+
+    A *new* list is returned: the input is the live message the model is still
+    working from this turn, and `_save_turn` only shallow-copies the entry, so
+    mutating in place would pull the picture out from under the current request.
+    """
+    out: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            out.append(part)
+            continue
+        if is_inline_image(part):
+            out.append({"type": "text", "text": "[image]"})
+        else:
+            out.append(part)
+    return out
+
 
 def _is_hard_tool_failure(result: object) -> bool:
     """True for a deterministic tool failure (recurs on an identical retry).
@@ -228,9 +267,18 @@ class AgentLoop:
     _TOOL_RESULT_MAX_CHARS = 16_000
     # Max emergency context shrinks per turn before a context overflow is fatal.
     _MAX_COMPRESS_RETRIES = 2
+    # Max image demotions per turn. One is enough: a refusal is deterministic for
+    # the model, and the first retry also caches the verdict, so a second attempt
+    # would mean the failure was never about images.
+    _MAX_IMAGE_DEMOTE_RETRIES = 1
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
+    # Image-bearing messages kept intact when emergency-shrinking. Tighter than
+    # the tool-result count because one image can cost 1568 tokens: the picture
+    # the model is currently reasoning about is worth keeping, older ones are the
+    # cheapest thing to give up.
+    _SHRINK_KEEP_RECENT_IMAGES = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -320,6 +368,11 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        # Resolved lazily on the first tool result that carries an image. Keyed
+        # by model, not a single flag: the loop is a long-lived singleton and
+        # takes a per-call model (strategies rewrite it, and the model chain
+        # falls back), so one model's verdict must not answer for another's.
+        self._image_tool_result_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
@@ -720,6 +773,31 @@ class AgentLoop:
             source=hub_cfg.source,
             cache_dir=workspace / "skills" / "hub",
         )
+
+    def _supports_image_tool_result(self, model: str | None = None) -> bool:
+        """Cached per model: resolving the LiteLLM target parses the model string,
+        and this is asked once per tool call that returns an image.
+
+        A ``False`` learned from a refused request (see ``should_drop_tool_images``)
+        is written into the same cache, so a static table that guessed wrong stops
+        costing a wasted call after the first one.
+        """
+        key = model or self.model
+        if key not in self._image_tool_result_ok:
+            spec = None
+            try:
+                from raven.providers.registry import find_by_model
+
+                spec = find_by_model(key)
+            except Exception:
+                pass
+            self._image_tool_result_ok[key] = supports_image_tool_result(self.provider, key, spec)
+            logger.debug(
+                "image-in-tool-result support for {}: {}",
+                key,
+                self._image_tool_result_ok[key],
+            )
+        return self._image_tool_result_ok[key]
 
     # ── Context engine helpers ──────────────────────────────────────────
 
@@ -1349,13 +1427,14 @@ class AgentLoop:
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
         """
+        messages, elided = cls._elide_older_images(messages)
+
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            return messages, 0
+            return messages, elided
         elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
         shrunk: list[dict] = []
-        elided = 0
         for i, m in enumerate(messages):
             if i in elide and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
@@ -1365,6 +1444,94 @@ class AgentLoop:
             else:
                 shrunk.append(m)
         return shrunk, elided
+
+    @staticmethod
+    def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
+        """Move images out of tool results into a following user message.
+
+        The recovery for an endpoint that refuses a picture in ``role="tool"``.
+        Produces exactly the message list a ``False`` capability verdict would
+        have built in the first place, so the retry lands on the already-tested
+        placeholder path rather than inventing a third shape.
+
+        A run of consecutive tool messages is one batch answering one assistant
+        message, so the pictures pulled out of it are attached once after the last
+        of them -- putting one between two tool results leaves a tool_call
+        unanswered where the API checks the sequence (measured, see the batching
+        comment in the tool loop).
+
+        Returns ``(new_messages, num_demoted)``; ``0`` means no tool result
+        carried an image, so the refusal was about something else and the caller
+        should not retry.
+        """
+        out: list[dict] = []
+        pending: list[dict] = []
+        demoted = 0
+
+        def flush() -> None:
+            if pending:
+                out.append({"role": "user", "content": list(pending), _ATTACHED_IMAGE_KEY: True})
+                pending.clear()
+
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "tool":
+                flush()
+                out.append(m)
+                continue
+            if not isinstance(content, list):
+                out.append(m)
+                continue
+            images = [p for p in content if is_image_part(p)]
+            if not images:
+                out.append(m)
+                continue
+            clean = dict(m)
+            clean["content"] = image_placeholder_text(content)
+            out.append(clean)
+            pending.extend(images)
+            demoted += len(images)
+        flush()
+        return out, demoted
+
+    @classmethod
+    def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
+        """Drop inline images from all but the most recent image-bearing message.
+
+        Run before the tool-text pass because an image is by far the densest
+        thing in the window -- one costs up to 1568 tokens, which is more than
+        most tool outputs -- so dropping a stale picture buys more room than
+        eliding several text results, and costs less of what the model still
+        needs.
+
+        Not restricted to ``role="tool"``: when the endpoint cannot carry an
+        image in a tool result the picture is attached to a following ``user``
+        message instead, and that message would otherwise be untouchable here.
+        """
+        bearing = [
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), list) and any(is_inline_image(p) for p in m["content"])
+        ]
+        if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
+            return messages, 0
+
+        target = set(bearing[: -cls._SHRINK_KEEP_RECENT_IMAGES] if cls._SHRINK_KEEP_RECENT_IMAGES else bearing)
+        out: list[dict] = []
+        elided = 0
+        for i, m in enumerate(messages):
+            if i not in target:
+                out.append(m)
+                continue
+            clean = dict(m)
+            # New list: the caller's messages may still be referenced elsewhere.
+            clean["content"] = [
+                {"type": "text", "text": "[image elided to fit the context window]"} if is_inline_image(p) else p
+                for p in m["content"]
+            ]
+            out.append(clean)
+            elided += 1
+        return out, elided
 
     async def _synthesize_final_on_exhaustion(
         self,
@@ -1462,6 +1629,8 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # Image-demotion recovery: bound per turn, same reason.
+        image_demote_retries = 0
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1583,13 +1752,55 @@ class AgentLoop:
                     )
                     continue
 
+            # Image-in-tool-result refused: this endpoint takes a picture only in
+            # a user message. Rebuild onto the placeholder path -- the shape a
+            # False capability verdict would have produced -- and retry this
+            # iteration. Also cache the verdict so the rest of the process stops
+            # paying for the attempt: the static table in `capabilities` guessed
+            # wrong, and this is how it self-corrects.
+            if (
+                response.finish_reason == "error"
+                and cls_ is not None
+                and cls_.should_drop_tool_images
+                and image_demote_retries < self._MAX_IMAGE_DEMOTE_RETRIES
+            ):
+                demoted_messages, demoted = self._demote_tool_images(messages)
+                if demoted > 0:
+                    messages = demoted_messages
+                    self._image_tool_result_ok[call_model or effective_model] = False
+                    image_demote_retries += 1
+                    iteration -= 1  # the refused call did no work; don't bill it
+                    logger.warning(
+                        "Endpoint refused {} image(s) in a tool result; moved them "
+                        "to a user message and retrying ({}/{})",
+                        demoted,
+                        image_demote_retries,
+                        self._MAX_IMAGE_DEMOTE_RETRIES,
+                    )
+                    continue
+
             if response.has_tool_calls:
+                abort_action = False
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
                         await on_progress(thought)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
+                # Images this transport cannot carry inside a tool result.
+                # Collected across the whole batch and attached once *after* the
+                # last tool result: a user message sitting between two tool
+                # results leaves an assistant tool_call unanswered at the point
+                # the API validates the sequence. Measured on gpt-4o, 2026-07-31,
+                # two tool calls with the picture from the first:
+                #   tool(c1), user, tool(c2) -> 400 "An assistant message with
+                #     'tool_calls' must be followed by tool messages responding
+                #     to each 'tool_call_id'"
+                #   tool(c1), tool(c2), user -> 200, and the model named the
+                #     image's colour
+                # Anthropic accepts both, so this only bites on Chat Completions
+                # -- which is the only transport that takes this path at all.
+                pending_images: list[dict[str, Any]] = []
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1599,7 +1810,7 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                for tool_call in response.tool_calls:
+                for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -1618,6 +1829,10 @@ class AgentLoop:
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
+                    if tool_call.name == "exec":
+                        exec_tool = self.tools.get("exec")
+                        if isinstance(exec_tool, ExecTool):
+                            exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -1646,7 +1861,49 @@ class AgentLoop:
                                 "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    blocks = getattr(result, "blocks", None)
+                    attach_blocks: list[dict[str, Any]] | None = None
+                    if blocks:
+                        if self._supports_image_tool_result(call_model or effective_model):
+                            pass  # blocks ride in the tool result itself
+                        else:
+                            # This transport cannot put an image in a tool result,
+                            # so the tool result carries text naming the image and
+                            # the picture follows in a user message. Same shape
+                            # OpenClaw uses against Chat Completions endpoints.
+                            model_text = image_placeholder_text(blocks)
+                            attach_blocks = [b for b in blocks if b.get("type") == "image_url"]
+                            blocks = None
+                    if blocks:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, model_text, blocks
+                        )
+                    else:
+                        # Keep the long-standing 4-arg call for text results so no
+                        # existing caller or test double sees a signature change.
+                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if attach_blocks:
+                        pending_images.extend(attach_blocks)
+                    if getattr(result, "abort_action", False):
+                        abort_action = True
+                        # A single assistant message may contain several parallel
+                        # tool calls (for example ``rm`` followed by a Python
+                        # fallback). Once policy terminates the action, none of
+                        # the siblings may execute. We must nevertheless append
+                        # one result for every advertised call id: OpenAI-style
+                        # providers reject conversation history containing an
+                        # assistant tool call without its matching tool result.
+                        for skipped_call in response.tool_calls[tool_call_index + 1 :]:
+                            messages = self.context.add_tool_result(
+                                messages,
+                                skipped_call.id,
+                                skipped_call.name,
+                                (
+                                    "Error: Tool call was not executed because a prior safety "
+                                    "decision terminated this action."
+                                ),
+                            )
+                        break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(model_text):
@@ -1656,6 +1913,20 @@ class AgentLoop:
                             loop_fail_tool, loop_fail_streak = tool_call.name, 1
                     else:
                         loop_fail_tool, loop_fail_streak = None, 0
+
+                if abort_action:
+                    # A normal tool result starts another model iteration. That
+                    # is specifically unsafe here: the next plan can translate
+                    # the rejected operation into an equivalent interpreter,
+                    # script, or tool call. Finish the turn in runtime code and
+                    # expose only the non-destructive continuation question.
+                    # Streaming callers need the explicit callback because no
+                    # final model response exists to generate token deltas.
+                    messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
+                    final_content = _ABORTED_ACTION_REPLY
+                    if on_token_delta is not None:
+                        await on_token_delta(_ABORTED_ACTION_REPLY)
+                    break
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
@@ -1673,6 +1944,13 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # After the nudge above, which needs the last message to still be
+                # the tool result it appends to. Also after the abort_action
+                # branch, which ends the turn in runtime code -- there is no
+                # further model call to show a picture to, so an aborted action
+                # deliberately drops it rather than leaving it dangling.
+                if pending_images:
+                    messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -1783,8 +2061,13 @@ class AgentLoop:
         # was retired on feature/integrate-everos; the after-turn pipeline —
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
-        if any(m.get("_recovery_synthetic") for m in messages):
-            messages = [m for m in messages if not m.get("_recovery_synthetic")]
+        # Attached-image messages are dropped here for the same reason and at the
+        # same point: the returned list feeds persistence, ``after_turn``
+        # extraction and ``backend.store`` alike, so filtering once upstream of
+        # all three is the only place that covers them.
+        _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+        if any(any(m.get(k) for k in _transient) for m in messages):
+            messages = [m for m in messages if not any(m.get(k) for k in _transient)]
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
         # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
@@ -2221,8 +2504,20 @@ class AgentLoop:
             role, content = entry.get("role"), entry.get("content")
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
+            if entry.get(_ATTACHED_IMAGE_KEY):
+                # Already filtered upstream; kept because this is the last gate
+                # before a write that cannot be undone, unlike the code above it.
+                continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if role == "tool" and isinstance(content, list):
+                # A multimodal tool result. Images must never reach the JSONL:
+                # a single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The char cap below cannot catch
+                # it either — it guards `str` content only.
+                content = _strip_inline_images(content)
+                entry["content"] = content
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
@@ -2234,20 +2529,16 @@ class AgentLoop:
                     else:
                         continue
                 if isinstance(content, list):
-                    filtered = []
-                    for c in content:
-                        if (
-                            c.get("type") == "text"
+                    filtered = [
+                        c
+                        for c in _strip_inline_images(content)
+                        if not (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
                             and isinstance(c.get("text"), str)
                             and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        ):
-                            continue  # Strip runtime context from multimodal messages
-                        if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
-                            "data:image/"
-                        ):
-                            filtered.append({"type": "text", "text": "[image]"})
-                        else:
-                            filtered.append(c)
+                        )
+                    ]
                     if not filtered:
                         continue
                     entry["content"] = filtered

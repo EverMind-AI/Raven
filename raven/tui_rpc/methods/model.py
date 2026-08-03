@@ -30,8 +30,16 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
-from raven.providers.common_models import common_models_for
-from raven.providers.registry import canonical_provider_name, find_by_model, find_by_name
+from raven.providers.common_models import common_models_for, litellm_models_for
+from raven.providers.registry import (
+    CRED_ENDPOINT,
+    CRED_LOCAL,
+    CRED_OAUTH,
+    canonical_provider_name,
+    credential_kind,
+    find_by_model,
+    find_by_name,
+)
 from raven.tui_rpc.errors import (
     ConfigValidationError,
     NotSupportedInV01Error,
@@ -46,9 +54,6 @@ from raven.tui_rpc.models import (
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
-
-
-_NEEDS_API_BASE = {"custom", "azure_openai"}
 
 
 def _parse(model_cls: type, params: dict) -> Any:
@@ -68,11 +73,19 @@ def _provider_models(slug: str) -> list[str]:
         cfg = {}
     configured = cfg.get("models", [])
     configured = list(configured) if isinstance(configured, list) else []
-    # Priority: the user's configured models first (manual entry via
-    # ``model.add_model`` writes here), then our curated "common" shortlist,
-    # deduped. Keeps the picker useful out of the box without a network call.
-    seen = set(configured)
-    return configured + [m for m in common_models_for(slug) if m not in seen]
+    # Priority: what the user configured (manual entry via ``model.add_model``
+    # writes here), then the curated shortlist, then LiteLLM's own catalogue.
+    # Curated before catalogue because the shortlist is a few models worth
+    # recommending and the catalogue is everything, deprecated snapshots
+    # included; catalogue after it because eleven providers have no shortlist at
+    # all, which is why the picker used to offer them nothing.
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug)):
+        if candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
@@ -80,7 +93,8 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     providers = {p["name"]: p for p in list_providers()}
     info = providers.get(slug, {})
 
-    is_oauth = bool(spec and spec.is_oauth)
+    kind = credential_kind(slug)
+    is_oauth = kind == CRED_OAUTH
     configured = bool(info.get("configured"))
     warning = ""
     if is_oauth and not configured:
@@ -92,13 +106,35 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
         "name": info.get("display_name") or (spec.label if spec else slug),
         "authenticated": configured,
         "is_current": slug == current_provider,
-        "auth_type": "oauth" if is_oauth else "api_key",
+        "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "models": models,
         "total_models": len(models),
-        "needs_api_base": slug in _NEEDS_API_BASE,
+        "needs_api_base": kind in (CRED_ENDPOINT, CRED_LOCAL),
         "warning": warning,
     }
+
+
+async def _entry_off_loop(slug: str, current_provider: str | None) -> dict[str, Any]:
+    """Build one picker row without blocking the event loop.
+
+    Reading the candidate chain imports LiteLLM the first time, which takes
+    seconds -- long enough to stall this session's token stream. Every handler
+    that returns a row goes through here rather than warming the cache in one
+    and reading it inline in the others: the cache is cold whenever a first read
+    failed (failures are deliberately not cached), and handler order is up to
+    the client.
+    """
+    return await asyncio.to_thread(_build_provider_entry, slug, current_provider=current_provider)
+
+
+async def _entries_off_loop(current_provider: str | None) -> list[dict[str, Any]]:
+    """Build every picker row in one thread hop rather than one hop per row."""
+
+    def _build() -> list[dict[str, Any]]:
+        return [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
+
+    return await asyncio.to_thread(_build)
 
 
 def _current_selection() -> tuple[str, str | None]:
@@ -125,7 +161,7 @@ def _current_selection() -> tuple[str, str | None]:
 async def model_options(params: dict) -> dict:
     _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
-    entries = [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
+    entries = await _entries_off_loop(current_provider)
     return {
         "model": current_model,
         "provider": current_provider or "",
@@ -147,13 +183,30 @@ async def model_save_key(params: dict) -> dict:
             f"{label} uses OAuth; run `raven provider login {parsed.slug.replace('_', '-')}`",
             data={"slug": parsed.slug},
         )
-    if parsed.slug in _NEEDS_API_BASE and not parsed.api_base:
+    kind = credential_kind(parsed.slug)
+    if kind in (CRED_ENDPOINT, CRED_LOCAL) and not parsed.api_base:
         raise ConfigValidationError(
             f"{label} requires an api_base",
             data={"slug": parsed.slug, "field": "api_base"},
         )
+    if kind == CRED_LOCAL and parsed.api_key:
+        # Said out loud rather than dropped: a local deployment writes no key, so
+        # storing one silently would look like it had been accepted.
+        raise ConfigValidationError(
+            f"{label} is a local deployment and takes no api_key; send api_base instead",
+            data={"slug": parsed.slug, "field": "api_key"},
+        )
+    if kind != CRED_LOCAL and not parsed.api_key:
+        raise ConfigValidationError(
+            f"{label} requires an api_key",
+            data={"slug": parsed.slug, "field": "api_key"},
+        )
 
-    fields: dict[str, Any] = {"api_key": parsed.api_key}
+    # A local deployment is reached by address and has no key, said explicitly
+    # rather than by omission: leaving the field alone kept whatever was there,
+    # so a section that once held a key would still be sending it to the user's
+    # own server.
+    fields: dict[str, Any] = {"api_key": "" if kind == CRED_LOCAL else parsed.api_key}
     if parsed.api_base:
         fields["api_base"] = parsed.api_base
 
@@ -166,7 +219,7 @@ async def model_save_key(params: dict) -> dict:
 
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
@@ -187,7 +240,7 @@ async def model_add_model(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
@@ -199,7 +252,7 @@ async def model_remove_model(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()
     return {
-        "provider": _build_provider_entry(parsed.slug, current_provider=current_provider),
+        "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
