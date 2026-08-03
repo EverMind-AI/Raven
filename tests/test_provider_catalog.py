@@ -192,3 +192,67 @@ def test_every_gateway_prefixes_the_models_it_routes() -> None:
         provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
         resolved = provider._resolve_model("probe-model")
         assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
+
+
+def test_a_failed_catalogue_read_is_not_cached_for_the_life_of_the_process() -> None:
+    """The index is cached; a failure to build it must not be.
+
+    ``lru_cache`` remembers whatever the call returned, so an empty result from a
+    transient import failure would leave every provider that has no curated
+    shortlist showing no models at all, for as long as the process runs, with no
+    way to retry. Eleven providers depend on this index for their candidates.
+    """
+    from functools import lru_cache
+
+    from raven.providers import common_models
+
+    calls = {"n": 0}
+    real = common_models._cached_chat_models_by_provider
+
+    # Wrapped in a genuine lru_cache rather than a stub with an inert cache_clear:
+    # what is under test is that the next call retries, and a stubbed clear made
+    # the test pass either way. For this case the retry comes from lru_cache
+    # storing only successful returns -- the guarantee the code leans on.
+    @lru_cache(maxsize=1)
+    def _fail_then_succeed() -> dict[str, tuple[str, ...]]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient import failure")
+        return {"deepseek": ("deepseek/deepseek-chat",)}
+
+    common_models._cached_chat_models_by_provider = _fail_then_succeed  # type: ignore[assignment]
+    try:
+        assert common_models._litellm_chat_models_by_provider() == {}
+        assert common_models._litellm_chat_models_by_provider() == {"deepseek": ("deepseek/deepseek-chat",)}
+        assert calls["n"] == 2, "the second read never happened, so the failure was cached"
+    finally:
+        common_models._cached_chat_models_by_provider = real  # type: ignore[assignment]
+        real.cache_clear()
+
+
+def test_an_empty_catalogue_is_not_cached_either() -> None:
+    """An import that succeeds but yields nothing is the same hazard.
+
+    It is what a LiteLLM whose table has not loaded yet returns, and caching it
+    is indistinguishable from caching the failure above.
+    """
+    from functools import lru_cache
+
+    from raven.providers import common_models
+
+    calls = {"n": 0}
+    real = common_models._cached_chat_models_by_provider
+
+    @lru_cache(maxsize=1)
+    def _empty_then_full() -> dict[str, tuple[str, ...]]:
+        calls["n"] += 1
+        return {} if calls["n"] == 1 else {"deepseek": ("deepseek/deepseek-chat",)}
+
+    common_models._cached_chat_models_by_provider = _empty_then_full  # type: ignore[assignment]
+    try:
+        assert common_models._litellm_chat_models_by_provider() == {}
+        assert common_models._litellm_chat_models_by_provider() != {}
+        assert calls["n"] == 2, "the second read never happened, so the empty result was cached"
+    finally:
+        common_models._cached_chat_models_by_provider = real  # type: ignore[assignment]
+        real.cache_clear()
