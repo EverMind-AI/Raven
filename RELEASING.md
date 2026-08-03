@@ -31,8 +31,13 @@ Highlights before publishing. Structure:
 - <user-facing change>
 
 ## Install
-  curl -fsSL https://raven.evermind.ai/install.sh | bash
+  install.sh one-liner for Linux / macOS / WSL2
+  install.ps1 one-liner for native Windows (plus the PowerShell 5.1 direct URL)
   then: raven onboard
+
+## Upgrade
+  raven upgrade, with its limits (latest stable only, editable checkouts
+  untouched, external helper on native Windows)
 
 ## Release Status
 - Version: `X.Y.Z`
@@ -58,6 +63,15 @@ Highlights before publishing. Structure:
    attached, titled and prefilled from the template.
 4. Fill the summary + Highlights in the draft, then click **Publish**.
    Publishing makes it `/releases/latest`, which `install.sh` serves.
+
+While a release is a draft, GitHub addresses it as
+`releases/tag/untagged-<hash>` -- even though the tag already exists, since CI
+only runs after the tag is pushed. Publishing moves the release to
+`releases/tag/vX.Y.Z` and leaves the old URL serving its own stale page with no
+redirect. So never share the draft URL: a reader who opens it after publication
+sees "untagged" and concludes the tag is missing or the release never went out.
+Link `releases/tag/vX.Y.Z` or `/releases/latest` instead; the release job prints
+both URLs in its step summary.
 
 ## Pre-releases
 
