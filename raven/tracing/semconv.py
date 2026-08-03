@@ -76,9 +76,10 @@ def _provider_label(model: str | None, provider_class: str | None) -> str | None
     path segment is the backend (``openrouter``). Fall back to the provider class
     name when the model carries no prefix (e.g. a native provider).
     """
-    if model and "/" in model:
-        return model.split("/", 1)[0]
-    return provider_class
+    from raven.providers.registry import split_model_id
+
+    prefix, _ = split_model_id(model or "")
+    return prefix or provider_class
 
 
 def _llm_attrs(resp: Any, provider: str, model: str | None, provider_class: str | None = None) -> dict[str, Any]:

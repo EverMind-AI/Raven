@@ -436,30 +436,6 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
               {footerMeta}
             </Text>
           </Box>
-
-          {typeof info.update_behind === 'number' && info.update_behind > 0 && (
-            <>
-              <Box>
-                <Text color={t.color.border} wrap="truncate">
-                  {'─'.repeat(Math.max(1, w))}
-                </Text>
-              </Box>
-              <Text bold color={t.color.warn}>
-                ! {info.update_behind} {info.update_behind === 1 ? 'commit' : 'commits'} behind
-                <Text bold={false} color={t.color.warn} dimColor>
-                  {' '}
-                  - run{' '}
-                </Text>
-                <Text bold color={t.color.warn}>
-                  {info.update_command || 'raven upgrade'}
-                </Text>
-                <Text bold={false} color={t.color.warn} dimColor>
-                  {' '}
-                  to update
-                </Text>
-              </Text>
-            </>
-          )}
         </Box>
 
         <Box marginTop={1}>

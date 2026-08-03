@@ -24,6 +24,12 @@ from raven.agent.loop.recovery import (
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.background import (
+    BackgroundJobRegistry,
+    JobCancelTool,
+    JobStatusTool,
+    JobWaitTool,
+)
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
     DeepResearchOfferTool,
@@ -39,7 +45,7 @@ from raven.agent.tools.media_gen import (
 )
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.shell import ExecTool
+from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
@@ -201,6 +207,21 @@ def _is_hard_tool_failure(result: object) -> bool:
     return s.lstrip().startswith("Error") or "error:" in low[:80]
 
 
+def _same_call_break_message(tool: str, n: int) -> str:
+    """Returned instead of executing a byte-identical call that keeps failing.
+
+    Starts with "Error" so the failure-streak tracking keeps the breaker armed
+    — otherwise the refusal would read as success and the next identical call
+    would execute again.
+    """
+    return (
+        f"Error: this exact `{tool}` call (same arguments) has already failed "
+        f"{n} times and was NOT executed again. Repeating it cannot succeed. "
+        "Re-read the earlier error, then change the arguments, use a different "
+        "tool, or move on to another part of the task."
+    )
+
+
 def _loop_break_nudge(tool: str, n: int) -> str:
     """Injected when the same tool fails deterministically N times running, so
     the model stops repeating a dead approach instead of adapting."""
@@ -296,9 +317,7 @@ class AgentLoop:
         r"(\b\d+\s+passed\b|^OK\b|\bOK\s*\()",
         re.MULTILINE,
     )
-    _GATE_DOC_PATH_RE = re.compile(
-        r"(\.(md|rst|txt)$|(^|/)docs?(/|$))", re.IGNORECASE
-    )
+    _GATE_DOC_PATH_RE = re.compile(r"(\.(md|rst|txt)$|(^|/)docs?(/|$))", re.IGNORECASE)
     _TEST_GATE_STALE_NUDGE_TMPL = (
         "NOTE (shown once, before you finish): after your most recent test run\n"
         "(`{cmd}`) you edited these files without re-running any test:\n"
@@ -326,6 +345,17 @@ class AgentLoop:
         "   fix, say so explicitly when you finish.\n"
         "After addressing this once, you may declare completion."
     )
+    # Same-call breaker: once a byte-identical (tool, arguments) call has
+    # hard-failed this many times running, further identical calls are refused
+    # without executing. Scoped to all-failed streaks only — identical
+    # *successful* repeats are legitimate polling (exec_read on a building
+    # session; 13 such streaks observed across passing eval tasks) and must
+    # never trip this.
+    _SAME_CALL_BREAK_THRESHOLD = 3
+    # Persist the turn-so-far every N iterations. A turn is the unit of session
+    # persistence, and benchmark tasks are one turn of hundreds of iterations —
+    # a crash mid-turn used to lose the whole trajectory.
+    _MID_TURN_CHECKPOINT_ITERS = 10
 
     def __init__(
         self,
@@ -339,6 +369,7 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
+        profile: str = "assistant",
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
@@ -453,11 +484,13 @@ class AgentLoop:
         # path" — see that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
 
+        self.profile = profile
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             llm_provider=provider,
             now_fn=now_fn,
+            profile=profile,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Tool names to omit from the registry — applied after default-tool
@@ -511,6 +544,7 @@ class AgentLoop:
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
+            profile=profile,
         )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
@@ -630,6 +664,30 @@ class AgentLoop:
 
         self._register_default_tools()
         self._apply_disabled_tools()
+        self._log_tool_manifest()
+
+    def _log_tool_manifest(self) -> None:
+        """Log the final tool surface (names + schema fingerprint).
+
+        Which tools the model saw, under which schemas, is the first question of
+        any eval-score regression; without a recorded manifest a config drift is
+        indistinguishable from a model change. The hash covers names,
+        descriptions and parameter schemas.
+        """
+        import hashlib
+        import json as _json
+
+        try:
+            defs = sorted(self.tools.get_definitions(), key=lambda d: d["function"]["name"])
+            digest = hashlib.sha256(_json.dumps(defs, sort_keys=True).encode()).hexdigest()[:12]
+            logger.info(
+                "Tool manifest ({} tools, schema {}): {}",
+                len(defs),
+                digest,
+                ", ".join(d["function"]["name"] for d in defs),
+            )
+        except Exception as e:
+            logger.warning("Could not log tool manifest: {}", e)
 
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
@@ -664,17 +722,37 @@ class AgentLoop:
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+        self._exec_sessions = ExecSessionRegistry(self._executor)
+        self._background_jobs = BackgroundJobRegistry(self._executor)
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
                 timeout=self.exec_config.timeout,
+                max_timeout=self.exec_config.max_timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
+                deny_patterns=self.exec_config.deny_patterns,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                sessions=self._exec_sessions,
+                jobs=self._background_jobs,
             )
         )
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        self.tools.register(ExecWriteTool(self._exec_sessions))
+        self.tools.register(ExecReadTool(self._exec_sessions, jobs=self._background_jobs))
+        if self._background_jobs.supported:
+            self.tools.register(JobStatusTool(self._background_jobs))
+            self.tools.register(JobWaitTool(self._background_jobs))
+            self.tools.register(JobCancelTool(self._background_jobs))
+        # web_search only exists when it can actually run: advertising a tool
+        # whose every call fails "API key not configured" wastes turns and
+        # teaches the model a dead path (17/17 failed calls in one TB run).
+        # web_fetch stays unconditional — Jina Reader works keyless.
+        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+        if web_search.api_key:
+            self.tools.register(web_search)
+        else:
+            logger.info("web_search not registered: no Serper API key configured")
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
@@ -1169,7 +1247,22 @@ class AgentLoop:
             logger.error("Failed to start sandbox debug server: %s", exc)
 
     async def close_executor(self) -> None:
-        """Tear down the sandbox executor."""
+        """Tear down the sandbox executor.
+
+        Closes interactive sessions but never background jobs: a job is started
+        precisely so it outlives the agent, so killing it here would break the
+        contract exec(background=true) advertises. Surviving jobs are reported
+        instead, which keeps them reclaimable rather than orphaned.
+        """
+        sessions = getattr(self, "_exec_sessions", None)
+        if sessions is not None:
+            try:
+                await sessions.close_all()
+            except Exception as exc:
+                logger.warning("Error closing exec sessions: %s", exc)
+        jobs = getattr(self, "_background_jobs", None)
+        if jobs is not None:
+            jobs.report_survivors()
         if self._debug_server is not None:
             try:
                 await self._debug_server.stop()
@@ -1212,6 +1305,8 @@ class AgentLoop:
             # Re-apply blacklist: MCP servers may register tool names that
             # also appear in ``disabled_tools`` (e.g. ``mcp_<server>_search``).
             self._apply_disabled_tools()
+            # The tool surface just changed; re-record it for attribution.
+            self._log_tool_manifest()
             self._mcp_connected = True
             self._mcp_connecting = False
         except Exception:
@@ -1429,6 +1524,59 @@ class AgentLoop:
             reasoning_content="".join(reasoning_buf) or None,
         )
 
+    @staticmethod
+    def _repair_tool_pairing(messages: list[dict]) -> list[dict]:
+        """Make tool_call/result pairing consistent in loaded history.
+
+        A crash or interrupt can persist an assistant message whose tool_calls
+        never received results, or a tool result whose call is gone. Providers
+        reject such histories (or the model misreads them as pending work), so:
+        missing results get a synthetic "[aborted]" entry right after their
+        call, and orphan results are dropped.
+        """
+        repaired: list[dict] = []
+        pending: dict[str, str] = {}
+        changed = False
+
+        def flush_pending() -> None:
+            nonlocal changed
+            for cid, tname in pending.items():
+                repaired.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "name": tname,
+                        "content": "[aborted: interrupted before a result was recorded]",
+                    }
+                )
+                changed = True
+            pending.clear()
+
+        for m in messages:
+            role = m.get("role")
+            if role == "tool":
+                cid = m.get("tool_call_id")
+                if cid in pending:
+                    pending.pop(cid, None)
+                    repaired.append(m)
+                else:
+                    changed = True  # orphan result: drop
+                continue
+            if pending:
+                flush_pending()
+            repaired.append(m)
+            if role == "assistant":
+                for tc in m.get("tool_calls") or []:
+                    cid = tc.get("id")
+                    if cid:
+                        pending[cid] = (tc.get("function") or {}).get("name", "unknown")
+        if pending:
+            flush_pending()
+        if changed:
+            logger.warning("Repaired inconsistent tool_call/result pairing in loaded history")
+            return repaired
+        return messages
+
     @classmethod
     def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
         """Elide the bodies of older tool-result messages to fit a tighter window.
@@ -1524,10 +1672,16 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         drain: Drain | None = None,
+        on_checkpoint: Callable[[list[dict]], None] | None = None,
     ) -> tuple[str | None, list[str], list[dict], TurnOutcome]:
         """Run the agent iteration loop.
+
+        ``on_checkpoint``, when wired, is called with the messages-so-far every
+        ``_MID_TURN_CHECKPOINT_ITERS`` iterations so the caller can persist a
+        long turn incrementally.
 
         ``drain``, when wired, is called at the top of each iteration to pull
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
@@ -1557,6 +1711,10 @@ class AgentLoop:
         loop_fail_tool: str | None = None
         loop_fail_streak = 0
         loop_nudges = 0
+        # Same-call breaker state: the byte-identical failing signature and how
+        # many times running it has hard-failed.
+        same_call_sig: str | None = None
+        same_call_streak = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1587,6 +1745,11 @@ class AgentLoop:
                 self.max_iterations,
                 effective_model,
             )
+
+            # Mark the episode boundary (one per model call) so an outlet can
+            # group this call's reasoning + text + tools into a single step.
+            if on_episode_start is not None:
+                await on_episode_start(iteration - 1)
 
             # Merge any INJECT-ed user messages (BusyPolicy.INJECT) before this
             # iteration's LLM call. Media-carrying injects keep their file
@@ -1706,21 +1869,36 @@ class AgentLoop:
                     # second emit here would double it.
                     emit_tool_event = on_tool_event is not None and tool_call.name != "message"
                     if emit_tool_event:
+                        _tool = self.tools.get(tool_call.name)
                         await on_tool_event(
                             "start",
                             {
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                # Tool-authored call label; None -> UI derives one.
+                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    # #1c Same-call breaker: this exact (tool, arguments) call
+                    # has already hard-failed `threshold` times running — refuse
+                    # instead of executing a fourth identical failure.
+                    call_sig = f"{tool_call.name}\x00{args_str}"
+                    if call_sig == same_call_sig and same_call_streak >= self._SAME_CALL_BREAK_THRESHOLD:
+                        result = _same_call_break_message(tool_call.name, same_call_streak)
+                    else:
+                        result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                    result_str = str(result)
+                    # The registry already unwrapped any ToolResult: `result` is
+                    # the model-facing text, with the optional display string
+                    # riding along on it (ToolOutput). The model always gets the
+                    # model text; the UI preview prefers the display string.
+                    model_text = str(result)
+                    display_src = getattr(result, "display_text", None) or model_text
                     if test_gate_enabled and tool_call.name == "exec":
                         cmd = str((tool_call.arguments or {}).get("command", ""))
-                        plain_out = self._ANSI_RE.sub("", result_str)
+                        plain_out = self._ANSI_RE.sub("", model_text)
                         if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(plain_out):
                             if not real_test_evidence:
                                 real_test_evidence = True
@@ -1731,7 +1909,7 @@ class AgentLoop:
                     elif (
                         (gate_stale_enabled or gate_red_enabled)
                         and tool_call.name in ("write_file", "edit_file")
-                        and not _is_hard_tool_failure(result)
+                        and not _is_hard_tool_failure(model_text)
                     ):
                         path = str((tool_call.arguments or {}).get("path", ""))
                         if (
@@ -1741,12 +1919,15 @@ class AgentLoop:
                         ):
                             if path not in edits_since_test:
                                 edits_since_test.append(path)
-                    preview = result_str.replace("\n", " ")[:200]
+                    # The log stays one line; the UI event keeps newlines so a
+                    # tool that reports several items (e.g. ask_user's
+                    # question -> answer pairs) renders one row each.
+                    preview = display_src[:200]
                     logger.info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
                         duration_ms,
-                        preview,
+                        preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
                         await on_tool_event(
@@ -1754,19 +1935,27 @@ class AgentLoop:
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
-                                "truncated": len(result_str) > 200,
+                                "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
+                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(result):
+                    if _is_hard_tool_failure(model_text):
                         if tool_call.name == loop_fail_tool:
                             loop_fail_streak += 1
                         else:
                             loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                        # #1c Track the byte-identical failing signature. Only
+                        # failures advance it: identical successful repeats are
+                        # legitimate polling and reset the breaker.
+                        if call_sig == same_call_sig:
+                            same_call_streak += 1
+                        else:
+                            same_call_sig, same_call_streak = call_sig, 1
                     else:
                         loop_fail_tool, loop_fail_streak = None, 0
+                        same_call_sig, same_call_streak = None, 0
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
@@ -1784,6 +1973,13 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # Incremental persistence for long turns: a crash at iteration
+                # 300 should not lose iterations 1-299.
+                if on_checkpoint is not None and iteration % self._MID_TURN_CHECKPOINT_ITERS == 0:
+                    try:
+                        on_checkpoint(messages)
+                    except Exception:
+                        logger.warning("mid-turn checkpoint failed", exc_info=True)
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -1886,13 +2082,15 @@ class AgentLoop:
                         "test-evidence gate: stale reminder (edits after last test: {})",
                         edits_since_test,
                     )
-                    messages.append({
-                        "role": "user",
-                        "content": self._TEST_GATE_STALE_NUDGE_TMPL.format(
-                            cmd=last_test_cmd,
-                            files="\n".join(f"- {p}" for p in edits_since_test[:10]),
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._TEST_GATE_STALE_NUDGE_TMPL.format(
+                                cmd=last_test_cmd,
+                                files="\n".join(f"- {p}" for p in edits_since_test[:10]),
+                            ),
+                        }
+                    )
                     prev_had_tool_calls = False
                     continue
                 if (
@@ -1908,13 +2106,15 @@ class AgentLoop:
                         "test-evidence gate: red inquiry (last test failed: {})",
                         last_test_detail,
                     )
-                    messages.append({
-                        "role": "user",
-                        "content": self._TEST_GATE_RED_NUDGE_TMPL.format(
-                            cmd=last_test_cmd,
-                            detail=last_test_detail or "(failure summary present in the test output)",
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._TEST_GATE_RED_NUDGE_TMPL.format(
+                                cmd=last_test_cmd,
+                                detail=last_test_detail or "(failure summary present in the test output)",
+                            ),
+                        }
+                    )
                     prev_had_tool_calls = False
                     continue
                 final_content = clean
@@ -2062,6 +2262,7 @@ class AgentLoop:
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
         on_tool_event: Callable[[str, dict], Awaitable[None]] | None = None,
+        on_episode_start: Callable[[int], Awaitable[None]] | None = None,
         usage_sink: dict[str, Any] | None = None,
         origin: Origin | None = None,
         drain: Drain | None = None,
@@ -2288,7 +2489,23 @@ class AgentLoop:
                 logger.info("Router fallback chain: {}", fallback_models)
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
+        # Repair dangling tool_call/result pairs in loaded history — a crash
+        # between mid-turn checkpoints can persist an assistant tool_call with
+        # no result, and providers reject (or models misread) such histories.
+        # Must happen before ``turn_start_idx`` is taken: repairs change length.
+        initial_messages = self._repair_tool_pairing(initial_messages)
         turn_start_idx = len(initial_messages) - 1
+
+        # Incremental persistence for long turns. ``_persisted_upto`` tracks how
+        # far into the (append-only; emergency shrink preserves length) message
+        # list the session already covers, so the final save never duplicates.
+        _persisted_upto = {"idx": turn_start_idx}
+
+        def _mid_turn_checkpoint(msgs: list[dict]) -> None:
+            self._save_turn(session, msgs, _persisted_upto["idx"])
+            self.sessions.save(session)
+            _persisted_upto["idx"] = len(msgs)
+
         final_content, _, all_msgs, outcome = await self._run_agent_loop(
             initial_messages,
             on_progress=on_progress,
@@ -2299,8 +2516,10 @@ class AgentLoop:
             on_token_delta=on_token_delta,
             on_reasoning_delta=on_reasoning_delta,
             on_tool_event=on_tool_event,
+            on_episode_start=on_episode_start,
             usage_sink=usage_sink,
             drain=drain,
+            on_checkpoint=_mid_turn_checkpoint,
         )
         self._stash_recovery(key, outcome)
 
@@ -2325,7 +2544,7 @@ class AgentLoop:
             if _send_decision.modified_content is not None:
                 final_content = _send_decision.modified_content
 
-        self._save_turn(session, all_msgs, turn_start_idx)
+        self._save_turn(session, all_msgs, _persisted_upto["idx"])
         self.sessions.save(session)
         await self.context_engine.after_turn(
             key,
@@ -2498,6 +2717,7 @@ class AgentLoop:
         """
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.spine.events import (
+            EpisodeStart,
             MediaOut,
             Notice,
             NoticeKind,
@@ -2545,6 +2765,9 @@ class AgentLoop:
             if text:
                 await emit(Reasoning(content=text))
 
+        async def on_episode(index: int) -> None:
+            await emit(EpisodeStart(index=index))
+
         async def on_tool(phase: str, info: dict[str, Any]) -> None:
             if phase == "start":
                 await emit(
@@ -2553,6 +2776,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        display=info.get("display"),
                     )
                 )
             else:
@@ -2655,6 +2879,7 @@ class AgentLoop:
                 on_token_delta=on_token if stream else None,
                 on_reasoning_delta=on_reasoning if stream else None,
                 on_tool_event=on_tool,
+                on_episode_start=on_episode if stream else None,
                 usage_sink=usage_sink,
                 origin=req.origin,
                 drain=drain,

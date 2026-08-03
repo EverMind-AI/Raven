@@ -133,3 +133,27 @@ class TestActiveSkills:
         # or emits a well-formed # Active Skills block (never malformed).
         if seg is not None:
             assert seg.text.startswith("# Active Skills")
+
+
+class TestIdentityProfile:
+    async def test_default_profile_is_assistant(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+        assert "helpful AI assistant" in seg.text
+        assert "software engineering" not in seg.text
+
+    async def test_coding_profile_renders_engineering_identity(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path, profile="coding").build(_ctx(tmp_path))
+        assert "software engineering" in seg.text
+        assert "<env>" in seg.text
+        # Tool routing follows raven's tool surface, not opencode's.
+        assert "read_file" in seg.text
+        assert "background job" in seg.text
+        # Verification discipline before declaring completion.
+        assert "before declaring a task complete" in seg.text
+        # opencode product content must not leak in.
+        assert "opencode" not in seg.text.lower()
+
+    async def test_coding_profile_matches_builder_delegation(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path, profile="coding").build(_ctx(tmp_path))
+        legacy = ContextBuilder(workspace=tmp_path, profile="coding")._get_identity()
+        assert seg.text == legacy

@@ -12,30 +12,51 @@ from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
-from raven.providers.custom_provider import CustomProvider
+from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
 if TYPE_CHECKING:
     from raven.config.schema import ModelEndpoint
 
 
+def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
+    """Build a LiteLLM provider pinned to one endpoint.
+
+    ``provider_name="custom"`` selects the generic OpenAI-compatible gateway
+    spec, so the endpoint's own ``api_base`` / ``api_key`` are carried per call
+    and several endpoints coexist in one process.
+    """
+    if not endpoint.api_base:
+        # Without an explicit base LiteLLM falls back to OPENAI_BASE_URL (or
+        # api.openai.com), silently shipping the prompt and this endpoint's key
+        # to a third party. Routing config must name the endpoint it routes to.
+        raise ValueError(f"routing.models entry for {endpoint.model!r} has no api_base")
+    return LiteLLMProvider(
+        api_key=endpoint.api_key,
+        api_base=endpoint.api_base,
+        default_model=endpoint.model,
+        provider_name="custom",
+        extra_headers=session_affinity_headers(),
+    )
+
+
 class PerModelProvider(LLMProvider):
-    """Route provider calls to a per-model :class:`CustomProvider` by model name."""
+    """Route provider calls to a per-model :class:`LiteLLMProvider` by model name."""
 
     def __init__(self, models: "Sequence[ModelEndpoint]", fallback: LLMProvider):
         super().__init__()
         self._fallback = fallback
-        self._by_model: dict[str, CustomProvider] = {
-            m.model: CustomProvider(api_key=m.api_key, api_base=m.api_base, default_model=m.model)
-            for m in models
-            if m.model
-        }
+        self._by_model: dict[str, LiteLLMProvider] = {m.model: _endpoint_provider(m) for m in models if m.model}
         self._default = next(iter(self._by_model), None) or fallback.get_default_model()
         # Per-model sub-providers are built here without generation settings;
         # inherit the fallback's (already configured from AgentDefaults) and push
         # them down so routed calls honor temperature / max_tokens / timeout.
         self.generation = fallback.generation
+        # Same for the user's per-model overrides: a routed model must honor
+        # them exactly as the default provider does.
+        overrides = getattr(fallback, "model_overrides", None) or {}
         for sub in self._by_model.values():
             sub.generation = self.generation
+            sub.model_overrides = overrides
 
     def _pick(self, model: str | None) -> LLMProvider:
         return self._by_model.get(model or "", self._fallback)

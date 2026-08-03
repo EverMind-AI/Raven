@@ -27,6 +27,9 @@ from raven.tui_rpc.methods.model import (
 @pytest.fixture
 def fake_home(monkeypatch, tmp_path) -> Path:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # Clear any process-wide config-path override a prior test left set, so
+    # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
+    monkeypatch.setattr("raven.config.loader._current_config_path", None)
     return tmp_path
 
 
@@ -300,7 +303,7 @@ _SEEDED_DIRECT_PROVIDERS = [
     ("openai", "openai/"),
     ("anthropic", "anthropic/"),
     ("gemini", "gemini/"),
-    ("zhipu", "zai/"),
+    ("zai", "zai/"),
     ("groq", "groq/"),
     ("dashscope", "dashscope/"),
 ]
@@ -328,3 +331,17 @@ async def test_options_direct_provider_lists_common_models_when_unconfigured(
     entry = _entry(await model_options({}), slug)
     assert entry["total_models"] > 0
     assert entry["models"] == common_models_for(slug)
+
+
+async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> None:
+    """The picker lists such a provider, so the key dialog has to serve it.
+
+    Four of the five model.* handlers already accepted one; refusing here left a
+    section the picker showed but nothing could finish configuring.
+    """
+    _write_config(fake_home, {"agents": {"defaults": {"model": "openai/gpt-4o"}}})
+
+    result = await model_save_key({"slug": "mistral", "api_key": "K-MISTRAL"})
+
+    assert result["provider"]["slug"] == "mistral"
+    assert result["provider"]["authenticated"] is True

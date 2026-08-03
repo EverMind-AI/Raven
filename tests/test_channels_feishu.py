@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+pytest.importorskip("lark_oapi")
+
 from raven.channels.adapters.feishu import cards, content
 from raven.channels.adapters.feishu.channel import FeishuChannel
 

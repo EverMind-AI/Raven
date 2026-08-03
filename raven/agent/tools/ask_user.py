@@ -11,7 +11,7 @@ tool result; the loop never sees an exception.
 from contextvars import ContextVar
 from typing import Any
 
-from raven.agent.tools.base import Tool
+from raven.agent.tools.base import Tool, ToolResult
 from raven.tui_rpc.question_broker import QuestionBroker
 
 
@@ -102,7 +102,19 @@ class AskUserTool(Tool):
             "required": ["questions"],
         }
 
-    async def execute(self, questions: list[dict[str, Any]], **kwargs: Any) -> str:
+    def display_call(self, args: dict[str, Any]) -> str | None:
+        """Show the question itself, not the raw arguments blob. A batch keeps
+        every question visible (joined) so the row still says what was asked;
+        the UI elides whatever does not fit."""
+        questions = [str(q.get("question", "")).strip() for q in args.get("questions") or []]
+        questions = [q for q in questions if q]
+        if not questions:
+            return None
+        if len(questions) == 1:
+            return questions[0]
+        return " | ".join(questions)
+
+    async def execute(self, questions: list[dict[str, Any]], **kwargs: Any) -> "str | ToolResult":
         cid = self._cid.get()
         if not self._broker:
             return "Error: ask_user not configured (no question broker)"
@@ -111,7 +123,11 @@ class AskUserTool(Tool):
         if not questions:
             return "Error: ask_user requires at least one question"
 
-        results: list[str] = []
+        told: list[str] = []  # model-facing
+        # Human-facing display: one "question -> answer" line per question, so a
+        # batch shows which answer belongs to which question. The UI renders each
+        # line as its own row.
+        picks: list[str] = []
         for entry in questions:
             question = str(entry.get("question", "")).strip()
             if not question:
@@ -124,10 +140,15 @@ class AskUserTool(Tool):
                 choices=[str(o) for o in options],
             )
             if answer:
-                results.append(f'User answered: "{question}" -> "{answer}".')
+                told.append(f'User answered: "{question}" -> "{answer}".')
+                picks.append(f"{question} -> {answer}" if len(questions) > 1 else str(answer))
             else:
-                results.append(f'For "{question}": (user did not answer; proceed with best judgment).')
+                told.append(f'For "{question}": (user did not answer; proceed with best judgment).')
+                picks.append(f"{question} -> (no answer)" if len(questions) > 1 else "(no answer)")
 
-        if not results:
+        if not told:
             return "Error: ask_user requires at least one non-empty question"
-        return " ".join(results) + " Continue."
+        return ToolResult(
+            model_text=" ".join(told) + " Continue.",
+            display_text="\n".join(picks) if len(picks) > 1 else f"answered: {picks[0]}",
+        )

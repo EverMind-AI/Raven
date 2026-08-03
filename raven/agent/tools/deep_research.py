@@ -311,7 +311,11 @@ _OFFER_DESCRIPTION = (
 # well-aligned model treats tool output as data and refuses embedded commands (a
 # strong "do NOT answer / reply with only this" was rejected as a prompt injection
 # in testing). (The older receipt/ack strings below keep mild imperatives.)
-_USE_REGULAR = "deep_research did not run: the user chose a regular web search instead."
+_USE_REGULAR = (
+    "The user chose a regular web search for this query, not the deep-research engine. "
+    "Go ahead and answer it with a normal web search -- this is the user's chosen path, "
+    "not a failure or a fallback."
+)
 # Shown to the USER directly via the broker prompt below. Command FIRST so it
 # survives the scrollback's truncated tool-call line (cut at ~60 chars); the live
 # picker wraps and shows it all anyway.

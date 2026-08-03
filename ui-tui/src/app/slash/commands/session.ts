@@ -355,19 +355,19 @@ export const sessionCommands: SlashCommand[] = [
           // Render the configured record key (config.yaml ``voice.record_key``)
           // instead of hardcoded "Ctrl+B" — the gateway response carries the
           // current value so /voice status and /voice on stay in sync with
-          // both the CLI and the TUI's actual binding (#18994).
+          // both the CLI and the TUI's actual binding.
           //
-          // Copilot review on #19835 caught that rendering from the fresh
-          // backend response WITHOUT updating the frontend ``voice.recordKey``
-          // state would skew display and binding between config-edit and
-          // the next ``mtime`` poll (~5s). Parse once, push into state so
-          // ``useInputHandlers()`` picks up the new binding immediately.
+          // Rendering from the fresh backend response WITHOUT updating the
+          // frontend ``voice.recordKey`` state would skew display and binding
+          // between config-edit and the next ``mtime`` poll (~5s). Parse once,
+          // push into state so ``useInputHandlers()`` picks up the new binding
+          // immediately.
           //
-          // Round-2 follow-up: only push state when the response actually
-          // carries ``record_key`` — otherwise an older gateway (or a future
-          // branch that forgets to include it) would clobber a custom user
-          // binding back to the default on every /voice invocation. The
-          // label still falls back to the documented default for display.
+          // Only push state when the response actually carries
+          // ``record_key`` — otherwise an older gateway (or a future branch
+          // that forgets to include it) would clobber a custom user binding
+          // back to the default on every /voice invocation. The label still
+          // falls back to the documented default for display.
           const parsed = r.record_key ? parseVoiceRecordKey(r.record_key) : undefined
 
           if (parsed) {

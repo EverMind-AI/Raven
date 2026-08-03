@@ -416,6 +416,7 @@ def _build_tui_agent_loop():
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
+            profile=config.agents.defaults.profile,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
             tool_search_config=config.tools.tool_search,
@@ -989,6 +990,14 @@ def tui(
             f"✗ Node 版本过低（找到 {ver_str}，需要 >= 22）。\n  请升级：nvm install 22  或  brew upgrade node\n",
         )
         raise typer.Exit(code=1)
+
+    # Refresh the cached latest-release version in the background (once per
+    # launch, throttled, best-effort) so the status bar can nudge
+    # `raven upgrade`. The gateway reads that cache when it builds the session
+    # info bundle.
+    from raven.cli.update_notice import maybe_refresh_async
+
+    maybe_refresh_async()
 
     # `--dev` runs tsx from the source tree, so it requires the ui-tui/ checkout.
     # The production path resolves a packaged or source-built bundle separately

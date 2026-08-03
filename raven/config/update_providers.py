@@ -5,7 +5,7 @@ points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
 providers section is forbidden -- see plan rule.
 
-OAuth providers (``openai_codex`` / ``github_copilot``) have a separate
+OAuth providers have a separate
 auth path via ``provider_commands._LOGIN_HANDLERS`` and store tokens via
 ``oauth_cli_kit``, not in ``config.json``. ``set_provider_fields`` refuses
 to write ``api_key`` for those providers; callers must invoke
@@ -25,11 +25,31 @@ from typing import Any, Union
 import httpx
 from loguru import logger
 from pydantic import BaseModel, ValidationError
+from pydantic.alias_generators import to_camel
 from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.config.schema import ProvidersConfig
-from raven.providers.registry import ProviderSpec, find_by_name
+from raven.config.schema import ProviderConfig, ProvidersConfig
+from raven.providers.registry import (
+    ProviderSpec,
+    canonical_provider_name,
+    find_by_name,
+    names_same_provider,
+    normalize_provider_name,
+)
+
+
+def _overlay(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge two spellings of one section, letting a set value beat an unset one.
+
+    Blindly preferring the later spelling let an empty `apiKey` from a
+    placeholder section erase the key the user had actually written under the
+    other spelling.
+    """
+    merged = dict(base)
+    merged.update({k: v for k, v in overlay.items() if v not in ("", None, [], {})})
+    return merged
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -70,23 +90,143 @@ def _provider_names() -> list[str]:
     return out
 
 
-def _provider_schema_cls(name: str) -> type[BaseModel]:
-    """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``."""
+def _listable_provider_names(data: dict[str, Any]) -> list[str]:
+    """Declared providers, plus any others the config actually holds.
+
+    A vendor configured by name alone would otherwise be invisible to callers of
+    ``list_providers`` -- ``provider list`` and the startup gate that decides
+    whether the wizard has to run -- while the runtime routes to it happily.
+    Reporting it as unconfigured is what sends a user who has set it up straight
+    back into a wizard that declines to configure it.
+
+    """
+    declared = _provider_names()
+    # Sections are stored camelCase ("azureOpenai"), so compare on the snake form
+    # or every declared provider looks like an unknown extra.
+    known = {n for name in declared for n in (name, to_camel(name))}
+    stored = data.get("providers") or {}
+    extra = [
+        name
+        for name, section in stored.items()
+        if isinstance(section, dict)
+        and name not in known
+        and canonical_provider_name(name) not in known
+        and normalize_provider_name(name) not in known
+    ]
+    return declared + sorted(extra)
+
+
+def _litellm_knows(name: str, *, authoritative: bool = True) -> bool | None:
+    """Whether LiteLLM speaks to this vendor, or None when it cannot be asked.
+
+    Three states, not two. Answering False when LiteLLM is merely unavailable
+    would tell the user their provider name is wrong when it may well be right.
+    Raising instead was worse: only one of the five call sites caught it, so the
+    rest turned an unavailable dependency into a bare traceback. None makes
+    every caller confront the third case at the point it has to decide.
+
+    A snapshot of LiteLLM's names answers the common case for free. Importing
+    LiteLLM costs about two seconds, which a command that is about to call a
+    model pays anyway and a command that only reports configuration should not.
+    So ``authoritative=False`` stops at the snapshot -- suitable where a wrong
+    answer means one row missing from a report -- while the default falls
+    through to LiteLLM itself when the snapshot has no entry, so a vendor added
+    in a newer LiteLLM than the snapshot can still be configured.
+
+    Comparison is normalized on both sides: LiteLLM hyphenates a few vendors
+    ("nano-gpt") while config sections and model-id prefixes are underscored, so
+    an exact match rejects the very spelling this function tells users to write.
+    """
+    from raven.providers.litellm_provider_names import LITELLM_PROVIDER_NAMES
+
+    normalized = normalize_provider_name(name)
+    if normalized in {normalize_provider_name(n) for n in LITELLM_PROVIDER_NAMES}:
+        return True
+    if not authoritative:
+        return False
+
+    from raven.providers.litellm_setup import import_litellm
+
+    try:
+        litellm = import_litellm()
+        providers = litellm.provider_list
+    except Exception:
+        return None
+    known = {normalize_provider_name(str(getattr(p, "value", p))) for p in providers}
+    return normalized in known
+
+
+def _provider_schema_cls(name: str, *, authoritative: bool = True) -> type[BaseModel]:
+    """Look up the Pydantic class for a provider, e.g. ``'gemini' -> GeminiProviderConfig``.
+
+    ``authoritative=False`` keeps the lookup off the LiteLLM import path; see
+    ``_litellm_knows``. Only reporting may pass it.
+    """
     field = ProvidersConfig.model_fields.get(name)
     if field is None:
-        raise KeyError(f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}")
+        # A vendor with no spec of ours is still configurable when LiteLLM knows
+        # it -- the plain section is all it needs. Anything LiteLLM has never
+        # heard of is a typo, and saying so beats writing a section that will
+        # never be read.
+        if _litellm_knows(name, authoritative=authoritative) is not False:
+            # Includes "cannot say": refusing a name we failed to verify would
+            # block a valid provider, while accepting one at worst writes a
+            # section nothing reads. The lesser harm is to accept.
+            return ProviderConfig
+        raise KeyError(
+            f"Unknown provider '{name}'. Available providers: {sorted(_provider_names())}. "
+            "Any other vendor LiteLLM supports also works, spelled as LiteLLM names it."
+        )
     ann = _unwrap_optional(field.annotation)
     if not _is_model_class(ann):
         raise KeyError(f"'{name}' is not a provider section. Available providers: {sorted(_provider_names())}")
     return ann
 
 
-def _provider_spec(name: str) -> ProviderSpec:
-    """Look up ``ProviderSpec`` from the registry (raises if absent)."""
+def _provider_spec(name: str) -> ProviderSpec | None:
+    """Look up ``ProviderSpec``, or None for a vendor we carry no spec for."""
+    return find_by_name(name)
+
+
+def _provider_aliases(name: str) -> tuple[str, ...]:
+    """Former names of ``name`` as they may still appear in config.json."""
     spec = find_by_name(name)
-    if spec is None:
-        raise KeyError(f"No registry entry for provider '{name}'. Add a ProviderSpec to raven/providers/registry.py.")
-    return spec
+    return spec.name_aliases if spec else ()
+
+
+def _raw_section(data: dict[str, Any], name: str) -> dict[str, Any]:
+    """Read a provider's raw section, folding in any pre-rename section.
+
+    Both names can hold half the settings; taking whichever is non-empty would
+    drop the other's fields on the next write. Current name wins per field.
+    """
+    providers = data.get("providers") or {}
+    section: dict[str, Any] = {}
+    # Spelling-insensitive, exactly like `ProvidersConfig.get`: a section written
+    # as LiteLLM spells it ("nano-gpt") or as this model serializes it
+    # ("nanoGpt") is the same section, and the management surface reading only
+    # the underscored key is how a key the runtime happily uses became
+    # invisible to `provider get/set`.
+    for want in (*_provider_aliases(name), name):
+        for key, older in providers.items():
+            if names_same_provider(key, want) and isinstance(older, dict):
+                section = _overlay(section, older)
+    return section
+
+
+def _write_raw_section(data: dict[str, Any], name: str, section: dict[str, Any]) -> None:
+    """Write a provider's section under its current name, retiring older keys.
+
+    Retires every key that names the same provider, not just declared aliases:
+    `_raw_section` folds spellings together on read, so leaving the old spelling
+    behind would produce two sections for one provider -- the next read merges
+    them and the loser's fields reappear after being removed.
+    """
+    providers = data.setdefault("providers", {})
+    wanted = (*_provider_aliases(name), name)
+    for key in [k for k in providers if any(names_same_provider(k, w) for w in wanted)]:
+        providers.pop(key, None)
+    providers[name] = section
 
 
 def _annotation_str(ann: Any) -> str:
@@ -311,6 +451,7 @@ def provider_field_specs(name: str) -> dict[str, dict[str, Any]]:
     Used by CLI parsers, the ``provider show`` command, and ``get_provider_config``
     to know which fields exist and which to redact.
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     return _flatten_fields(cls)
 
@@ -335,12 +476,24 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_providers = data.get("providers") or {}
 
     out: list[dict[str, Any]] = []
-    for fname in _provider_names():
-        cls = _provider_schema_cls(fname)
-        section = raw_providers.get(fname) or {}
+    for fname in _listable_provider_names(data):
+        try:
+            # Reporting: a stale snapshot costs one row here, whereas importing
+            # LiteLLM to render a table costs every caller two seconds.
+            cls = _provider_schema_cls(fname, authoritative=False)
+        except (KeyError, RuntimeError):
+            # A key we cannot resolve to a provider is a typo, and listing is a
+            # read-only report: skipping it keeps `provider list` and the startup
+            # gate working, where raising would leave the user unable to start
+            # Raven or even reach the wizard that would fix the file. RuntimeError
+            # covers "LiteLLM unavailable, so we cannot say" -- reporting is not
+            # the place to fail on that either.
+            continue
+        # Through _raw_section, so a provider still stored under its pre-rename
+        # key reads as configured here and not just at runtime.
+        section = _raw_section(data, fname)
         try:
             instance = cls.model_validate(section)
         except ValidationError:
@@ -357,7 +510,12 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
 
         if is_oauth:
-            configured = _oauth_token_path(fname).exists()
+            if fname in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import load_token
+
+                configured = load_token("global" if fname == "minimax_global" else "cn") is not None
+            else:
+                configured = _oauth_token_path(fname).exists()
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             configured = bool(api_base) or bool(api_key)
@@ -393,10 +551,11 @@ def get_provider_config(
     ``redact_secrets=False`` to get plaintext (used by ``test_provider`` to
     actually call the provider's ``/v1/models`` endpoint).
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_section = (data.get("providers") or {}).get(name) or {}
+    raw_section = _raw_section(data, name)
 
     try:
         instance = cls.model_validate(raw_section)
@@ -434,6 +593,7 @@ def set_provider_fields(
             OAuth provider — callers should use ``provider login`` instead.
         ValidationError: a field value violates the provider's Pydantic schema.
     """
+    name = canonical_provider_name(name)
     if not fields:
         return {}
 
@@ -447,7 +607,7 @@ def set_provider_fields(
             f"Unknown field(s) {unknown} for provider '{name}'. Available fields: {sorted(field_specs.keys())}"
         )
 
-    if spec.is_oauth:
+    if spec and spec.is_oauth:
         forbidden = [k for k in fields if field_specs[k]["is_secret"]]
         if forbidden:
             raise RuntimeError(
@@ -458,7 +618,7 @@ def set_provider_fields(
 
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    raw_section = (data.get("providers") or {}).get(name) or {}
+    raw_section = _raw_section(data, name)
 
     try:
         current = cls.model_validate(raw_section)
@@ -476,8 +636,7 @@ def set_provider_fields(
 
     validated = cls.model_validate(working)
 
-    data.setdefault("providers", {})
-    data["providers"][name] = validated.model_dump(by_alias=True)
+    _write_raw_section(data, name, validated.model_dump(by_alias=True))
     _write_atomic(path, data)
     return prev
 
@@ -505,23 +664,27 @@ def reset_provider(
     Callers don't need to know which case applies — one mental model covers
     both API-key and OAuth providers.
     """
+    name = canonical_provider_name(name)
     cls = _provider_schema_cls(name)
     spec = _provider_spec(name)
 
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    data.setdefault("providers", {})
-    data["providers"][name] = cls().model_dump(by_alias=True)
+    _write_raw_section(data, name, cls().model_dump(by_alias=True))
     _write_atomic(path, data)
 
-    if spec.is_oauth:
-        token_path = _oauth_token_path(name)
+    if spec and spec.is_oauth:
         try:
-            token_path.unlink(missing_ok=True)
+            if name in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import delete_token
+
+                delete_token("global" if name == "minimax_global" else "cn")
+            else:
+                _oauth_token_path(name).unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
-                "update_providers: failed to unlink OAuth token {}: {}",
-                token_path,
+                "update_providers: failed to unlink OAuth token for {}: {}",
+                name,
                 exc,
             )
 
@@ -530,7 +693,7 @@ def reset_provider(
 
 def _load_provider_models(name: str, data: dict[str, Any]) -> tuple[type, list[str]]:
     cls = _provider_schema_cls(name)
-    section = (data.get("providers") or {}).get(name) or {}
+    section = _raw_section(data, name)
     try:
         instance = cls.model_validate(section)
     except ValidationError:
@@ -548,16 +711,16 @@ def add_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model not in models:
         models.append(model)
-        section = (data.get("providers") or {}).get(name) or {}
+        section = _raw_section(data, name)
         section["models"] = models
         validated = cls.model_validate(section)
-        data.setdefault("providers", {})
-        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
         _write_atomic(path, data)
     return models
 
@@ -572,16 +735,16 @@ def remove_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
     if model in models:
         models = [m for m in models if m != model]
-        section = (data.get("providers") or {}).get(name) or {}
+        section = _raw_section(data, name)
         section["models"] = models
         validated = cls.model_validate(section)
-        data.setdefault("providers", {})
-        data["providers"][name] = validated.model_dump(by_alias=True)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
         _write_atomic(path, data)
     return models
 
@@ -621,8 +784,8 @@ def test_provider(
 
     Behavior:
 
-    1. Look up the provider's ``api_key`` (or OAuth access token via
-       ``oauth_cli_kit.get_token()`` for OAuth providers) and ``api_base``
+    1. Look up the provider's ``api_key`` or provider-specific OAuth access
+       token and ``api_base``
        (falling back to ``ProviderSpec.default_api_base`` when unset).
     2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}``.
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``). Unknown codes
@@ -631,10 +794,12 @@ def test_provider(
     Returns a dict, never raises. ``transport`` is injectable so unit tests
     can mount an ``httpx.MockTransport`` without touching real network.
     """
+    name = canonical_provider_name(name)
     import time
 
     try:
         spec = _provider_spec(name)
+        cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
     except KeyError as exc:
         return {
             "ok": False,
@@ -646,13 +811,20 @@ def test_provider(
             "error": str(exc),
         }
 
-    cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
     api_key = cfg.get("api_key") or ""
-    api_base = cfg.get("api_base") or spec.default_api_base or ""
+    api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
 
-    if spec.is_oauth:
+    if spec and spec.is_oauth:
         try:
-            from oauth_cli_kit import get_token
+            if spec.name in {"minimax_global", "minimax_cn"}:
+                from raven.providers.minimax_oauth import get_token
+
+                token = get_token("global" if spec.name == "minimax_global" else "cn")
+                api_base = token.resource_url
+            else:
+                from oauth_cli_kit import get_token
+
+                token = get_token()
         except ImportError:
             return {
                 "ok": False,
@@ -661,10 +833,8 @@ def test_provider(
                 "http_status": None,
                 "models_count": None,
                 "model_ids": None,
-                "error": "oauth_cli_kit not installed",
+                "error": "OAuth support is not installed",
             }
-        try:
-            token = get_token()
         except Exception as exc:
             return {
                 "ok": False,
@@ -687,7 +857,7 @@ def test_provider(
             }
         api_key = token.access
 
-    if not api_key and not spec.is_local:
+    if not api_key and not (spec and spec.is_local):
         return {
             "ok": False,
             "status": "not_configured",
@@ -714,6 +884,8 @@ def test_provider(
         url = api_base.rstrip("/") + "/v1/models"
 
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
+        headers["x-api-key"] = api_key
 
     start = time.monotonic()
     client_kwargs: dict[str, Any] = {"timeout": timeout_s}
