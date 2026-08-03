@@ -39,6 +39,10 @@ class ToolCallRequest:
     arguments: dict[str, Any]
     provider_specific_fields: dict[str, Any] | None = None
     function_provider_specific_fields: dict[str, Any] | None = None
+    # Set by the provider while the raw argument string is still available; the
+    # loop reads them to decide between a larger output budget and a resample.
+    arguments_truncated: bool = False
+    arguments_repaired: bool = False
 
     def to_openai_tool_call(self) -> dict[str, Any]:
         """Serialize to an OpenAI-style tool_call payload."""
@@ -120,11 +124,14 @@ class LLMProvider(ABC):
 
     _CHAT_RETRY_DELAYS = (1, 2, 4)
     _SENTINEL = object()
+    # Class-level default so subclasses that skip ``super().__init__`` still
+    # resolve the sentinel fallbacks; frozen, so sharing the instance is safe.
+    generation: GenerationSettings = GenerationSettings()
 
     def __init__(self, api_key: str | None = None, api_base: str | None = None):
         self.api_key = api_key
         self.api_base = api_base
-        self.generation: GenerationSettings = GenerationSettings()
+        self.generation = GenerationSettings()
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -219,7 +226,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: object = _SENTINEL,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -232,7 +239,14 @@ class LLMProvider(ABC):
         otherwise ``AttributeError`` there. This default makes any provider that
         implements ``chat`` usable in the streaming path — without token-level
         streaming. ``LiteLLMProvider`` overrides this with true streaming.
+
+        ``max_tokens`` falls back to ``self.generation`` the way
+        ``chat_with_retry`` does. A plain default meant the streaming path
+        silently capped output at the signature's 4096 while the configured
+        budget went unused, and left callers no way to raise it for a retry.
         """
+        if max_tokens is self._SENTINEL:
+            max_tokens = self.generation.max_tokens
         response = await self.chat(
             messages=messages,
             tools=tools,
@@ -244,11 +258,16 @@ class LLMProvider(ABC):
         )
         tool_call_delta: dict[str, Any] | None = None
         if response.tool_calls:
+            # The flags ride along because re-serializing repaired arguments
+            # produces valid JSON: without them the consumer would reconstruct
+            # a truncated call as a healthy one and execute it.
             tool_call_delta = {
                 "tool_calls": [
                     {
                         "index": i,
                         "id": tc.id,
+                        "arguments_truncated": tc.arguments_truncated,
+                        "arguments_repaired": tc.arguments_repaired,
                         "function": {
                             "name": tc.name,
                             "arguments": json.dumps(tc.arguments, ensure_ascii=False),

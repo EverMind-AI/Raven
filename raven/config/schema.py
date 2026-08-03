@@ -273,6 +273,12 @@ class AgentDefaults(Base):
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    # Tool-argument recovery: a call whose arguments the model could not finish
+    # or could not format is refused rather than executed on repaired values.
+    # Truncated ones retry with a doubled output budget; mangled ones resample.
+    tool_args_truncation_max_retries: int = 4
+    tool_args_malformed_max_resamples: int = 3
+    tool_args_max_tokens_ceiling: int = 32768
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode

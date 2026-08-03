@@ -374,6 +374,7 @@ def _build_tui_agent_loop():
         from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
         from raven.proactive_engine.schedulers.cron.tool import CronTool
+        from raven.providers.tool_args import limits_from_defaults as tool_args_limits_from_defaults
         from raven.session.manager import SessionManager
 
         config = load_runtime_config(None, None)
@@ -406,6 +407,7 @@ def _build_tui_agent_loop():
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,
             empty_recovery=limits_from_defaults(config.agents.defaults),
+            tool_args=tool_args_limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,

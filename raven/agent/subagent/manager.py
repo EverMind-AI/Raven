@@ -17,6 +17,7 @@ from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool,
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
+from raven.providers.tool_args import ToolArgsLimits
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.tracing import semconv, trace
@@ -25,6 +26,12 @@ from raven.utils.helpers import build_assistant_message
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
 _SPAWN_WINDOW_SECONDS = 3600
+
+_UNUSABLE_ARGS_MESSAGE = (
+    "Error: the arguments for this call were unusable (cut off by the output "
+    "length limit, or not valid JSON) and it was NOT executed. Re-issue it with "
+    "complete, well-formed JSON, splitting large content into smaller steps."
+)
 
 
 class SubagentManager:
@@ -56,6 +63,7 @@ class SubagentManager:
         # SUBAGENT-origin turn.
         self._submit = None
         self.model = model or provider.get_default_model()
+        self._tool_args_limits = ToolArgsLimits()
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -192,16 +200,32 @@ class SubagentManager:
             iteration = 0
             final_result: str | None = None
 
+            truncation_retries = 0
+            call_max_tokens: int | None = None
+
             while iteration < max_iterations:
                 iteration += 1
 
+                budget_kwargs = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
                 response = await self.provider.chat_with_retry(
                     messages=messages,
                     tools=tools.get_definitions(),
                     model=self.model,
+                    **budget_kwargs,
                 )
 
                 if response.has_tool_calls:
+                    # Same rule as the main loop: arguments cut off by the output
+                    # budget parse after repair but have lost their tails, so
+                    # executing them corrupts state while reporting success.
+                    truncated = [tc for tc in response.tool_calls if tc.arguments_truncated]
+                    if truncated and truncation_retries < self._tool_args_limits.truncation_max_retries:
+                        truncation_retries += 1
+                        provider_budget = getattr(getattr(self.provider, "generation", None), "max_tokens", 8192)
+                        call_max_tokens = self._tool_args_limits.next_max_tokens(call_max_tokens or provider_budget)
+                        iteration -= 1
+                        continue
+
                     tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                     messages.append(
                         build_assistant_message(
@@ -218,7 +242,10 @@ class SubagentManager:
                         logger.debug(
                             "Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str
                         )
-                        result = await tools.execute(tool_call.name, tool_call.arguments)
+                        if tool_call.arguments_truncated or tool_call.arguments_repaired:
+                            result = _UNUSABLE_ARGS_MESSAGE
+                        else:
+                            result = await tools.execute(tool_call.name, tool_call.arguments)
                         # The subagent's loop is an untrusted-data path too — fence its
                         # tool output like the main loop does in add_tool_result.
                         messages.append(

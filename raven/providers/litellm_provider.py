@@ -10,12 +10,12 @@ import warnings
 from collections.abc import AsyncIterator
 from typing import Any
 
-import json_repair
 from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.registry import find_by_keywords, find_by_model, find_gateway, split_model_id
+from raven.providers.tool_args import coerce_arguments
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -387,7 +387,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: object = LLMProvider._SENTINEL,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -410,6 +410,8 @@ class LiteLLMProvider(LLMProvider):
         if self._supports_cache_control(original_model) and not self.disable_auto_cache_control:
             messages, tools = self._apply_cache_control(messages, tools)
 
+        if max_tokens is self._SENTINEL:
+            max_tokens = self.generation.max_tokens
         max_tokens = max(1, max_tokens)
 
         kwargs: dict[str, Any] = {
@@ -559,10 +561,7 @@ class LiteLLMProvider(LLMProvider):
 
         tool_calls = []
         for tc in raw_tool_calls:
-            # Parse arguments from JSON string if needed
-            args = tc.function.arguments
-            if isinstance(args, str):
-                args = json_repair.loads(args)
+            args, flags = coerce_arguments(tc.function.arguments, finish_reason=finish_reason)
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None
@@ -574,6 +573,8 @@ class LiteLLMProvider(LLMProvider):
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
+                    arguments_truncated=flags.truncated,
+                    arguments_repaired=flags.repaired,
                 )
             )
 

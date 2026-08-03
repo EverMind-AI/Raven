@@ -8,9 +8,9 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-import json_repair
 
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.tool_args import coerce_arguments
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -176,16 +176,18 @@ class AzureOpenAIProvider(LLMProvider):
             tool_calls = []
             if message.get("tool_calls"):
                 for tc in message["tool_calls"]:
-                    # Parse arguments from JSON string if needed
-                    args = tc["function"]["arguments"]
-                    if isinstance(args, str):
-                        args = json_repair.loads(args)
+                    args, flags = coerce_arguments(
+                        tc["function"]["arguments"],
+                        finish_reason=choice.get("finish_reason"),
+                    )
 
                     tool_calls.append(
                         ToolCallRequest(
                             id=tc["id"],
                             name=tc["function"]["name"],
                             arguments=args,
+                            arguments_truncated=flags.truncated,
+                            arguments_repaired=flags.repaired,
                         )
                     )
 

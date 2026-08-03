@@ -238,6 +238,7 @@ def register(app: typer.Typer) -> None:
         from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
         from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.providers.tool_args import limits_from_defaults as tool_args_limits_from_defaults
         from raven.session.manager import SessionManager, new_chat_id
 
         # load_runtime_config must run FIRST: it calls set_config_path() so
@@ -330,6 +331,7 @@ def register(app: typer.Typer) -> None:
             model=config.agents.defaults.model,
             max_iterations=config.agents.defaults.max_tool_iterations,
             empty_recovery=limits_from_defaults(config.agents.defaults),
+            tool_args=tool_args_limits_from_defaults(config.agents.defaults),
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,

@@ -51,6 +51,7 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.tool_args import ToolArgsLimits, coerce_arguments
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -220,6 +221,21 @@ def _same_call_break_message(tool: str, n: int) -> str:
         "Re-read the earlier error, then change the arguments, use a different "
         "tool, or move on to another part of the task."
     )
+
+
+_TRUNCATED_ARGS_MESSAGE = (
+    "Error: the arguments for this call were cut off by the output length limit "
+    "and it was NOT executed. Retrying with a larger budget did not finish them "
+    "either. Split the work into smaller steps -- for a large file, write it in "
+    "sections or edit only the span that changes."
+)
+
+_MALFORMED_ARGS_MESSAGE = (
+    "Error: the arguments for this call were not valid JSON and it was NOT "
+    "executed. Re-issue it with well-formed JSON: escape quotes, newlines, and "
+    "control characters inside string values, and use {} when a tool takes no "
+    "parameters."
+)
 
 
 def _loop_break_nudge(tool: str, n: int) -> str:
@@ -410,6 +426,7 @@ class AgentLoop:
         # tools, default behavior unchanged.
         plugin_tools: "list[Tool] | None" = None,
         empty_recovery: RecoveryLimits | None = None,
+        tool_args: ToolArgsLimits | None = None,
     ):
         from raven.agent.hook import (
             CompositeHook,
@@ -445,6 +462,7 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
+        self._tool_args_limits = tool_args if tool_args is not None else ToolArgsLimits()
         self.context_window_tokens = context_window_tokens
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
@@ -1458,6 +1476,7 @@ class AgentLoop:
         model: str | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
 
@@ -1488,7 +1507,10 @@ class AgentLoop:
         # of hanging or leaking the connection. The stream path has no retry
         # (see docstring), so the error surfaces as the turn's response.
         try:
-            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+            stream_kwargs = {} if max_tokens is None else {"max_tokens": max_tokens}
+            async with aclosing(
+                self.provider.chat_stream(messages=messages, tools=tools, model=model, **stream_kwargs)
+            ) as stream:
                 async for delta in stream:
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
@@ -1722,6 +1744,12 @@ class AgentLoop:
         post_tool_nudges = 0
         prefill_retries = 0
         empty_retries = 0
+        # Tool-argument recovery state. Truncated arguments get a larger output
+        # budget (more tokens is the only thing that can finish them); mangled
+        # but complete ones get a plain resample (more tokens cannot help).
+        truncation_retries = 0
+        malformed_resamples = 0
+        call_max_tokens: int | None = None
         test_gate_enabled = bool(os.environ.get("RAVEN_REQUIRE_REAL_TEST_EVIDENCE"))
         real_test_evidence = False
         test_gate_nudges = 0
@@ -1774,6 +1802,7 @@ class AgentLoop:
                 tool_defs,
                 effective_model,
             )
+            budget_kwargs = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
                     messages=call_messages,
@@ -1781,6 +1810,7 @@ class AgentLoop:
                     model=call_model,
                     on_token_delta=on_token_delta,
                     on_reasoning_delta=on_reasoning_delta,
+                    **budget_kwargs,
                 )
             else:
                 response = await self.provider.chat_with_retry(
@@ -1788,6 +1818,7 @@ class AgentLoop:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
+                    **budget_kwargs,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
@@ -1846,6 +1877,44 @@ class AgentLoop:
                     continue
 
             if response.has_tool_calls:
+                # Arguments the model could not finish or could not format. Both
+                # arrive here already repaired into parseable dicts, which is the
+                # danger: a truncated write_file looks executable but has lost
+                # its tail, so running it corrupts the file while reporting
+                # success. Retry before touching anything.
+                limits = self._tool_args_limits
+                truncated_calls = [tc for tc in response.tool_calls if tc.arguments_truncated]
+                if truncated_calls and truncation_retries < limits.truncation_max_retries:
+                    truncation_retries += 1
+                    provider_budget = getattr(getattr(self.provider, "generation", None), "max_tokens", 8192)
+                    call_max_tokens = limits.next_max_tokens(call_max_tokens or provider_budget)
+                    iteration -= 1
+                    logger.warning(
+                        "Tool arguments truncated for {}; raising output budget to {} and retrying ({}/{})",
+                        ", ".join(tc.name for tc in truncated_calls),
+                        call_max_tokens,
+                        truncation_retries,
+                        limits.truncation_max_retries,
+                    )
+                    continue
+
+                malformed_calls = [
+                    tc for tc in response.tool_calls if tc.arguments_repaired and not tc.arguments_truncated
+                ]
+                if malformed_calls and malformed_resamples < limits.malformed_max_resamples:
+                    # A formatting slip, not a budget problem. Resample without
+                    # recording anything: keeping the broken call out of history
+                    # avoids teaching the model that the shape was acceptable.
+                    malformed_resamples += 1
+                    iteration -= 1
+                    logger.warning(
+                        "Tool arguments were not valid JSON for {}; resampling ({}/{})",
+                        ", ".join(tc.name for tc in malformed_calls),
+                        malformed_resamples,
+                        limits.malformed_max_resamples,
+                    )
+                    continue
+
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
@@ -1885,7 +1954,14 @@ class AgentLoop:
                     # has already hard-failed `threshold` times running — refuse
                     # instead of executing a fourth identical failure.
                     call_sig = f"{tool_call.name}\x00{args_str}"
-                    if call_sig == same_call_sig and same_call_streak >= self._SAME_CALL_BREAK_THRESHOLD:
+                    if tool_call.arguments_truncated:
+                        # Budget ladder exhausted. Still refuse: executing
+                        # half-written parameters silently produces a wrong
+                        # result, which is worse than an error the model can see.
+                        result = _TRUNCATED_ARGS_MESSAGE
+                    elif tool_call.arguments_repaired:
+                        result = _MALFORMED_ARGS_MESSAGE
+                    elif call_sig == same_call_sig and same_call_streak >= self._SAME_CALL_BREAK_THRESHOLD:
                         result = _same_call_break_message(tool_call.name, same_call_streak)
                     else:
                         result = await self.tools.execute(tool_call.name, tool_call.arguments)
@@ -2935,10 +3011,13 @@ def _merge_tool_call_fragments(
     for tc in incoming:
         idx = int(tc.get("index", 0) or 0)
         while len(slots) <= idx:
-            slots.append({"id": None, "function": {"name": None, "arguments_buf": []}})
+            slots.append({"id": None, "flags": {}, "function": {"name": None, "arguments_buf": []}})
         slot = slots[idx]
         if tc.get("id") and not slot["id"]:
             slot["id"] = tc["id"]
+        for flag in ("arguments_truncated", "arguments_repaired"):
+            if tc.get(flag):
+                slot["flags"][flag] = True
         fn = tc.get("function") or {}
         if fn.get("name") and not slot["function"]["name"]:
             slot["function"]["name"] = fn["name"]
@@ -2947,22 +3026,28 @@ def _merge_tool_call_fragments(
 
 
 def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
+    """Convert accumulator slots into final ToolCallRequest list.
+
+    Shares ``coerce_arguments`` with the non-streaming parsers so both paths
+    repair and flag identically. The previous fallback stored the raw string
+    under ``_raw_arguments``, a key nothing consumed: it reached the tool as an
+    unexpected keyword and surfaced as "missing required <field>", pointing the
+    model at a schema problem instead of the broken JSON it actually wrote.
+    """
     result: list[ToolCallRequest] = []
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
             continue
-        args_text = "".join(slot["function"]["arguments_buf"])
-        try:
-            args = json.loads(args_text) if args_text else {}
-        except json.JSONDecodeError:
-            args = {"_raw_arguments": args_text}
+        args, flags = coerce_arguments("".join(slot["function"]["arguments_buf"]))
+        upstream = slot.get("flags") or {}
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
+                arguments_truncated=flags.truncated or upstream.get("arguments_truncated", False),
+                arguments_repaired=flags.repaired or upstream.get("arguments_repaired", False),
             )
         )
     return result
