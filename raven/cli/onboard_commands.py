@@ -80,7 +80,7 @@ _TOTAL_STEPS = 6
 _BACK = object()
 
 # Sentinel a required EverOS role returns when the user chooses to give up EverOS
-# rather than configure it; ``_step4_memory`` then falls back to Markdown memory.
+# rather than configure it; ``_step4_memory`` then leaves memory disabled.
 _ABORT_EVEROS = object()
 
 # Unified prompt chrome (display-only), shared with every other command's
@@ -3174,9 +3174,12 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "reads each conversation to judge what matters and extract the key points",
             "从对话中判断信息边界、抽取要点",
         ),
+        # Worded as a floor rather than a default: the field is pre-filled with
+        # the user's own main model, because a recommended id is only reachable
+        # if their key carries it. This tells them how to judge their own.
         "recommendation": (
-            "Recommended: [bold]gpt-4.1-mini[/bold] or stronger; weaker models may degrade quality",
-            "推荐 [bold]gpt-4.1-mini[/bold] 或更强的模型，更弱的模型可能导致提取质量下降",
+            "Capability floor: [bold]gpt-4.1-mini[/bold] -- anything weaker noticeably degrades extraction",
+            "能力下限参考 [bold]gpt-4.1-mini[/bold]：低于这个水平会明显影响提取质量",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
@@ -3402,6 +3405,22 @@ def _match_everos_default(example: str, models: list[str]) -> str:
     return example
 
 
+def _preferred_memory_model(section: str, main_model: Optional[str], chosen_provider: Optional[str]) -> Optional[str]:
+    """The main chat model, when it is a sensible pre-fill for this role.
+
+    Only the llm role -- an embedding / rerank / multimodal endpoint does not
+    serve a chat model. Only when the picked provider is the main model's own: no
+    other provider carries that id, and pre-filling one it cannot serve turns
+    Enter into a verification failure. A custom endpoint has no resolved provider
+    and is left alone for the same reason.
+    """
+    if section != "llm" or not main_model or chosen_provider is None:
+        return None
+    if chosen_provider != _resolve_model_provider(main_model):
+        return None
+    return _resolve_reuse_llm_creds(main_model).get("model")
+
+
 def _everos_pick_model(
     *,
     base_url: Optional[str],
@@ -3411,18 +3430,33 @@ def _everos_pick_model(
     section: str = "llm",
     provider_name: Optional[str] = None,
     recommendation: Optional[tuple[str, str]] = None,
+    preferred: Optional[str] = None,
 ) -> Any:
     """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
-    fuzzy-searchable list, else fall back to free text. Empty submit = back."""
+    fuzzy-searchable list, else fall back to free text. Empty submit = back.
+
+    ``preferred`` pre-fills a model the user is already known to have access to
+    -- their main chat model. It wins over ``example`` because a recommended
+    model is only a recommendation if the user's key can reach it, and many keys
+    cannot; ``example`` then reads as the capability floor rather than the
+    default (see ``recommendation``).
+    """
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
     console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
     models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
+    if preferred:
+        console.print(
+            _t(
+                f"  [dim]Pre-filled with your main model [bold]{preferred}[/bold] -- press Enter to accept.[/dim]",
+                f"  [dim]已填入你的主模型 [bold]{preferred}[/bold]，直接回车即可。[/dim]",
+            )
+        )
     if recommendation:
         console.print(f"  [dim]{_t(*recommendation)}[/dim]")
     if models:
-        default_model = _match_everos_default(example, models)
+        default_model = preferred or _match_everos_default(example, models)
         question = questionary.autocomplete(
             _t(
                 f"Model ({len(models)} available — type to filter):",
@@ -3454,7 +3488,8 @@ def _everos_pick_model(
             )
         )
         chosen = questionary.text(
-            _t(f"Model id (e.g. {example}):", f"模型 id(如 {example}):"),
+            _t(f"Model id (e.g. {example}):", f"模型 id（如 {example}）："),
+            default=preferred or "",
             placeholder=_back_placeholder(allow_back),
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -3628,6 +3663,7 @@ def _everos_pick_creds_and_model(
             section=section,
             provider_name=chosen_provider,
             recommendation=recommendation,
+            preferred=_preferred_memory_model(section, main_model, chosen_provider),
         )
         if model is _BACK:
             continue
@@ -3645,7 +3681,7 @@ def _config_everos_role(
     with the unified provider→key→model flow, reuse shortcuts, and a back loop.
 
     Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
-    required role (the caller then disables EverOS and keeps Markdown memory)."""
+    required role (the caller then disables EverOS, leaving no long-term memory)."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
     from raven.config.update_everos import clear_everos_section, set_everos_section
@@ -3730,17 +3766,30 @@ def _config_everos_role(
                 # the role menu rather than forcing the give-up exit.
                 continue
             # A required role with nothing configured has no Skip, so backing out
-            # of the picker would loop forever. Offer a bounded exit: keep trying,
-            # or give up EverOS and fall back to Markdown memory.
-            action = questionary.select(
+            # of the picker would loop forever. Offer a bounded exit -- keep
+            # trying, or leave without long-term memory. Stated in full and in
+            # colour: this is the only place the wizard can lose memory
+            # altogether, and "no cross-session memory" is a consequence a user
+            # should not discover weeks later by noticing the agent forgets
+            # everything.
+            console.print()
+            console.print(
                 _t(
-                    f"{label_en} is required for EverOS memory. What would you like to do?",
-                    f"{label_zh} 是 EverOS 记忆必需的。想做什么?",
+                    f"  [yellow]⚠ {label_en} is required for long-term memory.[/yellow]\n"
+                    "  [dim]Without it Raven has no memory across sessions: every conversation starts\n"
+                    "  from nothing, with no recollection of your preferences or of what was done before.[/dim]",
+                    f"  [yellow]⚠ {label_zh} 是长期记忆的必需项。[/yellow]\n"
+                    "  [dim]放弃后 Raven 没有任何跨会话记忆：每次对话都从零开始，不记得你的偏好，\n"
+                    "  也不记得之前做过什么。[/dim]",
                 ),
+                highlight=False,
+            )
+            action = questionary.select(
+                _t("What would you like to do?", "想做什么？"),
                 choices=[
                     questionary.Choice(_t("Pick a provider / model", "选择服务商 / 模型"), value="retry"),
                     questionary.Choice(
-                        _t("Give up EverOS (use native Markdown memory)", "放弃 EverOS(改用原生 Markdown 记忆)"),
+                        _t("Give up (no long-term memory)", "放弃（不启用长期记忆）"),
                         value="abort",
                     ),
                 ],
@@ -3817,15 +3866,17 @@ def _config_everos_role(
 def _step4_memory(
     *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
 ) -> object:
-    """Step 4 — EverOS long-term memory (enable + model sub-screens).
+    """Step 4 -- EverOS long-term memory (model sub-screens).
 
-    The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
-    step's job is to either confirm it by configuring the required models or
-    resolve it back to ``None`` (native Markdown) on skip / non-interactive /
-    decline. ``_memory_enabled`` gates on both required models (llm + embedding)
-    being present, so a fresh modelless seed is treated as "not yet enabled" (the user still sees
-    the enable prompt) and the "keep current" path only triggers once models
-    are actually on disk.
+    The bootstrap seeds ``memory.backend="everos"`` (schema default) and everos
+    is the only memory backend, so this step does not ask whether to enable it:
+    it either confirms the seed by configuring the required models, or resolves
+    it back to ``None`` on skip / non-interactive / give-up. ``None`` means no
+    long-term memory at all, not a fallback to something simpler.
+
+    ``_memory_enabled`` gates on both required models (llm + embedding) being
+    present, so a fresh modelless seed reads as "not configured yet" and the
+    keep/reconfigure menu only appears once models are actually on disk.
     """
     _step_header(4, _t("EverOS long-term memory", "EverOS 长期记忆"))
 
@@ -3854,8 +3905,8 @@ def _step4_memory(
             _set_memory_backend(None)
         console.print(
             _t(
-                "  [dim]Keeping native Markdown memory.[/dim]",
-                "  [dim]保持原生 Markdown 记忆。[/dim]",
+                "  [dim]Long-term memory stays off.[/dim]",
+                "  [dim]长期记忆保持关闭。[/dim]",
             )
         )
         return None
@@ -3881,40 +3932,22 @@ def _step4_memory(
         if action == "keep":
             return None  # backend already "everos" + models on disk; leave as-is
     else:
+        # No enable/decline question: everos is the only memory backend, so the
+        # step goes straight into configuring it. Leaving is still possible --
+        # backing out of the required roles reaches the give-up prompt, which
+        # spells out what is lost.
+        # Wrapped by hand: rich re-wraps at the terminal width and drops the
+        # two-space indent on continuation lines, which reads as a stray
+        # left-flush sentence under an indented block.
         console.print(
             _t(
-                "  [dim]Enable to give Raven EverOS's stronger long-term memory — it needs a memory LLM and an "
-                "embedding model. Or skip and keep Raven's built-in Markdown memory (no extra setup).[/dim]",
-                "  [dim]启用后,Raven 获得 EverOS 提供的更强长期记忆能力,需额外配置记忆用的 LLM 和 embedding 模型;"
-                "不启用则使用 Raven 原生 Markdown 记忆,无需额外配置。[/dim]",
-            )
+                "  [dim]Raven's long-term memory comes from EverOS: conversations are distilled\n"
+                "  into episodes, facts and skills it can recall later.[/dim]",
+                "  [dim]Raven 拥有 EverOS 提供的强大长期记忆能力：\n"
+                "  对话会被提炼为情景、事实与技能，供以后召回。[/dim]",
+            ),
+            highlight=False,
         )
-        action = questionary.select(
-            _t("Enable EverOS long-term memory?", "启用 EverOS 长期记忆?"),
-            choices=[
-                questionary.Choice(_t("Enable (configure the memory models)", "启用(继续配置记忆模型)"), value="on"),
-                questionary.Choice(
-                    _t(
-                        "Don't enable (use Raven's native Markdown memory)",
-                        "不启用(使用 Raven 原生 Markdown 记忆)",
-                    ),
-                    value="off",
-                ),
-            ],
-            style=RAVEN_STYLE,
-            qmark=_QMARK,
-        ).ask()
-        if action is None:
-            raise typer.Exit(1)
-        if action == "off":
-            _set_memory_backend(None)
-            console.print(
-                _t(
-                    "  [dim]Using native Markdown memory.[/dim]",
-                    "  [dim]使用原生 Markdown 记忆。[/dim]",
-                )
-            )
-            return None
 
     # Ensure the EverOS home directory has its config templates (everos.toml
     # + ome.toml) BEFORE writing model sections — set_everos_section merges
@@ -3942,8 +3975,11 @@ def _step4_memory(
             _set_memory_backend(None)
             console.print(
                 _t(
-                    "  [dim]Gave up EverOS; keeping native Markdown memory.[/dim]",
-                    "  [dim]已放弃 EverOS,改用原生 Markdown 记忆。[/dim]",
+                    "  [yellow]⚠ Gave up long-term memory: Raven will not remember anything "
+                    "between sessions.[/yellow]\n"
+                    "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]",
+                    "  [yellow]⚠ 已放弃长期记忆，Raven 不会记住任何跨会话内容。[/yellow]\n"
+                    "  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
                 )
             )
             return None
@@ -4115,7 +4151,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
         else _t("Sandbox (boxlite)", "沙箱(boxlite)")
     )
     chans = ", ".join(_enabled_channels()) or _t("none", "无")
-    mem = _t("EverOS", "EverOS") if _memory_enabled() else _t("native Markdown", "原生 Markdown")
+    mem = _t("EverOS", "EverOS") if _memory_enabled() else _t("[yellow]off[/yellow]", "[yellow]未启用[/yellow]")
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()

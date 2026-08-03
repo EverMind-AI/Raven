@@ -84,16 +84,28 @@ def _restore_event_loop():
 
 
 @pytest.fixture(autouse=True)
-def _no_everos_health_probe(monkeypatch: pytest.MonkeyPatch):
-    """Keep the wizard's capability report off whatever server is running here.
+def _no_everos_io(monkeypatch: pytest.MonkeyPatch):
+    """Keep these tests away from a real EverOS server, in both directions.
 
-    The memory step reads `/health` after starting the server, so without this
-    every test that walks that step reports the developer's own EverOS install
-    and changes behaviour with it. Unreachable is the quiet default; tests about
-    the report install their own answer.
+    Spawning: any test that reaches `backend.start()` otherwise tries to launch
+    the server and waits out its 30s readiness timeout when none comes up -- on a
+    machine with no `~/.everos`, and on CI always. One test was paying 34s of a
+    35s file.
+
+    Probing: the memory step reads `/health` after starting the server, so
+    without this the tests report whatever the developer's own install answers
+    and change behaviour with it.
+
+    Both defaults are the inert ones; tests that care install their own answer,
+    which wins because it is set later.
     """
+    import raven.plugin.memory.everos._server as srv
     from raven.plugin.memory.everos import _health
 
+    async def _no_spawn(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(srv, "ensure_everos_server", _no_spawn)
     monkeypatch.setattr(
         _health,
         "probe_capabilities",
@@ -267,7 +279,7 @@ def test_onboard_non_interactive_skips_optional_steps(
     )
     assert r.exit_code == 0, r.stdout
     assert "Keeping run location: host" in r.stdout
-    assert "Keeping native Markdown memory" in r.stdout
+    assert "Long-term memory stays off" in r.stdout
     assert "Setup complete" in r.stdout
     # Memory left unconfigured (no llm model) → backend resolves to None.
     data = json.loads(tmp_env.read_text())
@@ -1121,15 +1133,21 @@ def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.Mo
 # --------------------------------------------------------------------------- memory step
 
 
-def test_memory_disable_sets_backend_null(
+def test_memory_giving_up_sets_backend_null(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Choosing 'don't enable' sets memory.backend=null and writes no EverOS toml."""
+    """Backing out of a required role and giving up disables memory entirely.
+
+    There is no enable/decline question any more -- everos is the only backend,
+    so the step goes straight into configuring it and this is the only way out.
+    """
     import questionary
+
+    answers = iter([onboard_commands._BACK, "abort"])
 
     class _FQ:
         def ask(self):
-            return "off"
+            return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
     onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -1140,6 +1158,63 @@ def test_memory_disable_sets_backend_null(
     from raven.config.raven import load_raven_config
 
     assert load_raven_config().memory.backend is None
+
+
+def test_giving_up_says_what_is_lost(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Losing memory is the one irreversible-feeling outcome of the wizard, and
+    a user should not discover it weeks later by noticing the agent forgets
+    everything."""
+    import questionary
+
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "no memory across sessions" in out
+    assert "not remember anything" in out
+
+
+@pytest.mark.parametrize(
+    ("lang", "needles"),
+    [
+        ("en", ("no memory across sessions", "not remember anything")),
+        ("zh", ("没有任何跨会话记忆", "不记得之前做过什么")),
+    ],
+)
+def test_giving_up_says_what_is_lost_in_both_languages(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needles: tuple[str, ...],
+) -> None:
+    """`_LANG` defaults to en, so a test written only in English leaves the
+    Chinese half of every `_t` pair unguarded -- it can be watered down to a
+    dim one-liner without a single test noticing."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for needle in needles:
+        assert needle in out, f"{lang}: missing {needle!r}"
 
 
 def test_memory_enable_writes_everos_sections(
@@ -1154,12 +1229,11 @@ def test_memory_enable_writes_everos_sections(
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
 
     # _step4_memory select() calls, in order:
-    #   1. enable memory                -> "on"
-    #   2. LLM source picker            -> ("custom",)
-    #   3. embedding source picker      -> ("custom",)
-    #   4. rerank "Configure it?"       -> "skip"
-    #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    #   1. LLM source picker            -> ("custom",)
+    #   2. embedding source picker      -> ("custom",)
+    #   3. rerank "Configure it?"       -> "skip"
+    #   4. multimodal "Configure it?"   -> "skip"
+    select_answers = iter([("custom",), ("custom",), "skip", "skip"])
     # text(): LLM base_url, LLM model, embed base_url, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
     # password(): LLM api key, embed api key.
@@ -1221,7 +1295,7 @@ def test_the_memory_step_reaches_the_capability_report(
     import questionary
 
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
-    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    select_answers = iter([("custom",), ("custom",), "skip", "skip"])
     text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
     password_answers = iter(["k-llm", "k-embed"])
 
@@ -3229,3 +3303,88 @@ def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
     onboard_commands._report_everos_capabilities()
 
     assert capsys.readouterr().out.strip() == ""
+
+
+# --------------------------------------------------------------------------- memory model pre-fill
+
+
+def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
+    """A recommended model id is only a recommendation if the user's key can
+    reach it, and many keys cannot. Their main model is one they demonstrably
+    have, and the routing prefix has to come off for EverOS's bare client."""
+    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+
+    assert got == "anthropic/claude-sonnet-4-5"
+
+
+def test_no_pre_fill_when_the_picked_provider_is_not_the_main_models() -> None:
+    """No other provider carries that model id; pre-filling one it cannot serve
+    would turn Enter into a verification failure."""
+    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
+
+    assert got is None
+
+
+def test_no_pre_fill_for_roles_that_do_not_serve_a_chat_model() -> None:
+    for section in ("embedding", "rerank", "multimodal"):
+        got = onboard_commands._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+        assert got is None, section
+
+
+def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recommendation is now a capability floor shown alongside, not the
+    value the field starts on."""
+    import questionary
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self):
+            return "chosen"
+
+    def _autocomplete(_message, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "autocomplete", _autocomplete)
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
+
+    onboard_commands._everos_pick_model(
+        base_url="https://x/v1",
+        api_key="k",
+        example="gpt-4.1-mini",
+        allow_back=False,
+        preferred="anthropic/claude-sonnet-4-5",
+    )
+
+    assert captured["default"] == "anthropic/claude-sonnet-4-5"
+
+
+def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Roles with no main model to reuse keep the old behaviour."""
+    import questionary
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self):
+            return "chosen"
+
+    monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ())[1])
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
+
+    onboard_commands._everos_pick_model(
+        base_url="https://x/v1",
+        api_key="k",
+        example="gpt-4.1-mini",
+        allow_back=False,
+        preferred=None,
+    )
+
+    assert captured["default"] == "x/gpt-4.1-mini"

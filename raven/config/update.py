@@ -321,7 +321,8 @@ def set_memory_backend(
     """Patch ``memory.backend`` on the on-disk config. Returns previous value.
 
     ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
-    memory (falls back to the native Markdown store). The onboarding wizard's
+    memory entirely -- there is no second backend to fall back to, so recall and
+    storage simply stop happening. The onboarding wizard's
     memory step writes the model sections to ``~/.everos/raven/everos.toml``
     and flips this flag here.
     """
