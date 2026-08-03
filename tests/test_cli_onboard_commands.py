@@ -3093,11 +3093,6 @@ def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pyt
     picker return None on cancellation and their caller translates it; that is a
     separate chain, and claiming the whole module here would be the same
     overreach twice.
-
-    Two of the three raised and one returned None, and each of its callers
-    translated that None differently -- an exit in one branch, a menu redraw in
-    the other. The divergence also read as absent to anyone who checked the module
-    and found two prompts agreeing.
     """
     from types import SimpleNamespace
 
@@ -3126,10 +3121,11 @@ def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pyt
 def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
     """The translations the divergence made necessary are gone, not relocated.
 
-    Bound to the call sites rather than to a variable name: the first version of
-    this test grepped for one spelling and stayed green while a third caller was
-    still translating under another -- the same local-agreement mistake the change
-    itself exists to remove.
+    Scoped to the function each call sits in, and to comparisons against the name
+    that call assigned. An earlier version grepped one spelling across the file and
+    stayed green with a third caller translating under another name; scanning every
+    line for those names instead would go red on any unrelated `base_url is None`,
+    of which this module has room for plenty.
     """
     import ast
     from pathlib import Path as _Path
@@ -3137,18 +3133,31 @@ def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
     source = (_Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py").read_text()
     tree = ast.parse(source)
 
-    targets: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
-            continue
-        callee = node.value.func
-        if getattr(callee, "id", None) != "_prompt_local_api_base":
-            continue
-        targets += [t.id for t in node.targets if isinstance(t, ast.Name)]
-    assert targets, "no call site found; this test would prove nothing"
+    def _assigned_names(scope: ast.AST) -> list[str]:
+        """Names this scope binds from a call to the address prompt."""
+        out: list[str] = []
+        for node in ast.walk(scope):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                continue
+            if getattr(node.value.func, "id", None) != "_prompt_local_api_base":
+                continue
+            out += [t.id for t in node.targets if isinstance(t, ast.Name)]
+        return out
 
-    lines = source.splitlines()
-    offenders = [
-        f"line {i}: {line.strip()}" for i, line in enumerate(lines, 1) for name in targets if f"{name} is None" in line
-    ]
-    assert not offenders, "the prompt raises now; nothing downstream should test for None:\n" + "\n".join(offenders)
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    checked = 0
+    offenders: list[str] = []
+    for func in functions:
+        names = _assigned_names(func)
+        if not names:
+            continue
+        checked += 1
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Compare) or not isinstance(node.ops[0], (ast.Is, ast.Eq)):
+                continue
+            left, right = node.left, node.comparators[0]
+            if getattr(left, "id", None) in names and isinstance(right, ast.Constant) and right.value is None:
+                offenders.append(f"{func.name} line {node.lineno}: {left.id} is None")
+
+    assert checked, "no function calls the prompt; this test would prove nothing"
+    assert not offenders, "the prompt raises now; its callers must not test for None:\n" + "\n".join(offenders)
