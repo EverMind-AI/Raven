@@ -163,12 +163,18 @@ class TestStartWarnsWhenRecallCannotWork:
             lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
         )
 
-    async def test_a_broken_required_role_is_said_out_loud(
+    @staticmethod
+    def _configured(monkeypatch: pytest.MonkeyPatch, *sections: str) -> None:
+        from raven.config import update_everos
+
+        monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
+
+    async def test_a_role_configured_but_unbuilt_is_said_out_loud(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
     ) -> None:
-        """recall would otherwise return empty for every turn, and the log it
-        writes to is file-only at runtime -- the user just sees an agent that
-        does not remember anything."""
+        """Recall silently drops to lexical matching, and the log saying so is
+        file-only at runtime -- the user just sees an agent that gets vaguer."""
+        self._configured(_no_capability_probe, "llm", "embedding")
         self._capabilities(_no_capability_probe, llm=True, embed=False)
         b = EverosBackend(_ctx(tmp_path))
 
@@ -178,14 +184,29 @@ class TestStartWarnsWhenRecallCannotWork:
         # Collapsed: rich wraps at the terminal width, so a raw substring match
         # would depend on how wide the machine running the tests happens to be.
         err = " ".join(capsys.readouterr().err.split())
-        assert "recall will return nothing" in err
+        assert "falls back to keyword matching" in err
         assert "cascade backfill" in err
+
+    async def test_a_role_the_user_never_configured_is_not_a_warning(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Skipping embedding is a choice the user already made; repeating it at
+        every start would be noise, not information."""
+        self._configured(_no_capability_probe)  # nothing configured
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
 
     async def test_writes_are_not_disabled_by_the_warning(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
     ) -> None:
         """Dropping to a no-op would discard memory the user gets back by fixing
         the provider and running a backfill."""
+        self._configured(_no_capability_probe, "llm", "embedding")
         self._capabilities(_no_capability_probe, llm=True, embed=False)
         b = EverosBackend(_ctx(tmp_path))
 

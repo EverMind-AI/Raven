@@ -237,18 +237,40 @@ def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memor
     assert "running" in r.stdout
 
 
-def test_a_role_the_server_could_not_build_is_a_failure(healthy_config: Path, no_memory_server) -> None:
-    """everos 1.2.1 boots without embedding and degrades to keyword-only search,
-    so "configured" no longer implies "working"; recall silently returns nothing,
-    which is a fault rather than a warning."""
+def test_an_unbuilt_optional_role_is_reported_without_failing(healthy_config: Path, no_memory_server) -> None:
+    """Without embedding the adapter searches lexically instead of semantically:
+    weaker memory, not broken memory. Worth saying, not worth an exit code."""
     _configured(no_memory_server, "llm", "embedding")
     _capabilities(no_memory_server, llm=True, embed=False)
 
     r = runner.invoke(app, ["doctor"])
 
-    assert r.exit_code == 2, r.stdout
+    assert r.exit_code == 0, r.stdout
     assert "could not build it" in r.stdout
-    assert "return nothing" in r.stdout
+    assert "runs degraded" in r.stdout
+
+
+def test_an_unbuilt_required_role_is_a_failure(healthy_config: Path, no_memory_server) -> None:
+    """Nothing works without the llm, so this one does set the exit code."""
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=False, embed=True)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 2, r.stdout
+    assert "cannot work" in r.stdout
+
+
+def test_an_unconfigured_optional_role_names_what_it_costs(healthy_config: Path, no_memory_server) -> None:
+    """A user deciding whether to configure embedding needs to know it buys
+    semantic recall specifically, not a vague "better memory"."""
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True, embed=True)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "matches keywords, not meaning" in r.stdout
 
 
 def test_a_missing_optional_role_is_not_a_failure(healthy_config: Path, no_memory_server) -> None:

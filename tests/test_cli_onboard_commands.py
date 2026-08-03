@@ -1230,10 +1230,12 @@ def test_memory_enable_writes_everos_sections(
 
     # _step4_memory select() calls, in order:
     #   1. LLM source picker            -> ("custom",)
-    #   2. embedding source picker      -> ("custom",)
-    #   3. rerank "Configure it?"       -> "skip"
-    #   4. multimodal "Configure it?"   -> "skip"
-    select_answers = iter([("custom",), ("custom",), "skip", "skip"])
+    #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
+    #                                               rather than breaks memory)
+    #   3. embedding source picker      -> ("custom",)
+    #   4. rerank "Configure it?"       -> "skip"
+    #   5. multimodal "Configure it?"   -> "skip"
+    select_answers = iter([("custom",), "redo", ("custom",), "skip", "skip"])
     # text(): LLM base_url, LLM model, embed base_url, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
     # password(): LLM api key, embed api key.
@@ -1295,7 +1297,7 @@ def test_the_memory_step_reaches_the_capability_report(
     import questionary
 
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
-    select_answers = iter([("custom",), ("custom",), "skip", "skip"])
+    select_answers = iter([("custom",), "redo", ("custom",), "skip", "skip"])
     text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
     password_answers = iter(["k-llm", "k-embed"])
 
@@ -3290,7 +3292,7 @@ def test_the_wizard_flags_a_role_everos_could_not_build(
 
     out = capsys.readouterr().out
     assert "embedding is configured but EverOS could not build it" in out
-    assert "recall will return nothing" in out
+    assert "runs degraded" in out
 
 
 def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
@@ -3388,3 +3390,69 @@ def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypat
     )
 
     assert captured["default"] == "x/gpt-4.1-mini"
+
+
+# --------------------------------------------------------------------------- capability tiers
+
+
+@pytest.mark.parametrize(
+    ("lang", "needles"),
+    [
+        ("en", ("memory LLM only", "recall matches keywords", "+ memory embedding", "+ memory rerank")),
+        ("zh", ("仅记忆 LLM", "召回按关键词匹配", "+ 记忆 embedding", "+ 记忆 rerank")),
+    ],
+)
+def test_the_memory_step_states_the_capability_tiers(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needles: tuple[str, ...],
+) -> None:
+    """embedding and rerank are both skippable, so what each one buys has to be
+    on screen before the user decides. Without this the step reads as three
+    prompts of equal weight."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for needle in needles:
+        assert needle in out, f"{lang}: missing {needle!r}"
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
+    """Skipping rerank costs ordering; skipping embedding costs semantic recall
+    altogether. The second cannot read like the first."""
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+
+    note = onboard_commands._t(*onboard_commands._EVEROS_ROLES["embedding"]["skip_note"])
+
+    assert "yellow" in note, "a degradation this large must not be dim"
+    assert "cascade backfill" in note
+    if lang == "zh":
+        assert "关键词匹配" in note
+    else:
+        assert "keywords, not meaning" in note
+
+
+def test_every_optional_role_carries_its_own_skip_note() -> None:
+    """The renderer prints these verbatim now, so a note without its own markup
+    would come out unstyled."""
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        if not role.get("optional"):
+            continue
+        note = role.get("skip_note")
+        assert note, f"{name} is optional but says nothing when skipped"
+        for text in note:
+            assert text.startswith("  ["), f"{name}: skip_note must carry its own style and indent: {text!r}"

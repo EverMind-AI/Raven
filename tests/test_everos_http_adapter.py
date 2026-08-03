@@ -45,6 +45,7 @@ class _MockEverOS:
         # tests set it directly; None drops `capabilities` entirely, which is
         # what a pre-1.2.1 server returns.
         self.rerank_available: bool | None = True
+        self.embed_available: bool = True
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -57,7 +58,11 @@ class _MockEverOS:
         if path == "/health":
             payload: dict = {"status": "ok"}
             if self.rerank_available is not None:
-                payload["capabilities"] = {"llm": True, "embed": True, "rerank": self.rerank_available}
+                payload["capabilities"] = {
+                    "llm": True,
+                    "embed": self.embed_available,
+                    "rerank": self.rerank_available,
+                }
             return httpx.Response(status, json=payload)
         if path.endswith("/memory/flush"):
             return httpx.Response(
@@ -142,7 +147,7 @@ class TestHttpAdapterSearch:
             query="coffee",
             top_k=5,
         )
-        assert len(mock.requests) == 1
+        assert [r.url.path for r in mock.requests] == ["/health", "/api/v2/memory/search"]
         req = _first(mock, "/memory/search")
         assert req.method == "POST"
         assert str(req.url) == "http://mem.test/api/v2/memory/search"
@@ -247,13 +252,38 @@ class TestHttpAdapterSearch:
 
         assert [r.url.path for r in mock.requests].count("/health") == 1
 
-    async def test_user_track_does_not_probe_at_all(self, mock, http_client) -> None:
-        """Only the agent track fuses through the cross-encoder."""
+    async def test_the_user_track_drops_to_keyword_search_without_embedding(self, mock, http_client) -> None:
+        """The embedding degradation is not agent-specific: HYBRID is refused for
+        either owner, so both tracks have to ask for KEYWORD."""
+        mock.embed_available = False
         adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
 
         await adapter.search(user_id="alice", agent_id=None, query="coffee", top_k=5)
 
-        assert "/health" not in [r.url.path for r in mock.requests]
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert body["method"] == "keyword"
+        assert "enable_llm_rerank" not in body
+
+    async def test_keyword_search_does_not_also_ask_for_the_llm_lane(self, mock, http_client) -> None:
+        """KEYWORD's agent path never reaches the cross-encoder, so paying for
+        an LLM rerank on top of it would buy nothing."""
+        mock.embed_available = False
+        mock.rerank_available = False
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        await adapter.search(user_id=None, agent_id="agent:default", query="coffee", top_k=5)
+
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert body["method"] == "keyword"
+        assert "enable_llm_rerank" not in body
+
+    async def test_a_healthy_server_gets_the_default_method(self, mock, http_client) -> None:
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        await adapter.search(user_id="alice", agent_id=None, query="coffee", top_k=5)
+
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert "method" not in body
 
     async def test_returns_jsonified_data(self, mock, http_client) -> None:
         mock.search_response = {

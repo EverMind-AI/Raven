@@ -2680,12 +2680,16 @@ def _everos_role_configured(section: str) -> bool:
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires both required roles (llm and embedding) configured.
+    "Usable" means the llm role is configured -- that is the whole requirement.
+    embedding is advised but optional: without it the adapter searches lexically
+    instead of semantically, which is weaker memory rather than none, and gating
+    on it here would tell a user who skipped it that memory is off (and skip the
+    import step along with it).
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    return _everos_role_configured("llm") and _everos_role_configured("embedding")
+    return _everos_role_configured("llm")
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -3186,7 +3190,11 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
     "embedding": {
         "label": ("Memory embedding", "记忆 embedding"),
         "example": "Qwen/Qwen3-Embedding-4B",
-        "optional": False,
+        # Optional in the sense that memory still functions without it: the
+        # adapter drops to KEYWORD search, which needs no vectors. Strongly
+        # advised all the same -- lexical recall misses a memory the moment the
+        # user phrases the question differently.
+        "optional": True,
         "verify": True,
         "purpose": (
             "turns text into vectors so memories are stored and retrieved by meaning, not just keywords",
@@ -3197,6 +3205,14 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "推荐 [bold]Qwen/Qwen3-Embedding-4B[/bold]，需 [bold yellow]1024 维[/bold yellow]且支持中英文的模型",
         ),
         "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
+        "skip_note": (
+            "  [yellow]! Skipped: recall will match keywords, not meaning.[/yellow]\n"
+            "  [dim]Phrase a question differently and it may miss a memory you have.\n"
+            "  Configure it later, then run `everos cascade backfill`.[/dim]",
+            "  [yellow]⚠ 已跳过：召回将按关键词匹配，而非按语义。[/yellow]\n"
+            "  [dim]换一种说法提问，就可能找不到已有的记忆。\n"
+            "  日后配好后运行 everos cascade backfill 可为已存记忆补上向量。[/dim]",
+        ),
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
@@ -3214,8 +3230,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
-            "Skipped reranking; memory retrieval still works.",
-            "已跳过 rerank,记忆检索仍可用。",
+            "  [dim]Skipped reranking; memory retrieval still works.[/dim]",
+            "  [dim]已跳过 rerank，记忆检索仍可用。[/dim]",
         ),
     },
     "multimodal": {
@@ -3234,8 +3250,9 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "推荐 [bold]google/gemini-3-flash-preview[/bold]",
         ),
         "skip_note": (
-            "Skipped; everything else is unaffected — configure it later if you come to need multimodal memory.",
-            "已跳过;其余功能不受影响,日后确有把多模态内容纳入记忆的需求时再配即可。",
+            "  [dim]Skipped; everything else is unaffected -- configure it later if you come to need\n"
+            "  multimodal memory.[/dim]",
+            "  [dim]已跳过；其余功能不受影响，日后确有把多模态内容纳入记忆的需求时再配即可。[/dim]",
         ),
     },
 }
@@ -3747,8 +3764,13 @@ def _config_everos_role(
             if action is None:
                 raise typer.Exit(1)
             if action == "skip":
-                note_en, note_zh = role.get("skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。"))
-                console.print(_t(f"  [dim]{note_en}[/dim]", f"  [dim]{note_zh}[/dim]"))
+                # Printed verbatim rather than wrapped in [dim]: skipping rerank
+                # costs ordering, skipping embedding costs semantic recall
+                # entirely, and one of those deserves to be seen.
+                note_en, note_zh = role.get(
+                    "skip_note", (f"  [dim]Skipped {label_en}.[/dim]", f"  [dim]已跳过 {label_zh}。[/dim]")
+                )
+                console.print(_t(note_en, note_zh), highlight=False)
                 return
         # A required role with nothing configured falls straight into the picker.
 
@@ -3941,10 +3963,15 @@ def _step4_memory(
         # left-flush sentence under an indented block.
         console.print(
             _t(
-                "  [dim]Raven's long-term memory comes from EverOS: conversations are distilled\n"
-                "  into episodes, facts and skills it can recall later.[/dim]",
-                "  [dim]Raven 拥有 EverOS 提供的强大长期记忆能力：\n"
-                "  对话会被提炼为情景、事实与技能，供以后召回。[/dim]",
+                "  [dim]Raven's long-term memory comes from EverOS. What it can do grows with\n"
+                "  what you configure:[/dim]\n"
+                "  [dim]    memory LLM only    conversations become memories; recall matches keywords[/dim]\n"
+                "  [dim]  + memory embedding   recall matches meaning, not wording (strongly advised)[/dim]\n"
+                "  [dim]  + memory rerank      recall ordering gets sharper[/dim]",
+                "  [dim]Raven 拥有 EverOS 提供的强大长期记忆能力，能力随配置递进：[/dim]\n"
+                "  [dim]    仅记忆 LLM       对话会被提炼成记忆存下来，召回按关键词匹配[/dim]\n"
+                "  [dim]  + 记忆 embedding   召回按语义匹配，换个问法也能找到（强烈建议配）[/dim]\n"
+                "  [dim]  + 记忆 rerank      召回结果排序更准[/dim]",
             ),
             highlight=False,
         )
@@ -4065,18 +4092,18 @@ def _report_everos_capabilities() -> None:
     Silent on a server too old to report capabilities -- reading that silence as
     "unavailable" would condemn a working install.
     """
-    from raven.plugin.memory.everos._health import REQUIRED_SECTIONS, probe_capabilities
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS, probe_capabilities
 
     report = probe_capabilities()
     if not report.reports_capabilities:
         return
-    configured = [s for s in REQUIRED_SECTIONS if _everos_role_configured(s)]
+    configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if _everos_role_configured(s)]
     broken = [s for s in configured if report.available(s) is False]
     if not broken:
         names = " and ".join(configured)
         console.print(
             _t(
-                f"  [green]✓ {names} are available.[/green]",
+                f"  [green]✓ {names} {'is' if len(configured) == 1 else 'are'} available.[/green]",
                 f"  [green]✓ {names} 均可用。[/green]",
             )
         )
@@ -4085,10 +4112,10 @@ def _report_everos_capabilities() -> None:
     console.print(
         _t(
             f"  [yellow]⚠ {names} is configured but EverOS could not build it.[/yellow]\n"
-            "  [dim]Memory recall will return nothing until this is fixed.[/dim]\n"
+            "  [dim]Memory runs degraded until this is fixed.[/dim]\n"
             f"  [dim]Check: {_everos_server_log_hint()}[/dim]",
             f"  [yellow]⚠ {names} 已配置，但 EverOS 未能构建成功。[/yellow]\n"
-            "  [dim]在此修复前，记忆召回将始终返回空。[/dim]\n"
+            "  [dim]在此修复前，记忆能力将处于降级状态。[/dim]\n"
             f"  [dim]请查看：{_everos_server_log_hint()}[/dim]",
         )
     )

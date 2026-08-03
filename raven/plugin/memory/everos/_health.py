@@ -30,10 +30,14 @@ _SECTION_TO_CAPABILITY = {
     "multimodal": "multimodal_llm",
 }
 
-# Recall goes through HYBRID, which the server refuses outright without an
-# embedding provider (`search/manager.py`: needs_embedding). The other roles
-# degrade instead of failing.
-REQUIRED_SECTIONS = ("llm", "embedding")
+# Nothing works without the llm: extraction needs it, and everos 1.2.1 will not
+# even boot without `[llm]` configured.
+REQUIRED_SECTIONS = ("llm",)
+
+# Configured but unbuilt, these cost recall quality rather than recall itself --
+# the adapter drops to KEYWORD search without embedding, and to the LLM rerank
+# lane without rerank. Reported, never treated as a fault.
+DEGRADING_SECTIONS = ("embedding", "rerank")
 
 
 @dataclass(frozen=True)

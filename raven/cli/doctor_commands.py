@@ -73,11 +73,24 @@ class MemoryInfo:
     capabilities: dict[str, bool] = field(default_factory=dict)
 
     @property
-    def broken(self) -> list[str]:
+    def unbuilt(self) -> list[str]:
         """Roles the user configured that the server could not build."""
         from raven.plugin.memory.everos._health import capability_available
 
         return [s for s in self.configured if capability_available(self.capabilities, s) is False]
+
+    @property
+    def broken(self) -> list[str]:
+        """Unbuilt roles that memory cannot work without at all.
+
+        Separate from :attr:`unbuilt` because the others cost quality, not
+        function: without embedding the adapter searches lexically instead of
+        semantically, and that is a worse memory rather than no memory. Only this
+        list decides the exit code.
+        """
+        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS
+
+        return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
 
 
 @dataclass
@@ -185,9 +198,9 @@ def _probe_memory(backend: Optional[str]) -> MemoryInfo:
     if backend != "everos":
         return info
     from raven.config.update_everos import everos_role_configured
-    from raven.plugin.memory.everos._health import REQUIRED_SECTIONS, probe_capabilities
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS, probe_capabilities
 
-    info.configured = [s for s in REQUIRED_SECTIONS if everos_role_configured(s)]
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
     report = probe_capabilities()
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
@@ -225,23 +238,45 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         if memory.configured:
             console.print(f"  Configured: {', '.join(memory.configured)}")
         return
-    for section in memory.configured:
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+
+    for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
+        label = f"  {section + ':':<12}"
+        if section not in memory.configured:
+            console.print(f"{label}[dim]not configured{_degradation_note(section)}[/dim]")
+            continue
         state = capability_available(memory.capabilities, section)
         if state is True:
-            console.print(f"  {section + ':':<12}[green]✓[/green]")
+            console.print(f"{label}[green]✓[/green]")
         elif state is False:
-            console.print(f"  {section + ':':<12}[red]✗ configured, but the server could not build it[/red]")
+            console.print(f"{label}[red]✗ configured, but the server could not build it[/red]")
         else:
-            console.print(f"  {section + ':':<12}[dim]not reported[/dim]")
-    if memory.capabilities.get("rerank") is False:
-        console.print("  [dim]rerank:     not configured (optional; recall falls back to the LLM lane)[/dim]")
-    if memory.broken:
+            console.print(f"{label}[dim]not reported[/dim]")
+    if memory.unbuilt:
         console.print()
-        console.print(
-            f"  [yellow]⚠ Memory recall needs {' and '.join(memory.broken)} "
-            "and will return nothing until this is fixed.[/yellow]"
-        )
+        if memory.broken:
+            console.print(
+                f"  [yellow]⚠ Memory needs {' and '.join(memory.broken)} and cannot work until this is fixed.[/yellow]"
+            )
+        else:
+            console.print(
+                f"  [yellow]⚠ {' and '.join(memory.unbuilt)} is configured but unavailable, so recall "
+                "runs degraded.[/yellow]"
+            )
         console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
+
+
+def _degradation_note(section: str) -> str:
+    """What is lost by leaving an optional role unconfigured.
+
+    Stated per role rather than as one blanket "optional": the two degrade
+    differently, and a user deciding whether to configure embedding needs to know
+    it costs semantic recall specifically.
+    """
+    return {
+        "embedding": "  (recall matches keywords, not meaning)",
+        "rerank": "  (agent-track recall uses the LLM lane instead of a cross-encoder)",
+    }.get(section, "")
 
 
 def _server_log_hint() -> str:

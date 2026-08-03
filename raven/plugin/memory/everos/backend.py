@@ -159,7 +159,7 @@ class _HttpEverosAdapter:
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
         )
-        self._needs_llm_rerank: bool | None = None
+        self._caps: dict[str, bool] | None = None
 
     async def aclose(self) -> None:
         """Close the underlying client if we own it. Idempotent."""
@@ -171,39 +171,57 @@ class _HttpEverosAdapter:
             return {"Authorization": f"Bearer {self._api_key}"}
         return {}
 
-    async def _agent_track_needs_llm_rerank(self) -> bool:
-        """Whether agent-track search has to fall back to the LLM rerank lane.
+    async def _capabilities(self) -> dict[str, bool]:
+        """What the server built, from ``/health``, cached for this adapter.
 
-        Agent-track HYBRID fuses ``agent_case`` / ``agent_skill`` through a
-        rerank cross-encoder. With no rerank provider the server refuses the
-        request outright -- 422 since everos 1.2.1, an opaque 500 before -- and
-        ``recall`` swallows that into an empty result, so the whole agent track
-        goes silently dead. ``enable_llm_rerank`` is the documented fallback,
-        but it spends one LLM call per recall, so it is only worth taking when
-        the cross-encoder is genuinely absent.
+        everos reports ``capabilities`` as of 1.2.1. An empty mapping means the
+        question could not be answered -- the server is unreachable, or predates
+        the field -- and every caller must then leave the request alone: a
+        ``SearchRequest`` forbids extra keys, so guessing turns a working request
+        into a validation error.
 
-        Answered from ``/health``, which reports ``capabilities`` as of everos
-        1.2.1. A server that does not report them is left alone: it predates
-        the field, and its ``SearchRequest`` forbids extra keys, so guessing
-        would turn a working request into a validation error. Cached for the
-        adapter's lifetime -- everos documents a tier change as requiring a
-        server restart, and the adapter does not outlive one.
+        Cached because everos documents a tier change as requiring a server
+        restart, and the adapter does not outlive one.
         """
-        if self._needs_llm_rerank is None:
-            self._needs_llm_rerank = await self._probe_rerank_missing()
-        return self._needs_llm_rerank
+        if self._caps is None:
+            self._caps = await self._probe_capabilities()
+        return self._caps
 
-    async def _probe_rerank_missing(self) -> bool:
+    async def _probe_capabilities(self) -> dict[str, bool]:
         try:
             r = await self._client.get(f"{self._base_url}/health", timeout=_HEALTH_TIMEOUT_S)
             r.raise_for_status()
             capabilities = (r.json() or {}).get("capabilities")
         except Exception as exc:
-            logger.warning("everos health probe failed (%s); leaving agent-track rerank untouched", exc)
-            return False
+            logger.warning("everos health probe failed (%s); leaving search parameters untouched", exc)
+            return {}
         if not isinstance(capabilities, dict):
-            return False
-        return capabilities.get("rerank") is False
+            return {}
+        return {k: v for k, v in capabilities.items() if isinstance(v, bool)}
+
+    async def _search_tuning(self, *, agent_id: str | None) -> dict[str, Any]:
+        """Search parameters this server's capabilities call for.
+
+        Two degradations, and the first rules out the second:
+
+        - **No embedding.** The default HYBRID is refused outright (everos
+          ``needs_embedding`` covers vector, hybrid and agentic), so recall would
+          return nothing at all. KEYWORD needs neither embedding nor rerank and
+          still searches the same rows, just lexically -- worse recall, but
+          recall. This is what makes the embedding role genuinely optional.
+        - **No rerank, agent track, HYBRID.** Agent-track HYBRID fuses
+          ``agent_case`` / ``agent_skill`` through a cross-encoder; without one
+          the server refuses the request. ``enable_llm_rerank`` is the documented
+          fallback, and it costs one LLM call per recall, so it is only taken
+          when the cross-encoder is genuinely absent. Moot under KEYWORD, whose
+          agent path does not go through rerank at all.
+        """
+        caps = await self._capabilities()
+        if caps.get("embed") is False:
+            return {"method": "keyword"}
+        if agent_id is not None and caps.get("rerank") is False:
+            return {"enable_llm_rerank": True}
+        return {}
 
     async def search(
         self,
@@ -226,8 +244,7 @@ class _HttpEverosAdapter:
             body["include_profile"] = True
         if agent_id is not None:
             body["agent_id"] = agent_id
-            if await self._agent_track_needs_llm_rerank():
-                body["enable_llm_rerank"] = True
+        body.update(await self._search_tuning(agent_id=agent_id))
         url = f"{self._base_url}/api/v2/memory/search"
         r = await self._client.post(url, json=body, headers=self._headers())
         r.raise_for_status()
@@ -391,36 +408,35 @@ class EverosBackend:
 
     @staticmethod
     def _warn_if_recall_cannot_work(base_url: str) -> None:
-        """Say out loud when the server is up but recall cannot work.
+        """Say out loud when the server is up but recall is not what it should be.
 
-        A running server no longer implies a working one: everos 1.2.1 boots with
-        ``[llm]`` alone, so an embedding provider it failed to build leaves every
-        HYBRID recall refused. ``recall`` turns that into an empty list and the
-        log it writes to is file-only at runtime, which makes the failure look
-        like an agent that simply does not remember things -- the hardest kind of
-        fault to attribute. ``raven doctor`` can find it, but only if the user
-        thinks to ask; this is on the path every session already takes.
+        A running server no longer implies a fully working one: everos 1.2.1 boots
+        with ``[llm]`` alone. What is left is real but weaker, and the log saying
+        so is file-only at runtime, so the difference looks like an agent that is
+        merely vague rather than one running on a lesser search -- the hardest
+        kind of fault to attribute. ``raven doctor`` can find it, but only if the
+        user thinks to ask; this is on the path every session already takes.
 
-        Deliberately *not* degrading to ``_NoOpAdapter`` the way the Windows
-        branch above does: writes still land, and once the provider is fixed
-        ``everos cascade backfill`` gives those rows their vectors. Dropping to a
-        no-op would discard memory the user could otherwise get back.
+        Only what was configured and could not be built is worth saying: a role
+        the user never configured is a choice they already know about, and
+        repeating it every start would be noise.
         """
-        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS, probe_capabilities
+        from raven.plugin.memory.everos._health import probe_capabilities
 
         report = probe_capabilities(base_url)
-        broken = [s for s in REQUIRED_SECTIONS if report.available(s) is False]
-        if not broken:
+        from raven.config.update_everos import everos_role_configured
+
+        if not (everos_role_configured("embedding") and report.available("embedding") is False):
             return
         from rich.console import Console
 
         from raven.plugin.memory.everos._server import server_log_path
 
-        names = " and ".join(broken)
         Console(stderr=True).print(
-            f"[yellow]EverOS is running but {names} is unavailable: memory recall will return nothing.[/yellow]\n"
-            f"[dim]New memories are still stored. Check {server_log_path()}, "
-            "fix the provider, then run `everos cascade backfill`.[/dim]"
+            "[yellow]EverOS is running but embedding is unavailable: recall falls back to "
+            "keyword matching.[/yellow]\n"
+            f"[dim]Memories are still stored. Check {server_log_path()}, fix the provider, "
+            "then run `everos cascade backfill` to give existing rows their vectors.[/dim]"
         )
 
     async def stop(self) -> None:
