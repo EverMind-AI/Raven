@@ -4416,7 +4416,7 @@ def _step5_import_body(
                     _tier_choice_label(
                         full_label,
                         label_width,
-                        _t(f"all of the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
+                        _t(f"the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
                         _t("hours, high LLM cost", "数小时，LLM 开销大"),
                     ),
                     value=Tier.FULL,

@@ -332,6 +332,42 @@ class TestRun:
         assert any("2 skills" in c["name"] for c in tier_choices)
         assert "2 skills" in result.output
 
+    def test_menu_rows_fit_eighty_columns(self, tmp_path: Path) -> None:
+        """A row past 80 columns wraps mid-phrase, which costs far more
+        legibility than wide padding buys. Four-digit counts are the widest
+        case worth planning for, and every count of that many digits is the
+        same width.
+        """
+        state = ImportState(path=tmp_path / "state.json")
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+        results = [
+            _scan_result("h-md", platform=Platform.HERMES, kind=SourceKind.MEMORY_FILE),
+            *[_scan_result(f"h{i}", platform=Platform.HERMES) for i in range(1000)],
+            _scan_result("c-md", platform=Platform.CLAUDE_CODE, kind=SourceKind.MEMORY_FILE),
+            *[_scan_result(f"c{i}", platform=Platform.CLAUDE_CODE) for i in range(1000)],
+        ]
+        skills = [
+            DiscoveredSkill(
+                name=f"s{i}", path=Path(f"/fake/s{i}"), origin=SkillOrigin.LOCAL_UNKNOWN, registry_name=f"s{i}"
+            )
+            for i in range(1000)
+        ]
+        fake = _RecordingQuestionary(iter([Platform.HERMES, Tier.MEMORY_FILES]))
+
+        with (
+            self._patched_run(state, summary, results, fake),
+            patch(
+                "raven.importer.skills.hermes.HermesSkillSource.discover",
+                new=AsyncMock(return_value=skills),
+            ),
+        ):
+            result = runner.invoke(import_app, ["run", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        # Two columns for the pointer and the space questionary puts before it.
+        widest = max(len(c["name"]) + 2 for _m, choices, _k in fake.calls for c in choices)
+        assert widest <= 80, widest
+
     @staticmethod
     def _patched_run(
         state: ImportState,

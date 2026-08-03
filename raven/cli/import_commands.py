@@ -722,7 +722,7 @@ async def _pick_tier(results: list[ScanResult], skill_count: int) -> Tier | None
         )
     choices.append(
         {
-            "name": f"{full_label:<{width}} · all of the above + {conv_count} conversations · hours, high LLM cost",
+            "name": f"{full_label:<{width}} · the above + {conv_count} conversations · hours, high LLM cost",
             "value": Tier.FULL,
         },
     )
