@@ -2988,9 +2988,7 @@ def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
     assert result is not None, "a retyped address must not read as 'switch provider'"
     assert attempts[-1] == "http://gpu-box:11434", "the retyped address was not re-verified"
 
-    # Ctrl+C at that prompt quits, the one contract every prompt in the module
-    # holds. It used to return None here and the caller translated it, which is
-    # how two call sites came to hold two different meanings for the same value.
+    # Ctrl+C at that prompt quits, like the other credential prompts.
     def _cancelled(*a: Any, **kw: Any) -> Any:
         raise typer.Exit(1)
 
