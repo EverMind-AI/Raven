@@ -41,6 +41,7 @@ from raven.cli._helpers import (
     print_probe_troubleshooting,
     send_probe,
 )
+from raven.cli._theme import POINTER, QMARK
 
 
 class _ThemedConsole(Console):
@@ -76,14 +77,13 @@ _BACK = object()
 # rather than configure it; ``_step4_memory`` then falls back to Markdown memory.
 _ABORT_EVEROS = object()
 
-# Unified prompt chrome (display-only): no leading question glyph (drops
-# questionary's default "?"). A single-space qmark is rendered as one blank,
-# which — with questionary's own leading space — puts every prompt line on the
-# same 2-space column as our printed help/status lines, so the left edge stays
-# flush instead of jittering between 1- and 2-space indents. Pointer is a
-# calmer "❯" than questionary's default "»".
-_QMARK = " "
-_POINTER = "❯"
+# Unified prompt chrome (display-only), shared with every other command's
+# prompts: a single-space qmark renders as one blank, which -- with
+# questionary's own leading space -- puts every prompt line on the same 2-space
+# column as our printed help/status lines, so the left edge stays flush instead
+# of jittering between 1- and 2-space indents.
+_QMARK = QMARK
+_POINTER = POINTER
 
 # UI language, chosen on the wizard's first screen. ``_t`` returns the English
 # or Chinese variant so every later prompt / message stays bilingual.
@@ -3681,9 +3681,11 @@ def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
 
     Names are padded to a common width so the separators line up; questionary
     renders a plain string, so the padding has to be applied here rather than
-    left to a table.
+    left to a table. Separators are kept to a single space either side and the
+    cost wording terse: a row that passes 80 columns wraps mid-phrase, which
+    costs far more legibility than the padding buys.
     """
-    return f"{name}{' ' * (width - _cell_len(name))}  ·  {contents}  · {cost}"
+    return f"{name}{' ' * (width - _cell_len(name))} · {contents} · {cost}"
 
 
 def _importable_skill_count(platform: str) -> int:
@@ -3794,12 +3796,14 @@ def _step5_import_body(
     from raven.cli._styles import RAVEN_STYLE
     from raven.cli.import_commands import (
         PLATFORM_DISPLAY_NAMES,
+        ImportRunResult,
         _build_and_run,
         _default_state,
+        _make_phase_reporter,
         _print_summary,
         _report_scan_error,
     )
-    from raven.importer.orchestrator import ImportSummary, ProgressEvent
+    from raven.importer.orchestrator import ProgressEvent
     from raven.importer.scanners import build_scanners, scan_all
     from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
@@ -3965,7 +3969,7 @@ def _step5_import_body(
                         full_label,
                         label_width,
                         _t(f"all of the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
-                        _t("may take hours, higher LLM cost", "可能数小时，LLM 开销大"),
+                        _t("hours, high LLM cost", "数小时，LLM 开销大"),
                     ),
                     value=Tier.FULL,
                 )
@@ -4108,7 +4112,7 @@ def _step5_import_body(
     # Foreground execution (async, with Rich progress)
     from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-    async def _do_import() -> ImportSummary:
+    async def _do_import() -> ImportRunResult:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -4128,11 +4132,14 @@ def _step5_import_body(
                     description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
                 )
 
-            return await _build_and_run(items, state, on_progress=on_progress)
+            return await _build_and_run(
+                items,
+                state,
+                on_progress=on_progress,
+                on_phase=_make_phase_reporter(progress),
+            )
 
-    summary = asyncio.run(_do_import())
-
-    _print_summary(summary, log_path=log_path)
+    _print_summary(asyncio.run(_do_import()), log_path=log_path)
     return None
 
 

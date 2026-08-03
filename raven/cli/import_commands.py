@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -16,6 +17,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TaskProgre
 from rich.table import Table
 
 from raven.cli._plugin_stack import build_plugin_registry, maybe_build_memory_backend
+from raven.cli._theme import POINTER, QMARK
 from raven.config.loader import load_config
 from raven.config.schema import Config
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
@@ -26,6 +28,7 @@ from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
 if TYPE_CHECKING:
+    from raven.importer.hermes_user_md import ImportedSections
     from raven.providers.base import LLMProvider
 
 console = Console()
@@ -72,6 +75,27 @@ def _platform_option(value: Optional[str]) -> Platform | None:
         raise typer.BadParameter(f"Unknown platform {value!r}. Available: {', '.join(p.value for p in Platform)}")
 
 
+@dataclass(frozen=True)
+class ImportRunResult:
+    """Everything one run produced, for the caller to render once the progress
+    display has closed.
+
+    The native-profile mirror and the skill install each report an outcome the
+    user needs, but printing them from here writes to this module's ``console``
+    while the onboard path's live progress display belongs to a *different*
+    ``Console`` object. Rich's Live can only hold back writes on its own
+    console, so those lines landed mid-bar and left the bar duplicated. Handing
+    them back as data lets each caller print them on the console it owns, after
+    the bar is gone.
+    """
+
+    summary: ImportSummary
+    profile: "ImportedSections | None" = None
+    profile_error: str = ""
+    skills: SkillImportSummary | None = None
+    skill_error: str = ""
+
+
 async def _build_and_run(
     items: list[tuple[Scanner, ScanResult]],
     state: ImportState,
@@ -79,7 +103,7 @@ async def _build_and_run(
     on_progress: Callable[[ProgressEvent], None] | None = None,
     on_phase: Callable[[str, int, int], None] | None = None,
     cancel_path: Path | None = None,
-) -> ImportSummary:
+) -> ImportRunResult:
     from raven.config.raven import load_raven_config
 
     config = load_config()
@@ -102,26 +126,30 @@ async def _build_and_run(
         raise typer.Exit(1)
     try:
         summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
-        # The native mirror is additive and runs after the EverOS pass, so any
-        # failure in it must be surfaced without reversing an import that has
-        # already succeeded. loguru is redirected to a file during `run`, so the
-        # console line is what the user actually sees.
+        # Both phases below are additive and run after the EverOS pass, so a
+        # failure in either is reported without reversing an import that has
+        # already succeeded.
+        profile: "ImportedSections | None" = None
+        profile_error = ""
         try:
-            await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
+            profile = await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
         except Exception as exc:
             logger.warning("hermes user.md mirror failed: {}", exc)
-            console.print(
-                f"[yellow]Imported to EverOS, but mirroring USER.md into the native profile failed: {exc}[/yellow]"
-            )
+            profile_error = str(exc)
+        skills: SkillImportSummary | None = None
+        skill_error = ""
         try:
-            skill_summary = await _install_hermes_skills(items, workspace, state)
+            skills = await _install_hermes_skills(items, workspace, state)
         except Exception as exc:
             logger.warning("hermes skill import failed: {}", exc)
-            console.print(f"[yellow]Imported to EverOS, but installing Hermes skills failed: {exc}[/yellow]")
-            skill_summary = None
-        if skill_summary is not None:
-            console.print(_format_skill_summary(skill_summary))
-        return summary
+            skill_error = str(exc)
+        return ImportRunResult(
+            summary=summary,
+            profile=profile,
+            profile_error=profile_error,
+            skills=skills,
+            skill_error=skill_error,
+        )
     finally:
         await backend.stop()
 
@@ -139,24 +167,6 @@ def _report_scan_error(platform: Platform, error: BaseException) -> None:
     console.print("[dim]Other platforms were scanned normally.[/dim]")
 
 
-def _format_skill_summary(summary: SkillImportSummary) -> str:
-    """One standalone sentence, worded like the ``scan`` line.
-
-    It lands before ``_print_summary``'s indented block, so it must read on its
-    own rather than borrow that block's ``  Label:`` shape. Naming the untouched
-    factory skills matters: without it, a run that installs 12 of 82 looks like
-    it dropped 70.
-    """
-    parts = [f"{summary.installed} installed"]
-    if summary.pristine:
-        parts.append(f"{summary.pristine} left as factory content")
-    if summary.skipped:
-        parts.append(f"{summary.skipped} already present")
-    if summary.failed:
-        parts.append(f"{summary.failed} failed")
-    return f"Hermes skills: {', '.join(parts)}"
-
-
 async def _install_skills_without_a_scan(platform_filter: Platform | None) -> bool:
     """Install Hermes skills on the paths where no ScanResult survived.
 
@@ -165,13 +175,16 @@ async def _install_skills_without_a_scan(platform_filter: Platform | None) -> bo
     whose only importable data is skills therefore reached an early return and
     was told there was nothing to import. Reached only when the normal path did
     not run, so a skill is never installed twice.
+
+    This path has no summary block to join, so the line has to name its own
+    subject rather than borrow that block's ``Label:`` column.
     """
     if platform_filter not in (None, Platform.HERMES):
         return False
     summary = await install_skills(HermesSkillSource(), load_config().workspace_path, _default_state())
     if summary.total == 0:
         return False
-    console.print(_format_skill_summary(summary))
+    console.print(f"Hermes skills: {_format_skill_summary(summary)}")
     return True
 
 
@@ -196,12 +209,16 @@ async def _land_hermes_user_md(
     workspace: Path,
     config: Config,
     on_phase: Callable[[str, int, int], None] | None = None,
-) -> None:
+) -> "ImportedSections | None":
     """Mirror the Hermes ``user-md`` source into the native ``user.md`` profile.
 
     EverOS storage alone does not reach every consumer: Curator, Personalizer,
     and the Sentinel producers read ``user_memory/profile/user.md`` directly
     and never see EverOS-only content.
+
+    Returns what landed, or ``None`` when there was nothing to mirror -- the
+    caller renders it, because loguru is file-only during ``run`` and a silent
+    mirror looks like one that never ran.
     """
     from raven.importer.hermes_user_md import import_user_md_sections
     from raven.importer.scanners.hermes import split_memory_entries
@@ -215,10 +232,10 @@ async def _land_hermes_user_md(
             raw = path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.warning("hermes user.md mirror skipped: {}", exc)
-            return
+            return None
         entries = split_memory_entries(raw)
         if not entries:
-            return
+            return None
         written = await import_user_md_sections(
             entries,
             MemoryStore(workspace),
@@ -227,14 +244,8 @@ async def _land_hermes_user_md(
             on_progress=(lambda i, n: on_phase("Mirroring USER.md", i, n)) if on_phase else None,
         )
         logger.info("hermes user.md mirror: {} entries landed", len(written))
-        # The skill phase prints its own line, so staying silent here made a
-        # successful mirror look like it had not run. loguru is file-only during
-        # `run`, which is why this is a console print rather than a log call.
-        parts = [f"{len(written)} entries into the native profile"]
-        if written.skipped:
-            parts.append(f"{written.skipped} already present")
-        console.print(f"Hermes USER.md: {', '.join(parts)}")
-        return
+        return written
+    return None
 
 
 def _make_hermes_provider(config: Config) -> "LLMProvider | None":
@@ -527,16 +538,23 @@ async def _run_async(
             console.print("No importable data found.")
         return
 
+    # Skills never travel as ScanResults, so every count derived from them omits
+    # skills. Discovered once here and narrowed after the platform is known,
+    # because discovery walks the whole Hermes skill tree.
+    skill_count = await _importable_skill_count(platform_filter)
+
     if platform_filter is None:
         platforms_found = sorted({r.platform for r in all_results})
         if len(platforms_found) == 1:
             platform_filter = platforms_found[0]
         else:
-            picked = _pick_platform(platforms_found)
+            picked = await _pick_platform(all_results, skill_count)
             if picked is None:
                 return
             platform_filter = picked
             all_results = [r for r in all_results if r.platform == platform_filter]
+    if platform_filter is not Platform.HERMES:
+        skill_count = 0
 
     if tier is not None:
         try:
@@ -545,7 +563,7 @@ async def _run_async(
             console.print(f"[red]Unknown tier {tier!r}. Use 'memory_files' or 'full'.[/red]")
             raise typer.Exit(1)
     else:
-        selected_tier = _pick_tier(all_results)
+        selected_tier = await _pick_tier(all_results, skill_count)
         if selected_tier is None:
             return
 
@@ -557,9 +575,13 @@ async def _run_async(
 
     mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
     conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
+    breakdown = [f"{mem} memory files"]
+    if skill_count:
+        breakdown.append(f"{skill_count} skills")
+    breakdown.append(f"{conv} conversations")
     console.print(
-        f"\nAbout to import {len(filtered)} items "
-        f"({mem} memory files, {conv} conversations) "
+        f"\nAbout to import {len(filtered) + skill_count} items "
+        f"({', '.join(breakdown)}) "
         f"from {platform_filter.value if platform_filter else 'all platforms'}.",
     )
     if not yes:
@@ -596,67 +618,143 @@ async def _run_async(
                     description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
                 )
 
-            # The phases after the import run inside this same live display and
-            # are not part of its total -- mirroring USER.md is one LLM call per
-            # entry and took 9.4s for three on a real install. Without a task of
-            # their own the bar reads 100% while they work, which is
-            # indistinguishable from a hang. Keyed by label so a phase reuses
-            # its own bar instead of stacking a new one per step.
-            phase_tasks: dict[str, TaskID] = {}
-
-            def on_phase(label: str, current: int, total: int) -> None:
-                task = phase_tasks.get(label)
-                if task is None:
-                    task = progress.add_task(label, total=total)
-                    phase_tasks[label] = task
-                progress.update(task, completed=current, description=f"{label} [{current}/{total}]")
-
-            summary = await _build_and_run(
-                items, state, on_progress=on_progress, on_phase=on_phase, cancel_path=state.cancel_path
+            result = await _build_and_run(
+                items,
+                state,
+                on_progress=on_progress,
+                on_phase=_make_phase_reporter(progress),
+                cancel_path=state.cancel_path,
             )
     finally:
         _logger.remove()
         _logger.add(sys.stderr, level="WARNING")
 
-    _print_summary(summary, log_path=log_path)
+    _print_summary(result, log_path=log_path)
 
 
-def _pick_platform(platforms: list[Platform]) -> Platform | None:
+async def _importable_skill_count(platform: Platform | None) -> int:
+    """How many skills the import would install, or 0 when none apply.
+
+    Only Hermes contributes skills today, so every other platform gets 0 and
+    the caller drops the skill wording entirely rather than showing a count
+    that can never move. ``None`` means every platform, which includes Hermes.
+    """
+    if platform not in (None, Platform.HERMES):
+        return 0
+    try:
+        discovered = await HermesSkillSource().discover()
+    except Exception as exc:
+        logger.warning("skill preview unavailable: {}", exc)
+        return 0
+    return sum(1 for skill in discovered if skill.origin is not SkillOrigin.BUNDLED_PRISTINE)
+
+
+def _platform_choice_label(platform: Platform, width: int, results: list[ScanResult], skills: int) -> str:
+    """One platform row: its display name and what picking it would bring.
+
+    The bare enum value carried no counts, so the choice was made blind.
+    """
+    mine = [r for r in results if r.platform is platform]
+    mem = sum(1 for r in mine if r.kind == SourceKind.MEMORY_FILE)
+    conv = sum(1 for r in mine if r.kind == SourceKind.CONVERSATION)
+    parts = [f"{mem} memory files", f"{conv} conversations"]
+    if skills:
+        parts.append(f"{skills} skills")
+    name = PLATFORM_DISPLAY_NAMES.get(platform.value, platform.value)
+    return f"{name:<{width}} · {', '.join(parts)}"
+
+
+async def _pick_platform(results: list[ScanResult], skill_count: int) -> Platform | None:
     try:
         questionary = _require_questionary()
     except SystemExit:
         return None
-    choices = [{"name": p.value, "value": p} for p in platforms]
-    picked = questionary.select(
+    from raven.cli._styles import RAVEN_STYLE
+
+    platforms = sorted({r.platform for r in results})
+    width = max(len(PLATFORM_DISPLAY_NAMES.get(p.value, p.value)) for p in platforms)
+    choices = [
+        {
+            "name": _platform_choice_label(p, width, results, skill_count if p is Platform.HERMES else 0),
+            "value": p,
+        }
+        for p in platforms
+    ]
+    picked = await questionary.select(
         "Select platform:",
         choices=choices,
-    ).ask()
+        style=RAVEN_STYLE,
+        qmark=QMARK,
+        pointer=POINTER,
+    ).ask_async()
     return picked
 
 
-def _pick_tier(results: list[ScanResult]) -> Tier | None:
+async def _pick_tier(results: list[ScanResult], skill_count: int) -> Tier | None:
     try:
         questionary = _require_questionary()
     except SystemExit:
         return None
+    from raven.cli._styles import RAVEN_STYLE
+
     mem_count = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
     conv_count = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+    console.print()
+    console.print(
+        "  [dim]Memory files are preferences and project knowledge; skills are copied into "
+        "the local skill pool; conversations are full chat history.[/dim]",
+        highlight=False,
+    )
+    console.print()
+    file_label, full_label = "Memory files only", "Full import"
+    # Separators are kept to a single space either side and the cost wording
+    # terse: a row past 80 columns wraps mid-phrase, which costs far more
+    # legibility than wider padding buys.
+    width = max(len(file_label), len(full_label))
+    file_contents = f"{mem_count} memory files + {skill_count} skills" if skill_count else f"{mem_count} memory files"
     choices = []
     if mem_count:
         choices.append(
-            {"name": f"Memory files only ({mem_count} items, fast)", "value": Tier.MEMORY_FILES},
+            {
+                "name": f"{file_label:<{width}} · {file_contents} · minutes, low LLM cost",
+                "value": Tier.MEMORY_FILES,
+            },
         )
     choices.append(
         {
-            "name": f"Full import ({mem_count + conv_count} items, includes conversations)",
+            "name": f"{full_label:<{width}} · all of the above + {conv_count} conversations · hours, high LLM cost",
             "value": Tier.FULL,
         },
     )
-    picked = questionary.select(
+    picked = await questionary.select(
         "Select import tier:",
         choices=choices,
-    ).ask()
+        style=RAVEN_STYLE,
+        qmark=QMARK,
+        pointer=POINTER,
+    ).ask_async()
     return picked
+
+
+def _make_phase_reporter(progress: Progress) -> Callable[[str, int, int], None]:
+    """Give each post-import phase a bar of its own in ``progress``.
+
+    Those phases run inside the same live display but are not part of the main
+    total -- mirroring USER.md is one LLM call per entry and took 9.4s for three
+    on a real install. Without a bar of their own the main bar sits at 100%
+    while they work, which is indistinguishable from a hang. Keyed by label so a
+    phase reuses its bar instead of stacking a new one per step.
+    """
+    tasks: dict[str, TaskID] = {}
+
+    def on_phase(label: str, current: int, total: int) -> None:
+        task = tasks.get(label)
+        if task is None:
+            task = progress.add_task(label, total=total)
+            tasks[label] = task
+        progress.update(task, completed=current, description=f"{label} [{current}/{total}]")
+
+    return on_phase
 
 
 def _require_questionary() -> Any:
@@ -671,7 +769,41 @@ def _require_questionary() -> Any:
         raise typer.Exit(1)
 
 
-def _print_summary(summary: ImportSummary, *, log_path: Path | None = None) -> None:
+_SUMMARY_LABEL_WIDTH = len("Submitted:")
+
+
+def _summary_line(label: str, value: str) -> str:
+    return f"  {label + ':':<{_SUMMARY_LABEL_WIDTH}} {value}"
+
+
+def _format_profile_summary(written: "ImportedSections") -> str:
+    parts = [f"{len(written)} entries into user.md"]
+    if written.skipped:
+        parts.append(f"{written.skipped} already present")
+    return ", ".join(parts)
+
+
+def _format_skill_summary(summary: SkillImportSummary) -> str:
+    """Naming the untouched factory skills matters: without it, a run that
+    installs 12 of 82 looks like it dropped 70."""
+    parts = [f"{summary.installed} installed"]
+    if summary.pristine:
+        parts.append(f"{summary.pristine} kept as factory")
+    if summary.skipped:
+        parts.append(f"{summary.skipped} already present")
+    if summary.failed:
+        parts.append(f"{summary.failed} failed")
+    return ", ".join(parts)
+
+
+def _print_summary(result: ImportRunResult, *, log_path: Path | None = None) -> None:
+    """Render the whole run as one block, after any progress display has closed.
+
+    Every outcome the run produced belongs in this block: the phases that used
+    to print their own line mid-run landed above the progress bars, so the
+    reader met them before the numbers they qualified.
+    """
+    summary = result.summary
     console.print()
     if summary.cancelled:
         console.print("[bold yellow]Import Cancelled[/bold yellow]\n")
@@ -679,22 +811,32 @@ def _print_summary(summary: ImportSummary, *, log_path: Path | None = None) -> N
         console.print("[bold yellow]Import Complete (with errors)[/bold yellow]\n")
     else:
         console.print("[bold green]Import Complete[/bold green]\n")
-    console.print(f"  Submitted: {summary.submitted}  [green]✅[/green]")
+    console.print(_summary_line("Submitted", f"{summary.submitted}  [green]✅[/green]"))
     if summary.skipped:
-        console.print(f"  Skipped:   {summary.skipped}  (already imported)")
+        console.print(_summary_line("Skipped", f"{summary.skipped}  (already imported)"))
     if summary.failed:
-        console.print(f"  Failed:    {summary.failed}  [yellow]⚠️[/yellow]")
+        console.print(_summary_line("Failed", f"{summary.failed}  [yellow]⚠️[/yellow]"))
+    if result.profile_error:
+        console.print(_summary_line("Profile", f"[yellow]not mirrored: {result.profile_error}[/yellow]"))
+    elif result.profile is not None:
+        console.print(_summary_line("Profile", _format_profile_summary(result.profile)))
+    if result.skill_error:
+        console.print(_summary_line("Skills", f"[yellow]not installed: {result.skill_error}[/yellow]"))
+    elif result.skills is not None:
+        console.print(_summary_line("Skills", _format_skill_summary(result.skills)))
+    if summary.cancelled:
+        remaining = summary.total - summary.submitted - summary.skipped - summary.failed
+        console.print(_summary_line("Remaining", str(remaining)))
+    if log_path:
+        console.print(_summary_line("Log", str(log_path)))
+    if summary.failed:
         console.print()
         for err in summary.errors:
             console.print(f"    {err.platform}/{err.source_key}: {err.error}")
     if summary.cancelled:
-        remaining = summary.total - summary.submitted - summary.skipped - summary.failed
-        console.print(f"  Remaining: {remaining}")
         console.print()
         console.print("Run `raven import run` to continue remaining items.")
     elif summary.failed:
         console.print()
         console.print("Run `raven import run` to retry failed items.")
-    if log_path:
-        console.print(f"  Log: {log_path}")
     console.print()

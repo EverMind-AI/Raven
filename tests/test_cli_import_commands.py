@@ -3,27 +3,33 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
+from raven.cli._theme import POINTER, QMARK
 from raven.cli.import_commands import (
+    ImportRunResult,
     _build_and_run,
     _format_skill_summary,
     _install_hermes_skills,
     _land_hermes_user_md,
     _make_hermes_provider,
+    _print_summary,
     import_app,
 )
 from raven.config.schema import Config
+from raven.importer.hermes_user_md import ImportedSections
 from raven.importer.orchestrator import ImportSummary
 from raven.importer.skills import DiscoveredSkill, SkillOrigin
 from raven.importer.skills.installer import SkillImportSummary
 from raven.importer.state import ImportState
-from raven.importer.types import Platform, Scanner, ScanResult, SourceKind
+from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 
 runner = CliRunner()
@@ -200,7 +206,7 @@ class TestRun:
             ),
             patch(
                 "raven.cli.import_commands._build_and_run",
-                new=AsyncMock(return_value=summary),
+                new=AsyncMock(return_value=ImportRunResult(summary=summary)),
             ),
             patch("raven.cli.import_commands._default_state", return_value=state),
         ):
@@ -244,6 +250,133 @@ class TestRun:
 
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
+
+    def test_run_selects_platform_and_tier_inside_the_event_loop(self, tmp_path: Path) -> None:
+        """The selectors run under `asyncio.run(_run_async(...))`, so they must
+        reach questionary's async API: `ask()` drives prompt_toolkit through
+        `asyncio.run()`, which raises inside a running loop. Both selectors are
+        exercised here because only an unfiltered invocation reaches them.
+        """
+        state = ImportState(path=tmp_path / "state.json")
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+        results = [
+            _scan_result("c1", platform=Platform.CLAUDE_CODE),
+            _scan_result("h1", platform=Platform.HERMES),
+        ]
+        fake = _RecordingQuestionary(iter([Platform.HERMES, Tier.FULL]))
+
+        with self._patched_run(state, summary, results, fake):
+            result = runner.invoke(import_app, ["run", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        assert [message for message, _choices, _kwargs in fake.calls] == [
+            "Select platform:",
+            "Select import tier:",
+        ]
+
+    def test_run_selectors_carry_the_shared_prompt_chrome(self, tmp_path: Path) -> None:
+        """Both selectors must pass the shared style and glyphs; questionary's
+        defaults ("?" marker, ">>" pointer, no palette) read as another program.
+        """
+        state = ImportState(path=tmp_path / "state.json")
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+        results = [
+            _scan_result("c1", platform=Platform.CLAUDE_CODE),
+            _scan_result("h1", platform=Platform.HERMES),
+        ]
+        fake = _RecordingQuestionary(iter([Platform.HERMES, Tier.FULL]))
+
+        with self._patched_run(state, summary, results, fake):
+            result = runner.invoke(import_app, ["run", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        for _message, _choices, kwargs in fake.calls:
+            assert kwargs["qmark"] == QMARK
+            assert kwargs["pointer"] == POINTER
+            assert kwargs["style"] is not None
+
+    def test_run_menus_name_the_skills_that_would_be_installed(self, tmp_path: Path) -> None:
+        """Skills never travel as ScanResults, so a menu built from them alone
+        offers "2 items" and then installs a dozen skills nobody was told about.
+        Factory-pristine skills are not installed and must not be counted.
+        """
+        state = ImportState(path=tmp_path / "state.json")
+        summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
+        results = [
+            _scan_result("c1", platform=Platform.CLAUDE_CODE),
+            _scan_result("h1", platform=Platform.HERMES, kind=SourceKind.MEMORY_FILE),
+            _scan_result("h2", platform=Platform.HERMES),
+        ]
+        skills = [
+            DiscoveredSkill(name="a", path=Path("/fake/a"), origin=SkillOrigin.LOCAL_UNKNOWN, registry_name="a"),
+            DiscoveredSkill(name="b", path=Path("/fake/b"), origin=SkillOrigin.CURATOR_MANAGED, registry_name="b"),
+            DiscoveredSkill(name="c", path=Path("/fake/c"), origin=SkillOrigin.BUNDLED_PRISTINE, registry_name="c"),
+        ]
+        fake = _RecordingQuestionary(iter([Platform.HERMES, Tier.MEMORY_FILES]))
+
+        with (
+            self._patched_run(state, summary, results, fake),
+            patch(
+                "raven.importer.skills.hermes.HermesSkillSource.discover",
+                new=AsyncMock(return_value=skills),
+            ),
+        ):
+            result = runner.invoke(import_app, ["run", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        platform_choices, tier_choices = (choices for _m, choices, _k in fake.calls)
+        hermes_row = next(c["name"] for c in platform_choices if c["value"] is Platform.HERMES)
+        assert "2 skills" in hermes_row
+        claude_row = next(c["name"] for c in platform_choices if c["value"] is Platform.CLAUDE_CODE)
+        assert "skills" not in claude_row
+        assert any("2 skills" in c["name"] for c in tier_choices)
+        assert "2 skills" in result.output
+
+    @staticmethod
+    def _patched_run(
+        state: ImportState,
+        summary: ImportSummary,
+        results: list[ScanResult],
+        questionary: "_RecordingQuestionary",
+    ) -> Any:
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+        for ctx in (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=results)),
+            patch(
+                "raven.cli.import_commands._build_and_run", new=AsyncMock(return_value=ImportRunResult(summary=summary))
+            ),
+            patch("raven.cli.import_commands._default_state", return_value=state),
+            patch("raven.cli.import_commands._require_questionary", return_value=questionary),
+        ):
+            stack.enter_context(ctx)
+        return stack
+
+
+class _RecordingQuestionary:
+    """questionary stand-in that records each prompt and refuses the sync `ask`.
+
+    `ask()` fails the way prompt_toolkit does inside a running loop, so a
+    selector that skips `ask_async` is caught rather than silently passing.
+    """
+
+    def __init__(self, answers: Iterator[object]) -> None:
+        self._answers = answers
+        self.calls: list[tuple[str, list[dict[str, Any]], dict[str, Any]]] = []
+
+    def select(self, message: str, choices: list[dict[str, Any]], **kwargs: Any) -> Any:
+        self.calls.append((message, choices, kwargs))
+        answers = self._answers
+
+        class _Question:
+            def ask(self) -> object:
+                raise RuntimeError("asyncio.run() cannot be called from a running event loop")
+
+            async def ask_async(self) -> object:
+                return next(answers)
+
+        return _Question()
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +554,7 @@ class TestBuildAndRunHermesOrdering:
             result = await _build_and_run([], state)
 
         assert calls == ["start", "run_import", "land", "stop"]
-        assert result is summary
+        assert result.summary is summary
 
     async def test_mirror_failure_does_not_fail_the_import(self, tmp_path: Path) -> None:
         calls: list[str] = []
@@ -451,7 +584,8 @@ class TestBuildAndRunHermesOrdering:
             result = await _build_and_run([], state)
 
         # The EverOS pass already succeeded, so its result must survive.
-        assert result is summary
+        assert result.summary is summary
+        assert "bad byte" in result.profile_error
         assert calls == ["start", "run_import", "stop"]
 
 
@@ -482,15 +616,15 @@ class TestInstallHermesSkills:
 class TestFormatSkillSummary:
     def test_names_the_untouched_factory_skills(self) -> None:
         line = _format_skill_summary(SkillImportSummary(total=82, installed=12, pristine=70))
-        assert line == "Hermes skills: 12 installed, 70 left as factory content"
+        assert line == "12 installed, 70 kept as factory"
 
     def test_rerun_reports_already_present_rather_than_a_bare_zero(self) -> None:
         line = _format_skill_summary(SkillImportSummary(total=82, installed=0, pristine=70, skipped=12))
-        assert line == "Hermes skills: 0 installed, 70 left as factory content, 12 already present"
+        assert line == "0 installed, 70 kept as factory, 12 already present"
 
     def test_failures_are_surfaced(self) -> None:
         line = _format_skill_summary(SkillImportSummary(total=2, installed=1, failed=1))
-        assert line == "Hermes skills: 1 installed, 1 failed"
+        assert line == "1 installed, 1 failed"
 
 
 class TestBuildAndRunHermesSkills:
@@ -527,7 +661,7 @@ class TestBuildAndRunHermesSkills:
             result = await _build_and_run([], state)
 
         assert calls == ["start", "run_import", "land", "skills", "stop"]
-        assert result is summary
+        assert result.summary is summary
 
     async def test_skill_install_failure_does_not_fail_the_import(self, tmp_path: Path) -> None:
         calls: list[str] = []
@@ -562,8 +696,78 @@ class TestBuildAndRunHermesSkills:
 
         # The EverOS pass and the USER.md mirror already succeeded, so their
         # results must survive a skill-install failure.
-        assert result is summary
+        assert result.summary is summary
+        assert result.skill_error == "disk full"
         assert calls == ["start", "run_import", "land", "stop"]
+
+
+class TestPrintSummary:
+    """The block `_build_and_run` no longer prints from inside the progress bar."""
+
+    @staticmethod
+    def _render(result: ImportRunResult, log_path: Path | None = None) -> str:
+        import io
+
+        from rich.console import Console
+
+        buf = io.StringIO()
+        with patch("raven.cli.import_commands.console", Console(file=buf, width=100)):
+            _print_summary(result, log_path=log_path)
+        return buf.getvalue()
+
+    def test_every_phase_reports_inside_the_block(self) -> None:
+        """Each phase used to print its own line the moment it finished, which
+        put it above the progress bars -- before the numbers it qualifies."""
+        out = self._render(
+            ImportRunResult(
+                summary=ImportSummary(total=4, submitted=4, skipped=0, failed=0, errors=()),
+                profile=ImportedSections(written=("## Preferences", "## Notes"), skipped=1),
+                skills=SkillImportSummary(total=82, installed=12, pristine=70),
+            ),
+            log_path=Path("/fake/import.log"),
+        )
+
+        header = out.index("Import Complete")
+        assert header < out.index("Submitted:") < out.index("Profile:") < out.index("Skills:") < out.index("Log:")
+        assert "2 entries into user.md, 1 already present" in out
+        assert "12 installed, 70 kept as factory" in out
+
+    def test_labels_share_one_column(self) -> None:
+        out = self._render(
+            ImportRunResult(
+                summary=ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=()),
+                profile=ImportedSections(written=("## Notes",), skipped=0),
+                skills=SkillImportSummary(total=1, installed=1),
+            ),
+            log_path=Path("/fake/import.log"),
+        )
+
+        starts = {
+            line.index(line.split(":", 1)[1].lstrip()[:1], line.index(":"))
+            for line in out.splitlines()
+            if line.startswith("  ") and ":" in line and line.split(":", 1)[1].strip()
+        }
+        assert len(starts) == 1, out
+
+    def test_a_failed_phase_names_its_reason(self) -> None:
+        """A phase that failed after a successful EverOS pass has no other way
+        to reach the user: loguru is file-only during `run`."""
+        out = self._render(
+            ImportRunResult(
+                summary=ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=()),
+                profile_error="disk full",
+                skill_error="permission denied",
+            )
+        )
+
+        assert "not mirrored: disk full" in out
+        assert "not installed: permission denied" in out
+
+    def test_phases_that_did_not_run_stay_out_of_the_block(self) -> None:
+        out = self._render(ImportRunResult(summary=ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())))
+
+        assert "Profile:" not in out
+        assert "Skills:" not in out
 
 
 class TestStatusCancelled:
