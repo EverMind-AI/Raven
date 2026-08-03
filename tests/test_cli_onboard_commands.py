@@ -2039,6 +2039,12 @@ def _import_results() -> list[Any]:
 
 def _run_import_step(monkeypatch: pytest.MonkeyPatch, answers: list[tuple[str, Any]]) -> _ScriptedSelect:
     scripted = _ScriptedSelect(answers)
+    # The step returns before its first prompt unless EverOS memory is both
+    # selected and has its llm and embedding roles configured -- a property of
+    # whoever's machine runs the suite, not of the behaviour under test. Left
+    # real, these tests pass on a developer box that has onboarded and fail
+    # everywhere else, including CI.
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr(
         "raven.importer.scanners.scan_all",
@@ -2135,6 +2141,9 @@ def test_tier_choices_omit_skills_when_the_platform_has_none(monkeypatch: pytest
         ],
     )
     tier_labels = [c.title for c in _choices_of(scripted)]
+    # Without this the assertion below passes on an empty menu, which is what a
+    # step that returned early produces.
+    assert tier_labels, "the tier menu was never shown"
     assert not any("skill" in t or "技能" in t for t in tier_labels), tier_labels
 
 
