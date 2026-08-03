@@ -174,16 +174,17 @@ def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
 
 
 def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
-    """The cached index, except that a failure is not what gets cached.
+    """The cached index, except that an empty one is not what gets cached.
 
-    `lru_cache` remembers whatever the call returned, so caching an empty result
-    from a transient import failure would leave the picker permanently empty for
-    the life of the process with no way to retry.
+    `lru_cache` remembers whatever the call returned, so an empty result -- from a
+    LiteLLM whose table has not loaded -- would leave every provider without a
+    curated shortlist showing no models at all for the life of the process, with
+    no way to retry. A raised exception needs no such handling: `lru_cache` stores
+    only successful returns, so the next call re-runs on its own.
     """
     try:
         index = _cached_chat_models_by_provider()
     except Exception:
-        _cached_chat_models_by_provider.cache_clear()
         return {}
     if not index:
         _cached_chat_models_by_provider.cache_clear()

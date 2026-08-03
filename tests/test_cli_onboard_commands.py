@@ -3456,3 +3456,150 @@ def test_every_optional_role_carries_its_own_skip_note() -> None:
         assert note, f"{name} is optional but says nothing when skipped"
         for text in note:
             assert text.startswith("  ["), f"{name}: skip_note must carry its own style and indent: {text!r}"
+
+
+def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U4: the branch a user reaches by getting their own server's address wrong.
+
+    A local deployment that cannot be reached is almost always a typo, so the
+    failure menu offers the address back. What that choice then runs had no test:
+    it re-reads the stored address, seeds the prompt with it, writes what comes
+    back, and re-verifies -- and returning None from it would have been read as
+    "switch provider" and rolled the setup back instead of retrying.
+    """
+    from raven.config.update_providers import set_provider_fields
+    from raven.providers.registry import find_by_name
+
+    set_provider_fields("ollama_chat", {"api_base": "http://typo:11434"})
+
+    attempts: list[str] = []
+
+    def _probe(provider: str, *a: Any, **kw: Any) -> dict[str, Any]:
+        stored = json.loads(tmp_env.read_text())["providers"]["ollama_chat"]["apiBase"]
+        attempts.append(stored)
+        ok = stored == "http://gpu-box:11434"
+        return {"ok": ok, "status": "valid" if ok else "network_error", "error": "" if ok else "unreachable"}
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, **kw: "rebase")
+    seeded: dict[str, Any] = {}
+
+    def _retype(spec: Any, *, current: str = "", **kw: Any) -> str:
+        seeded["current"] = current
+        return "http://gpu-box:11434"
+
+    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", _retype)
+
+    ok, status, _models = onboard_commands._verify_provider("ollama_chat")
+    assert not ok and status == "network_error"
+
+    # Drive the branch the menu selects.
+    result = onboard_commands._resolve_model_with_test(
+        "ollama_chat",
+        find_by_name("ollama_chat"),
+        is_custom=False,
+        custom_model=None,
+        user_model_flag="ollama_chat/codegeex4",
+        non_interactive=False,
+        warnings=[],
+        skip_test=True,
+    )
+
+    assert seeded["current"] == "http://typo:11434", "the address being fixed was not offered back"
+    assert json.loads(tmp_env.read_text())["providers"]["ollama_chat"]["apiBase"] == "http://gpu-box:11434"
+    assert result is not None, "a retyped address must not read as 'switch provider'"
+    assert attempts[-1] == "http://gpu-box:11434", "the retyped address was not re-verified"
+
+    # Ctrl+C at that prompt quits, as it does in the sibling re-enter-key branch.
+    # Returning None would be read as "switch provider" and roll the setup back.
+    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, **kw: "rebase")
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        lambda *a, **kw: {"ok": False, "status": "network_error", "error": "unreachable"},
+    )
+    with pytest.raises(typer.Exit):
+        onboard_commands._resolve_model_with_test(
+            "ollama_chat",
+            find_by_name("ollama_chat"),
+            is_custom=False,
+            custom_model=None,
+            user_model_flag="ollama_chat/codegeex4",
+            non_interactive=False,
+            warnings=[],
+            skip_test=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ({"api_key": "sk-nope"}, "takes no --api-key"),
+        ({"base_url": "gpu-box:11434"}, "must start with http"),
+    ],
+)
+def test_the_flag_path_rejects_credentials_a_local_deployment_cannot_use(
+    tmp_env: Path, flags: dict[str, Any], expected: str
+) -> None:
+    """U6: both guards face command-line users and neither was covered.
+
+    Dropping the key silently would look like it had been accepted, and a
+    scheme-less address passed the interactive validator's absence and only failed
+    at first use.
+    """
+    with pytest.raises(typer.BadParameter) as excinfo:
+        onboard_commands._collect_credentials(
+            "ollama_chat",
+            is_oauth=False,
+            is_custom=False,
+            is_local=True,
+            api_key=flags.get("api_key"),
+            base_url=flags.get("base_url"),
+            model=None,
+            non_interactive=True,
+        )
+    assert expected in str(excinfo.value)
+
+
+def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """U12: who serves the default is decided differently for a vendor with no spec.
+
+    It is reached by its prefix alone, so that is the whole test -- and treating
+    "no spec" as "not the source" skipped the warning entirely, leaving a default
+    model pointing at a provider whose key had just been removed.
+    """
+    import questionary
+
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("mistral", {"api_key": "sk-mistral"})
+    onboard_commands._persist_default_model("mistral/mistral-large-latest")
+
+    asked: list[str] = []
+
+    class _FQ:
+        def __init__(self, a: Any) -> None:
+            self._a = a
+
+        def ask(self) -> Any:
+            return self._a
+
+    def _confirm(message: Any, **kw: Any) -> Any:
+        asked.append(str(message))
+        return _FQ(False)  # decline, so nothing is removed
+
+    select_answers = iter(["mistral", "remove", onboard_commands._BACK])
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(questionary, "confirm", _confirm)
+    monkeypatch.setattr(onboard_commands, "_configured_providers", lambda: ["mistral"])
+
+    onboard_commands._manage_existing_providers(non_interactive=False)
+
+    assert asked, "removing the provider behind the default model asked nothing"
+    assert "default model" in asked[0].lower() or "默认模型" in asked[0]
+    # Declined, so the key is still there.
+    assert json.loads(tmp_env.read_text())["providers"]["mistral"].get("apiKey") == "sk-mistral"
