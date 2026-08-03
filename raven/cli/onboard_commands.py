@@ -1771,8 +1771,6 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                     stored = ""
                 retyped_key = _prompt_api_key(target)
                 retyped_url = _prompt_base_url(stored or "https://")
-                if retyped_url is None:
-                    continue
                 _write_provider_fields(target, {"api_key": retyped_key, "api_base": retyped_url})
             else:
                 _write_provider_fields(target, {"api_key": _prompt_api_key(target)})
