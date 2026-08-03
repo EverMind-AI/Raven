@@ -31,6 +31,25 @@ def tmp_config(tmp_path: Path) -> Path:
     set_config_path(None)  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def no_memory_server(monkeypatch: pytest.MonkeyPatch):
+    """Keep the memory probe away from whatever server the developer is running.
+
+    `memory.backend` defaults to everos, so without this every test here reaches
+    localhost:18791 and reports whatever that server happens to answer -- a
+    machine whose embedding provider is broken would fail the healthy-exit-0
+    case. Tests that care about capabilities install their own answer.
+    """
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+    )
+    return monkeypatch
+
+
 @pytest.fixture
 def healthy_config(tmp_config: Path, tmp_path: Path) -> Path:
     """Persist a config that routes cleanly to a real provider name."""
@@ -185,3 +204,90 @@ def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pyt
     assert data["probe"]["ok"] is True
     assert data["probe"]["text"] == "hi"
     assert data["probe"]["tokens"] == 10
+
+
+# --------------------------------------------------------------------------- memory
+
+
+def _capabilities(no_memory_server, **caps: bool) -> None:
+    """Make the memory probe answer as a reachable server with `caps`."""
+    from raven.plugin.memory.everos import _health
+
+    no_memory_server.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+    )
+
+
+def _configured(no_memory_server, *sections: str) -> None:
+    from raven.config import update_everos
+
+    no_memory_server.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
+
+
+def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memory_server) -> None:
+    _configured(no_memory_server, "llm", "embedding")
+    _capabilities(no_memory_server, llm=True, embed=True, rerank=False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "Memory" in r.stdout
+    assert "running" in r.stdout
+
+
+def test_a_role_the_server_could_not_build_is_a_failure(healthy_config: Path, no_memory_server) -> None:
+    """everos 1.2.1 boots without embedding and degrades to keyword-only search,
+    so "configured" no longer implies "working"; recall silently returns nothing,
+    which is a fault rather than a warning."""
+    _configured(no_memory_server, "llm", "embedding")
+    _capabilities(no_memory_server, llm=True, embed=False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 2, r.stdout
+    assert "could not build it" in r.stdout
+    assert "return nothing" in r.stdout
+
+
+def test_a_missing_optional_role_is_not_a_failure(healthy_config: Path, no_memory_server) -> None:
+    """rerank is optional -- agent-track recall falls back to the LLM lane."""
+    _configured(no_memory_server, "llm", "embedding")
+    _capabilities(no_memory_server, llm=True, embed=True, rerank=False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "rerank" in r.stdout
+
+
+def test_a_server_that_reports_no_capabilities_is_not_condemned(healthy_config: Path, no_memory_server) -> None:
+    """Pre-1.2.1 servers answer a bare {"status": "ok"}; reading that silence as
+    "unavailable" would fail a working install."""
+    _configured(no_memory_server, "llm", "embedding")
+    _capabilities(no_memory_server)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "does not report capabilities" in r.stdout
+
+
+def test_a_server_that_is_not_running_is_not_a_failure(healthy_config: Path) -> None:
+    """Raven starts the server on demand, so "not running" is a normal state."""
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "not running" in r.stdout
+
+
+def test_memory_section_reaches_the_json_output(healthy_config: Path, no_memory_server) -> None:
+    _configured(no_memory_server, "llm", "embedding")
+    _capabilities(no_memory_server, llm=True, embed=False)
+
+    r = runner.invoke(app, ["doctor", "--json"])
+
+    payload = json.loads(r.stdout)
+    assert payload["memory"]["capabilities"] == {"llm": True, "embed": False}
+    assert payload["memory"]["configured"] == ["llm", "embedding"]

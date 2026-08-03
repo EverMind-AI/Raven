@@ -134,6 +134,27 @@ def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def everos_section(section: str) -> dict[str, Any]:
+    """Current values of an EverOS section, or ``{}``."""
+    return load_everos_config().get(section, {}) or {}
+
+
+def everos_role_configured(section: str) -> bool:
+    """True iff the user really configured this EverOS role.
+
+    Sole criterion for "configured", shared by every caller: model AND api_key.
+    The shipped everos.toml template seeds each section's model name with an
+    empty api_key, so a model alone also holds on a fresh install -- two callers
+    disagreeing on this made the wizard's Back loop on itself forever.
+
+    Lives beside the writers rather than in the wizard so a reader does not have
+    to import it: the wizard module costs ~290ms to load, which `raven doctor`
+    (a millisecond command) would otherwise pay just to answer this.
+    """
+    sec = everos_section(section)
+    return bool(sec.get("model") and sec.get("api_key"))
+
+
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:
     """Merge ``fields`` into ``[section]`` of the user-level toml.
 

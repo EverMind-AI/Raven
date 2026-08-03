@@ -83,6 +83,25 @@ def _restore_event_loop():
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 
+@pytest.fixture(autouse=True)
+def _no_everos_health_probe(monkeypatch: pytest.MonkeyPatch):
+    """Keep the wizard's capability report off whatever server is running here.
+
+    The memory step reads `/health` after starting the server, so without this
+    every test that walks that step reports the developer's own EverOS install
+    and changes behaviour with it. Unreachable is the quiet default; tests about
+    the report install their own answer.
+    """
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+    )
+    return monkeypatch
+
+
 @pytest.fixture
 def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect config_path + workspace_path under tmp_path; stub template sync.
@@ -1191,6 +1210,53 @@ def test_memory_enable_writes_everos_sections(
     assert everos["embedding"]["base_url"] == "https://llm/v1"
     assert "rerank" not in everos
     assert "multimodal" not in everos
+
+
+def test_the_memory_step_reaches_the_capability_report(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A report nothing calls is dead code. Walks the same path as
+    `test_memory_enable_writes_everos_sections` and only checks that the step
+    gets as far as reporting what the server can do."""
+    import questionary
+
+    _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
+    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
+    password_answers = iter(["k-llm", "k-embed"])
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
+    monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    async def _fake_ensure_everos_server(*a: object, **kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
+
+    reported: list[int] = []
+    monkeypatch.setattr(onboard_commands, "_report_everos_capabilities", lambda: reported.append(1))
+
+    onboard_commands._step4_memory(
+        skip=False,
+        non_interactive=False,
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        warnings=[],
+    )
+
+    assert reported == [1], "the memory step never reported what EverOS can do"
 
 
 def test_memory_llm_reuse_pulls_provider_creds(
@@ -3111,3 +3177,55 @@ def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monke
     # Azure takes a deployment name where every other provider takes a model id,
     # so the step locks it in rather than offering the picker.
     assert returned == "gpt-4o-deployment"
+
+
+# --------------------------------------------------------------------------- everos capabilities
+
+
+def _stub_capabilities(monkeypatch: pytest.MonkeyPatch, *, configured: tuple[str, ...], **caps: bool) -> None:
+    from raven.config import update_everos
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in configured)
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+    )
+
+
+def test_the_wizard_says_which_roles_everos_could_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=True)
+
+    onboard_commands._report_everos_capabilities()
+
+    assert "llm and embedding are available" in capsys.readouterr().out
+
+
+def test_the_wizard_flags_a_role_everos_could_not_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """`ensure_everos_server` only proves the process answers. Since everos
+    1.2.1 a server whose embedding provider failed still answers 200 and
+    degrades to keyword-only search, so a tick there would be a lie."""
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=False)
+
+    onboard_commands._report_everos_capabilities()
+
+    out = capsys.readouterr().out
+    assert "embedding is configured but EverOS could not build it" in out
+    assert "recall will return nothing" in out
+
+
+def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Pre-1.2.1 servers answer a bare status; claiming a fault there would
+    condemn a working install."""
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"))
+
+    onboard_commands._report_everos_capabilities()
+
+    assert capsys.readouterr().out.strip() == ""

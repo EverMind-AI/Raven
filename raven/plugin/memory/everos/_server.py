@@ -40,6 +40,16 @@ def _lock_path() -> Path:
     return get_data_dir() / "everos-server.lock"
 
 
+def server_log_path() -> Path:
+    """Where the detached server's stdout and stderr land.
+
+    Named here rather than spelled out at each site: the wizard and doctor both
+    point users at this file, and a name that drifts sends them to one that does
+    not exist.
+    """
+    return get_logs_dir() / "everos-server.log"
+
+
 def _start_server_if_unlocked(port: str) -> bool:
     """Try to acquire the startup lock and launch the server.
 
@@ -53,7 +63,7 @@ def _start_server_if_unlocked(port: str) -> bool:
 
     try:
         with file_lock(_lock_path(), blocking=False):
-            log_path = get_logs_dir() / "everos-server.log"
+            log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:
                 subprocess.Popen(
@@ -93,7 +103,7 @@ async def ensure_everos_server(
         f"EverOS server failed to start within {timeout}s at {base_url}. "
         f"Check: (1) everos is installed (`uv run everos --help`), "
         f"(2) port {port} is not occupied, "
-        f"(3) logs at {get_logs_dir() / 'everos-server.log'}"
+        f"(3) logs at {server_log_path()}"
     )
 
 

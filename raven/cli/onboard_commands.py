@@ -2666,22 +2666,15 @@ def _init_extension_block_defaults() -> None:
 
 
 def _everos_section(section: str) -> dict[str, Any]:
-    """Current values of an EverOS section, or ``{}``."""
-    from raven.config.update_everos import load_everos_config
+    from raven.config.update_everos import everos_section
 
-    return load_everos_config().get(section, {}) or {}
+    return everos_section(section)
 
 
 def _everos_role_configured(section: str) -> bool:
-    """True iff the user really configured this EverOS role.
+    from raven.config.update_everos import everos_role_configured
 
-    Sole criterion for "configured", shared by every caller: model AND api_key.
-    The shipped everos.toml template seeds each section's model name with an
-    empty api_key, so a model alone also holds on a fresh install — two callers
-    disagreeing on this made the wizard's Back loop on itself forever.
-    """
-    sec = _everos_section(section)
-    return bool(sec.get("model") and sec.get("api_key"))
+    return everos_role_configured(section)
 
 
 def _memory_enabled() -> bool:
@@ -4017,8 +4010,58 @@ def _step4_memory(
         else:
             _set_memory_backend(None)
             return None
+    _report_everos_capabilities()
     _set_memory_backend("everos")
     return None
+
+
+def _report_everos_capabilities() -> None:
+    """Say what the running server can actually do, not just that it answers.
+
+    ``ensure_everos_server`` proves the process is up and nothing more. Since
+    everos 1.2.1 a server whose embedding provider failed to build still answers
+    200 and degrades to keyword-only search, so stopping at "running" would
+    print a tick over an install that cannot recall anything. The roles were
+    each verified against their provider earlier in this step; what is new here
+    is whether everos itself could build them from what got written to
+    ``everos.toml``.
+
+    Silent on a server too old to report capabilities -- reading that silence as
+    "unavailable" would condemn a working install.
+    """
+    from raven.plugin.memory.everos._health import REQUIRED_SECTIONS, probe_capabilities
+
+    report = probe_capabilities()
+    if not report.reports_capabilities:
+        return
+    configured = [s for s in REQUIRED_SECTIONS if _everos_role_configured(s)]
+    broken = [s for s in configured if report.available(s) is False]
+    if not broken:
+        names = " and ".join(configured)
+        console.print(
+            _t(
+                f"  [green]✓ {names} are available.[/green]",
+                f"  [green]✓ {names} 均可用。[/green]",
+            )
+        )
+        return
+    names = " and ".join(broken)
+    console.print(
+        _t(
+            f"  [yellow]⚠ {names} is configured but EverOS could not build it.[/yellow]\n"
+            "  [dim]Memory recall will return nothing until this is fixed.[/dim]\n"
+            f"  [dim]Check: {_everos_server_log_hint()}[/dim]",
+            f"  [yellow]⚠ {names} 已配置，但 EverOS 未能构建成功。[/yellow]\n"
+            "  [dim]在此修复前，记忆召回将始终返回空。[/dim]\n"
+            f"  [dim]请查看：{_everos_server_log_hint()}[/dim]",
+        )
+    )
+
+
+def _everos_server_log_hint() -> str:
+    from raven.plugin.memory.everos._server import server_log_path
+
+    return str(server_log_path())
 
 
 # ---------------------------------------------------------------------------
