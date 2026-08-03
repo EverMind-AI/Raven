@@ -6,15 +6,45 @@
 
 ## Install
 
+New install on Linux, macOS, or WSL2:
+
 ```bash
 curl -fsSL https://raven.evermind.ai/install.sh | bash
 ```
 
-Then reload your shell and run:
+New install on native Windows, in PowerShell:
+
+```powershell
+irm https://raven.evermind.ai/install.ps1 | iex
+```
+
+Windows PowerShell 5.1 (the version built into Windows) rejects that URL with
+`Permanent Redirect`; use the direct one instead:
+
+```powershell
+irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
+```
+
+Open a new terminal, then run:
 
 ```bash
 raven onboard
 ```
+
+## Upgrade
+
+Already running Raven? Upgrade in place -- configuration, sessions, and memory
+are preserved:
+
+```bash
+raven upgrade
+```
+
+`raven upgrade` installs the latest stable release, so it does not pick up a
+pre-release; rerun the installer above for that. Editable source checkouts are
+never overwritten -- pull the checkout and rerun its development setup. On
+native Windows the upgrade finishes in an external helper; wait for its
+completion message before running Raven again.
 
 ## Release Status
 

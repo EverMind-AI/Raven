@@ -132,10 +132,20 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
-              --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre
+            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
+              --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre)
+            # A draft lives at releases/tag/untagged-<hash> and keeps serving that
+            # stale page after publication, with no redirect to the real tag. Print
+            # both URLs so nobody shares the draft one by copying the address bar.
+            {
+              echo "### Release $tag"
+              echo ""
+              echo "- Draft (temporary, do not share): $draft_url"
+              echo "- Public URL once published: https://github.com/$repo/releases/tag/$tag"
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Release $tag already published (id=$id); leaving as-is."
+            echo "Release $tag already published: https://github.com/$repo/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # (Optional, wire up when ready) publish to PyPI on tag:
