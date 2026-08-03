@@ -712,10 +712,8 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
         qmark=_QMARK,
     ).ask()
     if url is None:
-        # Same as every other prompt here: Ctrl+C quits. Returning None instead
-        # made each caller hold a different contract -- one translated it to an
-        # exit, the other to a menu redraw -- and a reader checking the module
-        # found two of three prompts raising and wrote the rule down wrong.
+        # Ctrl+C quits, like the sibling credential prompts. Returning None left
+        # each caller to decide what it meant, and they did not agree.
         raise typer.Exit(1)
     url = url.strip()
     if allow_back and not url:
@@ -1458,8 +1456,6 @@ def _collect_credentials(
             base_url = _prompt_local_api_base(spec, current=stored, allow_back=True)
             if base_url is _BACK:
                 return _BACK
-            if base_url is None:
-                raise typer.Exit(1)
         _write_provider_fields(provider, {"api_base": base_url})
         return None
 

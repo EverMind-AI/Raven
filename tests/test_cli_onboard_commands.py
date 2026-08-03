@@ -3085,8 +3085,14 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     assert json.loads(tmp_env.read_text())["providers"]["mistral"].get("apiKey") == "sk-mistral"
 
 
-def test_every_prompt_in_the_wizard_means_the_same_thing_by_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One contract, so no call site has to remember which one it is holding.
+def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One contract across the four credential prompts, so no call site has to
+    remember which one it is holding.
+
+    Scoped to those four deliberately. The vendor search and the provider row
+    picker return None on cancellation and their caller translates it; that is a
+    separate chain, and claiming the whole module here would be the same
+    overreach twice.
 
     Two of the three raised and one returned None, and each of its callers
     translated that None differently -- an exit in one branch, a menu redraw in
@@ -3118,8 +3124,31 @@ def test_every_prompt_in_the_wizard_means_the_same_thing_by_ctrl_c(monkeypatch: 
 
 
 def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
-    """The translations the divergence made necessary are gone, not relocated."""
-    import inspect
+    """The translations the divergence made necessary are gone, not relocated.
 
-    source = inspect.getsource(onboard_commands)
-    assert "retyped is None" not in source, "a caller is still translating the prompt's cancellation; it raises now"
+    Bound to the call sites rather than to a variable name: the first version of
+    this test grepped for one spelling and stayed green while a third caller was
+    still translating under another -- the same local-agreement mistake the change
+    itself exists to remove.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    source = (_Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py").read_text()
+    tree = ast.parse(source)
+
+    targets: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        callee = node.value.func
+        if getattr(callee, "id", None) != "_prompt_local_api_base":
+            continue
+        targets += [t.id for t in node.targets if isinstance(t, ast.Name)]
+    assert targets, "no call site found; this test would prove nothing"
+
+    lines = source.splitlines()
+    offenders = [
+        f"line {i}: {line.strip()}" for i, line in enumerate(lines, 1) for name in targets if f"{name} is None" in line
+    ]
+    assert not offenders, "the prompt raises now; nothing downstream should test for None:\n" + "\n".join(offenders)
