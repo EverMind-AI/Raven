@@ -387,6 +387,41 @@ class EverosBackend:
                     e,
                 )
                 raise
+            self._warn_if_recall_cannot_work(base_url)
+
+    @staticmethod
+    def _warn_if_recall_cannot_work(base_url: str) -> None:
+        """Say out loud when the server is up but recall cannot work.
+
+        A running server no longer implies a working one: everos 1.2.1 boots with
+        ``[llm]`` alone, so an embedding provider it failed to build leaves every
+        HYBRID recall refused. ``recall`` turns that into an empty list and the
+        log it writes to is file-only at runtime, which makes the failure look
+        like an agent that simply does not remember things -- the hardest kind of
+        fault to attribute. ``raven doctor`` can find it, but only if the user
+        thinks to ask; this is on the path every session already takes.
+
+        Deliberately *not* degrading to ``_NoOpAdapter`` the way the Windows
+        branch above does: writes still land, and once the provider is fixed
+        ``everos cascade backfill`` gives those rows their vectors. Dropping to a
+        no-op would discard memory the user could otherwise get back.
+        """
+        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS, probe_capabilities
+
+        report = probe_capabilities(base_url)
+        broken = [s for s in REQUIRED_SECTIONS if report.available(s) is False]
+        if not broken:
+            return
+        from rich.console import Console
+
+        from raven.plugin.memory.everos._server import server_log_path
+
+        names = " and ".join(broken)
+        Console(stderr=True).print(
+            f"[yellow]EverOS is running but {names} is unavailable: memory recall will return nothing.[/yellow]\n"
+            f"[dim]New memories are still stored. Check {server_log_path()}, "
+            "fix the provider, then run `everos cascade backfill`.[/dim]"
+        )
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")

@@ -22,6 +22,7 @@ from raven.plugin.memory.everos.backend import (
     _PROFILE_MAX_CHARS,
     EverosBackend,
     _flatten_profile,
+    _HttpEverosAdapter,
     make_backend,
 )
 
@@ -71,6 +72,25 @@ class _FakeAdapter:
         )
         if self.memorize_raises is not None:
             raise self.memorize_raises
+
+
+@pytest.fixture(autouse=True)
+def _no_capability_probe(monkeypatch: pytest.MonkeyPatch):
+    """Keep `start()`'s capability warning off the developer's own server.
+
+    `start()` builds a real `_HttpEverosAdapter` when none is injected, so
+    without this the lifecycle tests reach localhost:18791 and their output
+    depends on what that server answers. Unreachable is the quiet default; the
+    tests about the warning install their own answer.
+    """
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+    )
+    return monkeypatch
 
 
 def _ctx(
@@ -128,6 +148,75 @@ class TestLifecycle:
         ) as mock_ensure:
             await b.start()
         mock_ensure.assert_called_once()
+
+
+class TestStartWarnsWhenRecallCannotWork:
+    """A running server stopped implying a working one in everos 1.2.1."""
+
+    @staticmethod
+    def _capabilities(monkeypatch: pytest.MonkeyPatch, **caps: bool) -> None:
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        )
+
+    async def test_a_broken_required_role_is_said_out_loud(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """recall would otherwise return empty for every turn, and the log it
+        writes to is file-only at runtime -- the user just sees an agent that
+        does not remember anything."""
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        # Collapsed: rich wraps at the terminal width, so a raw substring match
+        # would depend on how wide the machine running the tests happens to be.
+        err = " ".join(capsys.readouterr().err.split())
+        assert "recall will return nothing" in err
+        assert "cascade backfill" in err
+
+    async def test_writes_are_not_disabled_by_the_warning(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Dropping to a no-op would discard memory the user gets back by fixing
+        the provider and running a backfill."""
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert isinstance(b._adapter, _HttpEverosAdapter)
+
+    async def test_a_healthy_server_says_nothing(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        self._capabilities(_no_capability_probe, llm=True, embed=True, rerank=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
+
+    async def test_a_server_that_cannot_report_says_nothing(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Pre-1.2.1 servers answer a bare status; a warning there would be a
+        lie about a working install."""
+        self._capabilities(_no_capability_probe)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
