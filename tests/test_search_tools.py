@@ -145,3 +145,23 @@ async def test_find_sorted_by_recency(tree: Path):
     out = await tool.execute(pattern="*.py")
     lines = out.splitlines()
     assert lines[0].endswith("util.py")
+
+
+async def test_grep_fallback_deadline_cut_is_declared(tree: Path, monkeypatch):
+    """A walk stopped at the deadline must never report a confident empty
+    result — absence over a partial scan proves nothing."""
+    import raven.agent.tools.file_search as fs
+
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(fs, "_WALK_DEADLINE_S", -1.0)
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="def hello")
+    assert "results are incomplete" in out
+    assert out != "No matches found."
+
+
+async def test_grep_fallback_full_walk_keeps_plain_empty_message(tree: Path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="zzz_no_such_symbol_zzz")
+    assert out == "No matches found."

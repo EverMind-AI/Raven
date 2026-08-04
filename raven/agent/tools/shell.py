@@ -16,11 +16,13 @@ from raven.sandbox import DirectExecutor, ExecSession, SandboxExecutor
 _RM_RECURSIVE = r"\brm\s+(?:-\S+\s+)*-\S*r\S*\s+(?:-\S+\s+)*"
 _END = r"(?:\s|;|&|\||$)"
 _SYSTEM_DIRS = "bin|boot|dev|etc|lib|lib64|proc|root|sbin|sys|usr|var"
-# Anchor a name to command position (start of line / after ;|&& / after sudo) so
-# it only matches when *invoked*, never as a flag or argument. Without this,
-# `qemu ... -no-shutdown` matched the bare \bshutdown\b pattern and
-# `which mkfs.ext4` matched \bmkfs\b — both observed stranding agents in eval.
-_CMD = r"(?:^|[;&|]\s*|\bsudo\s+)"
+# Anchor a name to command position (start of input / after ;|&&/newline /
+# after sudo) so it only matches when *invoked*, never as a flag or argument.
+# Without this, `qemu ... -no-shutdown` matched the bare \bshutdown\b pattern
+# and `which mkfs.ext4` matched \bmkfs\b — both observed stranding agents in
+# eval. Newline is a command separator in shell, so it anchors too (`^` alone
+# only matches input start — a second line would slip past).
+_CMD = r"(?:^|[;&|\n]\s*|\bsudo\s+)"
 
 
 class ExecSessionRegistry:
@@ -91,7 +93,7 @@ class ExecTool(Tool):
         rf"{_RM_RECURSIVE}/(?:{_SYSTEM_DIRS})(?:/|{_END})",  # recursive rm inside a system tree
         r"\bdel\s+/[fq]\b",  # del /f, del /q
         r"\brmdir\s+/s\b",  # rmdir /s
-        r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
+        r"(?:^|[;&|\n]\s*)format\b",  # format (as standalone command only)
         rf"{_CMD}(?:mkfs(?:\.\w+)?|diskpart)\b",  # disk format commands, invoked only
         r"\bdd\s+[^|;&]*of=/dev/(sd|hd|vd|nvme|xvd)",  # raw write to a block device
         r">\s*/dev/sd",  # write to disk
@@ -148,7 +150,8 @@ class ExecTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Execute a shell command and return its output. Use with caution.\n"
+            "Execute a shell command (bash when available) and return its output. "
+            "Use with caution.\n"
             "Each call is a fresh process by default, so cwd, exported variables "
             "and background jobs do NOT carry over between calls.\n"
             "Pass `session` to run inside a persistent shell instead: state "
@@ -158,7 +161,10 @@ class ExecTool(Tool):
             "Pass `background: true` for work that must outlive this call and the "
             "run itself (servers, long builds): it returns immediately, the process "
             "is detached with its output going to a log file, and it keeps running "
-            "after you finish. Follow it with job_status, stop it with job_cancel."
+            "after you finish. Follow it with job_status, stop it with job_cancel.\n"
+            "When killing processes, target an exact PID or process group; broad "
+            "`pkill -f` patterns can match unrelated processes, including your own "
+            "tooling."
         )
 
     @property
@@ -399,6 +405,9 @@ class _SessionTool(Tool):
     """Shared plumbing for the tools that address an existing exec session."""
 
     _MAX_OUTPUT = 30_000
+    # Above the 600s schema maximum of the `timeout` parameter; without this the
+    # registry's 300s default ceiling killed reads the schema had just allowed.
+    timeout_seconds = 660.0
 
     def __init__(self, sessions: ExecSessionRegistry, jobs: BackgroundJobRegistry | None = None):
         self.sessions = sessions

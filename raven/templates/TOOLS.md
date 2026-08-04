@@ -52,6 +52,16 @@ Because jobs survive, cancel the ones that were only scaffolding. Leave any
 service the task asked you to have running — something will check it after you are
 done, and stopping it on the way out fails the task.
 
+## read_file / write_file — truncation and paging
+
+- `read_file` returns 2000 lines per call by default. A large file is NOT fully
+  read in one call — page through it with `offset`/`limit` until the output no
+  longer reports more lines remaining
+- Lines longer than 2000 chars are cut with an explicit `(line truncated ...)`
+  marker; use `exec` with `cut -c` or `grep -o` when the tail of a long line
+  matters
+- Absence of a truncation marker means you saw the complete requested range
+
 ## cron — Scheduled Reminders
 
 - Please refer to cron skill for usage.
