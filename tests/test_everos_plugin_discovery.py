@@ -48,7 +48,7 @@ class TestPackageSurface:
         import raven.plugin.memory.everos
         from raven.plugin.memory.everos.backend import EverosBackend, make_backend
 
-        assert raven.plugin.memory.everos.__version__ == "1.0.0"
+        assert raven.plugin.memory.everos.__version__ == "1.1.0"
         assert callable(make_backend)
         assert EverosBackend is not None
 
@@ -107,9 +107,9 @@ class TestBundledDiscovery:
         d = PluginDiscovery(bundled_dir=_BUNDLED, user_dir=user_dir)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        # Bundled (version 1.0.0) wins; user-dir version (9.9.9) is shadowed.
+        # Bundled (version 1.1.0) wins; user-dir version (9.9.9) is shadowed.
         assert record.source == Source.BUNDLED
-        assert record.manifest.version == "1.0.0"
+        assert record.manifest.version == "1.1.0"
 
 
 # ---------------------------------------------------------------------------

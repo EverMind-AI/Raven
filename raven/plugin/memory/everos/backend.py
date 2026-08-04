@@ -189,7 +189,14 @@ class _HttpEverosAdapter:
         from raven.plugin.memory.everos._health import HEALTH_TIMEOUT_S, parse_capabilities
 
         try:
-            r = await self._client.get(f"{self._base_url}/health", timeout=HEALTH_TIMEOUT_S)
+            # Same headers as every other call on this client: everos ships no
+            # auth today, but a deployment behind a proxy that adds it would read
+            # an unauthenticated probe as a server with no capabilities.
+            r = await self._client.get(
+                f"{self._base_url}/health",
+                headers=self._headers(),
+                timeout=HEALTH_TIMEOUT_S,
+            )
             r.raise_for_status()
             payload = r.json()
         except Exception as exc:
@@ -549,10 +556,11 @@ class EverosBackend:
 
         The host already collects ``skill_usage`` signals (which everos
         skills were injected / used in a turn) and dispatches them here.
-        everos 1.0.0's service layer exposes no endpoint to consume them
-        — ``agent_skill.confidence`` lives in the persistence internals
-        with no service-level write path — so signals are dropped until
-        everos grows one. The method stays on the Protocol because it is
+        everos 1.2.1's HTTP surface still exposes no endpoint to consume
+        them — its routes are get / health / knowledge / memorize /
+        metrics / ome / search, and ``agent_skill.confidence`` lives in
+        the persistence internals with no service-level write path — so
+        signals are dropped until everos grows one. The method stays on the Protocol because it is
         a valid optional capability and the host plumbing is in place;
         this is not dead code.
 
