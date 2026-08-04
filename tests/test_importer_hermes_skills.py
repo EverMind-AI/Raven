@@ -141,6 +141,51 @@ async def test_all_five_origins_classified(tmp_path: Path) -> None:
     }
 
 
+async def test_an_org_mirror_without_a_marker_is_not_discovered(tmp_path: Path) -> None:
+    """Hermes gates `_org` by token, not by name: with no `.active_org` it prunes
+    the whole mirror, so those skills do not resolve for the user either. Importing
+    them would resurrect the skills of an org the user has left, and there is no
+    delete path for an unwanted import.
+    """
+    home, _ = _home_with_skills(tmp_path, skills=(("", "mine"),))
+    _skill(home / "skills" / "_org" / "org-OLD", "stale")
+
+    got = {s.name for s in await HermesSkillSource(hermes_home=home).discover()}
+
+    assert got == {"mine"}
+
+
+async def test_only_the_marked_org_mirror_is_discovered(tmp_path: Path) -> None:
+    """With a marker, Hermes descends into that org alone -- so the active org's
+    skills must be imported, and every other mirror on disk must not. Excluding
+    `_org` wholesale would fail this half.
+    """
+    home, _ = _home_with_skills(tmp_path, skills=(("", "mine"),))
+    org_root = home / "skills" / "_org"
+    _skill(org_root / "org-1", "current")
+    _skill(org_root / "org-2", "other")
+    (org_root / ".active_org").write_text("org-1\n", encoding="utf-8")
+
+    got = {s.name for s in await HermesSkillSource(hermes_home=home).discover()}
+
+    assert got == {"mine", "current"}
+
+
+async def test_a_blank_org_marker_counts_as_absent(tmp_path: Path) -> None:
+    """Upstream reads the marker as `text.strip() or None`, so whitespace is not
+    an org id. Treating it as one would match no directory anyway -- but reading
+    it as "any org" would import every mirror.
+    """
+    home, _ = _home_with_skills(tmp_path, skills=(("", "mine"),))
+    org_root = home / "skills" / "_org"
+    _skill(org_root / "org-1", "current")
+    (org_root / ".active_org").write_text("   \n", encoding="utf-8")
+
+    got = {s.name for s in await HermesSkillSource(hermes_home=home).discover()}
+
+    assert got == {"mine"}
+
+
 async def test_missing_manifest_makes_everything_importable(tmp_path: Path) -> None:
     home, _ = _home_with_skills(tmp_path, skills=(("cat", "a"), ("", "b")))
     got = {s.origin for s in await HermesSkillSource(hermes_home=home).discover()}
@@ -420,6 +465,53 @@ async def test_rerun_is_idempotent(tmp_path: Path) -> None:
     assert first.installed == 1
     assert second.installed == 0
     assert second.skipped == 1
+
+
+async def test_a_name_the_pool_already_holds_is_not_installed_again(tmp_path: Path) -> None:
+    """The pool keys a skill by frontmatter name, so a second skill declaring a
+    name an *earlier* run installed is the invisible one `get(name)` never
+    returns. Checking only the current run left that collision undetected -- the
+    exact loss the check exists to report.
+    """
+    ws = tmp_path / "ws"
+    pool = ws / "skills" / "hermes"
+    pool.mkdir(parents=True)
+    _skill(pool, "mine", body="---\nname: shared-name\n---\nthe one already in the pool\n")
+
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills", "incoming", body="---\nname: shared-name\n---\nthe newcomer\n")
+
+    summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
+
+    assert summary.installed == 0
+    assert summary.skipped == 1
+    assert not (pool / "incoming").exists()
+    assert (pool / "mine" / "SKILL.md").read_text(encoding="utf-8").endswith("already in the pool\n")
+
+
+async def test_a_rerun_does_not_collide_with_its_own_earlier_install(tmp_path: Path) -> None:
+    """The pool check must not cost re-run idempotency.
+
+    Separate from `test_rerun_is_idempotent` because the frontmatter name differs
+    from the directory name here, which is the only shape where a pool lookup
+    keyed on the frontmatter name can match a directory-named target.
+    """
+    home = tmp_path / ".hermes"
+    (home / "skills").mkdir(parents=True)
+    _skill(home / "skills" / "cat", "coach", body="---\nname: display-name\n---\nbody\n")
+    ws = tmp_path / "ws"
+    state = ImportState(path=tmp_path / "state.json")
+
+    first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+    second = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
+
+    assert first.installed == 1
+    assert second.installed == 0
+    assert second.skipped == 1
+    # One entry, not one plus a "coach-2" that the collision path would have
+    # produced had the name check run before the target was resolved.
+    assert [p.name for p in (ws / "skills" / "hermes").iterdir()] == ["coach"]
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")

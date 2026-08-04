@@ -60,22 +60,27 @@ async def install_skills(
     claimed: set[str] = set()
     claimed_registry_names: set[str] = set()
     for skill in wanted:
-        # A registry-name collision cannot be renamed away: the pool keys a
-        # skill as (source, frontmatter name), which travels inside the copied
-        # SKILL.md, so a second skill under any directory name would still be
-        # the invisible one that get(name) never returns. Skipping and counting
-        # it at least makes the loss reportable.
-        if skill.registry_name in claimed_registry_names:
+        target = _target_for(skill, dest_root, claimed)
+        if target is None:
+            skipped += 1
+            continue
+        # A registry-name collision cannot be renamed away: the pool keys a skill
+        # as (source, frontmatter name), which travels inside the copied
+        # SKILL.md, so a second skill under any directory name would still be the
+        # invisible one that get(name) never returns. Skipping and counting it at
+        # least makes the loss reportable.
+        #
+        # Checked against the pool as well as this run, because a name claimed by
+        # an earlier import or by the user's own skill is exactly as invisible.
+        # Ordered after `_target_for` so that "already on disk" stays its answer
+        # to give: a re-run of the same skill is a no-op, not a dropped duplicate.
+        if skill.registry_name in claimed_registry_names | _pool_registry_names(dest_root):
             logger.warning(
-                "skill {} declares the name {} already claimed this run; skipping the duplicate at {}",
+                "skill {} declares the name {}, already claimed; skipping the duplicate at {}",
                 skill.name,
                 skill.registry_name,
                 skill.path,
             )
-            skipped += 1
-            continue
-        target = _target_for(skill, dest_root, claimed)
-        if target is None:
             skipped += 1
             continue
         # Keyed on the resolved target name, not skill.name: two skills that
@@ -119,6 +124,32 @@ async def install_skills(
         skipped=skipped,
         failed=failed,
     )
+
+
+def _pool_registry_names(dest_root: Path) -> set[str]:
+    """The frontmatter names already installed under ``dest_root``.
+
+    The pool keys by frontmatter name rather than directory name, so this has to
+    read each SKILL.md instead of listing directories. Cheap in the only place it
+    matters: the pool holds what previous imports installed, not the whole Hermes
+    tree.
+
+    No need to exclude the incoming skill's own target: ``_target_for`` returns a
+    path only when it does not exist yet, so the target is never among these and
+    an idempotent re-run never meets its own name here.
+    """
+    from raven.utils.text import parse_frontmatter
+
+    names: set[str] = set()
+    for skill_md in sorted(dest_root.rglob("SKILL.md")):
+        try:
+            front, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        name = str(front.get("name") or "").strip()
+        if name:
+            names.add(name)
+    return names
 
 
 def _target_for(skill: DiscoveredSkill, dest_root: Path, claimed: set[str]) -> Path | None:
