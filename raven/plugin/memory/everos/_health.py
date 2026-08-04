@@ -15,10 +15,13 @@ what the user configured belongs to the caller, which is the side that can read
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
-_HEALTH_TIMEOUT_S = 5.0
+# Health is a local, in-process check; a slow answer means the server is wedged,
+# and waiting on it would only delay the work it is meant to inform.
+HEALTH_TIMEOUT_S = 5.0
 
 # everos.toml section name -> the key /health reports it under. The two differ
 # (`embedding` vs `embed`, `multimodal` vs `multimodal_llm`), so a caller that
@@ -77,16 +80,26 @@ def capability_available(capabilities: dict[str, bool], section: str) -> bool | 
     return value if isinstance(value, bool) else None
 
 
+def parse_capabilities(payload: Any) -> dict[str, bool]:
+    """The bool-valued subset of a ``/health`` body's ``capabilities`` map.
+
+    ``{}`` whenever the body cannot answer -- absent, malformed, or from a
+    pre-1.2.1 server. Shared with the adapter, which reads the same map to pick
+    its search lane: parsed two ways, ``raven doctor`` and recall could disagree
+    about the same server.
+    """
+    raw = (payload or {}).get("capabilities") if isinstance(payload, dict) else None
+    return {k: v for k, v in raw.items() if isinstance(v, bool)} if isinstance(raw, dict) else {}
+
+
 def probe_capabilities(base_url: str = DEFAULT_EVEROS_BASE_URL) -> CapabilityReport:
     """Ask a running server what it can do. Never raises."""
     import httpx
 
     try:
-        r = httpx.get(f"{base_url.rstrip('/')}/health", timeout=_HEALTH_TIMEOUT_S)
+        r = httpx.get(f"{base_url.rstrip('/')}/health", timeout=HEALTH_TIMEOUT_S)
         r.raise_for_status()
         payload = r.json() or {}
     except Exception as exc:
         return CapabilityReport(reachable=False, error=f"{type(exc).__name__}: {exc}")
-    raw = payload.get("capabilities")
-    capabilities = {k: v for k, v in raw.items() if isinstance(v, bool)} if isinstance(raw, dict) else {}
-    return CapabilityReport(reachable=True, capabilities=capabilities)
+    return CapabilityReport(reachable=True, capabilities=parse_capabilities(payload))

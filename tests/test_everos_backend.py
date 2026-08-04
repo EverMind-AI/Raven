@@ -169,6 +169,26 @@ class TestStartWarnsWhenRecallCannotWork:
 
         monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
 
+    async def test_the_probe_runs_off_the_event_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The probe and the config read behind it are blocking IO, and start()
+        runs on the loop every session begins on: called inline, a wedged server
+        stalls that loop for the whole health timeout.
+        """
+        import threading
+
+        on_main: list[bool] = []
+
+        def _warn(_base_url: str) -> None:
+            on_main.append(threading.current_thread() is threading.main_thread())
+
+        monkeypatch.setattr(EverosBackend, "_warn_if_recall_cannot_work", staticmethod(_warn))
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert on_main == [False], "the health probe ran on the event loop's own thread"
+
     async def test_a_role_configured_but_unbuilt_is_said_out_loud(
         self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
     ) -> None:

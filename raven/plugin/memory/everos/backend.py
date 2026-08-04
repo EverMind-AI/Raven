@@ -26,6 +26,7 @@ Three architectural invariants worth re-stating:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -120,9 +121,6 @@ def _jsonify(obj: Any) -> Any:
 
 _DEFAULT_HTTP_TIMEOUT_S: float = 60.0
 _MEMORIZE_TIMEOUT_S: float = 360.0
-# Health is a local, in-process check; a slow answer means the server is wedged,
-# and waiting on it would only delay the recall it is meant to inform.
-_HEALTH_TIMEOUT_S: float = 5.0
 
 
 class _HttpEverosAdapter:
@@ -188,16 +186,16 @@ class _HttpEverosAdapter:
         return self._caps
 
     async def _probe_capabilities(self) -> dict[str, bool]:
+        from raven.plugin.memory.everos._health import HEALTH_TIMEOUT_S, parse_capabilities
+
         try:
-            r = await self._client.get(f"{self._base_url}/health", timeout=_HEALTH_TIMEOUT_S)
+            r = await self._client.get(f"{self._base_url}/health", timeout=HEALTH_TIMEOUT_S)
             r.raise_for_status()
-            capabilities = (r.json() or {}).get("capabilities")
+            payload = r.json()
         except Exception as exc:
             logger.warning("everos health probe failed (%s); leaving search parameters untouched", exc)
             return {}
-        if not isinstance(capabilities, dict):
-            return {}
-        return {k: v for k, v in capabilities.items() if isinstance(v, bool)}
+        return parse_capabilities(payload)
 
     async def _search_tuning(self, *, agent_id: str | None) -> dict[str, Any]:
         """Search parameters this server's capabilities call for.
@@ -404,7 +402,9 @@ class EverosBackend:
                     e,
                 )
                 raise
-            self._warn_if_recall_cannot_work(base_url)
+            # Off-thread: the probe and the config read below are both blocking
+            # IO, and start() runs on the loop every session begins on.
+            await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
 
     @staticmethod
     def _warn_if_recall_cannot_work(base_url: str) -> None:
@@ -745,6 +745,9 @@ def _flatten_profile(profile_data: Any) -> str:
         return _cap_profile_text(str(profile_data))
     lines: list[str] = []
     for key, value in profile_data.items():
+        # EverOS stamps a profile with ``*_ms`` epoch keys recording when it last
+        # touched each part. That is bookkeeping about the store, not a fact about
+        # the user, and rendering it spends prompt budget on raw millisecond ints.
         if key.endswith("_ms"):
             continue
         if isinstance(value, list):
