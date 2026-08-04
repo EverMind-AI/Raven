@@ -5,12 +5,20 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from typing import Any, AsyncGenerator
 
 import httpx
 from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.openai_codex_catalog import (
+    AUTO_CODEX_MODEL,
+    CODEX_CATALOG_CACHE_TTL,
+    CODEX_CATALOG_TIMEOUT,
+    fetch_codex_models,
+    is_auto_codex_model,
+)
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -19,9 +27,12 @@ DEFAULT_ORIGINATOR = "raven"
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str = AUTO_CODEX_MODEL):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
+        self._resolved_auto_model: str | None = None
+        self._resolved_auto_model_for: str | None = None
+        self._resolved_auto_model_expires_at = 0.0
 
     async def chat(
         self,
@@ -45,6 +56,15 @@ class OpenAICodexProvider(LLMProvider):
             ) from e
 
         token = await asyncio.to_thread(get_codex_token)
+        if is_auto_codex_model(model):
+            try:
+                model = await self._resolve_auto_model(token)
+            except Exception as e:
+                return LLMResponse(
+                    content=f"Error calling Codex: {str(e)}",
+                    finish_reason="error",
+                    error_classification=self.classify_error(e),
+                )
         headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {
@@ -95,6 +115,30 @@ class OpenAICodexProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
+
+    async def _resolve_auto_model(self, token: Any) -> str:
+        cache_key = _catalog_cache_key(token)
+        if (
+            self._resolved_auto_model is not None
+            and self._resolved_auto_model_for == cache_key
+            and time.monotonic() < self._resolved_auto_model_expires_at
+        ):
+            return self._resolved_auto_model
+
+        timeout = min(self.generation.timeout, CODEX_CATALOG_TIMEOUT)
+        models = await asyncio.to_thread(fetch_codex_models, token, timeout=timeout)
+        self._resolved_auto_model = models[0]
+        self._resolved_auto_model_for = cache_key
+        self._resolved_auto_model_expires_at = time.monotonic() + CODEX_CATALOG_CACHE_TTL
+        return self._resolved_auto_model
+
+
+def _catalog_cache_key(token: Any) -> str:
+    account_id = getattr(token, "account_id", None)
+    if isinstance(account_id, str) and account_id:
+        return f"account:{account_id}"
+    access = getattr(token, "access", "")
+    return f"token:{hashlib.sha256(str(access).encode()).hexdigest()}"
 
 
 def _strip_model_prefix(model: str) -> str:

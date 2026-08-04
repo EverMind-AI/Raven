@@ -771,15 +771,16 @@ def test_provider(
     config_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> dict[str, Any]:
-    """Verify a provider's credentials via a free GET request to ``/v1/models``.
+    """Verify credentials with the provider's free model metadata endpoint.
 
-    Why ``/v1/models`` rather than a chat completion (same rationale as
-    hermes-agent's ``doctor._probe_apikey_provider``):
+    OpenAI-compatible providers use ``/v1/models``. OpenAI Codex uses its
+    account-scoped catalog because its OAuth token is not an API key and the
+    generic endpoint rejects it.
 
     - Zero token cost — metadata endpoint, not LLM-generated content.
     - No charge to the user, doesn't burn inference quota.
-    - Supported by virtually every OpenAI-compatible provider (the 18 we
-      ship today).
+    - Supported by the OpenAI-compatible providers we ship, with a dedicated
+      adapter for providers whose catalog contract differs.
     - No "which test model?" maintenance burden.
 
     Behavior:
@@ -787,7 +788,8 @@ def test_provider(
     1. Look up the provider's ``api_key`` or provider-specific OAuth access
        token and ``api_base``
        (falling back to ``ProviderSpec.default_api_base`` when unset).
-    2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}``.
+    2. Fetch the provider-specific model catalog with its required auth
+       headers.
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``). Unknown codes
        render as ``http_{code}``. Network errors → ``network_error``.
 
@@ -813,6 +815,7 @@ def test_provider(
 
     api_key = cfg.get("api_key") or ""
     api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
+    oauth_token: Any | None = None
 
     if spec and spec.is_oauth:
         try:
@@ -856,6 +859,7 @@ def test_provider(
                 "error": "no OAuth token stored",
             }
         api_key = token.access
+        oauth_token = token
 
     if not api_key and not (spec and spec.is_local):
         return {
@@ -877,6 +881,53 @@ def test_provider(
             "models_count": None,
             "model_ids": None,
             "error": "api_base is empty and provider has no default",
+        }
+
+    if spec and spec.name == "openai_codex":
+        from raven.providers.openai_codex_catalog import CodexModelCatalogError, fetch_codex_models
+
+        start = time.monotonic()
+        try:
+            model_ids = fetch_codex_models(oauth_token, timeout=timeout_s, transport=transport)
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            return {
+                "ok": False,
+                "status": _HTTP_STATUS_MAP.get(status_code, f"http_{status_code}"),
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": status_code,
+                "models_count": None,
+                "model_ids": None,
+                "error": f"HTTP {status_code}",
+            }
+        except CodexModelCatalogError as exc:
+            return {
+                "ok": False,
+                "status": "no_models",
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": 200,
+                "models_count": 0,
+                "model_ids": [],
+                "error": str(exc),
+            }
+        except httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "status": "network_error",
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": str(exc),
+            }
+        return {
+            "ok": True,
+            "status": "valid",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": 200,
+            "models_count": len(model_ids),
+            "model_ids": model_ids,
+            "error": None,
         }
 
     url = api_base.rstrip("/") + "/models"

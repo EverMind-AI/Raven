@@ -382,6 +382,7 @@ def test_test_command_success_renders_models_count(
     assert r.exit_code == 0, r.output
     assert "412 models" in r.output
     assert "234ms" in r.output
+    assert "model catalog" in r.output
 
 
 def test_test_command_failure_renders_hint(
@@ -406,6 +407,32 @@ def test_test_command_failure_renders_hint(
     assert r.exit_code == 1
     assert "invalid_key" in r.output
     assert "provider set openrouter --api-key" in r.output
+
+
+def test_test_command_oauth_auth_failure_renders_login_hint(
+    tmp_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda name, *, timeout_s=10: {
+            "ok": False,
+            "status": "invalid_key",
+            "elapsed_ms": 50,
+            "http_status": 403,
+            "models_count": None,
+            "error": "HTTP 403",
+        },
+    )
+
+    result = runner.invoke(app, ["provider", "test", "openai-codex"])
+
+    assert result.exit_code == 1
+    assert "provider login openai-codex" in result.output
+    assert "--api-key" not in result.output
 
 
 def test_test_command_unknown_provider_exits_1(tmp_config: Path) -> None:

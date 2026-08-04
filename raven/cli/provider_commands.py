@@ -10,7 +10,7 @@ Config subcommands:
 - ``provider list``                 — overview of every provider's status
 - ``provider get <name>``           — current config (secrets redacted)
 - ``provider set <name> [...]``     — patch fields (--api-key, --api-base, ...)
-- ``provider test <name>``          — verify creds via free ``GET /v1/models``
+- ``provider test <name>``          — verify creds via a free model catalog request
 - ``provider reset <name>``         — restore schema defaults; OAuth providers
                                       also lose their token file
 - ``provider show <name>``          — reflect available ``--flag`` fields
@@ -383,15 +383,14 @@ def _register_config_commands(app: typer.Typer) -> None:
         name: str = typer.Argument(..., help="Provider name"),
         timeout: int = typer.Option(10, "--timeout", "-t", help="Timeout seconds"),
     ):
-        """Verify a provider's credentials via a free ``GET /v1/models`` call.
+        """Verify a provider's credentials via a free model catalog request.
 
         Does NOT consume inference quota — hits the provider's models metadata
-        endpoint, which is free, fast, and tells you whether the key is valid,
-        has credit, and isn't rate-limited.
+        endpoint to verify that the configured credentials can list models.
         """
         from raven.config.update_providers import test_provider as probe
 
-        console.print(f"[dim]Pinging {name}/v1/models ...[/dim]")
+        console.print(f"[dim]Pinging {name} model catalog ...[/dim]")
         try:
             result = probe(name, timeout_s=timeout)
         except KeyError as exc:
@@ -406,12 +405,21 @@ def _register_config_commands(app: typer.Typer) -> None:
             )
             return
 
+        from raven.providers.registry import CRED_OAUTH, credential_kind
+
+        oauth_login_hint = f"Run: raven provider login {name.replace('_', '-')}"
+        invalid_credential_hint = (
+            oauth_login_hint
+            if credential_kind(name) == CRED_OAUTH
+            else f"Run: raven provider set {name} --api-key <NEW-KEY>"
+        )
         hints = {
             "not_configured": f"Run: raven provider set {name} --api-key <KEY>",
-            "invalid_key": f"Run: raven provider set {name} --api-key <NEW-KEY>",
+            "invalid_key": invalid_credential_hint,
             "no_credits": "Fund your account at the provider's billing page",
             "rate_limited": "Wait a few minutes and retry, or switch provider",
-            "oauth_token_missing": (f"Run: raven provider login {name.replace('_', '-')}"),
+            "oauth_token_missing": oauth_login_hint,
+            "no_models": "No visible models are available for this account",
             "network_error": "Check network / firewall / VPN settings",
         }
         hint = hints.get(result["status"], "")

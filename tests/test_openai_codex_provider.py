@@ -34,9 +34,9 @@ def test_headers_declare_experimental_responses_beta():
     assert headers["accept"] == "text/event-stream"
 
 
-def test_provider_default_model_is_codex():
-    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.1-codex")
-    assert provider.get_default_model() == "openai-codex/gpt-5.1-codex"
+def test_provider_default_model_is_auto():
+    provider = OpenAICodexProvider()
+    assert provider.get_default_model() == "openai-codex/auto"
     # OAuth-based: constructed without an API key.
     assert provider.api_key is None
 

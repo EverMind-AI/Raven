@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from raven.providers.openai_codex_catalog import AUTO_CODEX_MODEL
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -321,7 +323,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         is_oauth=True,  # OAuth-based authentication
-        default_model="openai-codex/gpt-5-codex",
+        default_model=AUTO_CODEX_MODEL,
     ),
     # Github Copilot: uses OAuth, not API key.
     ProviderSpec(

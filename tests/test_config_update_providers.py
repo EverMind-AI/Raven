@@ -425,7 +425,19 @@ def test_test_provider_oauth_reads_token_from_oauth_cli_kit(
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["auth"] = request.headers.get("Authorization")
-        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+        seen["account"] = request.headers.get("chatgpt-account-id")
+        seen["path"] = request.url.path
+        seen["client_version"] = request.url.params.get("client_version")
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"slug": "second", "visibility": "list", "priority": 20},
+                    {"slug": "hidden", "visibility": "hide", "priority": 1},
+                    {"slug": "first", "visibility": "list", "priority": 2},
+                ]
+            },
+        )
 
     # openai_codex has default_api_base set; github_copilot doesn't — pick
     # the former so the request can resolve a URL without extra setup.
@@ -436,6 +448,64 @@ def test_test_provider_oauth_reads_token_from_oauth_cli_kit(
     )
     assert result["ok"] is True
     assert seen["auth"] == "Bearer oauth-token-xyz"
+    assert seen["account"] == "me@x"
+    assert seen["path"] == "/backend-api/codex/models"
+    assert seen["client_version"]
+    assert result["models_count"] == 2
+    assert result["model_ids"] == ["first", "second"]
+
+
+def test_test_provider_oauth_empty_catalog_is_not_valid(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
+    monkeypatch.setitem(sys.modules, "oauth_cli_kit", SimpleNamespace(get_token=lambda: fake_token))
+    transport = _mock_transport(lambda _: httpx.Response(200, json={"models": []}))
+
+    result = probe_provider("openai_codex", config_path=cfg_path, transport=transport)
+
+    assert result["ok"] is False
+    assert result["status"] == "no_models"
+    assert result["http_status"] == 200
+
+
+def test_test_provider_oauth_catalog_403_maps_to_invalid_key(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
+    monkeypatch.setitem(sys.modules, "oauth_cli_kit", SimpleNamespace(get_token=lambda: fake_token))
+    transport = _mock_transport(lambda _: httpx.Response(403, json={"detail": "forbidden"}))
+
+    result = probe_provider("openai_codex", config_path=cfg_path, transport=transport)
+
+    assert result["ok"] is False
+    assert result["status"] == "invalid_key"
+    assert result["http_status"] == 403
+
+
+def test_test_provider_oauth_catalog_network_error_is_not_a_credential_failure(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
+    monkeypatch.setitem(sys.modules, "oauth_cli_kit", SimpleNamespace(get_token=lambda: fake_token))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    result = probe_provider("openai_codex", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is False
+    assert result["status"] == "network_error"
+    assert result["http_status"] is None
 
 
 def test_test_provider_oauth_missing_token_returns_oauth_token_missing(

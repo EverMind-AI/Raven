@@ -131,6 +131,14 @@ def test_seeded_provider_default_model_in_shortlist(slug: str) -> None:
     assert default in common_models_for(slug)
 
 
+def test_openai_codex_registry_and_runtime_share_auto_default() -> None:
+    from raven.providers.openai_codex_catalog import AUTO_CODEX_MODEL
+    from raven.providers.openai_codex_provider import OpenAICodexProvider
+
+    assert find_by_name("openai_codex").default_model == AUTO_CODEX_MODEL
+    assert OpenAICodexProvider().get_default_model() == AUTO_CODEX_MODEL
+
+
 def _concrete_provider_subclasses() -> set[type]:
     """All non-abstract LLMProvider subclasses defined in raven.providers."""
     # Import each backend module so its subclass is registered on LLMProvider.

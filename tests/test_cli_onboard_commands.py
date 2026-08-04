@@ -2212,6 +2212,42 @@ def test_the_wizard_offers_known_models_when_the_provider_cannot_be_reached(monk
     assert any(c.startswith("moonshot/") for c in offered["choices"]), offered["choices"][:3]
 
 
+def test_codex_picker_preserves_auto_as_default_above_live_catalog(monkeypatch) -> None:
+    from raven.cli import onboard_commands
+    from raven.providers.openai_codex_catalog import AUTO_CODEX_MODEL
+    from raven.providers.registry import find_by_name
+
+    offered: dict[str, Any] = {}
+
+    class _Prompt:
+        def __init__(self, _label, **kwargs):
+            offered["choices"] = list(kwargs["choices"])
+            offered["default"] = kwargs["default"]
+
+        def ask(self):
+            return offered["default"]
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_require_questionary",
+        lambda: SimpleNamespace(autocomplete=_Prompt),
+    )
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model=None,
+        model_ids=["gpt-new-default", "gpt-secondary"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert offered["default"] == AUTO_CODEX_MODEL
+    assert offered["choices"] == [AUTO_CODEX_MODEL, "gpt-new-default", "gpt-secondary"]
+    assert chosen == AUTO_CODEX_MODEL
+
+
 def test_a_spec_less_vendors_model_id_carries_its_route_prefix() -> None:
     """A bare id is routed by keyword and fallback, not to the section configured.
 
