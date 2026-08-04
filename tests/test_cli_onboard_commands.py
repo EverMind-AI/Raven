@@ -3608,14 +3608,22 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
 # --------------------------------------------------------------------------- role cost lines
 
 
-def test_every_optional_role_states_what_skipping_it_costs() -> None:
-    """A role the user can skip has to say what skipping it loses, in the same
-    place for every role, or the three read as equally weighted choices."""
+def test_embedding_states_what_skipping_it_costs() -> None:
+    """The one role whose absence changes how recall works at all -- searching
+    lexically instead of semantically -- has to say so before it is skipped."""
+    en, zh = onboard_commands._EVEROS_ROLES["embedding"]["cost"]
+
+    assert "keywords" in en, en
+    assert "关键词" in zh, zh
+
+
+def test_cost_lines_lead_with_the_consequence() -> None:
+    """Whichever roles carry one, they read the same way, so a reader comparing
+    two of them is comparing like with like."""
     for name, role in onboard_commands._EVEROS_ROLES.items():
-        if not role.get("optional"):
-            continue
         cost = role.get("cost")
-        assert cost, f"{name} is optional but never says what skipping it costs"
+        if not cost:
+            continue
         en, zh = cost
         assert en.startswith("Without it:"), f"{name}: English cost must lead with the consequence: {en!r}"
         assert zh.startswith("不配置："), f"{name}: Chinese cost must lead with the consequence: {zh!r}"
@@ -3632,17 +3640,6 @@ def test_the_roles_we_want_configured_say_so(name: str) -> None:
     en, zh = tag
     assert "advised" in en, en
     assert "建议" in zh, zh
-
-
-def test_the_rerank_cost_names_the_llm_call_it_saves() -> None:
-    """Skipping rerank is not just weaker ordering: the adapter has to send
-    enable_llm_rerank, which spends an LLM call on every agent-track recall --
-    and that track feeds SkillForge during context assembly, so it runs per
-    turn. A recurring cost is a better reason to configure it than ranking."""
-    en, zh = onboard_commands._EVEROS_ROLES["rerank"]["cost"]
-
-    assert "LLM call" in en, en
-    assert "LLM 调用" in zh, zh
 
 
 @pytest.mark.parametrize("lang", ["en", "zh"])
@@ -3687,9 +3684,9 @@ def test_the_cost_line_actually_reaches_the_screen(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
     onboard_commands._config_everos_role(
-        section="rerank", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
+        section="embedding", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
 
     out = " ".join(capsys.readouterr().out.split())
     assert needle in out, f"{lang}: the cost line never printed"
-    assert ("LLM call" if lang == "en" else "LLM 调用") in out
+    assert ("only match keywords" if lang == "en" else "只能使用关键词检索") in out

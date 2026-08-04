@@ -3203,9 +3203,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "[accent]（可选，强烈建议配置）[/accent]",
         ),
         "cost": (
-            "Without it: rephrase a question and it may miss a memory you have;\n"
-            "  EverOS's semantic recall goes entirely unused.",
-            "不配置：换个说法提问就可能找不到已有记忆，EverOS 的语义召回能力完全用不上。",
+            "Without it: rephrase a question and it may miss a memory you have;\n  recall can only match keywords.",
+            "不配置：换个说法提问就可能找不到已有记忆，记忆召回时只能使用关键词检索。",
         ),
         "recommendation": (
             "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold] -- must be [bold yellow]1024-dim[/bold yellow],\n"
@@ -3235,26 +3234,14 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
             "[accent](optional, advised)[/accent]",
             "[accent]（可选，建议配置）[/accent]",
         ),
-        # Not merely "weaker ordering": without a cross-encoder the adapter has to
-        # send enable_llm_rerank, which spends an LLM call on every agent-track
-        # recall -- and that track feeds SkillForge during context assembly, so it
-        # runs every turn. Configuring rerank removes a recurring cost, which is a
-        # better reason to do it than ranking quality alone.
-        "cost": (
-            "Without it: every agent-track recall spends an extra LLM call to rank,\n"
-            "  and ranks less accurately than a cross-encoder would.",
-            "不配置：每次 agent 轨召回都要多花一次 LLM 调用来排序，且精度不如专用模型。",
-        ),
         "recommendation": (
             "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
             "推荐 [bold]Qwen/Qwen3-Reranker-4B[/bold]",
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
-            "  [yellow]! Skipped: agent-track recall will rank via an extra LLM call.[/yellow]\n"
-            "  [dim]Retrieval still works. Configure rerank later to drop that per-recall cost.[/dim]",
-            "  [yellow]⚠ 已跳过：agent 轨召回将改用额外的 LLM 调用来排序。[/yellow]\n"
-            "  [dim]检索仍可用。日后配好 rerank 即可省掉这笔每次召回的开销。[/dim]",
+            "  [dim]Skipped rerank; memory retrieval still works.[/dim]",
+            "  [dim]已跳过 rerank，记忆检索仍可用。[/dim]",
         ),
     },
     "multimodal": {
