@@ -402,7 +402,14 @@ _MIN_WINDOW = timedelta(minutes=1)
 # handful of probes and wrong the first time a clock skew or a migrated store
 # produced an older started_at, so the epoch it is -- the empty halves left of
 # real data return on their first probe without recursing.
-_PARTITION_FLOOR = datetime(1970, 1, 1)
+#
+# 1970-01-02 rather than 01-01: the bound is formatted as naive local time and
+# hermes parses it the same way (`hermes_cli/session_filters.py`, "naive = local
+# time", then `dt.timestamp()`). East of UTC an epoch-day floor is therefore a
+# pre-epoch instant, and a naive `timestamp()` goes through mktime, which raises
+# OSError for those on Windows. A day of headroom covers every real offset, and
+# no hermes session predates it.
+_PARTITION_FLOOR = datetime(1970, 1, 2)
 
 
 class HermesExportError(RuntimeError):
