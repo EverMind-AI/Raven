@@ -4356,7 +4356,9 @@ def _step5_import_body(
         # arrive as ScanResults: an install whose only importable data is skills
         # lands here, and stopping at the message above would tell that user
         # there is nothing to import while a dozen skills sit on disk.
-        if not asyncio.run(_install_skills_without_a_scan(None)):
+        # Not assume_yes: the wizard's own "Start?" gate sits further down, past
+        # the prompts this return skips, so nothing else asks before the copy.
+        if not asyncio.run(_install_skills_without_a_scan(None, assume_yes=False)):
             console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
 
@@ -4546,7 +4548,7 @@ def _step5_import_body(
                 # skills-only install reaches this return with its skills still
                 # uninstalled unless they are handled here.
                 scope = None if selected_platform == "all" else Platform(selected_platform)
-                if not asyncio.run(_install_skills_without_a_scan(scope)):
+                if not asyncio.run(_install_skills_without_a_scan(scope, assume_yes=False)):
                     console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
                 return None
 
@@ -4632,6 +4634,7 @@ def _step5_import_body(
         import subprocess as _sp
 
         raven_bin = shutil.which("raven")
+        platform_flag = selected_platform if selected_platform != "all" else None
         if not raven_bin:
             console.print(
                 _t(
@@ -4640,8 +4643,21 @@ def _step5_import_body(
                 )
             )
             exec_mode = "foreground"
+        elif platform_flag is None and len(by_platform) > 1:
+            # `import run` has no way to say "every platform": with no --platform
+            # and more than one platform holding data, the child reaches the
+            # platform picker. A detached process with DEVNULL on both streams has
+            # no terminal to ask on, so it would hang unseen after this step had
+            # already reported the import as started.
+            console.print(
+                _t(
+                    "  [yellow]An all-platforms import cannot run in the background yet;\n"
+                    "  running it in the foreground instead.[/yellow]",
+                    "  [yellow]全平台导入暂不支持后台执行，改为前台运行。[/yellow]",
+                )
+            )
+            exec_mode = "foreground"
         else:
-            platform_flag = selected_platform if selected_platform != "all" else None
             cmd = [raven_bin, "import", "run", "--tier", selected_tier.value, "--yes"]
             if platform_flag:
                 cmd.extend(["--platform", platform_flag])

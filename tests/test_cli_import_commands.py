@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -251,25 +252,67 @@ class TestRun:
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
 
+    @staticmethod
+    @contextmanager
+    def _patched_skills_only(tmp_path: Path) -> Iterator[AsyncMock]:
+        """A machine whose only importable data is 12 Hermes skills.
+
+        `_importable_skill_count` has to be stubbed too: it walks the real
+        `~/.hermes` skill tree, so left alone the count -- and whether this test
+        passes at all -- would come from whoever's machine is running it.
+        """
+        installer = AsyncMock(return_value=SkillImportSummary(total=12, installed=12))
+        with (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=[])),
+            patch("raven.cli.import_commands._importable_skill_count", new=AsyncMock(return_value=12)),
+            patch("raven.cli.import_commands.install_skills", new=installer),
+            patch("raven.cli.import_commands.load_config", return_value=SimpleNamespace(workspace_path=tmp_path)),
+        ):
+            yield installer
+
     def test_run_installs_skills_when_the_scan_finds_nothing(self, tmp_path: Path) -> None:
         """Skills are directories rather than message sources, so they never
         arrive as ScanResults. An install whose only importable data is skills
         reaches this early return, and stopping there tells that user there is
         nothing to import while a dozen skills sit on disk.
         """
-        with (
-            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=[])),
-            patch(
-                "raven.cli.import_commands.install_skills",
-                new=AsyncMock(return_value=SkillImportSummary(total=12, installed=12)),
-            ),
-            patch("raven.cli.import_commands.load_config", return_value=SimpleNamespace(workspace_path=tmp_path)),
-        ):
+        with self._patched_skills_only(tmp_path):
             result = runner.invoke(import_app, ["run", "--platform", "hermes", "--tier", "full", "--yes"])
 
         assert result.exit_code == 0, result.output
         assert "12 installed" in result.stdout
         assert "No importable data found" not in result.stdout
+
+    def test_run_asks_before_copying_a_skill_tree(self, tmp_path: Path) -> None:
+        """This path runs before the run's own `Proceed?` gate and copies
+        directories nothing undoes, so declining has to stop it. Every other test
+        here passes `--yes`, which is what hid the missing gate.
+        """
+        with self._patched_skills_only(tmp_path) as installer:
+            result = runner.invoke(
+                import_app,
+                ["run", "--platform", "hermes", "--tier", "full"],
+                input="n\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "About to import 12 Hermes skills" in result.stdout
+        installer.assert_not_awaited()
+        # A decline is an answer; reporting "nothing to import" on top of it
+        # would contradict the count just shown.
+        assert "No importable data found" not in result.stdout
+
+    def test_run_copies_the_skill_tree_once_accepted(self, tmp_path: Path) -> None:
+        with self._patched_skills_only(tmp_path) as installer:
+            result = runner.invoke(
+                import_app,
+                ["run", "--platform", "hermes", "--tier", "full"],
+                input="y\n",
+            )
+
+        assert result.exit_code == 0, result.output
+        installer.assert_awaited_once()
+        assert "12 installed" in result.stdout
 
     def test_run_installs_skills_when_the_tier_keeps_nothing(self, tmp_path: Path) -> None:
         """The tier filter has nothing of the skills' to keep either, so the
@@ -633,6 +676,48 @@ class TestBuildAndRunHermesOrdering:
 
         assert calls == ["start", "run_import", "land", "stop"]
         assert result.summary is summary
+
+    async def test_a_cancelled_run_skips_both_post_phases(self, tmp_path: Path) -> None:
+        """`run_import` returns normally when it sees the cancel file, so nothing
+        downstream notices unless it reads `cancelled`. These two phases are the
+        run's most expensive -- one LLM call per USER.md entry, and a copy of the
+        whole skill tree -- so `raven import stop` was starting the work it was
+        asked to stop.
+        """
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+        cancelled = ImportSummary(total=4, submitted=1, skipped=0, failed=0, errors=(), cancelled=True)
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            return cancelled
+
+        async def _fake_land(*_args: object, **_kwargs: object) -> None:
+            calls.append("land")
+
+        async def _fake_skills(*_args: object, **_kwargs: object) -> None:
+            calls.append("skills")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            patch("raven.cli.import_commands._land_hermes_user_md", new=_fake_land),
+            patch("raven.cli.import_commands._install_hermes_skills", new=_fake_skills),
+        ):
+            result = await _build_and_run([], state)
+
+        assert calls == ["start", "run_import", "stop"], calls
+        assert result.summary is cancelled
+        assert result.profile is None
+        assert result.skills is None
 
     async def test_mirror_failure_does_not_fail_the_import(self, tmp_path: Path) -> None:
         calls: list[str] = []

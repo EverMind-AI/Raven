@@ -120,8 +120,10 @@ async def _build_and_run(
     try:
         await backend.start()
     except Exception as e:
+        from raven.plugin.memory.everos._server import server_log_path
+
         console.print(f"[red]Failed to start EverOS memory server: {e}[/red]")
-        console.print("[dim]Check the server log: ~/.raven/logs/everos-server.log[/dim]")
+        console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")
         console.print("[dim]Retry: raven import run[/dim]")
         raise typer.Exit(1)
     try:
@@ -131,18 +133,23 @@ async def _build_and_run(
         # already succeeded.
         profile: "ImportedSections | None" = None
         profile_error = ""
-        try:
-            profile = await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
-        except Exception as exc:
-            logger.warning("hermes user.md mirror failed: {}", exc)
-            profile_error = str(exc)
         skills: SkillImportSummary | None = None
         skill_error = ""
-        try:
-            skills = await _install_hermes_skills(items, workspace, state)
-        except Exception as exc:
-            logger.warning("hermes skill import failed: {}", exc)
-            skill_error = str(exc)
+        # `run_import` returns normally on cancellation rather than raising, and
+        # these two phases are the expensive ones: one LLM call per USER.md entry,
+        # and a copy of the whole skill tree. `raven import stop` has to stop the
+        # run, not hand it its two longest steps.
+        if not summary.cancelled:
+            try:
+                profile = await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
+            except Exception as exc:
+                logger.warning("hermes user.md mirror failed: {}", exc)
+                profile_error = str(exc)
+            try:
+                skills = await _install_hermes_skills(items, workspace, state)
+            except Exception as exc:
+                logger.warning("hermes skill import failed: {}", exc)
+                skill_error = str(exc)
         return ImportRunResult(
             summary=summary,
             profile=profile,
@@ -167,7 +174,7 @@ def _report_scan_error(platform: Platform, error: BaseException) -> None:
     console.print("[dim]Other platforms were scanned normally.[/dim]")
 
 
-async def _install_skills_without_a_scan(platform_filter: Platform | None) -> bool:
+async def _install_skills_without_a_scan(platform_filter: Platform | None, *, assume_yes: bool) -> bool:
     """Install Hermes skills on the paths where no ScanResult survived.
 
     Skills are directories rather than message sources, so they never appear as
@@ -176,11 +183,25 @@ async def _install_skills_without_a_scan(platform_filter: Platform | None) -> bo
     was told there was nothing to import. Reached only when the normal path did
     not run, so a skill is never installed twice.
 
+    These paths sit *before* the run's own ``Proceed?`` gate, and copying a skill
+    tree is not undone by anything, so the count is named and consent taken here
+    rather than inherited from a gate that is never reached. ``assume_yes`` is
+    what a caller passes when its own confirmation already covers this.
+
+    Returns whether the path was handled -- including a decline, which is an
+    answer, not a reason for the caller to also report finding nothing.
+
     This path has no summary block to join, so the line has to name its own
     subject rather than borrow that block's ``Label:`` column.
     """
     if platform_filter not in (None, Platform.HERMES):
         return False
+    count = await _importable_skill_count(platform_filter)
+    if not count:
+        return False
+    console.print(f"\nAbout to import {count} Hermes skills.")
+    if not assume_yes and not typer.confirm("Proceed?", default=True):
+        return True
     summary = await install_skills(HermesSkillSource(), load_config().workspace_path, _default_state())
     if summary.total == 0:
         return False
@@ -534,7 +555,7 @@ async def _run_async(
     all_results = await scan_all(platform_filter=platform_filter, on_error=_report_scan_error)
 
     if not all_results:
-        if not await _install_skills_without_a_scan(platform_filter):
+        if not await _install_skills_without_a_scan(platform_filter, assume_yes=yes):
             console.print("No importable data found.")
         return
 
@@ -569,7 +590,7 @@ async def _run_async(
 
     filtered = filter_by_tier(all_results, selected_tier)
     if not filtered:
-        if not await _install_skills_without_a_scan(platform_filter):
+        if not await _install_skills_without_a_scan(platform_filter, assume_yes=yes):
             console.print("No items match the selected tier.")
         return
 

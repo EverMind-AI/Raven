@@ -2190,8 +2190,38 @@ def _import_results() -> list[Any]:
     ]
 
 
-def _run_import_step(monkeypatch: pytest.MonkeyPatch, answers: list[tuple[str, Any]]) -> _ScriptedSelect:
+def _import_results_two_platforms() -> list[Any]:
+    """One Hermes memory file plus one from Claude Code.
+
+    The single-platform default skips the platform prompt's ambiguity entirely,
+    which is the only condition under which "all platforms" means anything.
+    """
+    from raven.importer.types import Platform, ScanResult, SourceKind
+
+    return [
+        *_import_results(),
+        ScanResult(
+            source_key="claude-md",
+            platform=Platform.CLAUDE_CODE,
+            kind=SourceKind.MEMORY_FILE,
+            file_paths=(Path("/fake/CLAUDE.md"),),
+            estimated_size=100,
+            mtime=1.0,
+        ),
+    ]
+
+
+def _run_import_step(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[tuple[str, Any]],
+    results: list[Any] | None = None,
+    confirm: bool = True,
+) -> _ScriptedSelect:
     scripted = _ScriptedSelect(answers)
+    # The step's confirmations are `typer.confirm`, not questionary, so the
+    # scripted select cannot answer them and the real one would read the
+    # suite's stdin.
+    monkeypatch.setattr(typer, "confirm", lambda *_a, **_kw: confirm)
     # The step returns before its first prompt unless EverOS memory is both
     # selected and has its llm and embedding roles configured -- a property of
     # whoever's machine runs the suite, not of the behaviour under test. Left
@@ -2201,21 +2231,28 @@ def _run_import_step(monkeypatch: pytest.MonkeyPatch, answers: list[tuple[str, A
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr(
         "raven.importer.scanners.scan_all",
-        AsyncMock(return_value=_import_results()),
+        AsyncMock(return_value=_import_results() if results is None else results),
     )
     onboard_commands._step5_import(skip=False, non_interactive=False)
     return scripted
 
 
-def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> None:
-    """Make the skill install a fixed 12, without reading the developer's disk."""
+def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path, *, confirm: bool = True) -> AsyncMock:
+    """Make the skill install a fixed 12, without reading the developer's disk.
+
+    Returns the installer mock so a test can assert it never ran. `confirm`
+    answers the `typer.confirm` the copy is gated on -- real, it would read the
+    suite's stdin.
+    """
     from raven.cli import import_commands
     from raven.importer.skills.installer import SkillImportSummary
 
-    monkeypatch.setattr(
-        import_commands, "install_skills", AsyncMock(return_value=SkillImportSummary(total=12, installed=12))
-    )
+    installer = AsyncMock(return_value=SkillImportSummary(total=12, installed=12))
+    monkeypatch.setattr(import_commands, "install_skills", installer)
     monkeypatch.setattr(import_commands, "load_config", lambda: SimpleNamespace(workspace_path=workspace))
+    monkeypatch.setattr(import_commands, "_importable_skill_count", AsyncMock(return_value=12))
+    monkeypatch.setattr(typer, "confirm", lambda *_a, **_kw: confirm)
+    return installer
 
 
 def test_import_step_installs_skills_when_the_scan_finds_nothing(
@@ -2276,6 +2313,96 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
     assert "12 installed" in out, out
     assert "No items match the selected tier" not in out
     assert "所选档位无匹配项" not in out
+
+
+def test_the_wizard_asks_before_copying_a_skill_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The wizard's own "Start?" gate is further down, past the prompts this
+    return skips, so declining here is the only thing between the user and a
+    directory copy nothing undoes.
+    """
+    scripted = _ScriptedSelect([("import conversation history", "yes")])
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
+    installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    installer.assert_not_awaited()
+    out = " ".join(capsys.readouterr().out.split())
+    assert "About to import 12 Hermes skills" in out, out
+    assert "12 installed" not in out
+
+
+def _spawned_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[tuple[str, Any]],
+    results: list[Any] | None = None,
+) -> list[list[str]]:
+    """Run the import step and return every argv it detached.
+
+    The Popen branch had no coverage at all, so an argv the child cannot act on
+    was indistinguishable from one it can.
+    """
+    import subprocess
+
+    spawned: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, cmd: list[str], **_kwargs: Any) -> None:
+            spawned.append(list(cmd))
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/local/bin/raven")
+    _run_import_step(monkeypatch, answers, results)
+    return spawned
+
+
+def test_a_background_import_names_the_platform_it_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The child has no terminal, so every choice made here has to reach it as a
+    flag rather than as a prompt it would raise."""
+    from raven.importer.types import Platform, Tier
+
+    spawned = _spawned_argv(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", Platform.HERMES.value),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "background"),
+        ],
+    )
+
+    assert len(spawned) == 1, spawned
+    argv = spawned[0]
+    assert "--platform" in argv and Platform.HERMES.value in argv
+    assert "--yes" in argv, "a child with no terminal cannot answer Proceed?"
+
+
+def test_an_all_platforms_import_does_not_go_to_the_background(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """`import run` has no all-platforms flag, so the argv would omit --platform
+    and the child would reach its platform picker -- on DEVNULL, with no terminal.
+    The wizard printed "started in background" over a process that never moved.
+    """
+    from raven.importer.types import Tier
+
+    spawned = _spawned_argv(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "all"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "background"),
+        ],
+        _import_results_two_platforms(),
+    )
+
+    assert spawned == [], "an all-platforms import must not be detached"
+    out = " ".join(capsys.readouterr().out.split())
+    assert "cannot run in the background" in out, out
+    assert "started in background" not in out
 
 
 def test_import_step_can_be_skipped_at_the_platform_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
