@@ -61,16 +61,22 @@ Contract rules:
 
 ### Identity consistency
 
-`recall` is the read side; `store` is the write side. They must agree
-on identity for stored memory to be retrievable:
+`recall` is the read side and `store` is the write side, and they must
+agree on identity or stored memory is unretrievable. That is enforced
+structurally rather than asked of the user: **`memory.userId` and
+`memory.agentId` are the only place either id lives**, and the host
+hands both to the backend through `ctx.services`.
 
-| Host (read) | == | Plugin (write) |
-|---|:--:|---|
-| `memory.userId` | == | `plugins.config[<id>].user_id` |
-| `memory.agentId` | == | `plugins.config[<id>].agent_id` |
+| Host config | Reaches the backend as |
+|---|---|
+| `memory.userId` | `ctx.services.user_id` |
+| `memory.agentId` | `ctx.services.agent_id` |
 
-Because ids are now bare strings, both sides hold the **identical
-literal** (e.g. `"user-raven"`) — no prefix stripping to reconcile.
+A backend must not read an id from its own `plugins.config[<id>]`
+slice. Two places holding the same value is what allowed a user to edit
+one of them and split writes from reads, and nothing warned: recall
+simply returned nothing forever. The everos backend logs a warning if
+those obsolete keys are still present and disagree.
 
 ---
 
@@ -287,7 +293,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.0.0`]**
+### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.1`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -315,9 +321,10 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    (`~/.everos/.index/` sqlite + lancedb) changed.
 1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add 'everos[multimodal]==1.2.0' && uv sync
+   uv add 'everos[multimodal]==1.2.1' && uv sync
    ```
-   Always keep the `[multimodal]` extra.
+   Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
+   path-traversal regression fixed in `1.2.1`.
 2. **Adapt the adapter** if symbols/signatures changed — only
    `raven/plugin/memory/everos/`. Re-check version assumptions
    written in adapter comments.
@@ -327,14 +334,23 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
      tests/test_everos_http_adapter.py tests/test_memory_backend_protocol.py \
      tests/test_memory_backend_contract.py -q          # unit (mock adapter)
    uv run pytest tests/integration/test_everos_backend_e2e.py -m real_llm  # real
-   python scripts/everos_memory_roundtrip.py            # native shell smoke
    ```
 4. **Data migration (major bumps only)**: if the schema changed, real
    `~/.everos/.index/` may need rebuild/migration per the changelog.
    Tests use per-test tmp roots and are unaffected.
+
+   **Migrations can be one-way, and reverting Raven does not undo them.**
+   `1.2.1` is the standing example: on its first start it migrates the
+   LanceDB schema and prunes older manifest versions, so a machine that
+   has run `1.2.1` keeps that on-disk shape after a `git revert` of the
+   pin. Rolling back the data means restoring `~/.everos/` from a copy
+   taken *before* the upgrade — so take one, and say so in the release
+   notes for any bump whose migration behaves this way. An upgrade whose
+   only record is a pull-request description is known to whoever read
+   that description.
 5. **Finalize**: bump the manifest `version`; commit `pyproject.toml` +
    `uv.lock` + adapter changes. Rollback = `git revert` (plus data
-   rollback if the schema changed).
+   restore if the schema changed — see step 4).
 
 ---
 

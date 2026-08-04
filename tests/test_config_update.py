@@ -270,12 +270,11 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
         "memoryTopK": 5,
     }
     assert data["plugins"]["disabled"] == []
-    # plugins.config is never empty — it carries the everos-memory identity
-    # wiring (snake_case, verbatim pass-through to the plugin factory).
+    # plugins.config is never empty — it carries the everos-memory base_url
+    # (snake_case, verbatim pass-through to the plugin factory). Identity is
+    # NOT seeded here: it comes from ServiceLocator at plugin activation.
     assert data["plugins"]["config"]["everos-memory"] == {
         "base_url": "http://localhost:18791",
-        "user_id": "default",
-        "agent_id": "default",
     }
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
@@ -292,15 +291,14 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     }
 
 
-def test_init_extension_defaults_plugin_identity_matches_memory(cfg_path: Path) -> None:
-    # The everos-memory user_id / agent_id must equal memory.userId / agentId,
-    # otherwise stored memory is stamped under one identity and recalled under
-    # another (silently empty recall).
+def test_init_extension_defaults_plugin_config_has_no_identity(cfg_path: Path) -> None:
+    # Regression guard: identity must not be duplicated into plugins.config
+    # anymore. A user editing memory.userId/agentId without also editing this
+    # copy used to silently split store from recall (see ServiceLocator docs).
     init_extension_block_defaults(config_path=cfg_path)
-    data = _read(cfg_path)
-    em = data["plugins"]["config"]["everos-memory"]
-    assert em["user_id"] == data["memory"]["userId"]
-    assert em["agent_id"] == data["memory"]["agentId"]
+    em = _read(cfg_path)["plugins"]["config"]["everos-memory"]
+    assert "user_id" not in em
+    assert "agent_id" not in em
 
 
 def test_init_extension_defaults_omits_internal_infra_fields(cfg_path: Path) -> None:

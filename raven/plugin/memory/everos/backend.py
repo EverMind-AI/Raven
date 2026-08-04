@@ -2,7 +2,7 @@
 
 The backend is the host's :class:`MemoryBackend` implementation,
 delegating to a running EverOS server over HTTP
-(``POST /api/v1/memory/{search,add,...}``).
+(``POST /api/v2/memory/{search,add,...}``).
 
 Constructor accepts an explicit ``adapter`` so tests can inject a
 fake without monkeypatching module-level imports. Production wiring
@@ -26,7 +26,9 @@ Three architectural invariants worth re-stating:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
 from types import SimpleNamespace
 from typing import Any, Literal, Protocol
@@ -35,13 +37,15 @@ import httpx
 
 from raven.memory_engine import Memory
 from raven.plugin import PluginContext
+from raven.plugin.memory.everos._server import DEFAULT_EVEROS_BASE_URL
 
 logger = logging.getLogger("raven.plugin.memory.everos")
 
 _OwnerType = Literal["user", "agent"]
 
-_DEFAULT_AGENT_ID: str = "default"
-_DEFAULT_USER_ID: str = "default"
+_PATH_SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_.@+-]+$")
+_PATH_TRAVERSAL_IDS = frozenset({".", ".."})
+_STALE_IDENTITY_KEYS = ("user_id", "agent_id")
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +126,14 @@ _MEMORIZE_TIMEOUT_S: float = 360.0
 class _HttpEverosAdapter:
     """Adapter that talks to a remote EverOS service over HTTP.
 
-    Endpoints (per the EverOS v1 API brief, see
-    ``everos/entrypoints/api/routes/{search,memorize}.py``):
+    Endpoints (see ``everos/entrypoints/api/routes/{search,memorize}.py``).
+    ``/api/v2`` is the canonical prefix as of everos 1.2.0; ``/api/v1`` still
+    resolves to the same handlers but is documented as a legacy alias that a
+    future major release may drop:
 
-    - ``POST /api/v1/memory/search`` — request body ``SearchRequest``,
+    - ``POST /api/v2/memory/search`` — request body ``SearchRequest``,
       response ``{request_id, data: SearchData}``.
-    - ``POST /api/v1/memory/add`` — request body ``MemorizeAddRequest``,
+    - ``POST /api/v2/memory/add`` — request body ``MemorizeAddRequest``,
       response ``{request_id, data: AddResponseData}``.
 
     The adapter constructs an :class:`httpx.AsyncClient` per-instance by
@@ -151,6 +157,7 @@ class _HttpEverosAdapter:
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
         )
+        self._caps: dict[str, bool] | None = None
 
     async def aclose(self) -> None:
         """Close the underlying client if we own it. Idempotent."""
@@ -160,6 +167,65 @@ class _HttpEverosAdapter:
     def _headers(self) -> dict[str, str]:
         if self._api_key:
             return {"Authorization": f"Bearer {self._api_key}"}
+        return {}
+
+    async def _capabilities(self) -> dict[str, bool]:
+        """What the server built, from ``/health``, cached for this adapter.
+
+        everos reports ``capabilities`` as of 1.2.1. An empty mapping means the
+        question could not be answered -- the server is unreachable, or predates
+        the field -- and every caller must then leave the request alone: a
+        ``SearchRequest`` forbids extra keys, so guessing turns a working request
+        into a validation error.
+
+        Cached because everos documents a tier change as requiring a server
+        restart, and the adapter does not outlive one.
+        """
+        if self._caps is None:
+            self._caps = await self._probe_capabilities()
+        return self._caps
+
+    async def _probe_capabilities(self) -> dict[str, bool]:
+        from raven.plugin.memory.everos._health import HEALTH_TIMEOUT_S, parse_capabilities
+
+        try:
+            # Same headers as every other call on this client: everos ships no
+            # auth today, but a deployment behind a proxy that adds it would read
+            # an unauthenticated probe as a server with no capabilities.
+            r = await self._client.get(
+                f"{self._base_url}/health",
+                headers=self._headers(),
+                timeout=HEALTH_TIMEOUT_S,
+            )
+            r.raise_for_status()
+            payload = r.json()
+        except Exception as exc:
+            logger.warning("everos health probe failed (%s); leaving search parameters untouched", exc)
+            return {}
+        return parse_capabilities(payload)
+
+    async def _search_tuning(self, *, agent_id: str | None) -> dict[str, Any]:
+        """Search parameters this server's capabilities call for.
+
+        Two degradations, and the first rules out the second:
+
+        - **No embedding.** The default HYBRID is refused outright (everos
+          ``needs_embedding`` covers vector, hybrid and agentic), so recall would
+          return nothing at all. KEYWORD needs neither embedding nor rerank and
+          still searches the same rows, just lexically -- worse recall, but
+          recall. This is what makes the embedding role genuinely optional.
+        - **No rerank, agent track, HYBRID.** Agent-track HYBRID fuses
+          ``agent_case`` / ``agent_skill`` through a cross-encoder; without one
+          the server refuses the request. ``enable_llm_rerank`` is the documented
+          fallback, and it costs one LLM call per recall, so it is only taken
+          when the cross-encoder is genuinely absent. Moot under KEYWORD, whose
+          agent path does not go through rerank at all.
+        """
+        caps = await self._capabilities()
+        if caps.get("embed") is False:
+            return {"method": "keyword"}
+        if agent_id is not None and caps.get("rerank") is False:
+            return {"enable_llm_rerank": True}
         return {}
 
     async def search(
@@ -174,9 +240,17 @@ class _HttpEverosAdapter:
         body: dict[str, Any] = {"query": query, "top_k": top_k}
         if user_id is not None:
             body["user_id"] = user_id
+            # Profiles are opt-in server-side and default off, so without this
+            # every extracted user profile stays unreachable. It costs nothing
+            # server-side: a direct fetch, not ranked, not counted against
+            # top_k, at most one row. It is not free in the prompt — see
+            # _PROFILE_MAX_CHARS. Agent owners ignore the flag, so only send
+            # it for user_id.
+            body["include_profile"] = True
         if agent_id is not None:
             body["agent_id"] = agent_id
-        url = f"{self._base_url}/api/v1/memory/search"
+        body.update(await self._search_tuning(agent_id=agent_id))
+        url = f"{self._base_url}/api/v2/memory/search"
         r = await self._client.post(url, json=body, headers=self._headers())
         r.raise_for_status()
         payload = r.json() or {}
@@ -202,7 +276,7 @@ class _HttpEverosAdapter:
             body["app_id"] = app_id
         if project_id is not None:
             body["project_id"] = project_id
-        url = f"{self._base_url}/api/v1/memory/add"
+        url = f"{self._base_url}/api/v2/memory/add"
         r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
         r.raise_for_status()
         if is_final:
@@ -211,7 +285,7 @@ class _HttpEverosAdapter:
                 flush_body["app_id"] = app_id
             if project_id is not None:
                 flush_body["project_id"] = project_id
-            flush_url = f"{self._base_url}/api/v1/memory/flush"
+            flush_url = f"{self._base_url}/api/v2/memory/flush"
             fr = await self._client.post(
                 flush_url,
                 json=flush_body,
@@ -238,8 +312,9 @@ class EverosBackend:
         self._config = ctx.config
         self._services = ctx.services
         self._logger = ctx.logger
-        self._agent_id: str = self._config.get("agent_id") or _DEFAULT_AGENT_ID
-        self._user_id: str = self._config.get("user_id") or _DEFAULT_USER_ID
+        self._agent_id: str = self._services.agent_id
+        self._user_id: str = self._services.user_id
+        self._warn_stale_identity_keys()
         self._flush_every_turns: int = int(
             self._config.get("flush_every_turns", 1),
         )
@@ -257,7 +332,7 @@ class EverosBackend:
         Pulls ``base_url`` / ``api_key`` / ``timeout_s`` out of
         ``ctx.config`` with documented defaults.
         """
-        base_url = self._config.get("base_url") or "http://localhost:18791"
+        base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         api_key = self._config.get("api_key")
         timeout_s = float(
             self._config.get("timeout_s", _DEFAULT_HTTP_TIMEOUT_S),
@@ -268,9 +343,43 @@ class EverosBackend:
             timeout_s=timeout_s,
         )
 
+    def _warn_stale_identity_keys(self) -> None:
+        """Surface a config left over from before identity moved to the host.
+
+        A stale value that differs from the host's is exactly the split that
+        used to make every written memory unrecallable, so it must be loud
+        rather than silently ignored.
+        """
+        for key in _STALE_IDENTITY_KEYS:
+            stale = self._config.get(key)
+            if stale is None:
+                continue
+            current = self._user_id if key == "user_id" else self._agent_id
+            if stale != current:
+                self._logger.warning(
+                    "plugins.config['everos-memory'].%s=%r is obsolete and ignored; "
+                    "the active value is memory.%s=%r. Remove the stale key.",
+                    key,
+                    stale,
+                    "userId" if key == "user_id" else "agentId",
+                    current,
+                )
+
+    def _validate_identity(self) -> None:
+        # Name the on-disk camelCase key, not the Python attribute: the message
+        # has to be greppable in the user's config.json.
+        for key, value in (("userId", self._user_id), ("agentId", self._agent_id)):
+            if value in _PATH_TRAVERSAL_IDS or not _PATH_SAFE_ID_RE.match(value):
+                raise ValueError(
+                    f"memory.{key}={value!r} is not accepted by EverOS: it becomes a "
+                    f"directory segment on the write path, so it must match "
+                    f"{_PATH_SAFE_ID_RE.pattern} and must not be '.' or '..'."
+                )
+
     # ── Lifecycle ───────────────────────────────────────────────────
 
     async def start(self) -> None:
+        self._validate_identity()
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
@@ -291,7 +400,7 @@ class EverosBackend:
 
             from raven.plugin.memory.everos._server import ensure_everos_server
 
-            base_url = self._config.get("base_url") or "http://localhost:18791"
+            base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
             try:
                 await ensure_everos_server(base_url)
             except Exception as e:
@@ -300,6 +409,42 @@ class EverosBackend:
                     e,
                 )
                 raise
+            # Off-thread: the probe and the config read below are both blocking
+            # IO, and start() runs on the loop every session begins on.
+            await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
+
+    @staticmethod
+    def _warn_if_recall_cannot_work(base_url: str) -> None:
+        """Say out loud when the server is up but recall is not what it should be.
+
+        A running server no longer implies a fully working one: everos 1.2.1 boots
+        with ``[llm]`` alone. What is left is real but weaker, and the log saying
+        so is file-only at runtime, so the difference looks like an agent that is
+        merely vague rather than one running on a lesser search -- the hardest
+        kind of fault to attribute. ``raven doctor`` can find it, but only if the
+        user thinks to ask; this is on the path every session already takes.
+
+        Only what was configured and could not be built is worth saying: a role
+        the user never configured is a choice they already know about, and
+        repeating it every start would be noise.
+        """
+        from raven.plugin.memory.everos._health import probe_capabilities
+
+        report = probe_capabilities(base_url)
+        from raven.config.update_everos import everos_role_configured
+
+        if not (everos_role_configured("embedding") and report.available("embedding") is False):
+            return
+        from rich.console import Console
+
+        from raven.plugin.memory.everos._server import server_log_path
+
+        Console(stderr=True).print(
+            "[yellow]EverOS is running but embedding is unavailable: recall falls back to "
+            "keyword matching.[/yellow]\n"
+            f"[dim]Memories are still stored. Check {server_log_path()}, fix the provider, "
+            "then run `everos cascade backfill` to give existing rows their vectors.[/dim]"
+        )
 
     async def stop(self) -> None:
         self._logger.info("EverosBackend.stop")
@@ -411,10 +556,11 @@ class EverosBackend:
 
         The host already collects ``skill_usage`` signals (which everos
         skills were injected / used in a turn) and dispatches them here.
-        everos 1.0.0's service layer exposes no endpoint to consume them
-        — ``agent_skill.confidence`` lives in the persistence internals
-        with no service-level write path — so signals are dropped until
-        everos grows one. The method stays on the Protocol because it is
+        everos 1.2.1's HTTP surface still exposes no endpoint to consume
+        them — its routes are get / health / knowledge / memorize /
+        metrics / ome / search, and ``agent_skill.confidence`` lives in
+        the persistence internals with no service-level write path — so
+        signals are dropped until everos grows one. The method stays on the Protocol because it is
         a valid optional capability and the host plumbing is in place;
         this is not dead code.
 
@@ -576,12 +722,73 @@ class EverosBackend:
         return out
 
 
+# EverOS accumulates the profile monotonically over an install's life with no
+# server-side size limit (11,414 chars measured before it was rendered as prose,
+# 5,172 after, on a still-young install), so without a client-side ceiling one
+# growing blob can come to dominate the recalled-memory block. The ceiling is
+# sized to roughly the combined budget of a full episode batch (each episode's
+# summary is itself capped near 200 chars server-side and memory_top_k defaults
+# to 5), so the profile stays substantial without outweighing everything else.
+#
+# Its score falling back to 1.0 sorts it above every similarity-scored episode,
+# which is ordering only: the profile is a direct fetch that does not count
+# against top_k, and the caller renders every hit, so nothing is displaced by
+# it being first. Length was the whole exposure.
+_PROFILE_MAX_CHARS = 1200
+
+
 def _flatten_profile(profile_data: Any) -> str:
-    """Render a profile dict as ``key: value`` lines for prompt
-    injection. Non-dicts get ``str()``."""
+    """Render a profile dict as human-readable lines for prompt injection.
+
+    Scalars render as ``key: value``. Lists render one bullet per item.
+    Dict items only surface ``category``/``trait`` (label) and
+    ``description`` (body) — an allowlist, not a denylist of the
+    ``evidence``/``basis`` meta-narration fields EverOS attaches to
+    explain *how* it inferred an item, which is not a fact about the
+    user and must never reach the prompt. Non-dicts get ``str()``.
+
+    The result is capped at ``_PROFILE_MAX_CHARS``; see that constant.
+    """
     if not isinstance(profile_data, dict):
-        return str(profile_data)
-    return "\n".join(f"{k}: {v}" for k, v in profile_data.items())
+        return _cap_profile_text(str(profile_data))
+    lines: list[str] = []
+    for key, value in profile_data.items():
+        # EverOS stamps a profile with ``*_ms`` epoch keys recording when it last
+        # touched each part. That is bookkeeping about the store, not a fact about
+        # the user, and rendering it spends prompt budget on raw millisecond ints.
+        if key.endswith("_ms"):
+            continue
+        if isinstance(value, list):
+            lines.extend(_flatten_profile_list(value))
+        else:
+            lines.append(f"{key}: {value}")
+    return _cap_profile_text("\n".join(lines))
+
+
+def _cap_profile_text(text: str) -> str:
+    """Truncate ``text`` to ``_PROFILE_MAX_CHARS``, on a line boundary,
+    with a visible marker rather than a silent cut."""
+    if len(text) <= _PROFILE_MAX_CHARS:
+        return text
+    head, _, _ = text[:_PROFILE_MAX_CHARS].rpartition("\n")
+    kept = head or text[:_PROFILE_MAX_CHARS]
+    omitted = len(text) - len(kept)
+    return f"{kept}\n[profile truncated, {omitted} chars omitted]"
+
+
+def _flatten_profile_list(items: list[Any]) -> list[str]:
+    lines: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            lines.append(f"- {item}")
+            continue
+        label = item.get("category") or item.get("trait")
+        body = item.get("description")
+        if label and body:
+            lines.append(f"- {label}: {body}")
+        elif label or body:
+            lines.append(f"- {label or body}")
+    return lines
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
@@ -80,6 +81,37 @@ def _restore_event_loop():
     asyncio.set_event_loop(asyncio.new_event_loop())
     yield
     asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+@pytest.fixture(autouse=True)
+def _no_everos_io(monkeypatch: pytest.MonkeyPatch):
+    """Keep these tests away from a real EverOS server, in both directions.
+
+    Spawning: any test that reaches `backend.start()` otherwise tries to launch
+    the server and waits out its 30s readiness timeout when none comes up -- on a
+    machine with no `~/.everos`, and on CI always. One test was paying 34s of a
+    35s file.
+
+    Probing: the memory step reads `/health` after starting the server, so
+    without this the tests report whatever the developer's own install answers
+    and change behaviour with it.
+
+    Both defaults are the inert ones; tests that care install their own answer,
+    which wins because it is set later.
+    """
+    import raven.plugin.memory.everos._server as srv
+    from raven.plugin.memory.everos import _health
+
+    async def _no_spawn(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(srv, "ensure_everos_server", _no_spawn)
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+    )
+    return monkeypatch
 
 
 @pytest.fixture
@@ -247,7 +279,7 @@ def test_onboard_non_interactive_skips_optional_steps(
     )
     assert r.exit_code == 0, r.stdout
     assert "Keeping run location: host" in r.stdout
-    assert "Keeping native Markdown memory" in r.stdout
+    assert "Long-term memory stays off" in r.stdout
     assert "Setup complete" in r.stdout
     # Memory left unconfigured (no llm model) → backend resolves to None.
     data = json.loads(tmp_env.read_text())
@@ -1101,15 +1133,21 @@ def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.Mo
 # --------------------------------------------------------------------------- memory step
 
 
-def test_memory_disable_sets_backend_null(
+def test_memory_giving_up_sets_backend_null(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Choosing 'don't enable' sets memory.backend=null and writes no EverOS toml."""
+    """Backing out of a required role and giving up disables memory entirely.
+
+    There is no enable/decline question any more -- everos is the only backend,
+    so the step goes straight into configuring it and this is the only way out.
+    """
     import questionary
+
+    answers = iter([onboard_commands._BACK, "abort"])
 
     class _FQ:
         def ask(self):
-            return "off"
+            return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
     onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -1120,6 +1158,63 @@ def test_memory_disable_sets_backend_null(
     from raven.config.raven import load_raven_config
 
     assert load_raven_config().memory.backend is None
+
+
+def test_giving_up_says_what_is_lost(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Losing memory is the one irreversible-feeling outcome of the wizard, and
+    a user should not discover it weeks later by noticing the agent forgets
+    everything."""
+    import questionary
+
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "no memory across sessions" in out
+    assert "not remember anything" in out
+
+
+@pytest.mark.parametrize(
+    ("lang", "needles"),
+    [
+        ("en", ("no memory across sessions", "not remember anything")),
+        ("zh", ("没有任何跨会话记忆", "不记得之前做过什么")),
+    ],
+)
+def test_giving_up_says_what_is_lost_in_both_languages(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needles: tuple[str, ...],
+) -> None:
+    """`_LANG` defaults to en, so a test written only in English leaves the
+    Chinese half of every `_t` pair unguarded -- it can be watered down to a
+    dim one-liner without a single test noticing."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for needle in needles:
+        assert needle in out, f"{lang}: missing {needle!r}"
 
 
 def test_memory_enable_writes_everos_sections(
@@ -1134,12 +1229,13 @@ def test_memory_enable_writes_everos_sections(
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
 
     # _step4_memory select() calls, in order:
-    #   1. enable memory                -> "on"
-    #   2. LLM source picker            -> ("custom",)
+    #   1. LLM source picker            -> ("custom",)
+    #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
+    #                                               rather than breaks memory)
     #   3. embedding source picker      -> ("custom",)
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["on", ("custom",), ("custom",), "skip", "skip"])
+    select_answers = iter([("custom",), "redo", ("custom",), "skip", "skip"])
     # text(): LLM base_url, LLM model, embed base_url, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
     # password(): LLM api key, embed api key.
@@ -1190,6 +1286,53 @@ def test_memory_enable_writes_everos_sections(
     assert everos["embedding"]["base_url"] == "https://llm/v1"
     assert "rerank" not in everos
     assert "multimodal" not in everos
+
+
+def test_the_memory_step_reaches_the_capability_report(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A report nothing calls is dead code. Walks the same path as
+    `test_memory_enable_writes_everos_sections` and only checks that the step
+    gets as far as reporting what the server can do."""
+    import questionary
+
+    _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
+    select_answers = iter([("custom",), "redo", ("custom",), "skip", "skip"])
+    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
+    password_answers = iter(["k-llm", "k-embed"])
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
+    monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
+    monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    async def _fake_ensure_everos_server(*a: object, **kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
+
+    reported: list[int] = []
+    monkeypatch.setattr(onboard_commands, "_report_everos_capabilities", lambda: reported.append(1))
+
+    onboard_commands._step4_memory(
+        skip=False,
+        non_interactive=False,
+        main_model="openrouter/anthropic/claude-sonnet-4-5",
+        warnings=[],
+    )
+
+    assert reported == [1], "the memory step never reported what EverOS can do"
 
 
 def test_memory_llm_reuse_pulls_provider_creds(
@@ -1970,6 +2113,407 @@ def test_removal_guard_sees_a_model_saved_under_a_former_name() -> None:
     spec = find_by_name("zai")
     assert onboard_commands._model_routes_to_provider("zhipu/glm-4.6", spec) is True
     assert onboard_commands._model_routes_to_provider("zai/glm-4.6", spec) is True
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — import wizard navigation
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedSelect:
+    """A questionary stand-in that answers each prompt from a script.
+
+    The navigation this covers lives entirely in questionary's return values,
+    so unlike the rest of this file it cannot be exercised by stubbing a step
+    helper. Each answer is matched by a substring of the prompt so a test reads
+    as the sequence a user would actually click.
+    """
+
+    def __init__(self, answers: list[tuple[str, Any]]) -> None:
+        self._answers = list(answers)
+        self.asked: list[str] = []
+        self.offered: list[tuple[str, list[Any]]] = []
+        self.raw_choices: list[tuple[str, list[Any]]] = []
+        self.prompt_kwargs: list[tuple[str, dict[str, Any]]] = []
+
+    def select(self, message: str, choices: list[Any] | None = None, **kwargs: Any) -> Any:
+        self.asked.append(message)
+        # Recorded so a test can assert a choice was actually offered: scripting
+        # an answer by prompt text alone would still "work" if the choice that
+        # produces it had been deleted from the menu.
+        self.offered.append((message, [getattr(c, "value", c) for c in (choices or [])]))
+        self.raw_choices.append((message, list(choices or [])))
+        # Everything else the prompt was given, verbatim. Swallowed kwargs are
+        # invisible defects: while this dropped them, a prompt could lose
+        # `style=RAVEN_STYLE` and fall back to questionary's own colours with the
+        # suite still green.
+        self.prompt_kwargs.append((message, dict(kwargs)))
+        for index, (needle, value) in enumerate(self._answers):
+            if needle in message:
+                self._answers.pop(index)
+                return _Answer(value)
+        raise AssertionError(f"unscripted prompt: {message!r} (remaining: {self._answers})")
+
+    def values_offered_for(self, needle: str) -> list[Any]:
+        return [v for message, values in self.offered if needle in message for v in values]
+
+    @staticmethod
+    def Choice(title: str, value: Any = None, **kwargs: Any) -> Any:  # noqa: N802
+        # Every keyword survives, not a hand-picked few. `disabled` -- which greys
+        # a row and makes the arrow keys skip it -- was droppable with the suite
+        # green until it was recorded, and the next keyword to matter would have
+        # repeated that. `disabled` is defaulted so a test can read it off any
+        # choice without asking whether it was passed.
+        return SimpleNamespace(title=title, value=value, **{"disabled": None, **kwargs})
+
+
+class _Answer:
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def ask(self) -> Any:
+        return self._value
+
+
+def _import_results() -> list[Any]:
+    from raven.importer.types import Platform, ScanResult, SourceKind
+
+    return [
+        ScanResult(
+            source_key="user-md",
+            platform=Platform.HERMES,
+            kind=SourceKind.MEMORY_FILE,
+            file_paths=(Path("/fake/USER.md"),),
+            estimated_size=100,
+            mtime=1.0,
+        )
+    ]
+
+
+def _import_results_two_platforms() -> list[Any]:
+    """One Hermes memory file plus one from Claude Code.
+
+    The single-platform default skips the platform prompt's ambiguity entirely,
+    which is the only condition under which "all platforms" means anything.
+    """
+    from raven.importer.types import Platform, ScanResult, SourceKind
+
+    return [
+        *_import_results(),
+        ScanResult(
+            source_key="claude-md",
+            platform=Platform.CLAUDE_CODE,
+            kind=SourceKind.MEMORY_FILE,
+            file_paths=(Path("/fake/CLAUDE.md"),),
+            estimated_size=100,
+            mtime=1.0,
+        ),
+    ]
+
+
+def _run_import_step(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[tuple[str, Any]],
+    results: list[Any] | None = None,
+    confirm: bool = True,
+) -> _ScriptedSelect:
+    scripted = _ScriptedSelect(answers)
+    # The step's confirmations are `typer.confirm`, not questionary, so the
+    # scripted select cannot answer them and the real one would read the
+    # suite's stdin.
+    monkeypatch.setattr(typer, "confirm", lambda *_a, **_kw: confirm)
+    # The step returns before its first prompt unless EverOS memory is both
+    # selected and has its llm and embedding roles configured -- a property of
+    # whoever's machine runs the suite, not of the behaviour under test. Left
+    # real, these tests pass on a developer box that has onboarded and fail
+    # everywhere else, including CI.
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr(
+        "raven.importer.scanners.scan_all",
+        AsyncMock(return_value=_import_results() if results is None else results),
+    )
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+    return scripted
+
+
+def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path, *, confirm: bool = True) -> AsyncMock:
+    """Make the skill install a fixed 12, without reading the developer's disk.
+
+    Returns the installer mock so a test can assert it never ran. `confirm`
+    answers the `typer.confirm` the copy is gated on -- real, it would read the
+    suite's stdin.
+    """
+    from raven.cli import import_commands
+    from raven.importer.skills.installer import SkillImportSummary
+
+    installer = AsyncMock(return_value=SkillImportSummary(total=12, installed=12))
+    monkeypatch.setattr(import_commands, "install_skills", installer)
+    monkeypatch.setattr(import_commands, "load_config", lambda: SimpleNamespace(workspace_path=workspace))
+    monkeypatch.setattr(import_commands, "_importable_skill_count", AsyncMock(return_value=12))
+    monkeypatch.setattr(typer, "confirm", lambda *_a, **_kw: confirm)
+    return installer
+
+
+def test_import_step_installs_skills_when_the_scan_finds_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The wizard is the path every new user takes, and skills never arrive as
+    ScanResults. Left unhandled, an install whose only importable data is skills
+    is told there is nothing to import -- the same dead end `raven import run`
+    already covers, on the entry point that matters more.
+    """
+    scripted = _ScriptedSelect([("import conversation history", "yes")])
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
+    _patch_skills_only_install(monkeypatch, tmp_path)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "12 installed" in out, out
+    assert "No importable data found" not in out
+    assert "未找到可导入的数据" not in out
+
+
+def test_import_step_installs_skills_when_the_tier_keeps_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The tier filter has nothing of the skills' to keep either, so picking the
+    memory-files tier on a Hermes install that only has conversations lands on
+    the same dead end one prompt later.
+    """
+    from raven.importer.types import Platform, ScanResult, SourceKind, Tier
+
+    conversation = ScanResult(
+        source_key="h1",
+        platform=Platform.HERMES,
+        kind=SourceKind.CONVERSATION,
+        file_paths=(),
+        estimated_size=0,
+        mtime=0.0,
+    )
+    scripted = _ScriptedSelect(
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", Platform.HERMES.value),
+            ("Select import tier", Tier.MEMORY_FILES),
+        ]
+    )
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[conversation]))
+    _patch_skill_count(monkeypatch, 12)
+    _patch_skills_only_install(monkeypatch, tmp_path)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "12 installed" in out, out
+    assert "No items match the selected tier" not in out
+    assert "所选档位无匹配项" not in out
+
+
+def test_the_wizard_asks_before_copying_a_skill_tree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The wizard's own "Start?" gate is further down, past the prompts this
+    return skips, so declining here is the only thing between the user and a
+    directory copy nothing undoes.
+    """
+    scripted = _ScriptedSelect([("import conversation history", "yes")])
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
+    installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    installer.assert_not_awaited()
+    out = " ".join(capsys.readouterr().out.split())
+    assert "About to import 12 Hermes skills" in out, out
+    assert "12 installed" not in out
+
+
+def _spawned_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    answers: list[tuple[str, Any]],
+    results: list[Any] | None = None,
+) -> list[list[str]]:
+    """Run the import step and return every argv it detached.
+
+    The Popen branch had no coverage at all, so an argv the child cannot act on
+    was indistinguishable from one it can.
+    """
+    import subprocess
+
+    spawned: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, cmd: list[str], **_kwargs: Any) -> None:
+            spawned.append(list(cmd))
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/local/bin/raven")
+    _run_import_step(monkeypatch, answers, results)
+    return spawned
+
+
+def test_a_background_import_names_the_platform_it_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The child has no terminal, so every choice made here has to reach it as a
+    flag rather than as a prompt it would raise."""
+    from raven.importer.types import Platform, Tier
+
+    spawned = _spawned_argv(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", Platform.HERMES.value),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "background"),
+        ],
+    )
+
+    assert len(spawned) == 1, spawned
+    argv = spawned[0]
+    assert "--platform" in argv and Platform.HERMES.value in argv
+    assert "--yes" in argv, "a child with no terminal cannot answer Proceed?"
+
+
+def test_an_all_platforms_import_does_not_go_to_the_background(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """`import run` has no all-platforms flag, so the argv would omit --platform
+    and the child would reach its platform picker -- on DEVNULL, with no terminal.
+    The wizard printed "started in background" over a process that never moved.
+    """
+    from raven.importer.types import Tier
+
+    spawned = _spawned_argv(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "all"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "background"),
+        ],
+        _import_results_two_platforms(),
+    )
+
+    assert spawned == [], "an all-platforms import must not be detached"
+    out = " ".join(capsys.readouterr().out.split())
+    assert "cannot run in the background" in out, out
+    assert "started in background" not in out
+
+
+def test_import_step_can_be_skipped_at_the_platform_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answering the offer with yes used to be a one-way door: the platform
+    prompt had no exit, so changing your mind meant Esc, which aborts the whole
+    onboarding rather than this step."""
+    scripted = _run_import_step(
+        monkeypatch,
+        [("import conversation history", "yes"), ("Select platform", "skip")],
+    )
+    assert "skip" in scripted.values_offered_for("Select platform"), "the exit must be offered, not just handled"
+    assert not any("execution mode" in m for m in scripted.asked)
+
+
+def test_back_at_the_execution_mode_prompt_returns_instead_of_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The execution-mode prompt sat outside the navigation loop and offered no
+    way back, so it was the one step of the wizard a user could not leave."""
+    from raven.importer.types import Tier
+
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            # Back is one level up, so the tier prompt comes next. Scripting the
+            # platform prompt here instead would raise "unscripted prompt".
+            ("Select import tier", back_value_sentinel()),
+            ("Select platform", "skip"),
+        ],
+    )
+    assert "back" in scripted.values_offered_for("execution mode"), "the exit must be offered, not just handled"
+    order = [m for m in scripted.asked if "Select platform" in m or "Select import tier" in m or "execution mode" in m]
+    assert [_short(m) for m in order] == ["platform", "tier", "mode", "tier", "platform"]
+
+
+def back_value_sentinel() -> str:
+    return "back"
+
+
+def _short(message: str) -> str:
+    if "Select platform" in message:
+        return "platform"
+    if "Select import tier" in message:
+        return "tier"
+    return "mode"
+
+
+def _patch_skill_count(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """Fix what the wizard's skill preview reports.
+
+    The wizard shares ``import_commands``' counter rather than keeping its own,
+    so this patches the one implementation both entry points call.
+    """
+    from raven.cli import import_commands
+
+    async def _count(_platform: Any) -> int:
+        return count
+
+    monkeypatch.setattr(import_commands, "_importable_skill_count", _count)
+
+
+def test_tier_choices_name_the_skills_that_will_be_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skills are not ScanResults, so every count taken from the scan omits
+    them. The wizard used to offer "2 items" and then install a dozen skills
+    the user had never been shown."""
+    from raven.importer.types import Tier
+
+    _patch_skill_count(monkeypatch, 12)
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            ("Select import tier", "back"),
+            ("Select platform", "skip"),
+        ],
+    )
+    tier_labels = [c.title for c in _choices_of(scripted)]
+    assert any("12" in t for t in tier_labels), f"skill count missing from the tier menu: {tier_labels}"
+
+
+def test_tier_choices_omit_skills_when_the_platform_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code contributes no skills, so a count that can never move would
+    be noise rather than information."""
+    from raven.importer.types import Tier
+
+    _patch_skill_count(monkeypatch, 0)
+    scripted = _run_import_step(
+        monkeypatch,
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", "hermes"),
+            ("Select import tier", Tier.MEMORY_FILES),
+            ("execution mode", "back"),
+            ("Select import tier", "back"),
+            ("Select platform", "skip"),
+        ],
+    )
+    tier_labels = [c.title for c in _choices_of(scripted)]
+    # Without this the assertion below passes on an empty menu, which is what a
+    # step that returned early produces.
+    assert tier_labels, "the tier menu was never shown"
+    assert not any("skill" in t or "技能" in t for t in tier_labels), tier_labels
+
+
+def _choices_of(scripted: _ScriptedSelect) -> list[Any]:
+    return [c for message, choices in scripted.raw_choices if "Select import tier" in message for c in choices]
 
 
 def test_the_wizard_offers_every_provider_the_registry_carries() -> None:
@@ -2934,6 +3478,209 @@ def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monke
     assert returned == "gpt-4o-deployment"
 
 
+# --------------------------------------------------------------------------- everos capabilities
+
+
+def _stub_capabilities(monkeypatch: pytest.MonkeyPatch, *, configured: tuple[str, ...], **caps: bool) -> None:
+    from raven.config import update_everos
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in configured)
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+    )
+
+
+def test_the_wizard_says_which_roles_everos_could_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=True)
+
+    onboard_commands._report_everos_capabilities()
+
+    assert "llm and embedding are available" in capsys.readouterr().out
+
+
+def test_the_wizard_flags_a_role_everos_could_not_build(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """`ensure_everos_server` only proves the process answers. Since everos
+    1.2.1 a server whose embedding provider failed still answers 200 and
+    degrades to keyword-only search, so a tick there would be a lie."""
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=False)
+
+    onboard_commands._report_everos_capabilities()
+
+    out = capsys.readouterr().out
+    assert "embedding is configured but EverOS could not build it" in out
+    assert "runs degraded" in out
+
+
+def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """Pre-1.2.1 servers answer a bare status; claiming a fault there would
+    condemn a working install."""
+    _stub_capabilities(monkeypatch, configured=("llm", "embedding"))
+
+    onboard_commands._report_everos_capabilities()
+
+    assert capsys.readouterr().out.strip() == ""
+
+
+# --------------------------------------------------------------------------- memory model pre-fill
+
+
+def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
+    """A recommended model id is only a recommendation if the user's key can
+    reach it, and many keys cannot. Their main model is one they demonstrably
+    have, and the routing prefix has to come off for EverOS's bare client."""
+    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+
+    assert got == "anthropic/claude-sonnet-4-5"
+
+
+def test_no_pre_fill_when_the_picked_provider_is_not_the_main_models() -> None:
+    """No other provider carries that model id; pre-filling one it cannot serve
+    would turn Enter into a verification failure."""
+    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
+
+    assert got is None
+
+
+def test_no_pre_fill_for_roles_that_do_not_serve_a_chat_model() -> None:
+    for section in ("embedding", "rerank", "multimodal"):
+        got = onboard_commands._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+        assert got is None, section
+
+
+def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recommendation is now a capability floor shown alongside, not the
+    value the field starts on."""
+    import questionary
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self):
+            return "chosen"
+
+    def _autocomplete(_message, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "autocomplete", _autocomplete)
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
+
+    onboard_commands._everos_pick_model(
+        base_url="https://x/v1",
+        api_key="k",
+        example="gpt-4.1-mini",
+        allow_back=False,
+        preferred="anthropic/claude-sonnet-4-5",
+    )
+
+    assert captured["default"] == "anthropic/claude-sonnet-4-5"
+
+
+def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Roles with no main model to reuse keep the old behaviour."""
+    import questionary
+
+    captured: dict = {}
+
+    class _FQ:
+        def __init__(self) -> None:
+            self.application = SimpleNamespace(pre_run_callables=[])
+
+        def ask(self):
+            return "chosen"
+
+    monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ())[1])
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
+
+    onboard_commands._everos_pick_model(
+        base_url="https://x/v1",
+        api_key="k",
+        example="gpt-4.1-mini",
+        allow_back=False,
+        preferred=None,
+    )
+
+    assert captured["default"] == "x/gpt-4.1-mini"
+
+
+# --------------------------------------------------------------------------- capability tiers
+
+
+@pytest.mark.parametrize(
+    ("lang", "needles"),
+    [
+        ("en", ("memory LLM only", "recall matches keywords", "+ memory embedding", "+ memory rerank")),
+        ("zh", ("仅记忆 LLM", "召回按关键词匹配", "+ 记忆 embedding", "+ 记忆 rerank")),
+    ],
+)
+def test_the_memory_step_states_the_capability_tiers(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needles: tuple[str, ...],
+) -> None:
+    """embedding and rerank are both skippable, so what each one buys has to be
+    on screen before the user decides. Without this the step reads as three
+    prompts of equal weight."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    answers = iter([onboard_commands._BACK, "abort"])
+
+    class _FQ:
+        def ask(self):
+            return next(answers)
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    out = " ".join(capsys.readouterr().out.split())
+    for needle in needles:
+        assert needle in out, f"{lang}: missing {needle!r}"
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
+    """Skipping rerank costs ordering; skipping embedding costs semantic recall
+    altogether. The second cannot read like the first."""
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+
+    note = onboard_commands._t(*onboard_commands._EVEROS_ROLES["embedding"]["skip_note"])
+
+    assert "yellow" in note, "a degradation this large must not be dim"
+    assert "cascade backfill" in note
+    if lang == "zh":
+        assert "关键词匹配" in note
+    else:
+        assert "keywords, not meaning" in note
+
+
+def test_every_optional_role_carries_its_own_skip_note() -> None:
+    """The renderer prints these verbatim now, so a note without its own markup
+    would come out unstyled."""
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        if not role.get("optional"):
+            continue
+        note = role.get("skip_note")
+        assert note, f"{name} is optional but says nothing when skipped"
+        for text in note:
+            assert text.startswith("  ["), f"{name}: skip_note must carry its own style and indent: {text!r}"
+
+
 def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3081,6 +3828,169 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     assert "default model" in asked[0].lower() or "默认模型" in asked[0]
     # Declined, so the key is still there.
     assert json.loads(tmp_env.read_text())["providers"]["mistral"].get("apiKey") == "sk-mistral"
+
+
+# --------------------------------------------------------------------------- role cost lines
+
+
+def test_embedding_states_what_skipping_it_costs() -> None:
+    """The one role whose absence changes how recall works at all -- searching
+    lexically instead of semantically -- has to say so before it is skipped."""
+    en, zh = onboard_commands._EVEROS_ROLES["embedding"]["cost"]
+
+    assert "keywords" in en, en
+    assert "关键词" in zh, zh
+
+
+def test_cost_lines_lead_with_the_consequence() -> None:
+    """Whichever roles carry one, they read the same way, so a reader comparing
+    two of them is comparing like with like."""
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        cost = role.get("cost")
+        if not cost:
+            continue
+        en, zh = cost
+        assert en.startswith("Without it:"), f"{name}: English cost must lead with the consequence: {en!r}"
+        assert zh.startswith("不配置："), f"{name}: Chinese cost must lead with the consequence: {zh!r}"
+
+
+@pytest.mark.parametrize("name", ["embedding", "rerank"])
+def test_the_roles_we_want_configured_say_so(name: str) -> None:
+    """Calling all three merely "optional" flattens the difference between
+    losing semantic recall and losing some ranking accuracy. These two carry the
+    encouragement in their own tag."""
+    tag = onboard_commands._EVEROS_ROLES[name].get("tag")
+
+    assert tag, f"{name} should carry its own tag"
+    en, zh = tag
+    assert "advised" in en, en
+    assert "建议" in zh, zh
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
+    """These blocks are hand-wrapped because rich re-wraps at the terminal width
+    and drops the leading indent, leaving a stray left-flush line mid-sentence."""
+    from rich.text import Text
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
+        for key in ("tag", "cost", "recommendation", "skip_note"):
+            if role.get(key):
+                parts.append(onboard_commands._t(*role[key]))
+        for part in parts:
+            for line in Text.from_markup(part).plain.split("\n"):
+                width = Text(line).cell_len + 2  # the two-space info column
+                assert width <= 80, f"{lang}/{name}: {width} cols: {line!r}"
+
+
+@pytest.mark.parametrize(
+    ("lang", "needle"),
+    [("en", "Without it:"), ("zh", "不配置：")],
+)
+def test_the_cost_line_actually_reaches_the_screen(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needle: str,
+) -> None:
+    """A cost the role carries but the renderer never prints is dead data. Every
+    assertion above reads `_EVEROS_ROLES`; this one reads the terminal."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+
+    class _FQ:
+        def ask(self):
+            return "skip"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._config_everos_role(
+        section="embedding", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
+    )
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert needle in out, f"{lang}: the cost line never printed"
+    assert ("only match keywords" if lang == "en" else "只能使用关键词检索") in out
+
+
+# --------------------------------------------------------------------------- platform menu
+
+
+def _platform_menu(monkeypatch: pytest.MonkeyPatch, lang: str = "en") -> list:
+    """The platform prompt's choices, as the wizard builds them.
+
+    The scripted answers are keyed on prompt text, so they have to be written in
+    whichever language the step is running in.
+    """
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    offer, platform = (
+        ("import conversation history", "Select platform") if lang == "en" else ("导入对话历史", "选择平台")
+    )
+    scripted = _run_import_step(monkeypatch, [(offer, "yes"), (platform, "skip")])
+    return [c for message, choices in scripted.raw_choices if platform in message for c in choices]
+
+
+def test_unsupported_platforms_cannot_be_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """They used to be selectable, costing the user a round trip to be told the
+    platform is unsupported. `disabled` both greys the row and makes the arrow
+    keys skip it."""
+    menu = _platform_menu(monkeypatch)
+
+    coming = [c for c in menu if str(c.value).startswith("coming:")]
+    assert coming, "the menu no longer lists the unsupported platforms at all"
+    for choice in coming:
+        assert choice.disabled, f"{choice.value} is pickable but unsupported"
+
+
+def test_pickable_platforms_are_not_greyed_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    menu = _platform_menu(monkeypatch)
+
+    for choice in menu:
+        if not str(choice.value).startswith("coming:"):
+            assert not choice.disabled, f"{choice.value} is greyed out but pickable"
+
+
+def test_unsupported_platforms_sink_below_the_pickable_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In enum order the two kinds interleave, which buried Hermes between two
+    placeholders."""
+    menu = _platform_menu(monkeypatch)
+    kinds = ["coming" if str(c.value).startswith("coming:") else "real" for c in menu]
+
+    assert kinds.index("coming") > kinds.index("real"), kinds
+    # and no pickable row appears after the first greyed one, other than the exit
+    tail = [c for c in menu[kinds.index("coming") :] if not str(c.value).startswith("coming:")]
+    assert [c.value for c in tail] == ["skip"], [c.value for c in tail]
+
+
+def test_the_coming_soon_label_keeps_the_full_width_parens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """questionary appends a `disabled` reason string in its own hardcoded ASCII
+    " (...)", so the reason is passed as True and the label carries the pair the
+    rest of the Chinese copy uses."""
+    menu = _platform_menu(monkeypatch, lang="zh")
+
+    coming = [c for c in menu if str(c.value).startswith("coming:")]
+    assert coming
+    for choice in coming:
+        assert "（即将支持）" in choice.title, choice.title
+        assert choice.disabled is True, f"a reason string would bring ASCII parens: {choice.disabled!r}"
+
+
+def test_every_import_prompt_carries_the_shared_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prompt that forgets `style` falls back to questionary's own colours and
+    marker, which reads as a different program mid-wizard. Unassertable until the
+    fake stopped swallowing the prompt's keywords."""
+    from raven.cli._theme import QMARK
+
+    scripted = _run_import_step(monkeypatch, [("import conversation history", "yes"), ("Select platform", "skip")])
+
+    assert scripted.prompt_kwargs, "no prompt was raised at all"
+    for message, kwargs in scripted.prompt_kwargs:
+        assert kwargs.get("style") is not None, f"{message!r} has no style"
+        assert kwargs.get("qmark") == QMARK, f"{message!r} has qmark {kwargs.get('qmark')!r}"
 
 
 def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:

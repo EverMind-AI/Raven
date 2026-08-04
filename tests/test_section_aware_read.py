@@ -6,7 +6,7 @@ overlap with the query, and returns only the top-K (default 2) plus
 the '## Notes' catchall. When called without a message, it preserves
 the full-dump behavior.
 
-Tests cover the three pure helpers (``_parse_user_md_sections``,
+Tests cover the three pure helpers (``parse_user_md_sections``,
 ``_score_section_relevance``, ``_select_relevant_sections``) and the
 public ``get_memory_context`` entry point.
 """
@@ -19,8 +19,8 @@ import pytest
 
 from raven.memory_engine.consolidate.consolidator import (
     MemoryStore,
-    _parse_user_md_sections,
     _score_section_relevance,
+    parse_user_md_sections,
 )
 
 SEEDED = (
@@ -52,7 +52,7 @@ SEEDED = (
 
 class TestParseUserMdSections:
     def test_splits_into_h2_blocks_in_file_order(self):
-        sections = _parse_user_md_sections(SEEDED)
+        sections = parse_user_md_sections(SEEDED)
         assert list(sections.keys()) == [
             "## Projects",
             "## Habits",
@@ -61,17 +61,17 @@ class TestParseUserMdSections:
         ]
 
     def test_body_includes_h3_subheadings(self):
-        sections = _parse_user_md_sections(SEEDED)
+        sections = parse_user_md_sections(SEEDED)
         projects = sections["## Projects"]
         assert "### Project A" in projects
         assert "### Project B" in projects
 
     def test_h1_preamble_dropped(self):
-        sections = _parse_user_md_sections(SEEDED)
+        sections = parse_user_md_sections(SEEDED)
         assert "# Long-term Memory" not in "\n".join(sections.values())
 
     def test_returns_empty_for_no_h2(self):
-        sections = _parse_user_md_sections("# Title\n\nsome prose\n")
+        sections = parse_user_md_sections("# Title\n\nsome prose\n")
         assert sections == {}
 
 

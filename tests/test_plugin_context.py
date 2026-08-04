@@ -13,20 +13,29 @@ from raven.plugin import PluginContext, ServiceLocator
 
 class TestServiceLocator:
     def test_holds_workspace(self, tmp_path: Path) -> None:
-        loc = ServiceLocator(workspace=tmp_path)
+        loc = ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default")
         assert loc.workspace == tmp_path
 
     def test_frozen(self, tmp_path: Path) -> None:
-        loc = ServiceLocator(workspace=tmp_path)
+        loc = ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default")
         with pytest.raises(FrozenInstanceError):
             loc.workspace = tmp_path / "other"  # type: ignore[misc]
+
+    def test_carries_identity(self, tmp_path: Path) -> None:
+        loc = ServiceLocator(workspace=tmp_path, user_id="alice", agent_id="bot")
+        assert loc.user_id == "alice"
+        assert loc.agent_id == "bot"
+
+    def test_identity_is_required(self, tmp_path: Path) -> None:
+        with pytest.raises(TypeError):
+            ServiceLocator(workspace=tmp_path)  # type: ignore[call-arg]
 
 
 class TestPluginContext:
     def test_constructed_with_minimum_fields(self, tmp_path: Path) -> None:
         ctx = PluginContext(
             config={"mode": "embedded"},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert ctx.config == {"mode": "embedded"}
         assert ctx.services.workspace == tmp_path
@@ -34,7 +43,7 @@ class TestPluginContext:
     def test_default_logger_assigned(self, tmp_path: Path) -> None:
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(ctx.logger, logging.Logger)
         # Default name lands under the raven.plugin namespace so
@@ -45,7 +54,7 @@ class TestPluginContext:
         my_logger = logging.getLogger("raven.plugin.everos")
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
             logger=my_logger,
         )
         assert ctx.logger is my_logger
@@ -53,7 +62,7 @@ class TestPluginContext:
     def test_frozen(self, tmp_path: Path) -> None:
         ctx = PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         with pytest.raises(FrozenInstanceError):
             ctx.config = {"changed": True}  # type: ignore[misc]

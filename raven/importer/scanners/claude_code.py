@@ -124,7 +124,7 @@ def _tool_calls_from_content(content: list[dict[str, Any]], ts: int) -> tuple[di
     return tuple(calls) if calls else None
 
 
-def _tool_results_from_content(content: list[dict[str, Any]], ts: int, sender: str) -> list[ImportMessage]:
+def _tool_results_from_content(content: list[dict[str, Any]], ts: int) -> list[ImportMessage]:
     msgs: list[ImportMessage] = []
     for block in content:
         if not isinstance(block, dict) or block.get("type") != "tool_result":
@@ -145,7 +145,6 @@ def _tool_results_from_content(content: list[dict[str, Any]], ts: int, sender: s
                 role="tool",
                 content=_truncate(inner),
                 timestamp=ts,
-                sender_id=sender,
                 tool_call_id=tool_use_id,
             )
         )
@@ -179,7 +178,7 @@ def _split_paragraphs(text: str) -> list[str]:
 def _build_file_messages(intro: str, body: str, file_end: str, mtime_ms: int) -> list[ImportMessage]:
     paragraphs = _split_paragraphs(body)
     messages = [
-        ImportMessage(role="user", content=intro, timestamp=mtime_ms, sender_id="user"),
+        ImportMessage(role="user", content=intro, timestamp=mtime_ms),
     ]
     for i, para in enumerate(paragraphs):
         messages.append(
@@ -187,7 +186,6 @@ def _build_file_messages(intro: str, body: str, file_end: str, mtime_ms: int) ->
                 role="user",
                 content=para,
                 timestamp=mtime_ms + i + 1,
-                sender_id="user",
             )
         )
     messages.append(
@@ -195,7 +193,6 @@ def _build_file_messages(intro: str, body: str, file_end: str, mtime_ms: int) ->
             role="user",
             content=file_end,
             timestamp=mtime_ms + len(paragraphs) + 1,
-            sender_id="user",
         )
     )
     return messages
@@ -383,7 +380,6 @@ class ClaudeCodeScanner:
         ts = parse_iso_ts_ms(ev.get("timestamp"))
         if ts is None:
             return
-        sender = "user" if role == "user" else "assistant"
 
         if isinstance(content, str):
             text = content.strip()
@@ -393,7 +389,6 @@ class ClaudeCodeScanner:
                         role=role,
                         content=_truncate(text),
                         timestamp=ts,
-                        sender_id=sender,
                     )
                 )
             return
@@ -402,11 +397,11 @@ class ClaudeCodeScanner:
             return
 
         if role == "user":
-            for tr in _tool_results_from_content(content, ts, sender):
+            for tr in _tool_results_from_content(content, ts):
                 out.append(tr)
             text = _text_from_content(content)
             if text:
-                out.append(ImportMessage(role="user", content=_truncate(text), timestamp=ts, sender_id=sender))
+                out.append(ImportMessage(role="user", content=_truncate(text), timestamp=ts))
         else:
             text = _text_from_content(content)
             tool_calls = _tool_calls_from_content(content, ts)
@@ -416,7 +411,6 @@ class ClaudeCodeScanner:
                         role="assistant",
                         content=_truncate(text),
                         timestamp=ts,
-                        sender_id=sender,
                         tool_calls=tool_calls,
                     )
                 )
@@ -476,7 +470,6 @@ class ClaudeCodeScanner:
                 role="user",
                 content=preamble_tpl.format(proj=proj_name, count=readable_count),
                 timestamp=base_mtime_ms,
-                sender_id="user",
             ),
         ]
 
@@ -499,7 +492,6 @@ class ClaudeCodeScanner:
                 role="user",
                 content=epilogue_tpl.format(proj=proj_name, count=readable_count),
                 timestamp=base_mtime_ms + ts_offset,
-                sender_id="user",
             ),
         )
 

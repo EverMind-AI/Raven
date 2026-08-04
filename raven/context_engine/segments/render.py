@@ -129,7 +129,10 @@ def render_recalled_memory(memories: "list[Memory] | None") -> str:
         text = (m.text or "").strip()
         if not text:
             continue
-        lines.append(f"- {text}")
+        # A hit can be multi-line -- the everos user profile renders as prose --
+        # and without indenting the continuations they read as body text that
+        # escaped the list rather than as part of that bullet.
+        lines.append("- " + text.replace("\n", "\n  "))
     if not lines:
         return ""
     return wrap_untrusted("\n".join(lines), source="recalled memory")

@@ -57,7 +57,7 @@ class TestActiveBackend:
         )
         assert result.exit_code == 0, result.stdout
         assert "everos-memory" in result.stdout
-        assert "1.0.0" in result.stdout
+        assert "1.1.0" in result.stdout
         assert "bundled" in result.stdout
 
     def test_shows_active_backend_with_track_ids(

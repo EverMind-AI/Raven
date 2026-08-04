@@ -23,6 +23,14 @@ from typing import Literal
 
 Scheme = Literal["light", "dark"]
 
+# Prompt chrome, shared by every interactive command so none of them falls back
+# to questionary's defaults ("?" marker, ">>" pointer) and reads as a different
+# program. A single-space qmark renders as one blank, which -- with
+# questionary's own leading space -- puts every prompt line on the same 2-space
+# column as our printed help/status lines.
+QMARK = " "
+POINTER = "❯"
+
 _LUMA_LIGHT_THRESHOLD = 0.6
 
 PALETTE: dict[Scheme, dict[str, str]] = {
