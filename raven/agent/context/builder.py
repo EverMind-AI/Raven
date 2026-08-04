@@ -39,10 +39,12 @@ class ContextBuilder:
         *,
         start_watcher: bool = True,
         profile: str = "assistant",
+        model: str | None = None,
         wrap_tool_outputs: str = "all",
     ):
         self.workspace = workspace
         self._profile = profile
+        self._model = model
         self._wrap_tool_outputs = wrap_tool_outputs
         self.memory = MemoryStore(workspace)
         self.skills = LocalSkillCatalog(
@@ -184,7 +186,7 @@ Skills with available="false" need dependencies installed first - you can try in
         """Get the core identity section (delegates to the segment renderer)."""
         from raven.context_engine.segments import render as _render
 
-        return _render.identity_text(self.workspace, self._profile)
+        return _render.identity_text(self.workspace, self._profile, self._model)
 
     def _build_runtime_context(self, channel: str | None, chat_id: str | None) -> str:
         """Build untrusted runtime metadata block for injection before the user message."""

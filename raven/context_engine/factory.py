@@ -114,7 +114,7 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace, profile=profile),
+        IdentitySegmentBuilder(workspace, profile=profile, model=model),
         # Coding profile: assistant persona files (soul/agent) are noise in a
         # project workspace; only tool guidance carries over.
         BootstrapSegmentBuilder(workspace, ["TOOLS.md"] if profile == "coding" else None),
