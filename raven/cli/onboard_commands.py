@@ -407,9 +407,9 @@ def _bootstrap_empty_config() -> None:
     degrades gracefully when its models aren't configured yet (empty recall + a
     warning, never a crash), so an enabled-but-modelless install is safe. The
     wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
-    back to ``None`` when the user opts out or never configures the required
-    models (``_memory_enabled`` gates on both required models (llm + embedding)
-    being present, not just the backend name).
+    back to ``None`` when the user opts out or never configures the one required
+    model (``_memory_enabled`` gates on the llm role being present, not just the
+    backend name; embedding and rerank only cost recall quality).
 
     Seeding runs on EVERY onboard, not just a brand-new config: the writer is
     ``setdefault``-based (non-clobbering), so it backfills these blocks into a
@@ -3907,13 +3907,14 @@ def _step4_memory(
 
     The bootstrap seeds ``memory.backend="everos"`` (schema default) and everos
     is the only memory backend, so this step does not ask whether to enable it:
-    it either confirms the seed by configuring the required models, or resolves
-    it back to ``None`` on skip / non-interactive / give-up. ``None`` means no
-    long-term memory at all, not a fallback to something simpler.
+    it either confirms the seed by configuring the llm role, or resolves it back
+    to ``None`` on skip / non-interactive / give-up. ``None`` means no long-term
+    memory at all, not a fallback to something simpler.
 
-    ``_memory_enabled`` gates on both required models (llm + embedding) being
-    present, so a fresh modelless seed reads as "not configured yet" and the
-    keep/reconfigure menu only appears once models are actually on disk.
+    ``_memory_enabled`` gates on the llm role alone, so a fresh modelless seed
+    reads as "not configured yet" and the keep/reconfigure menu only appears once
+    that model is actually on disk. embedding and rerank are offered here but
+    never gate: skipping them costs recall quality, not memory itself.
     """
     _step_header(4, _t("EverOS long-term memory", "EverOS 长期记忆"))
 
@@ -4257,31 +4258,6 @@ def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
     return f"{name}{' ' * (width - _cell_len(name))} · {contents} · {cost}"
 
 
-def _importable_skill_count(platform: str) -> int:
-    """How many skills the import would install, or 0 when none apply.
-
-    Only Hermes contributes skills today, so every other platform gets 0 and
-    the caller drops the skill wording entirely rather than showing a count
-    that can never move.
-    """
-    import asyncio
-
-    from loguru import logger
-
-    from raven.importer.skills import SkillOrigin
-    from raven.importer.skills.hermes import HermesSkillSource
-    from raven.importer.types import Platform
-
-    if platform not in ("all", Platform.HERMES.value):
-        return 0
-    try:
-        discovered = asyncio.run(HermesSkillSource().discover())
-    except Exception as exc:
-        logger.warning("skill preview unavailable: {}", exc)
-        return 0
-    return sum(1 for s in discovered if s.origin is not SkillOrigin.BUNDLED_PRISTINE)
-
-
 def _step5_import(*, skip: bool, non_interactive: bool) -> object:
     """Step 5 — optionally import conversation history from other AI tools."""
     _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
@@ -4368,6 +4344,8 @@ def _step5_import_body(
         ImportRunResult,
         _build_and_run,
         _default_state,
+        _importable_skill_count,
+        _install_skills_without_a_scan,
         _make_phase_reporter,
         _print_summary,
         _report_scan_error,
@@ -4381,8 +4359,17 @@ def _step5_import_body(
     # a platform that failed to scan is indistinguishable from one with no data.
     all_results = asyncio.run(scan_all(on_error=_report_scan_error))
     if not all_results:
-        console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
+        # Skills are directories rather than message sources, so they never
+        # arrive as ScanResults: an install whose only importable data is skills
+        # lands here, and stopping at the message above would tell that user
+        # there is nothing to import while a dozen skills sit on disk.
+        if not asyncio.run(_install_skills_without_a_scan(None)):
+            console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
+
+    # Discovery walks the whole Hermes skill tree, and every prompt below can be
+    # returned to, so it is counted once here rather than inside the loop.
+    hermes_skill_count = asyncio.run(_importable_skill_count(Platform.HERMES))
 
     # Platform selection (sync questionary)
 
@@ -4478,7 +4465,7 @@ def _step5_import_body(
         # Skills never travel as ScanResults, so every count derived from
         # `results` omits them. Left out, the wizard offers "2 items" and then
         # installs a dozen skills the user was never told about.
-        skills = _importable_skill_count(selected_platform)
+        skills = hermes_skill_count if selected_platform in ("all", Platform.HERMES.value) else 0
         console.print(
             _t(
                 f"  {len(results) + skills} items selected "
@@ -4562,7 +4549,12 @@ def _step5_import_body(
             # -- Filter --
             filtered = filter_by_tier(results, selected_tier)
             if not filtered:
-                console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
+                # The tier filter has nothing of the skills' to keep, so a
+                # skills-only install reaches this return with its skills still
+                # uninstalled unless they are handled here.
+                scope = None if selected_platform == "all" else Platform(selected_platform)
+                if not asyncio.run(_install_skills_without_a_scan(scope)):
+                    console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
                 return None
 
             f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)

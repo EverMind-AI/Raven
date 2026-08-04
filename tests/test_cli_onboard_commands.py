@@ -2207,6 +2207,77 @@ def _run_import_step(monkeypatch: pytest.MonkeyPatch, answers: list[tuple[str, A
     return scripted
 
 
+def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> None:
+    """Make the skill install a fixed 12, without reading the developer's disk."""
+    from raven.cli import import_commands
+    from raven.importer.skills.installer import SkillImportSummary
+
+    monkeypatch.setattr(
+        import_commands, "install_skills", AsyncMock(return_value=SkillImportSummary(total=12, installed=12))
+    )
+    monkeypatch.setattr(import_commands, "load_config", lambda: SimpleNamespace(workspace_path=workspace))
+
+
+def test_import_step_installs_skills_when_the_scan_finds_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The wizard is the path every new user takes, and skills never arrive as
+    ScanResults. Left unhandled, an install whose only importable data is skills
+    is told there is nothing to import -- the same dead end `raven import run`
+    already covers, on the entry point that matters more.
+    """
+    scripted = _ScriptedSelect([("import conversation history", "yes")])
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
+    _patch_skills_only_install(monkeypatch, tmp_path)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "12 installed" in out, out
+    assert "No importable data found" not in out
+    assert "未找到可导入的数据" not in out
+
+
+def test_import_step_installs_skills_when_the_tier_keeps_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """The tier filter has nothing of the skills' to keep either, so picking the
+    memory-files tier on a Hermes install that only has conversations lands on
+    the same dead end one prompt later.
+    """
+    from raven.importer.types import Platform, ScanResult, SourceKind, Tier
+
+    conversation = ScanResult(
+        source_key="h1",
+        platform=Platform.HERMES,
+        kind=SourceKind.CONVERSATION,
+        file_paths=(),
+        estimated_size=0,
+        mtime=0.0,
+    )
+    scripted = _ScriptedSelect(
+        [
+            ("import conversation history", "yes"),
+            ("Select platform", Platform.HERMES.value),
+            ("Select import tier", Tier.MEMORY_FILES),
+        ]
+    )
+    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+    monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[conversation]))
+    _patch_skill_count(monkeypatch, 12)
+    _patch_skills_only_install(monkeypatch, tmp_path)
+
+    onboard_commands._step5_import(skip=False, non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "12 installed" in out, out
+    assert "No items match the selected tier" not in out
+    assert "所选档位无匹配项" not in out
+
+
 def test_import_step_can_be_skipped_at_the_platform_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     """Answering the offer with yes used to be a one-way door: the platform
     prompt had no exit, so changing your mind meant Esc, which aborts the whole
@@ -2254,13 +2325,27 @@ def _short(message: str) -> str:
     return "mode"
 
 
+def _patch_skill_count(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """Fix what the wizard's skill preview reports.
+
+    The wizard shares ``import_commands``' counter rather than keeping its own,
+    so this patches the one implementation both entry points call.
+    """
+    from raven.cli import import_commands
+
+    async def _count(_platform: Any) -> int:
+        return count
+
+    monkeypatch.setattr(import_commands, "_importable_skill_count", _count)
+
+
 def test_tier_choices_name_the_skills_that_will_be_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Skills are not ScanResults, so every count taken from the scan omits
     them. The wizard used to offer "2 items" and then install a dozen skills
     the user had never been shown."""
     from raven.importer.types import Tier
 
-    monkeypatch.setattr(onboard_commands, "_importable_skill_count", lambda _p: 12)
+    _patch_skill_count(monkeypatch, 12)
     scripted = _run_import_step(
         monkeypatch,
         [
@@ -2281,7 +2366,7 @@ def test_tier_choices_omit_skills_when_the_platform_has_none(monkeypatch: pytest
     be noise rather than information."""
     from raven.importer.types import Tier
 
-    monkeypatch.setattr(onboard_commands, "_importable_skill_count", lambda _p: 0)
+    _patch_skill_count(monkeypatch, 0)
     scripted = _run_import_step(
         monkeypatch,
         [

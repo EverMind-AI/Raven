@@ -251,6 +251,48 @@ class TestRun:
         assert result.exit_code == 0
         assert "No importable data found" in result.stdout
 
+    def test_run_installs_skills_when_the_scan_finds_nothing(self, tmp_path: Path) -> None:
+        """Skills are directories rather than message sources, so they never
+        arrive as ScanResults. An install whose only importable data is skills
+        reaches this early return, and stopping there tells that user there is
+        nothing to import while a dozen skills sit on disk.
+        """
+        with (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=[])),
+            patch(
+                "raven.cli.import_commands.install_skills",
+                new=AsyncMock(return_value=SkillImportSummary(total=12, installed=12)),
+            ),
+            patch("raven.cli.import_commands.load_config", return_value=SimpleNamespace(workspace_path=tmp_path)),
+        ):
+            result = runner.invoke(import_app, ["run", "--platform", "hermes", "--tier", "full", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        assert "12 installed" in result.stdout
+        assert "No importable data found" not in result.stdout
+
+    def test_run_installs_skills_when_the_tier_keeps_nothing(self, tmp_path: Path) -> None:
+        """The tier filter has nothing of the skills' to keep either, so the
+        memory-files tier on a Hermes install with conversations only lands on
+        the same dead end.
+        """
+        results = [_scan_result("h1", platform=Platform.HERMES, kind=SourceKind.CONVERSATION)]
+
+        with (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=results)),
+            patch("raven.cli.import_commands._importable_skill_count", new=AsyncMock(return_value=12)),
+            patch(
+                "raven.cli.import_commands.install_skills",
+                new=AsyncMock(return_value=SkillImportSummary(total=12, installed=12)),
+            ),
+            patch("raven.cli.import_commands.load_config", return_value=SimpleNamespace(workspace_path=tmp_path)),
+        ):
+            result = runner.invoke(import_app, ["run", "--platform", "hermes", "--tier", "memory_files", "--yes"])
+
+        assert result.exit_code == 0, result.output
+        assert "12 installed" in result.stdout
+        assert "No items match the selected tier" not in result.stdout
+
     def test_run_selects_platform_and_tier_inside_the_event_loop(self, tmp_path: Path) -> None:
         """The selectors run under `asyncio.run(_run_async(...))`, so they must
         reach questionary's async API: `ask()` drives prompt_toolkit through
