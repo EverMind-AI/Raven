@@ -132,7 +132,11 @@ def maybe_build_memory_backend(
     if registry is None:
         registry = build_plugin_registry(config)
     plugin_slice = _resolve_plugin_config_slice(registry, config, name)
-    services = ServiceLocator(workspace=workspace)
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+    )
     try:
         backend = registry.build_memory_backend(
             name,
@@ -185,7 +189,11 @@ def build_plugin_tools(
     names = registry.tool_names()
     if not names:
         return []
-    services = ServiceLocator(workspace=workspace)
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+    )
     slices = config.plugins.config
     tools = []
     for name in names:

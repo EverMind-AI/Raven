@@ -200,3 +200,15 @@ class TestServiceLocatorPlumbing:
         backend = maybe_build_memory_backend(tmp_path, _config())
         # EverosBackend stores ctx.services on construction.
         assert backend._services.workspace == tmp_path
+
+    def test_the_two_identities_do_not_arrive_swapped(self, tmp_path: Path) -> None:
+        """The whole point of moving identity into ServiceLocator is that a
+        mismatch makes every written memory unrecallable with no warning. Until
+        this assertion existed, swapping the two arguments at the only
+        production wiring point left the entire suite green."""
+        config = _config()
+        config.memory.user_id = "u-distinct"
+        config.memory.agent_id = "a-distinct"
+        backend = maybe_build_memory_backend(tmp_path, config)
+        assert backend._services.user_id == "u-distinct"
+        assert backend._services.agent_id == "a-distinct"

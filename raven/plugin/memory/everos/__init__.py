@@ -11,4 +11,4 @@ lazily pulls the heavy ``everos`` substrate). Import the backend
 explicitly from :mod:`raven.plugin.memory.everos.backend`.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

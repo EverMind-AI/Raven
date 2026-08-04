@@ -41,6 +41,7 @@ from raven.cli._helpers import (
     print_probe_troubleshooting,
     send_probe,
 )
+from raven.cli._theme import POINTER, QMARK
 from raven.providers.registry import (
     CRED_ENDPOINT,
     CRED_LOCAL,
@@ -79,17 +80,16 @@ _TOTAL_STEPS = 6
 _BACK = object()
 
 # Sentinel a required EverOS role returns when the user chooses to give up EverOS
-# rather than configure it; ``_step4_memory`` then falls back to Markdown memory.
+# rather than configure it; ``_step4_memory`` then leaves memory disabled.
 _ABORT_EVEROS = object()
 
-# Unified prompt chrome (display-only): no leading question glyph (drops
-# questionary's default "?"). A single-space qmark is rendered as one blank,
-# which — with questionary's own leading space — puts every prompt line on the
-# same 2-space column as our printed help/status lines, so the left edge stays
-# flush instead of jittering between 1- and 2-space indents. Pointer is a
-# calmer "❯" than questionary's default "»".
-_QMARK = " "
-_POINTER = "❯"
+# Unified prompt chrome (display-only), shared with every other command's
+# prompts: a single-space qmark renders as one blank, which -- with
+# questionary's own leading space -- puts every prompt line on the same 2-space
+# column as our printed help/status lines, so the left edge stays flush instead
+# of jittering between 1- and 2-space indents.
+_QMARK = QMARK
+_POINTER = POINTER
 
 # UI language, chosen on the wizard's first screen. ``_t`` returns the English
 # or Chinese variant so every later prompt / message stays bilingual.
@@ -407,9 +407,9 @@ def _bootstrap_empty_config() -> None:
     degrades gracefully when its models aren't configured yet (empty recall + a
     warning, never a crash), so an enabled-but-modelless install is safe. The
     wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
-    back to ``None`` when the user opts out or never configures the required
-    models (``_memory_enabled`` gates on both required models (llm + embedding)
-    being present, not just the backend name).
+    back to ``None`` when the user opts out or never configures the one required
+    model (``_memory_enabled`` gates on the llm role being present, not just the
+    backend name; embedding and rerank only cost recall quality).
 
     Seeding runs on EVERY onboard, not just a brand-new config: the writer is
     ``setdefault``-based (non-clobbering), so it backfills these blocks into a
@@ -2657,33 +2657,30 @@ def _init_extension_block_defaults() -> None:
 
 
 def _everos_section(section: str) -> dict[str, Any]:
-    """Current values of an EverOS section, or ``{}``."""
-    from raven.config.update_everos import load_everos_config
+    from raven.config.update_everos import everos_section
 
-    return load_everos_config().get(section, {}) or {}
+    return everos_section(section)
 
 
 def _everos_role_configured(section: str) -> bool:
-    """True iff the user really configured this EverOS role.
+    from raven.config.update_everos import everos_role_configured
 
-    Sole criterion for "configured", shared by every caller: model AND api_key.
-    The shipped everos.toml template seeds each section's model name with an
-    empty api_key, so a model alone also holds on a fresh install — two callers
-    disagreeing on this made the wizard's Back loop on itself forever.
-    """
-    sec = _everos_section(section)
-    return bool(sec.get("model") and sec.get("api_key"))
+    return everos_role_configured(section)
 
 
 def _memory_enabled() -> bool:
     """True iff EverOS memory is both selected AND usable on disk.
 
-    "Usable" requires both required roles (llm and embedding) configured.
+    "Usable" means the llm role is configured -- that is the whole requirement.
+    embedding is advised but optional: without it the adapter searches lexically
+    instead of semantically, which is weaker memory rather than none, and gating
+    on it here would tell a user who skipped it that memory is off (and skip the
+    import step along with it).
     """
     data = _load_raw_config()
     if (data.get("memory") or {}).get("backend") != "everos":
         return False
-    return _everos_role_configured("llm") and _everos_role_configured("embedding")
+    return _everos_role_configured("llm")
 
 
 # Providers whose main model can be reused as the EverOS memory LLM: they
@@ -3169,29 +3166,53 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": False,
         "verify": True,
         "purpose": (
-            "reads each conversation to judge what matters and extract the key points",
-            "从对话中判断信息边界、抽取要点",
+            "Reads each conversation to judge what matters and extract the key points.",
+            "从对话中判断信息边界、抽取要点。",
         ),
+        # Worded as a floor rather than a default: the field is pre-filled with
+        # the user's own main model, because a recommended id is only reachable
+        # if their key carries it. This tells them how to judge their own.
         "recommendation": (
-            "Recommended: [bold]gpt-4.1-mini[/bold] or stronger; weaker models may degrade quality",
-            "推荐 [bold]gpt-4.1-mini[/bold] 或更强的模型，更弱的模型可能导致提取质量下降",
+            "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
+            "能力下限参考 [bold]gpt-4.1-mini[/bold]：低于这个水平会明显影响提取质量",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
     },
     "embedding": {
         "label": ("Memory embedding", "记忆 embedding"),
         "example": "Qwen/Qwen3-Embedding-4B",
-        "optional": False,
+        # Optional in the sense that memory still functions without it: the
+        # adapter drops to KEYWORD search, which needs no vectors. Strongly
+        # advised all the same -- lexical recall misses a memory the moment the
+        # user phrases the question differently.
+        "optional": True,
         "verify": True,
         "purpose": (
-            "turns text into vectors so memories are stored and retrieved by meaning, not just keywords",
-            "把文字转成向量,存入记忆库并在检索时按「意思」匹配,而不只是关键词",
+            "Turns text into vectors so memories are found by meaning, not just keywords.",
+            "把文字转成向量，让记忆能按「意思」检索，而不只是按关键词。",
+        ),
+        "tag": (
+            "[accent](optional, strongly advised)[/accent]",
+            "[accent]（可选，强烈建议配置）[/accent]",
+        ),
+        "cost": (
+            "Without it: rephrase a question and it may miss a memory you have;\n  recall can only match keywords.",
+            "不配置：换个说法提问就可能找不到已有记忆，记忆召回时只能使用关键词检索。",
         ),
         "recommendation": (
-            "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold]; must be [bold yellow]1024-dim[/bold yellow] and support Chinese + English",
+            "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold] -- must be [bold yellow]1024-dim[/bold yellow],\n"
+            "  Chinese + English",
             "推荐 [bold]Qwen/Qwen3-Embedding-4B[/bold]，需 [bold yellow]1024 维[/bold yellow]且支持中英文的模型",
         ),
         "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
+        "skip_note": (
+            "  [yellow]! Skipped: recall will match keywords, not meaning.[/yellow]\n"
+            "  [dim]Phrase a question differently and it may miss a memory you have.\n"
+            "  Configure it later, then run `everos cascade backfill`.[/dim]",
+            "  [yellow]⚠ 已跳过：召回将按关键词匹配，而非按语义。[/yellow]\n"
+            "  [dim]换一种说法提问，就可能找不到已有的记忆。\n"
+            "  日后配好后运行 everos cascade backfill 可为已存记忆补上向量。[/dim]",
+        ),
     },
     "rerank": {
         "label": ("Memory rerank", "记忆 rerank"),
@@ -3199,9 +3220,12 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": True,
         "purpose": (
-            "re-ranks the candidates from semantic search so the best match comes first (slightly slower); "
-            "memory works fine without it, just with slightly weaker ordering",
-            "在语义召回一批候选后再精排一遍,让结果更准,会略增延迟;不配也能正常用记忆,只是排序略逊",
+            "Re-ranks what semantic search found so the best match comes first, at a small\n  latency cost.",
+            "在语义召回一批候选后再精排一遍，让最相关的排在最前，会略增延迟。",
+        ),
+        "tag": (
+            "[accent](optional, advised)[/accent]",
+            "[accent]（可选，建议配置）[/accent]",
         ),
         "recommendation": (
             "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
@@ -3209,8 +3233,8 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
-            "Skipped reranking; memory retrieval still works.",
-            "已跳过 rerank,记忆检索仍可用。",
+            "  [dim]Skipped rerank; memory retrieval still works.[/dim]",
+            "  [dim]已跳过 rerank，记忆检索仍可用。[/dim]",
         ),
     },
     "multimodal": {
@@ -3219,18 +3243,21 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": True,
         "purpose": (
-            "lets Raven store and recall images / PDFs / audio as memory\n"
-            "  only needed if you want multimodal content remembered, not merely because such files exist",
-            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索\n"
-            "  仅当你确有把多模态内容纳入记忆的需求时才配,有这类文件并不等于需要",
+            "Lets Raven understand and recall images / PDFs / audio as memory.",
+            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索。",
+        ),
+        "cost": (
+            "Without it: those files stay out of memory. Having such files is not the same\n"
+            "  as needing them remembered -- configure it when you do.",
+            "不配置：这类文件不进入记忆；有这类文件并不等于需要，确有此需求时再配即可。",
         ),
         "recommendation": (
             "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
             "推荐 [bold]google/gemini-3-flash-preview[/bold]",
         ),
         "skip_note": (
-            "Skipped; everything else is unaffected — configure it later if you come to need multimodal memory.",
-            "已跳过;其余功能不受影响,日后确有把多模态内容纳入记忆的需求时再配即可。",
+            "  [dim]Skipped; nothing else is affected -- configure it if you come to need\n  multimodal memory.[/dim]",
+            "  [dim]已跳过；其余功能不受影响，日后确有把多模态内容纳入记忆的需求时再配即可。[/dim]",
         ),
     },
 }
@@ -3400,6 +3427,22 @@ def _match_everos_default(example: str, models: list[str]) -> str:
     return example
 
 
+def _preferred_memory_model(section: str, main_model: Optional[str], chosen_provider: Optional[str]) -> Optional[str]:
+    """The main chat model, when it is a sensible pre-fill for this role.
+
+    Only the llm role -- an embedding / rerank / multimodal endpoint does not
+    serve a chat model. Only when the picked provider is the main model's own: no
+    other provider carries that id, and pre-filling one it cannot serve turns
+    Enter into a verification failure. A custom endpoint has no resolved provider
+    and is left alone for the same reason.
+    """
+    if section != "llm" or not main_model or chosen_provider is None:
+        return None
+    if chosen_provider != _resolve_model_provider(main_model):
+        return None
+    return _resolve_reuse_llm_creds(main_model).get("model")
+
+
 def _everos_pick_model(
     *,
     base_url: Optional[str],
@@ -3409,18 +3452,33 @@ def _everos_pick_model(
     section: str = "llm",
     provider_name: Optional[str] = None,
     recommendation: Optional[tuple[str, str]] = None,
+    preferred: Optional[str] = None,
 ) -> Any:
     """Pick a model id for an EverOS endpoint: fetch ``/models`` for a
-    fuzzy-searchable list, else fall back to free text. Empty submit = back."""
+    fuzzy-searchable list, else fall back to free text. Empty submit = back.
+
+    ``preferred`` pre-fills a model the user is already known to have access to
+    -- their main chat model. It wins over ``example`` because a recommended
+    model is only a recommendation if the user's key can reach it, and many keys
+    cannot; ``example`` then reads as the capability floor rather than the
+    default (see ``recommendation``).
+    """
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
     console.print(_t("  [dim]⏳ Loading models…[/dim]", "  [dim]⏳ 正在拉取模型列表…[/dim]"))
     models = _fetch_everos_models(base_url, api_key, section=section, provider_name=provider_name)
+    if preferred:
+        console.print(
+            _t(
+                f"  [dim]Pre-filled with your main model [bold]{preferred}[/bold] -- press Enter to accept.[/dim]",
+                f"  [dim]已填入你的主模型 [bold]{preferred}[/bold]，直接回车即可。[/dim]",
+            )
+        )
     if recommendation:
         console.print(f"  [dim]{_t(*recommendation)}[/dim]")
     if models:
-        default_model = _match_everos_default(example, models)
+        default_model = preferred or _match_everos_default(example, models)
         question = questionary.autocomplete(
             _t(
                 f"Model ({len(models)} available — type to filter):",
@@ -3452,7 +3510,8 @@ def _everos_pick_model(
             )
         )
         chosen = questionary.text(
-            _t(f"Model id (e.g. {example}):", f"模型 id(如 {example}):"),
+            _t(f"Model id (e.g. {example}):", f"模型 id（如 {example}）："),
+            default=preferred or "",
             placeholder=_back_placeholder(allow_back),
             style=RAVEN_STYLE,
             qmark=_QMARK,
@@ -3626,6 +3685,7 @@ def _everos_pick_creds_and_model(
             section=section,
             provider_name=chosen_provider,
             recommendation=recommendation,
+            preferred=_preferred_memory_model(section, main_model, chosen_provider),
         )
         if model is _BACK:
             continue
@@ -3643,7 +3703,7 @@ def _config_everos_role(
     with the unified provider→key→model flow, reuse shortcuts, and a back loop.
 
     Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
-    required role (the caller then disables EverOS and keeps Markdown memory)."""
+    required role (the caller then disables EverOS, leaving no long-term memory)."""
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
     from raven.config.update_everos import clear_everos_section, set_everos_section
@@ -3654,24 +3714,27 @@ def _config_everos_role(
     optional = role["optional"]
     verify_label = _t(label_en, label_zh)
 
-    # Tell the user what this model is for before asking them to configure it.
-    # Header sits on the 2-space info column (bold accent); the purpose nests
-    # one line under it (dim), matching the layout system used everywhere else.
-    tag = _t("optional", "可选")
+    # Tell the user what this model is for, and what skipping it costs, before
+    # asking them to configure it. Header sits on the 2-space info column (bold
+    # accent); purpose and cost nest under it, matching the layout used
+    # everywhere else.
+    #
+    # The cost line is dim rather than a warning colour on purpose: this is
+    # pre-decision information, and colouring it would cry wolf before the user
+    # has chosen anything. The warning comes after, from ``skip_note``.
+    #
+    # Roles that want to be configured say so in their own ``tag`` -- calling all
+    # three merely "optional" flattens the difference between losing semantic
+    # recall entirely and losing a little ranking accuracy.
+    tag_markup = _t(*role["tag"]) if role.get("tag") else _t("[dim](optional)[/dim]", "[dim]（可选）[/dim]")
+    lines = [f"  [bold][accent]{_t(label_en, label_zh)}[/accent][/bold]" + (f" {tag_markup}" if optional else "")]
+    lines.append(f"  [dim]{_t(purpose_en, purpose_zh)}[/dim]")
+    if role.get("cost"):
+        lines.append(f"  [dim]{_t(*role['cost'])}[/dim]")
     console.print()
     # highlight=False so Rich's default highlighter doesn't tint the dim prose
     # (parens/numbers/words) and make an informational hint read like an error.
-    console.print(
-        _t(
-            f"  [bold][accent]{label_en}[/accent][/bold]"
-            + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_en}[/dim]",
-            f"  [bold][accent]{label_zh}[/accent][/bold]"
-            + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_zh}[/dim]",
-        ),
-        highlight=False,
-    )
+    console.print("\n".join(lines), highlight=False)
 
     while True:  # role-menu loop — a back-out of the source picker returns here
         current = _everos_section(section).get("model") if _everos_role_configured(section) else None
@@ -3709,8 +3772,13 @@ def _config_everos_role(
             if action is None:
                 raise typer.Exit(1)
             if action == "skip":
-                note_en, note_zh = role.get("skip_note", (f"Skipped {label_en}.", f"已跳过 {label_zh}。"))
-                console.print(_t(f"  [dim]{note_en}[/dim]", f"  [dim]{note_zh}[/dim]"))
+                # Printed verbatim rather than wrapped in [dim]: skipping rerank
+                # costs ordering, skipping embedding costs semantic recall
+                # entirely, and one of those deserves to be seen.
+                note_en, note_zh = role.get(
+                    "skip_note", (f"  [dim]Skipped {label_en}.[/dim]", f"  [dim]已跳过 {label_zh}。[/dim]")
+                )
+                console.print(_t(note_en, note_zh), highlight=False)
                 return
         # A required role with nothing configured falls straight into the picker.
 
@@ -3728,17 +3796,30 @@ def _config_everos_role(
                 # the role menu rather than forcing the give-up exit.
                 continue
             # A required role with nothing configured has no Skip, so backing out
-            # of the picker would loop forever. Offer a bounded exit: keep trying,
-            # or give up EverOS and fall back to Markdown memory.
-            action = questionary.select(
+            # of the picker would loop forever. Offer a bounded exit -- keep
+            # trying, or leave without long-term memory. Stated in full and in
+            # colour: this is the only place the wizard can lose memory
+            # altogether, and "no cross-session memory" is a consequence a user
+            # should not discover weeks later by noticing the agent forgets
+            # everything.
+            console.print()
+            console.print(
                 _t(
-                    f"{label_en} is required for EverOS memory. What would you like to do?",
-                    f"{label_zh} 是 EverOS 记忆必需的。想做什么?",
+                    f"  [yellow]⚠ {label_en} is required for long-term memory.[/yellow]\n"
+                    "  [dim]Without it Raven has no memory across sessions: every conversation starts\n"
+                    "  from nothing, with no recollection of your preferences or of what was done before.[/dim]",
+                    f"  [yellow]⚠ {label_zh} 是长期记忆的必需项。[/yellow]\n"
+                    "  [dim]放弃后 Raven 没有任何跨会话记忆：每次对话都从零开始，不记得你的偏好，\n"
+                    "  也不记得之前做过什么。[/dim]",
                 ),
+                highlight=False,
+            )
+            action = questionary.select(
+                _t("What would you like to do?", "想做什么？"),
                 choices=[
                     questionary.Choice(_t("Pick a provider / model", "选择服务商 / 模型"), value="retry"),
                     questionary.Choice(
-                        _t("Give up EverOS (use native Markdown memory)", "放弃 EverOS(改用原生 Markdown 记忆)"),
+                        _t("Give up (no long-term memory)", "放弃（不启用长期记忆）"),
                         value="abort",
                     ),
                 ],
@@ -3815,15 +3896,18 @@ def _config_everos_role(
 def _step4_memory(
     *, skip: bool, non_interactive: bool, main_model: Optional[str], warnings: list[str], skip_test: bool = False
 ) -> object:
-    """Step 4 — EverOS long-term memory (enable + model sub-screens).
+    """Step 4 -- EverOS long-term memory (model sub-screens).
 
-    The bootstrap seeds ``memory.backend="everos"`` (schema default), so this
-    step's job is to either confirm it by configuring the required models or
-    resolve it back to ``None`` (native Markdown) on skip / non-interactive /
-    decline. ``_memory_enabled`` gates on both required models (llm + embedding)
-    being present, so a fresh modelless seed is treated as "not yet enabled" (the user still sees
-    the enable prompt) and the "keep current" path only triggers once models
-    are actually on disk.
+    The bootstrap seeds ``memory.backend="everos"`` (schema default) and everos
+    is the only memory backend, so this step does not ask whether to enable it:
+    it either confirms the seed by configuring the llm role, or resolves it back
+    to ``None`` on skip / non-interactive / give-up. ``None`` means no long-term
+    memory at all, not a fallback to something simpler.
+
+    ``_memory_enabled`` gates on the llm role alone, so a fresh modelless seed
+    reads as "not configured yet" and the keep/reconfigure menu only appears once
+    that model is actually on disk. embedding and rerank are offered here but
+    never gate: skipping them costs recall quality, not memory itself.
     """
     _step_header(4, _t("EverOS long-term memory", "EverOS 长期记忆"))
 
@@ -3852,8 +3936,8 @@ def _step4_memory(
             _set_memory_backend(None)
         console.print(
             _t(
-                "  [dim]Keeping native Markdown memory.[/dim]",
-                "  [dim]保持原生 Markdown 记忆。[/dim]",
+                "  [dim]Long-term memory stays off.[/dim]",
+                "  [dim]长期记忆保持关闭。[/dim]",
             )
         )
         return None
@@ -3879,40 +3963,27 @@ def _step4_memory(
         if action == "keep":
             return None  # backend already "everos" + models on disk; leave as-is
     else:
+        # No enable/decline question: everos is the only memory backend, so the
+        # step goes straight into configuring it. Leaving is still possible --
+        # backing out of the required roles reaches the give-up prompt, which
+        # spells out what is lost.
+        # Wrapped by hand: rich re-wraps at the terminal width and drops the
+        # two-space indent on continuation lines, which reads as a stray
+        # left-flush sentence under an indented block.
         console.print(
             _t(
-                "  [dim]Enable to give Raven EverOS's stronger long-term memory — it needs a memory LLM and an "
-                "embedding model. Or skip and keep Raven's built-in Markdown memory (no extra setup).[/dim]",
-                "  [dim]启用后,Raven 获得 EverOS 提供的更强长期记忆能力,需额外配置记忆用的 LLM 和 embedding 模型;"
-                "不启用则使用 Raven 原生 Markdown 记忆,无需额外配置。[/dim]",
-            )
+                "  [dim]Raven's long-term memory comes from EverOS. What it can do grows with\n"
+                "  what you configure:[/dim]\n"
+                "  [dim]    memory LLM only    conversations become memories; recall matches keywords[/dim]\n"
+                "  [dim]  + memory embedding   recall matches meaning, not wording (strongly advised)[/dim]\n"
+                "  [dim]  + memory rerank      recall ordering gets sharper[/dim]",
+                "  [dim]Raven 拥有 EverOS 提供的强大长期记忆能力，能力随配置递进：[/dim]\n"
+                "  [dim]    仅记忆 LLM       对话会被提炼成记忆存下来，召回按关键词匹配[/dim]\n"
+                "  [dim]  + 记忆 embedding   召回按语义匹配，换个问法也能找到（强烈建议配）[/dim]\n"
+                "  [dim]  + 记忆 rerank      召回结果排序更准[/dim]",
+            ),
+            highlight=False,
         )
-        action = questionary.select(
-            _t("Enable EverOS long-term memory?", "启用 EverOS 长期记忆?"),
-            choices=[
-                questionary.Choice(_t("Enable (configure the memory models)", "启用(继续配置记忆模型)"), value="on"),
-                questionary.Choice(
-                    _t(
-                        "Don't enable (use Raven's native Markdown memory)",
-                        "不启用(使用 Raven 原生 Markdown 记忆)",
-                    ),
-                    value="off",
-                ),
-            ],
-            style=RAVEN_STYLE,
-            qmark=_QMARK,
-        ).ask()
-        if action is None:
-            raise typer.Exit(1)
-        if action == "off":
-            _set_memory_backend(None)
-            console.print(
-                _t(
-                    "  [dim]Using native Markdown memory.[/dim]",
-                    "  [dim]使用原生 Markdown 记忆。[/dim]",
-                )
-            )
-            return None
 
     # Ensure the EverOS home directory has its config templates (everos.toml
     # + ome.toml) BEFORE writing model sections — set_everos_section merges
@@ -3940,8 +4011,11 @@ def _step4_memory(
             _set_memory_backend(None)
             console.print(
                 _t(
-                    "  [dim]Gave up EverOS; keeping native Markdown memory.[/dim]",
-                    "  [dim]已放弃 EverOS,改用原生 Markdown 记忆。[/dim]",
+                    "  [yellow]⚠ Gave up long-term memory: Raven will not remember anything "
+                    "between sessions.[/yellow]\n"
+                    "  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]",
+                    "  [yellow]⚠ 已放弃长期记忆，Raven 不会记住任何跨会话内容。[/yellow]\n"
+                    "  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
                 )
             )
             return None
@@ -4008,8 +4082,66 @@ def _step4_memory(
         else:
             _set_memory_backend(None)
             return None
+    _report_everos_capabilities()
     _set_memory_backend("everos")
     return None
+
+
+def _report_everos_capabilities() -> None:
+    """Say what the running server can actually do, not just that it answers.
+
+    ``ensure_everos_server`` proves the process is up and nothing more. Since
+    everos 1.2.1 a server whose embedding provider failed to build still answers
+    200 and degrades to keyword-only search, so stopping at "running" would
+    print a tick over an install that cannot recall anything. The roles were
+    each verified against their provider earlier in this step; what is new here
+    is whether everos itself could build them from what got written to
+    ``everos.toml``.
+
+    Silent on a server too old to report capabilities -- reading that silence as
+    "unavailable" would condemn a working install.
+    """
+    from raven.config.raven import load_raven_config
+    from raven.plugin.memory.everos._health import (
+        DEGRADING_SECTIONS,
+        REQUIRED_SECTIONS,
+        configured_base_url,
+        probe_capabilities,
+    )
+
+    # The configured address, not the default: probing the wrong port reports on
+    # a server nobody is using, and reads as "not running".
+    report = probe_capabilities(configured_base_url(load_raven_config()))
+    if not report.reports_capabilities:
+        return
+    configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if _everos_role_configured(s)]
+    broken = [s for s in configured if report.available(s) is False]
+    if not broken:
+        names = " and ".join(configured)
+        console.print(
+            _t(
+                f"  [green]✓ {names} {'is' if len(configured) == 1 else 'are'} available.[/green]",
+                f"  [green]✓ {names} 均可用。[/green]",
+            )
+        )
+        return
+    names = " and ".join(broken)
+    console.print(
+        _t(
+            f"  [yellow]⚠ {names} is configured but EverOS could not build it.[/yellow]\n"
+            "  [dim]Memory runs degraded until this is fixed.[/dim]\n"
+            f"  [dim]Check: {_everos_server_log_hint()}[/dim]",
+            f"  [yellow]⚠ {names} 已配置，但 EverOS 未能构建成功。[/yellow]\n"
+            "  [dim]在此修复前，记忆能力将处于降级状态。[/dim]\n"
+            f"  [dim]请查看：{_everos_server_log_hint()}[/dim]",
+        )
+    )
+
+
+def _everos_server_log_hint() -> str:
+    from raven.plugin.memory.everos._server import server_log_path
+
+    return str(server_log_path())
 
 
 # ---------------------------------------------------------------------------
@@ -4063,7 +4195,7 @@ def _print_next_steps(*, warnings: list[str]) -> None:
         else _t("Sandbox (boxlite)", "沙箱(boxlite)")
     )
     chans = ", ".join(_enabled_channels()) or _t("none", "无")
-    mem = _t("EverOS", "EverOS") if _memory_enabled() else _t("native Markdown", "原生 Markdown")
+    mem = _t("EverOS", "EverOS") if _memory_enabled() else _t("[yellow]off[/yellow]", "[yellow]未启用[/yellow]")
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()
@@ -4106,6 +4238,25 @@ def _print_next_steps(*, warnings: list[str]) -> None:
 # ---------------------------------------------------------------------------
 # Step 5 — cold-start import
 # ---------------------------------------------------------------------------
+
+
+def _cell_len(text: str) -> int:
+    """Rendered width, counting a CJK glyph as two columns."""
+    from rich.text import Text
+
+    return Text(text).cell_len
+
+
+def _tier_choice_label(name: str, width: int, contents: str, cost: str) -> str:
+    """One menu row: what it is, what it brings, what it costs.
+
+    Names are padded to a common width so the separators line up; questionary
+    renders a plain string, so the padding has to be applied here rather than
+    left to a table. Separators are kept to a single space either side and the
+    cost wording terse: a row that passes 80 columns wraps mid-phrase, which
+    costs far more legibility than the padding buys.
+    """
+    return f"{name}{' ' * (width - _cell_len(name))} · {contents} · {cost}"
 
 
 def _step5_import(*, skip: bool, non_interactive: bool) -> object:
@@ -4191,18 +4342,37 @@ def _step5_import_body(
     from raven.cli._styles import RAVEN_STYLE
     from raven.cli.import_commands import (
         PLATFORM_DISPLAY_NAMES,
+        ImportRunResult,
         _build_and_run,
         _default_state,
+        _importable_skill_count,
+        _install_skills_without_a_scan,
+        _make_phase_reporter,
         _print_summary,
+        _report_scan_error,
     )
-    from raven.importer.orchestrator import ImportSummary, ProgressEvent
+    from raven.importer.orchestrator import ProgressEvent
     from raven.importer.scanners import build_scanners, scan_all
     from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
 
-    all_results = asyncio.run(scan_all())
+    # on_error is not optional here: scan_all isolates a failing scanner rather
+    # than propagating, and loguru is file-only during onboarding, so without it
+    # a platform that failed to scan is indistinguishable from one with no data.
+    all_results = asyncio.run(scan_all(on_error=_report_scan_error))
     if not all_results:
-        console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
+        # Skills are directories rather than message sources, so they never
+        # arrive as ScanResults: an install whose only importable data is skills
+        # lands here, and stopping at the message above would tell that user
+        # there is nothing to import while a dozen skills sit on disk.
+        # Not assume_yes: the wizard's own "Start?" gate sits further down, past
+        # the prompts this return skips, so nothing else asks before the copy.
+        if not asyncio.run(_install_skills_without_a_scan(None, assume_yes=False)):
+            console.print(_t("  No importable data found.", "  未找到可导入的数据。"))
         return None
+
+    # Discovery walks the whole Hermes skill tree, and every prompt below can be
+    # returned to, so it is counted once here rather than inside the loop.
+    hermes_skill_count = asyncio.run(_importable_skill_count(Platform.HERMES))
 
     # Platform selection (sync questionary)
 
@@ -4223,30 +4393,57 @@ def _step5_import_body(
         by_platform.setdefault(r.platform.value, []).append(r)
 
     back_value = "back"
+    skip_value = "skip"
 
-    while True:
+    # Nested loops, one per prompt, so Back is `break` -- it lands on the prompt
+    # immediately above and keeps every choice made before it. A single flat
+    # loop would send Back from any depth to the platform prompt, silently
+    # discarding selections the user never asked to change.
+    while True:  # platform level
         # -- Platform selection --
-        platform_choices = []
-        for p in Platform:
-            name = PLATFORM_DISPLAY_NAMES.get(p.value, p.value)
-            if p.value in by_platform:
-                platform_choices.append(
-                    questionary.Choice(
-                        _platform_label(by_platform[p.value], name),
-                        value=p.value,
-                    )
-                )
-            else:
-                platform_choices.append(
-                    questionary.Choice(
-                        _t(f"{name} (coming soon)", f"{name}（即将支持）"),
-                        value=f"coming:{p.value}",
-                    )
-                )
+        # Scannable platforms first, then everything that cannot be picked. In
+        # enum order the two kinds interleave, which buried the one real choice
+        # among placeholders.
+        platform_choices = [
+            questionary.Choice(
+                _platform_label(by_platform[p.value], PLATFORM_DISPLAY_NAMES.get(p.value, p.value)),
+                value=p.value,
+            )
+            for p in Platform
+            if p.value in by_platform
+        ]
         platform_choices.append(
             questionary.Choice(
                 _platform_label(all_results, _t("All platforms", "全部平台")),
                 value="all",
+            )
+        )
+        # ``disabled`` both greys the row (RAVEN_STYLE's `disabled` class) and
+        # makes the arrow keys skip it, so an unsupported platform can no longer
+        # be picked only to be told it is unsupported. Passed as ``True`` rather
+        # than a reason string because questionary appends a reason in its own
+        # hardcoded " (...)" -- ASCII parens, and the label is already written
+        # with the full-width pair the rest of the Chinese copy uses.
+        platform_choices.extend(
+            questionary.Choice(
+                _t(
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)} (coming soon)",
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)}（即将支持）",
+                ),
+                value=f"coming:{p.value}",
+                disabled=True,
+            )
+            for p in Platform
+            if p.value not in by_platform
+        )
+        # The top level has no prompt above it, so its exit leaves the step
+        # entirely. Without it the only way out is Esc, which aborts the whole
+        # onboarding; answering "no" to the offer above skips cleanly, and
+        # changing your mind one prompt later should too.
+        platform_choices.append(
+            questionary.Choice(
+                _t("Skip import", "跳过导入"),
+                value=skip_value,
             )
         )
         selected_platform = questionary.select(
@@ -4257,20 +4454,9 @@ def _step5_import_body(
         ).ask()
         if selected_platform is None:
             raise typer.Exit(1)
-
-        if selected_platform.startswith("coming:"):
-            coming_name = PLATFORM_DISPLAY_NAMES.get(
-                selected_platform.removeprefix("coming:"),
-                selected_platform.removeprefix("coming:"),
-            )
-            console.print(
-                _t(
-                    f"  [dim]{coming_name} is not yet supported. Stay tuned![/dim]",
-                    f"  [dim]{coming_name} 尚未支持，敬请期待！[/dim]",
-                )
-            )
-            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
-            continue
+        if selected_platform == skip_value:
+            console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
+            return None
 
         if selected_platform == "all":
             results = all_results
@@ -4279,97 +4465,137 @@ def _step5_import_body(
 
         mem = sum(1 for r in results if r.kind == SourceKind.MEMORY_FILE)
         conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
+        # Skills never travel as ScanResults, so every count derived from
+        # `results` omits them. Left out, the wizard offers "2 items" and then
+        # installs a dozen skills the user was never told about.
+        skills = hermes_skill_count if selected_platform in ("all", Platform.HERMES.value) else 0
         console.print(
             _t(
+                f"  {len(results) + skills} items selected "
+                f"({mem} memory files, {skills} skills, {conv} conversations).",
+                f"  已选 {len(results) + skills} 项（{mem} 个记忆文件，{skills} 个技能，{conv} 个对话）。",
+            )
+            if skills
+            else _t(
                 f"  {len(results)} items selected ({mem} memory files, {conv} conversations).",
                 f"  已选 {len(results)} 项（{mem} 个记忆文件，{conv} 个对话）。",
             )
         )
 
-        # -- Tier selection --
-        console.print(
-            _t(
-                "\n  [bold][accent]Memory files only[/accent][/bold]  "
-                "[dim]Fast (minutes). Imports preferences, rules, and project knowledge. Low LLM cost.[/dim]\n\n"
-                "  [bold][accent]Full import[/accent][/bold]  "
-                "[dim]Slow (may take hours). Imports memory files + all conversation history. Higher LLM cost.[/dim]",
-                "\n  [bold][accent]仅记忆文件[/accent][/bold]  "
-                "[dim]快速（分钟级）。导入偏好、规则和项目知识。LLM 开销较少。[/dim]\n\n"
-                "  [bold][accent]完整导入[/accent][/bold]  "
-                "[dim]较慢（可能数小时）。导入记忆文件 + 全部对话历史。LLM 开销较多。[/dim]",
-            ),
-            highlight=False,
-        )
-        console.print()
-        tier_choices = []
-        if mem:
+        while True:  # tier level -- Back here returns to the platform prompt
+            # -- Tier selection --
+            # One line naming the three kinds of data, then each option carrying
+            # its own contents and cost. The previous shape put two prose
+            # paragraphs above the menu, so the reader had to match each
+            # sentence back to an option by name, and both paragraphs wrapped
+            # mid-word at 80 columns.
+            console.print()
+            console.print(
+                _t(
+                    "  [dim]Memory files are preferences and project knowledge; skills are copied "
+                    "into the local skill pool; conversations are full chat history.[/dim]",
+                    "  [dim]记忆文件是偏好与项目知识，技能会复制进本地技能池，对话是完整聊天历史。[/dim]",
+                ),
+                highlight=False,
+            )
+            console.print()
+            file_label = _t("Memory files only", "仅记忆文件")
+            full_label = _t("Full import", "完整导入")
+            label_width = max(_cell_len(file_label), _cell_len(full_label))
+            file_contents = (
+                _t(f"{mem} memory files + {skills} skills", f"{mem} 个记忆文件 + {skills} 个技能")
+                if skills
+                else _t(f"{mem} memory files", f"{mem} 个记忆文件")
+            )
+            tier_choices = []
+            if mem:
+                tier_choices.append(
+                    questionary.Choice(
+                        _tier_choice_label(
+                            file_label,
+                            label_width,
+                            file_contents,
+                            _t("minutes, low LLM cost", "分钟级，LLM 开销小"),
+                        ),
+                        value=Tier.MEMORY_FILES,
+                    )
+                )
             tier_choices.append(
                 questionary.Choice(
-                    _t(
-                        f"Memory files only ({mem} items, fast)",
-                        f"仅记忆文件（{mem} 项，快速）",
+                    _tier_choice_label(
+                        full_label,
+                        label_width,
+                        _t(f"the above + {conv} conversations", f"以上全部 + {conv} 个对话"),
+                        _t("hours, high LLM cost", "数小时，LLM 开销大"),
                     ),
-                    value=Tier.MEMORY_FILES,
+                    value=Tier.FULL,
                 )
             )
-        tier_choices.append(
-            questionary.Choice(
-                _t(
-                    f"Full import ({mem + conv} items, includes conversations)",
-                    f"完整导入（{mem + conv} 项，含对话）",
-                ),
-                value=Tier.FULL,
+            tier_choices.append(
+                questionary.Choice(
+                    _t("Back", "返回"),
+                    value=back_value,
+                )
             )
-        )
-        tier_choices.append(
-            questionary.Choice(
-                _t("Back", "返回"),
-                value=back_value,
-            )
-        )
-        selected_tier = questionary.select(
-            _t("Select import tier:", "选择导入档位："),
-            choices=tier_choices,
-            style=RAVEN_STYLE,
-            qmark=_QMARK,
-        ).ask()
-        if selected_tier is None:
-            raise typer.Exit(1)
-        if selected_tier == back_value:
-            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
-            continue
-        break
+            selected_tier = questionary.select(
+                _t("Select import tier:", "选择导入档位："),
+                choices=tier_choices,
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if selected_tier is None:
+                raise typer.Exit(1)
+            if selected_tier == back_value:
+                _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
+                break
 
-    # Filter
-    filtered = filter_by_tier(results, selected_tier)
-    if not filtered:
-        console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
-        return None
+            # -- Filter --
+            filtered = filter_by_tier(results, selected_tier)
+            if not filtered:
+                # The tier filter has nothing of the skills' to keep, so a
+                # skills-only install reaches this return with its skills still
+                # uninstalled unless they are handled here.
+                scope = None if selected_platform == "all" else Platform(selected_platform)
+                if not asyncio.run(_install_skills_without_a_scan(scope, assume_yes=False)):
+                    console.print(_t("  No items match the selected tier.", "  所选档位无匹配项。"))
+                return None
 
-    f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
-    f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
+            f_mem = sum(1 for r in filtered if r.kind == SourceKind.MEMORY_FILE)
+            f_conv = sum(1 for r in filtered if r.kind == SourceKind.CONVERSATION)
 
-    # Execution mode choice
-    exec_mode = questionary.select(
-        _t("Select execution mode:", "选择执行方式："),
-        choices=[
-            questionary.Choice(
-                _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
-                value="foreground",
-            ),
-            questionary.Choice(
-                _t(
-                    "Run in background (use raven import status to check progress)",
-                    "后台执行（用 raven import status 查看进度）",
-                ),
-                value="background",
-            ),
-        ],
-        style=RAVEN_STYLE,
-        qmark=_QMARK,
-    ).ask()
-    if exec_mode is None:
-        raise typer.Exit(1)
+            # -- Execution mode --
+            exec_mode = questionary.select(
+                _t("Select execution mode:", "选择执行方式："),
+                choices=[
+                    questionary.Choice(
+                        _t("Run now (wait for completion, show progress)", "立即执行（等待完成，显示进度）"),
+                        value="foreground",
+                    ),
+                    questionary.Choice(
+                        _t(
+                            "Run in background (use raven import status to check progress)",
+                            "后台执行（用 raven import status 查看进度）",
+                        ),
+                        value="background",
+                    ),
+                    questionary.Choice(
+                        _t("Back", "返回"),
+                        value=back_value,
+                    ),
+                ],
+                style=RAVEN_STYLE,
+                qmark=_QMARK,
+            ).ask()
+            if exec_mode is None:
+                raise typer.Exit(1)
+            if exec_mode == back_value:
+                continue
+
+            break
+        # The tier level exits either by Back, which means try the platform
+        # prompt again, or by completing, which means the whole step is done.
+        if selected_tier != back_value:
+            break
 
     # Summary + confirm
     platform_display = (
@@ -4386,12 +4612,14 @@ def _step5_import_body(
             f"\n  About to import:\n"
             f"    Platform: {platform_display}\n"
             f"    Tier:     {tier_display}\n"
-            f"    Items:    {len(filtered)} ({f_mem} memory files, {f_conv} conversations)\n"
+            f"    Items:    {len(filtered) + skills} ({f_mem} memory files, "
+            f"{skills} skills, {f_conv} conversations)\n"
             f"    Mode:     {mode_display}",
             f"\n  即将导入:\n"
             f"    平台:     {platform_display}\n"
             f"    档位:     {tier_display}\n"
-            f"    数量:     {len(filtered)} 项（{f_mem} 个记忆文件，{f_conv} 个对话）\n"
+            f"    数量:     {len(filtered) + skills} 项"
+            f"（{f_mem} 个记忆文件，{skills} 个技能，{f_conv} 个对话）\n"
             f"    执行方式: {mode_display}",
         )
     )
@@ -4414,6 +4642,7 @@ def _step5_import_body(
         import subprocess as _sp
 
         raven_bin = shutil.which("raven")
+        platform_flag = selected_platform if selected_platform != "all" else None
         if not raven_bin:
             console.print(
                 _t(
@@ -4422,8 +4651,21 @@ def _step5_import_body(
                 )
             )
             exec_mode = "foreground"
+        elif platform_flag is None and len(by_platform) > 1:
+            # `import run` has no way to say "every platform": with no --platform
+            # and more than one platform holding data, the child reaches the
+            # platform picker. A detached process with DEVNULL on both streams has
+            # no terminal to ask on, so it would hang unseen after this step had
+            # already reported the import as started.
+            console.print(
+                _t(
+                    "  [yellow]An all-platforms import cannot run in the background yet;\n"
+                    "  running it in the foreground instead.[/yellow]",
+                    "  [yellow]全平台导入暂不支持后台执行，改为前台运行。[/yellow]",
+                )
+            )
+            exec_mode = "foreground"
         else:
-            platform_flag = selected_platform if selected_platform != "all" else None
             cmd = [raven_bin, "import", "run", "--tier", selected_tier.value, "--yes"]
             if platform_flag:
                 cmd.extend(["--platform", platform_flag])
@@ -4446,7 +4688,7 @@ def _step5_import_body(
     # Foreground execution (async, with Rich progress)
     from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-    async def _do_import() -> ImportSummary:
+    async def _do_import() -> ImportRunResult:
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -4466,11 +4708,14 @@ def _step5_import_body(
                     description=f"[{event.current}/{event.total}] {event.platform}/{event.source_key}",
                 )
 
-            return await _build_and_run(items, state, on_progress=on_progress)
+            return await _build_and_run(
+                items,
+                state,
+                on_progress=on_progress,
+                on_phase=_make_phase_reporter(progress),
+            )
 
-    summary = asyncio.run(_do_import())
-
-    _print_summary(summary, log_path=log_path)
+    _print_summary(asyncio.run(_do_import()), log_path=log_path)
     return None
 
 

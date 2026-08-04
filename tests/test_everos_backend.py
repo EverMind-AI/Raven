@@ -19,7 +19,10 @@ import pytest
 from raven.memory_engine import MemoryBackend
 from raven.plugin import PluginContext, ServiceLocator
 from raven.plugin.memory.everos.backend import (
+    _PROFILE_MAX_CHARS,
     EverosBackend,
+    _flatten_profile,
+    _HttpEverosAdapter,
     make_backend,
 )
 
@@ -71,10 +74,35 @@ class _FakeAdapter:
             raise self.memorize_raises
 
 
-def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
+@pytest.fixture(autouse=True)
+def _no_capability_probe(monkeypatch: pytest.MonkeyPatch):
+    """Keep `start()`'s capability warning off the developer's own server.
+
+    `start()` builds a real `_HttpEverosAdapter` when none is injected, so
+    without this the lifecycle tests reach localhost:18791 and their output
+    depends on what that server answers. Unreachable is the quiet default; the
+    tests about the warning install their own answer.
+    """
+    from raven.plugin.memory.everos import _health
+
+    monkeypatch.setattr(
+        _health,
+        "probe_capabilities",
+        lambda *_a, **_kw: _health.CapabilityReport(reachable=False, error="probe disabled in tests"),
+    )
+    return monkeypatch
+
+
+def _ctx(
+    tmp_path: Path,
+    *,
+    user_id: str = "default",
+    agent_id: str = "default",
+    **config: Any,
+) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path),
+        services=ServiceLocator(workspace=tmp_path, user_id=user_id, agent_id=agent_id),
     )
 
 
@@ -120,6 +148,116 @@ class TestLifecycle:
         ) as mock_ensure:
             await b.start()
         mock_ensure.assert_called_once()
+
+
+class TestStartWarnsWhenRecallCannotWork:
+    """A running server stopped implying a working one in everos 1.2.1."""
+
+    @staticmethod
+    def _capabilities(monkeypatch: pytest.MonkeyPatch, **caps: bool) -> None:
+        from raven.plugin.memory.everos import _health
+
+        monkeypatch.setattr(
+            _health,
+            "probe_capabilities",
+            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+        )
+
+    @staticmethod
+    def _configured(monkeypatch: pytest.MonkeyPatch, *sections: str) -> None:
+        from raven.config import update_everos
+
+        monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
+
+    async def test_the_probe_runs_off_the_event_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The probe and the config read behind it are blocking IO, and start()
+        runs on the loop every session begins on: called inline, a wedged server
+        stalls that loop for the whole health timeout.
+        """
+        import threading
+
+        on_main: list[bool] = []
+
+        def _warn(_base_url: str) -> None:
+            on_main.append(threading.current_thread() is threading.main_thread())
+
+        monkeypatch.setattr(EverosBackend, "_warn_if_recall_cannot_work", staticmethod(_warn))
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert on_main == [False], "the health probe ran on the event loop's own thread"
+
+    async def test_a_role_configured_but_unbuilt_is_said_out_loud(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Recall silently drops to lexical matching, and the log saying so is
+        file-only at runtime -- the user just sees an agent that gets vaguer."""
+        self._configured(_no_capability_probe, "llm", "embedding")
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        # Collapsed: rich wraps at the terminal width, so a raw substring match
+        # would depend on how wide the machine running the tests happens to be.
+        err = " ".join(capsys.readouterr().err.split())
+        assert "falls back to keyword matching" in err
+        assert "cascade backfill" in err
+
+    async def test_a_role_the_user_never_configured_is_not_a_warning(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Skipping embedding is a choice the user already made; repeating it at
+        every start would be noise, not information."""
+        self._configured(_no_capability_probe)  # nothing configured
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
+
+    async def test_writes_are_not_disabled_by_the_warning(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Dropping to a no-op would discard memory the user gets back by fixing
+        the provider and running a backfill."""
+        self._configured(_no_capability_probe, "llm", "embedding")
+        self._capabilities(_no_capability_probe, llm=True, embed=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert isinstance(b._adapter, _HttpEverosAdapter)
+
+    async def test_a_healthy_server_says_nothing(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        self._capabilities(_no_capability_probe, llm=True, embed=True, rerank=False)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
+
+    async def test_a_server_that_cannot_report_says_nothing(
+        self, tmp_path: Path, _no_capability_probe, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Pre-1.2.1 servers answer a bare status; a warning there would be a
+        lie about a working install."""
+        self._capabilities(_no_capability_probe)
+        b = EverosBackend(_ctx(tmp_path))
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
+
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +422,143 @@ class TestUserSearchConversion:
         hits = await b.recall("q", user_id="x", top_k=5)
         scores = [h.score for h in hits]
         assert scores == sorted(scores, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# _flatten_profile — rendering a profile dict for prompt injection
+# ---------------------------------------------------------------------------
+
+
+class TestFlattenProfile:
+    def test_ms_suffixed_keys_are_skipped(self) -> None:
+        result = _flatten_profile({"name": "Alice", "profile_timestamp_ms": 123})
+        assert result == "name: Alice"
+
+    def test_scalar_dict_renders_key_value_lines(self) -> None:
+        result = _flatten_profile({"name": "Alice", "tz": "PST"})
+        assert result == "name: Alice\ntz: PST"
+
+    def test_list_of_dicts_renders_category_and_description(self) -> None:
+        result = _flatten_profile(
+            {
+                "explicit_info": [
+                    {
+                        "category": "occupation",
+                        "description": "software engineer",
+                        "evidence": "seen across many conversations",
+                    },
+                ],
+            }
+        )
+        assert result == "- occupation: software engineer"
+        assert "evidence" not in result
+        assert "seen across many conversations" not in result
+
+    def test_list_of_dicts_uses_trait_when_no_category(self) -> None:
+        result = _flatten_profile(
+            {
+                "implicit_traits": [
+                    {
+                        "trait": "detail-oriented",
+                        "description": "asks precise technical questions",
+                        "basis": "observed across multiple conversations",
+                    },
+                ],
+            }
+        )
+        assert result == "- detail-oriented: asks precise technical questions"
+        assert "basis" not in result
+        assert "observed across multiple conversations" not in result
+
+    def test_category_wins_when_both_label_fields_present(self) -> None:
+        result = _flatten_profile(
+            {
+                "explicit_info": [
+                    {
+                        "category": "work",
+                        "trait": "detail-oriented",
+                        "description": "ships backend services",
+                    },
+                ],
+            }
+        )
+        assert result == "- work: ships backend services"
+
+    def test_list_item_missing_description_renders_label_only(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"category": "location", "evidence": "lives in Seattle"}]})
+        assert result == "- location"
+
+    def test_list_item_missing_label_renders_description_only(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"description": "orphan fact"}]})
+        assert result == "- orphan fact"
+
+    def test_list_item_with_neither_label_nor_description_is_skipped(self) -> None:
+        result = _flatten_profile({"explicit_info": [{"evidence": "only evidence, nothing else"}]})
+        assert result == ""
+
+    def test_non_dict_list_item_renders_as_is(self) -> None:
+        result = _flatten_profile({"explicit_info": ["a raw string note"]})
+        assert result == "- a raw string note"
+
+    def test_non_dict_profile_data_renders_str(self) -> None:
+        assert _flatten_profile("just a string") == "just a string"
+        assert _flatten_profile(None) == "None"
+
+    def test_short_profile_is_not_truncated(self) -> None:
+        result = _flatten_profile({"name": "Alice", "tz": "PST"})
+        assert "truncated" not in result
+        assert len(result) <= _PROFILE_MAX_CHARS
+
+    def test_long_profile_is_capped_at_line_boundary_with_visible_marker(
+        self,
+    ) -> None:
+        items = [{"category": f"trait{i}", "description": "d" * 100} for i in range(30)]
+        uncapped = "\n".join(f"- trait{i}: {'d' * 100}" for i in range(30))
+        assert len(uncapped) > _PROFILE_MAX_CHARS  # sanity: cap must actually engage
+
+        result = _flatten_profile({"explicit_info": items})
+
+        assert len(result) < len(uncapped)
+        assert len(result) <= _PROFILE_MAX_CHARS + len("\n[profile truncated, 99999 chars omitted]")
+        body, _, marker = result.rpartition("\n")
+        assert marker.startswith("[profile truncated, ") and marker.endswith(" chars omitted]")
+        # Cut on a line boundary — no bullet is left half-written.
+        for line in body.split("\n"):
+            assert line.startswith("- trait")
+
+    def test_non_dict_profile_data_is_also_capped(self) -> None:
+        result = _flatten_profile("x" * (_PROFILE_MAX_CHARS + 500))
+        assert len(result) < _PROFILE_MAX_CHARS + 500
+        assert "[profile truncated," in result
+
+    def test_realistic_payload_shape(self) -> None:
+        profile_data = {
+            "summary": "Works as a software engineer, interested in Python and ML.",
+            "explicit_info": [
+                {
+                    "category": "occupation",
+                    "description": "software engineer",
+                    "evidence": "2026-06-25 to 2026-07-21, multiple conversations",
+                },
+            ],
+            "implicit_traits": [
+                {
+                    "trait": "detail-oriented",
+                    "description": "asks precise technical questions",
+                    "basis": "observed across multiple conversations",
+                },
+            ],
+            "profile_timestamp_ms": 1721990400000,
+        }
+        result = _flatten_profile(profile_data)
+        assert result == (
+            "summary: Works as a software engineer, interested in Python and ML.\n"
+            "- occupation: software engineer\n"
+            "- detail-oriented: asks precise technical questions"
+        )
+        assert "evidence" not in result
+        assert "basis" not in result
+        assert "profile_timestamp_ms" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +826,59 @@ class TestFeedback:
         await b.feedback({})
         await b.feedback({"kind": "skill_usage", "ids": ["x"]})
         await b.feedback({"arbitrary": object()})
+
+
+# ---------------------------------------------------------------------------
+# Identity — sourced from ServiceLocator, not the plugin config slice
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityFromServices:
+    def test_identity_comes_from_services_not_config(self, tmp_path: Path) -> None:
+        ctx = PluginContext(
+            config={"user_id": "from_config", "agent_id": "from_config"},
+            services=ServiceLocator(
+                workspace=tmp_path,
+                user_id="from_services",
+                agent_id="agent_from_services",
+            ),
+        )
+        backend = make_backend(ctx)
+        assert backend._user_id == "from_services"
+        assert backend._agent_id == "agent_from_services"
+
+    def test_stale_identity_keys_in_config_warn(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        ctx = PluginContext(
+            config={"user_id": "other"},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )
+        make_backend(ctx)
+        assert any("user_id" in r.message for r in caplog.records if r.levelname == "WARNING")
+
+    def test_stale_identity_keys_matching_are_silent(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        ctx = PluginContext(
+            config={"user_id": "default"},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )
+        make_backend(ctx)
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    @pytest.mark.parametrize("bad", ["agent:default", "a/b", "..", "."])
+    async def test_illegal_identity_rejected_on_start(self, tmp_path: Path, bad: str) -> None:
+        ctx = PluginContext(
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id=bad, agent_id="default"),
+        )
+        backend = make_backend(ctx)
+        # The message must name the on-disk camelCase key so the user can grep
+        # for it in config.json.
+        with pytest.raises(ValueError, match="memory.userId"):
+            await backend.start()

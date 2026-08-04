@@ -158,7 +158,7 @@ async def everos_env(
     be = EverosBackend(
         PluginContext(
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
     )
     await be.start()

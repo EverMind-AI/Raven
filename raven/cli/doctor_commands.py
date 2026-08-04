@@ -15,13 +15,16 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting, send_probe
+
+if TYPE_CHECKING:
+    from raven.config.raven import RavenConfig
 
 console = Console()
 
@@ -56,6 +59,44 @@ class GatewayInfo:
 
 
 @dataclass
+class MemoryInfo:
+    """What the memory backend is, and what it can actually do.
+
+    ``configured`` comes from the config files; ``capabilities`` from a running
+    server's ``/health``. Keeping both is the point: from everos 1.2.1 a server
+    whose embedding provider failed to build still answers 200 and degrades to
+    keyword-only search, so the two can disagree, and that disagreement is the
+    fault worth reporting.
+    """
+
+    backend: Optional[str] = None
+    server_running: bool = False
+    reports_capabilities: bool = False
+    configured: list[str] = field(default_factory=list)
+    capabilities: dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def unbuilt(self) -> list[str]:
+        """Roles the user configured that the server could not build."""
+        from raven.plugin.memory.everos._health import capability_available
+
+        return [s for s in self.configured if capability_available(self.capabilities, s) is False]
+
+    @property
+    def broken(self) -> list[str]:
+        """Unbuilt roles that memory cannot work without at all.
+
+        Separate from :attr:`unbuilt` because the others cost quality, not
+        function: without embedding the adapter searches lexically instead of
+        semantically, and that is a worse memory rather than no memory. Only this
+        list decides the exit code.
+        """
+        from raven.plugin.memory.everos._health import REQUIRED_SECTIONS
+
+        return [s for s in self.unbuilt if s in REQUIRED_SECTIONS]
+
+
+@dataclass
 class ProbeResult:
     ok: bool
     text: Optional[str] = None
@@ -72,6 +113,7 @@ class DoctorReport:
     routing: Optional[RoutingInfo] = None
     features: Optional[FeaturesInfo] = None
     gateway: Optional[GatewayInfo] = None
+    memory: Optional[MemoryInfo] = None
     probe: Optional[ProbeResult] = None
 
     def exit_code(self) -> int:
@@ -82,6 +124,10 @@ class DoctorReport:
         if self.routing is None or self.routing.provider is None:
             return 1
         if self.probe is not None and not self.probe.ok:
+            return 2
+        # A role the user configured that the server could not build is a real
+        # fault, not a warning: recall silently returns nothing.
+        if self.memory is not None and self.memory.broken:
             return 2
         return 0
 
@@ -144,6 +190,33 @@ def _gather_static_checks() -> DoctorReport:
     return report
 
 
+def _probe_memory(config: "RavenConfig") -> MemoryInfo:
+    """Ask the memory server what it can do. Local HTTP only, never raises.
+
+    Deliberately not part of ``_gather_static_checks``: that stays zero-network.
+    This one talks to localhost, which is cheap enough to run unconditionally --
+    unlike ``--probe``, it spends no tokens and reaches no third party.
+    """
+    backend = config.memory.backend
+    info = MemoryInfo(backend=backend)
+    if backend != "everos":
+        return info
+    from raven.config.update_everos import everos_role_configured
+    from raven.plugin.memory.everos._health import (
+        DEGRADING_SECTIONS,
+        REQUIRED_SECTIONS,
+        configured_base_url,
+        probe_capabilities,
+    )
+
+    info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
+    report = probe_capabilities(configured_base_url(config))
+    info.server_running = report.reachable
+    info.reports_capabilities = report.reports_capabilities
+    info.capabilities = dict(report.capabilities)
+    return info
+
+
 def _run_llm_probe(timeout_s: int) -> ProbeResult:
     """Wrap :func:`send_probe` so failures become a structured ProbeResult."""
     try:
@@ -151,6 +224,77 @@ def _run_llm_probe(timeout_s: int) -> ProbeResult:
         return ProbeResult(ok=True, text=text, tokens=tokens, elapsed_s=elapsed)
     except Exception as exc:
         return ProbeResult(ok=False, error=str(exc) or exc.__class__.__name__)
+
+
+def _render_memory_capabilities(memory: MemoryInfo) -> None:
+    """Report the running server's capabilities, or say why they are unknown.
+
+    "Server running" and "server can recall" stopped being the same statement in
+    everos 1.2.1, so they are printed as separate lines rather than one tick.
+    """
+    from raven.plugin.memory.everos._health import capability_available
+
+    if memory.backend != "everos":
+        return
+    if not memory.server_running:
+        console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
+        if memory.configured:
+            console.print(f"  Configured: {', '.join(memory.configured)}")
+        return
+    console.print("  Server:     [green]running[/green]")
+    if not memory.reports_capabilities:
+        console.print("  [dim]This server does not report capabilities (everos < 1.2.1).[/dim]")
+        if memory.configured:
+            console.print(f"  Configured: {', '.join(memory.configured)}")
+        return
+    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS
+
+    for section in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS):
+        label = f"  {section + ':':<12}"
+        if section not in memory.configured:
+            console.print(f"{label}[dim]not configured{_degradation_note(section)}[/dim]")
+            continue
+        state = capability_available(memory.capabilities, section)
+        if state is True:
+            console.print(f"{label}[green]✓[/green]")
+        elif state is False:
+            console.print(f"{label}[red]✗ configured, but the server could not build it[/red]")
+        else:
+            console.print(f"{label}[dim]not reported[/dim]")
+    if memory.unbuilt:
+        console.print()
+        if memory.broken:
+            console.print(
+                f"  [yellow]⚠ Memory needs {' and '.join(memory.broken)} and cannot work until this is fixed.[/yellow]"
+            )
+        else:
+            # "memory", not "recall": an unbuilt multimodal llm costs ingest of
+            # images / PDFs / audio, which recall never sees either way.
+            console.print(
+                f"  [yellow]⚠ {' and '.join(memory.unbuilt)} is configured but unavailable, so memory "
+                "runs degraded.[/yellow]"
+            )
+        console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
+
+
+def _degradation_note(section: str) -> str:
+    """What is lost by leaving an optional role unconfigured.
+
+    Stated per role rather than as one blanket "optional": they degrade
+    differently, and a user deciding whether to configure embedding needs to know
+    it costs semantic recall specifically.
+    """
+    return {
+        "embedding": "  (recall matches keywords, not meaning)",
+        "rerank": "  (agent-track recall uses the LLM lane instead of a cross-encoder)",
+        "multimodal": "  (images, PDFs and audio stay out of memory)",
+    }.get(section, "")
+
+
+def _server_log_hint() -> str:
+    from raven.plugin.memory.everos._server import server_log_path
+
+    return str(server_log_path())
 
 
 def _render_human_output(report: DoctorReport) -> None:
@@ -208,6 +352,12 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  [dim]not running[/dim]")
 
+    memory = report.memory
+    if memory is not None and memory.backend:
+        console.print("\n[bold]Memory[/bold]")
+        console.print(f"  Backend:    {memory.backend}")
+        _render_memory_capabilities(memory)
+
     if report.probe is not None:
         console.print("\n[bold]LLM Probe[/bold]")
         if routing:
@@ -254,6 +404,11 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Health-check Raven config, routing, and (optionally) the LLM."""
         report = _gather_static_checks()
+
+        if report.config_loaded:
+            from raven.config.raven import load_raven_config
+
+            report.memory = _probe_memory(load_raven_config())
 
         if probe and report.routing is not None and report.routing.provider is not None:
             report.probe = _run_llm_probe(timeout_s=timeout)

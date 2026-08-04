@@ -53,13 +53,10 @@ def _msg(
     content: str = "hello",
     role: str = "user",
     ts: int = 1000,
-    sender: str = "user",
     tool_calls: tuple[dict[str, Any], ...] | None = None,
     tool_call_id: str | None = None,
 ) -> ImportMessage:
-    return ImportMessage(
-        role=role, content=content, timestamp=ts, sender_id=sender, tool_calls=tool_calls, tool_call_id=tool_call_id
-    )
+    return ImportMessage(role=role, content=content, timestamp=ts, tool_calls=tool_calls, tool_call_id=tool_call_id)
 
 
 def _session(
@@ -281,7 +278,7 @@ class TestMessageConversion:
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         tc = ({"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}},)
-        msg = _msg(role="assistant", content="thinking", tool_calls=tc, sender="assistant")
+        msg = _msg(role="assistant", content="thinking", tool_calls=tc)
         session = ImportSession(session_id="s", messages=(msg,))
         scanner = FakeScanner({"k1": session})
 
