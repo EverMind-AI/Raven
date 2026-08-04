@@ -226,6 +226,53 @@ def _configured(no_memory_server, *sections: str) -> None:
     no_memory_server.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
 
 
+def test_the_probe_follows_the_configured_address(healthy_config: Path, no_memory_server) -> None:
+    """Probing the default while the backend reads `plugins.config` reports on a
+    server nobody is using: someone who moved everos off 18791 is told it is not
+    running, by the very check added to make a degraded server visible.
+    """
+    import json as _json
+
+    from raven.plugin.memory.everos import _health
+
+    raw = _json.loads(healthy_config.read_text())
+    raw.setdefault("plugins", {}).setdefault("config", {})["everos-memory"] = {"base_url": "http://localhost:29999"}
+    healthy_config.write_text(_json.dumps(raw))
+
+    seen: list[str] = []
+
+    def _probe(base_url: str = "", *_a, **_kw):
+        seen.append(base_url)
+        return _health.CapabilityReport(reachable=True, capabilities={"llm": True})
+
+    no_memory_server.setattr(_health, "probe_capabilities", _probe)
+    _configured(no_memory_server, "llm")
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    assert seen == ["http://localhost:29999"], seen
+
+
+def test_an_unbuilt_multimodal_role_is_reported(healthy_config: Path, no_memory_server) -> None:
+    """multimodal is config surface the wizard writes, so it can fail to build --
+    and while it was absent from DEGRADING_SECTIONS neither consumer looked at it,
+    making the section-name mapping dead code.
+    """
+    _configured(no_memory_server, "llm", "multimodal")
+    _capabilities(no_memory_server, llm=True, multimodal_llm=False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    out = " ".join(r.stdout.split())
+    assert "multimodal" in out
+    assert "could not build it" in out
+    # Not "recall runs degraded": an unbuilt multimodal llm costs ingest, and
+    # recall never saw those inputs either way.
+    assert "so memory runs degraded" in out
+
+
 def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memory_server) -> None:
     _configured(no_memory_server, "llm", "embedding")
     _capabilities(no_memory_server, llm=True, embed=True, rerank=False)

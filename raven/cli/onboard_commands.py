@@ -4101,9 +4101,17 @@ def _report_everos_capabilities() -> None:
     Silent on a server too old to report capabilities -- reading that silence as
     "unavailable" would condemn a working install.
     """
-    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS, probe_capabilities
+    from raven.config.raven import load_raven_config
+    from raven.plugin.memory.everos._health import (
+        DEGRADING_SECTIONS,
+        REQUIRED_SECTIONS,
+        configured_base_url,
+        probe_capabilities,
+    )
 
-    report = probe_capabilities()
+    # The configured address, not the default: probing the wrong port reports on
+    # a server nobody is using, and reads as "not running".
+    report = probe_capabilities(configured_base_url(load_raven_config()))
     if not report.reports_capabilities:
         return
     configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if _everos_role_configured(s)]

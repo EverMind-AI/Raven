@@ -35,12 +35,24 @@ _SECTION_TO_CAPABILITY = {
 
 # Nothing works without the llm: extraction needs it, and everos 1.2.1 will not
 # even boot without `[llm]` configured.
+#
+# Which is also why nothing reaches this branch on 1.2.1: its `/health` reports
+# `llm` as a hardcoded True (`entrypoints/api/routes/health.py`) precisely
+# because a server that got that far must have one. An llm that fails at boot
+# surfaces as an unreachable server instead. Kept because everos' own comment
+# says that literal may become a real probe, and because the section list is the
+# contract, not a description of one release's behaviour.
 REQUIRED_SECTIONS = ("llm",)
 
-# Configured but unbuilt, these cost recall quality rather than recall itself --
-# the adapter drops to KEYWORD search without embedding, and to the LLM rerank
-# lane without rerank. Reported, never treated as a fault.
-DEGRADING_SECTIONS = ("embedding", "rerank")
+# Configured but unbuilt, these cost some part of memory rather than memory
+# itself -- the adapter drops to KEYWORD search without embedding and to the LLM
+# rerank lane without rerank, and without the multimodal llm images / PDFs /
+# audio never make it in. Reported, never treated as a fault.
+#
+# Every optional role the wizard can write belongs here: `update_everos`
+# WRITABLE_SECTIONS is the source of that list, and a role missing from here is
+# one that can fail to build with nobody saying so.
+DEGRADING_SECTIONS = ("embedding", "rerank", "multimodal")
 
 
 @dataclass(frozen=True)
@@ -78,6 +90,24 @@ def capability_available(capabilities: dict[str, bool], section: str) -> bool | 
         return None
     value = capabilities.get(key)
     return value if isinstance(value, bool) else None
+
+
+def configured_base_url(config: Any) -> str:
+    """Where the backend will actually be, per ``plugins.config``.
+
+    A caller that probes the default while the backend reads the configured
+    value reports on a server nobody is using: someone who moved everos off port
+    18791 is told it is not running. Key order mirrors
+    ``_plugin_stack._resolve_plugin_config_slice`` (plugin id, then contribution
+    name) without building a registry, which the callers -- ``raven doctor`` and
+    the wizard -- have no other reason to do.
+    """
+    slices = getattr(getattr(config, "plugins", None), "config", None) or {}
+    for key in ("everos-memory", "everos"):
+        slice_ = slices.get(key)
+        if isinstance(slice_, dict) and slice_.get("base_url"):
+            return str(slice_["base_url"])
+    return DEFAULT_EVEROS_BASE_URL
 
 
 def parse_capabilities(payload: Any) -> dict[str, bool]:

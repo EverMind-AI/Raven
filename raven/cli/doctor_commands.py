@@ -15,13 +15,16 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import typer
 from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import print_probe_troubleshooting, send_probe
+
+if TYPE_CHECKING:
+    from raven.config.raven import RavenConfig
 
 console = Console()
 
@@ -187,21 +190,27 @@ def _gather_static_checks() -> DoctorReport:
     return report
 
 
-def _probe_memory(backend: Optional[str]) -> MemoryInfo:
+def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     """Ask the memory server what it can do. Local HTTP only, never raises.
 
     Deliberately not part of ``_gather_static_checks``: that stays zero-network.
     This one talks to localhost, which is cheap enough to run unconditionally --
     unlike ``--probe``, it spends no tokens and reaches no third party.
     """
+    backend = config.memory.backend
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
     from raven.config.update_everos import everos_role_configured
-    from raven.plugin.memory.everos._health import DEGRADING_SECTIONS, REQUIRED_SECTIONS, probe_capabilities
+    from raven.plugin.memory.everos._health import (
+        DEGRADING_SECTIONS,
+        REQUIRED_SECTIONS,
+        configured_base_url,
+        probe_capabilities,
+    )
 
     info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
-    report = probe_capabilities()
+    report = probe_capabilities(configured_base_url(config))
     info.server_running = report.reachable
     info.reports_capabilities = report.reports_capabilities
     info.capabilities = dict(report.capabilities)
@@ -259,8 +268,10 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
                 f"  [yellow]⚠ Memory needs {' and '.join(memory.broken)} and cannot work until this is fixed.[/yellow]"
             )
         else:
+            # "memory", not "recall": an unbuilt multimodal llm costs ingest of
+            # images / PDFs / audio, which recall never sees either way.
             console.print(
-                f"  [yellow]⚠ {' and '.join(memory.unbuilt)} is configured but unavailable, so recall "
+                f"  [yellow]⚠ {' and '.join(memory.unbuilt)} is configured but unavailable, so memory "
                 "runs degraded.[/yellow]"
             )
         console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
@@ -269,13 +280,14 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
 def _degradation_note(section: str) -> str:
     """What is lost by leaving an optional role unconfigured.
 
-    Stated per role rather than as one blanket "optional": the two degrade
+    Stated per role rather than as one blanket "optional": they degrade
     differently, and a user deciding whether to configure embedding needs to know
     it costs semantic recall specifically.
     """
     return {
         "embedding": "  (recall matches keywords, not meaning)",
         "rerank": "  (agent-track recall uses the LLM lane instead of a cross-encoder)",
+        "multimodal": "  (images, PDFs and audio stay out of memory)",
     }.get(section, "")
 
 
@@ -396,7 +408,7 @@ def register(app: typer.Typer) -> None:
         if report.config_loaded:
             from raven.config.raven import load_raven_config
 
-            report.memory = _probe_memory(load_raven_config().memory.backend)
+            report.memory = _probe_memory(load_raven_config())
 
         if probe and report.routing is not None and report.routing.provider is not None:
             report.probe = _run_llm_probe(timeout_s=timeout)
