@@ -2152,8 +2152,11 @@ class _ScriptedSelect:
         return [v for message, values in self.offered if needle in message for v in values]
 
     @staticmethod
-    def Choice(title: str, value: Any = None, **_kwargs: Any) -> Any:  # noqa: N802
-        return SimpleNamespace(title=title, value=value)
+    def Choice(title: str, value: Any = None, **kwargs: Any) -> Any:  # noqa: N802
+        # `disabled` is kept, not swallowed: it is what greys a row and makes the
+        # arrow keys skip it, so a test asserting a row is unpickable has to be
+        # able to see it. Dropping it let `disabled=True` be deleted silently.
+        return SimpleNamespace(title=title, value=value, disabled=kwargs.get("disabled"))
 
 
 class _Answer:
@@ -3690,3 +3693,65 @@ def test_the_cost_line_actually_reaches_the_screen(
     out = " ".join(capsys.readouterr().out.split())
     assert needle in out, f"{lang}: the cost line never printed"
     assert ("only match keywords" if lang == "en" else "只能使用关键词检索") in out
+
+
+# --------------------------------------------------------------------------- platform menu
+
+
+def _platform_menu(monkeypatch: pytest.MonkeyPatch, lang: str = "en") -> list:
+    """The platform prompt's choices, as the wizard builds them.
+
+    The scripted answers are keyed on prompt text, so they have to be written in
+    whichever language the step is running in.
+    """
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    offer, platform = (
+        ("import conversation history", "Select platform") if lang == "en" else ("导入对话历史", "选择平台")
+    )
+    scripted = _run_import_step(monkeypatch, [(offer, "yes"), (platform, "skip")])
+    return [c for message, choices in scripted.raw_choices if platform in message for c in choices]
+
+
+def test_unsupported_platforms_cannot_be_picked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """They used to be selectable, costing the user a round trip to be told the
+    platform is unsupported. `disabled` both greys the row and makes the arrow
+    keys skip it."""
+    menu = _platform_menu(monkeypatch)
+
+    coming = [c for c in menu if str(c.value).startswith("coming:")]
+    assert coming, "the menu no longer lists the unsupported platforms at all"
+    for choice in coming:
+        assert choice.disabled, f"{choice.value} is pickable but unsupported"
+
+
+def test_pickable_platforms_are_not_greyed_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    menu = _platform_menu(monkeypatch)
+
+    for choice in menu:
+        if not str(choice.value).startswith("coming:"):
+            assert not choice.disabled, f"{choice.value} is greyed out but pickable"
+
+
+def test_unsupported_platforms_sink_below_the_pickable_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In enum order the two kinds interleave, which buried Hermes between two
+    placeholders."""
+    menu = _platform_menu(monkeypatch)
+    kinds = ["coming" if str(c.value).startswith("coming:") else "real" for c in menu]
+
+    assert kinds.index("coming") > kinds.index("real"), kinds
+    # and no pickable row appears after the first greyed one, other than the exit
+    tail = [c for c in menu[kinds.index("coming") :] if not str(c.value).startswith("coming:")]
+    assert [c.value for c in tail] == ["skip"], [c.value for c in tail]
+
+
+def test_the_coming_soon_label_keeps_the_full_width_parens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """questionary appends a `disabled` reason string in its own hardcoded ASCII
+    " (...)", so the reason is passed as True and the label carries the pair the
+    rest of the Chinese copy uses."""
+    menu = _platform_menu(monkeypatch, lang="zh")
+
+    coming = [c for c in menu if str(c.value).startswith("coming:")]
+    assert coming
+    for choice in coming:
+        assert "（即将支持）" in choice.title, choice.title
+        assert choice.disabled is True, f"a reason string would bring ASCII parens: {choice.disabled!r}"

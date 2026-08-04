@@ -4411,28 +4411,40 @@ def _step5_import_body(
     # discarding selections the user never asked to change.
     while True:  # platform level
         # -- Platform selection --
-        platform_choices = []
-        for p in Platform:
-            name = PLATFORM_DISPLAY_NAMES.get(p.value, p.value)
-            if p.value in by_platform:
-                platform_choices.append(
-                    questionary.Choice(
-                        _platform_label(by_platform[p.value], name),
-                        value=p.value,
-                    )
-                )
-            else:
-                platform_choices.append(
-                    questionary.Choice(
-                        _t(f"{name} (coming soon)", f"{name}（即将支持）"),
-                        value=f"coming:{p.value}",
-                    )
-                )
+        # Scannable platforms first, then everything that cannot be picked. In
+        # enum order the two kinds interleave, which buried the one real choice
+        # among placeholders.
+        platform_choices = [
+            questionary.Choice(
+                _platform_label(by_platform[p.value], PLATFORM_DISPLAY_NAMES.get(p.value, p.value)),
+                value=p.value,
+            )
+            for p in Platform
+            if p.value in by_platform
+        ]
         platform_choices.append(
             questionary.Choice(
                 _platform_label(all_results, _t("All platforms", "全部平台")),
                 value="all",
             )
+        )
+        # ``disabled`` both greys the row (RAVEN_STYLE's `disabled` class) and
+        # makes the arrow keys skip it, so an unsupported platform can no longer
+        # be picked only to be told it is unsupported. Passed as ``True`` rather
+        # than a reason string because questionary appends a reason in its own
+        # hardcoded " (...)" -- ASCII parens, and the label is already written
+        # with the full-width pair the rest of the Chinese copy uses.
+        platform_choices.extend(
+            questionary.Choice(
+                _t(
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)} (coming soon)",
+                    f"{PLATFORM_DISPLAY_NAMES.get(p.value, p.value)}（即将支持）",
+                ),
+                value=f"coming:{p.value}",
+                disabled=True,
+            )
+            for p in Platform
+            if p.value not in by_platform
         )
         # The top level has no prompt above it, so its exit leaves the step
         # entirely. Without it the only way out is Esc, which aborts the whole
@@ -4455,20 +4467,6 @@ def _step5_import_body(
         if selected_platform == skip_value:
             console.print(_t("  [dim]Skipped.[/dim]", "  [dim]已跳过。[/dim]"))
             return None
-
-        if selected_platform.startswith("coming:"):
-            coming_name = PLATFORM_DISPLAY_NAMES.get(
-                selected_platform.removeprefix("coming:"),
-                selected_platform.removeprefix("coming:"),
-            )
-            console.print(
-                _t(
-                    f"  [dim]{coming_name} is not yet supported. Stay tuned![/dim]",
-                    f"  [dim]{coming_name} 尚未支持，敬请期待！[/dim]",
-                )
-            )
-            _step_header(6, _t("Import history from other AI tools", "从其他 AI 工具导入历史"))
-            continue
 
         if selected_platform == "all":
             results = all_results
