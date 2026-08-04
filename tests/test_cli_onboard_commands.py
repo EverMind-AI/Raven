@@ -3608,9 +3608,11 @@ def test_a_mistyped_local_address_can_be_retyped_without_losing_the_setup(
     assert result is not None, "a retyped address must not read as 'switch provider'"
     assert attempts[-1] == "http://gpu-box:11434", "the retyped address was not re-verified"
 
-    # Ctrl+C at that prompt quits, as it does in the sibling re-enter-key branch.
-    # Returning None would be read as "switch provider" and roll the setup back.
-    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", lambda *a, **kw: None)
+    # Ctrl+C at that prompt quits, like the other credential prompts.
+    def _cancelled(*a: Any, **kw: Any) -> Any:
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(onboard_commands, "_prompt_local_api_base", _cancelled)
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, **kw: "rebase")
     monkeypatch.setattr(
         "raven.config.update_providers.test_provider",
@@ -3862,3 +3864,81 @@ def test_every_import_prompt_carries_the_shared_chrome(monkeypatch: pytest.Monke
     for message, kwargs in scripted.prompt_kwargs:
         assert kwargs.get("style") is not None, f"{message!r} has no style"
         assert kwargs.get("qmark") == QMARK, f"{message!r} has qmark {kwargs.get('qmark')!r}"
+
+
+def test_every_credential_prompt_means_the_same_thing_by_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One contract across the four credential prompts, so no call site has to
+    remember which one it is holding.
+
+    Scoped to those four deliberately. The vendor search and the provider row
+    picker return None on cancellation and their caller translates it; that is a
+    separate chain, and claiming the whole module here would be the same
+    overreach twice.
+    """
+    from types import SimpleNamespace
+
+    from raven.providers.registry import find_by_name
+
+    class _Cancelled:
+        def ask(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_require_questionary",
+        lambda: SimpleNamespace(text=lambda *a, **kw: _Cancelled(), password=lambda *a, **kw: _Cancelled()),
+    )
+
+    for call in (
+        lambda: onboard_commands._prompt_api_key("deepseek"),
+        lambda: onboard_commands._prompt_base_url(),
+        lambda: onboard_commands._prompt_custom_model(),
+        lambda: onboard_commands._prompt_local_api_base(find_by_name("ollama_chat")),
+    ):
+        with pytest.raises(typer.Exit):
+            call()
+
+
+def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
+    """The translations the divergence made necessary are gone, not relocated.
+
+    Scoped to the function each call sits in, and to comparisons against the name
+    that call assigned. An earlier version grepped one spelling across the file and
+    stayed green with a third caller translating under another name; scanning every
+    line for those names instead would go red on any unrelated `base_url is None`,
+    of which this module has room for plenty.
+    """
+    import ast
+    from pathlib import Path as _Path
+
+    source = (_Path(__file__).resolve().parents[1] / "raven" / "cli" / "onboard_commands.py").read_text()
+    tree = ast.parse(source)
+
+    def _assigned_names(scope: ast.AST) -> list[str]:
+        """Names this scope binds from a call to the address prompt."""
+        out: list[str] = []
+        for node in ast.walk(scope):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                continue
+            if getattr(node.value.func, "id", None) != "_prompt_local_api_base":
+                continue
+            out += [t.id for t in node.targets if isinstance(t, ast.Name)]
+        return out
+
+    functions = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    checked = 0
+    offenders: list[str] = []
+    for func in functions:
+        names = _assigned_names(func)
+        if not names:
+            continue
+        checked += 1
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Compare) or not isinstance(node.ops[0], (ast.Is, ast.Eq)):
+                continue
+            left, right = node.left, node.comparators[0]
+            if getattr(left, "id", None) in names and isinstance(right, ast.Constant) and right.value is None:
+                offenders.append(f"{func.name} line {node.lineno}: {left.id} is None")
+
+    assert checked, "no function calls the prompt; this test would prove nothing"
+    assert not offenders, "the prompt raises now; its callers must not test for None:\n" + "\n".join(offenders)
