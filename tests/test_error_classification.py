@@ -123,3 +123,59 @@ def test_jitter_within_ten_percent():
 
 def test_jitter_zero_stays_zero():
     assert LLMProvider._jittered(0) == 0.0
+
+
+# --- Retry-After ------------------------------------------------------------ #
+
+
+class _Resp:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+def test_retry_after_from_response_headers():
+    exc = Exception("429")
+    exc.response = _Resp({"retry-after": "7"})
+    assert LLMProvider._retry_after_seconds(exc) == 7.0
+
+
+def test_retry_after_direct_headers_attr():
+    exc = Exception("429")
+    exc.headers = {"Retry-After": "2.5"}
+    assert LLMProvider._retry_after_seconds(exc) == 2.5
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [None, "", "Wed, 21 Oct 2026 07:28:00 GMT", "-3", "0", "999999"],
+)
+def test_retry_after_ignores_absent_dates_and_absurd_values(raw):
+    exc = Exception("429")
+    exc.headers = {"retry-after": raw} if raw is not None else {}
+    assert LLMProvider._retry_after_seconds(exc) is None
+
+
+def test_retry_after_none_exception():
+    assert LLMProvider._retry_after_seconds(None) is None
+
+
+# --- 424 Failed Dependency (gateway upstream failure) ----------------------- #
+
+
+def test_424_status_classifies_as_retryable_server():
+    exc = Exception("Provider returned error")
+    exc.status_code = 424
+    c = _c(exc=exc)
+    assert c.category == "server" and c.retryable and c.should_fallback
+
+
+def test_failed_dependency_phrase_classifies_as_server():
+    c = _c(content="APIError: failed dependency from upstream")
+    assert c.category == "server" and c.retryable
+
+
+def test_bare_424_digits_in_content_do_not_trigger_server():
+    # "424" appears in ordinary output (line numbers, byte counts); only the
+    # status code or the explicit phrase may classify.
+    c = _c(content="wrote 424 bytes to output.bin")
+    assert c.category == "unknown"

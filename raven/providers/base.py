@@ -3,6 +3,7 @@
 import asyncio
 import json
 import random
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -112,6 +113,15 @@ class GenerationSettings:
     max_tokens: int = 4096
     reasoning_effort: str | None = None
     timeout: float = 600.0
+    # Backend health probing between retries. A hung backend costs a full
+    # `timeout` per attempt in non-streaming mode (a hang and a slow legit
+    # generation are indistinguishable until the wall clock fires), so after a
+    # hang / 5xx failure the retry ladder first waits for a cheap 1-token
+    # probe to answer within `probe_timeout` seconds (polling up to
+    # `probe_budget` seconds) before re-issuing the expensive request.
+    # probe_timeout <= 0 disables probing.
+    probe_timeout: float = 0.0
+    probe_budget: float = 240.0
 
 
 class LLMProvider(ABC):
@@ -127,6 +137,11 @@ class LLMProvider(ABC):
     # Class-level default so subclasses that skip ``super().__init__`` still
     # resolve the sentinel fallbacks; frozen, so sharing the instance is safe.
     generation: GenerationSettings = GenerationSettings()
+    # Failure categories worth probing for: a dead/hung backend (hang → the
+    # wall-clock cap classifies as "network", 5xx → "server"). Rate limits are
+    # excluded — the backend is alive, probing just burns quota.
+    _PROBE_CATEGORIES = frozenset({"server", "network"})
+    _PROBE_INTERVAL = 5.0
 
     def __init__(self, api_key: str | None = None, api_base: str | None = None):
         self.api_key = api_key
@@ -358,15 +373,21 @@ class LLMProvider(ABC):
         ):
             return ErrorClassification("rate_limit", retryable=True, should_fallback=True)
 
-        # Transient server / capacity → retry + fallback.
+        # Transient server / capacity → retry + fallback. 424 (Failed
+        # Dependency) is a gateway signalling an upstream-provider failure —
+        # transient like a 5xx, not a client error — and OpenRouter returns it
+        # when a pinned backend errors mid-generation (observed on reasoning-max
+        # turns). Left in "unknown" it got a single blind retry and then killed
+        # the turn on the second occurrence.
         if (
-            status in (500, 502, 503, 504)
+            status in (424, 500, 502, 503, 504)
             or {"internalservererror", "serviceunavailableerror", "badgatewayerror"} & names
             or has(
                 "overloaded",
                 "server error",
                 "service unavailable",
                 "temporarily unavailable",
+                "failed dependency",
                 "500",
                 "502",
                 "503",
@@ -449,6 +470,59 @@ class LLMProvider(ABC):
             return 0.0
         return delay * random.uniform(0.9, 1.1)
 
+    @staticmethod
+    def _retry_after_seconds(exc: BaseException | None) -> float | None:
+        """Numeric Retry-After from the exception's HTTP response, if any.
+
+        HTTP-date form is ignored (clock-skew prone, rare on LLM gateways);
+        non-positive or absurd values are treated as absent.
+        """
+        if exc is None:
+            return None
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+        if headers is None:
+            headers = getattr(exc, "headers", None)
+        if headers is None:
+            return None
+        try:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if 0 < value <= 3600 else None
+
+    async def _probe_backend(self, model: str | None) -> bool:
+        """One cheap request to check the backend is answering.
+
+        Providers without a real probe implementation report healthy, so the
+        retry ladder degrades to plain backoff for them.
+        """
+        return True
+
+    async def _await_backend_recovery(self, model: str | None) -> None:
+        """Poll ``_probe_backend`` until it answers or ``probe_budget`` is spent.
+
+        Returns either way — on budget exhaustion the retry proceeds anyway so
+        probing can only delay a retry, never remove one.
+        """
+        deadline = time.monotonic() + self.generation.probe_budget
+        while True:
+            if await self._probe_backend(model):
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "LLM backend still unhealthy after {:.0f}s probe budget, retrying anyway",
+                    self.generation.probe_budget,
+                )
+                return
+            await asyncio.sleep(min(self._PROBE_INTERVAL, remaining))
+
     async def _chat_attempt_with_retry(
         self,
         *,
@@ -486,7 +560,10 @@ class LLMProvider(ABC):
                 raise
             except Exception as e:
                 exc = e
-                response = LLMResponse(content=f"Error calling LLM: {e}", finish_reason="error")
+                # str(e) can be empty (bare provider exceptions); an opaque
+                # "Error calling LLM:" is undiagnosable downstream.
+                detail = str(e) or type(e).__name__
+                response = LLMResponse(content=f"Error calling LLM: {detail}", finish_reason="error")
 
             if response.finish_reason != "error":
                 return response
@@ -497,10 +574,22 @@ class LLMProvider(ABC):
             response.error_classification = classification
             last_response = response
 
-            if not classification.retryable or attempt == total_attempts:
+            # An unclassifiable failure gets one blind retry: empty-message
+            # provider exceptions (a 200 with a broken body, a bare APIError)
+            # land here, and returning immediately turned a single flaky
+            # response into a dead agent turn.
+            unknown_one_shot = classification.category == "unknown" and attempt == 1
+            if (not classification.retryable and not unknown_one_shot) or attempt == total_attempts:
                 return response
 
             delay = self._jittered(self._CHAT_RETRY_DELAYS[attempt - 1])
+            # A rate-limited backend states when it will accept traffic again;
+            # retrying sooner than that burns the attempt (and quota) for a
+            # guaranteed 429. Bounded so a hostile header cannot stall a turn.
+            if classification.category == "rate_limit":
+                retry_after = self._retry_after_seconds(exc)
+                if retry_after is not None:
+                    delay = max(delay, min(retry_after, 60.0))
             logger.warning(
                 "LLM error [{}] (attempt {}/{}) model={}, retrying in {:.1f}s: {}",
                 classification.category,
@@ -511,6 +600,8 @@ class LLMProvider(ABC):
                 (response.content or "")[:120],
             )
             await asyncio.sleep(delay)
+            if self.generation.probe_timeout > 0 and classification.category in self._PROBE_CATEGORIES:
+                await self._await_backend_recovery(model)
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
 

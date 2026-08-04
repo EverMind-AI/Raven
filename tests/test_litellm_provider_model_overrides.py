@@ -133,3 +133,47 @@ async def test_config_override_wins_over_registry(monkeypatch: pytest.MonkeyPatc
     await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
 
     assert seen[0]["temperature"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_mirrored_into_openrouter_extra_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """drop_params silently discards reasoning_effort for unknown models; the
+    OpenRouter mirror in extra_body is what actually reaches the wire."""
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="sk-or-test",
+        api_base="https://openrouter.ai/api/v1",
+        default_model="vendor/brand-new-model",
+        provider_name="openrouter",
+    )
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], reasoning_effort="max")
+
+    assert seen[0]["reasoning_effort"] == "max"
+    assert seen[0]["extra_body"]["reasoning"] == {"effort": "max"}
+
+
+@pytest.mark.asyncio
+async def test_reasoning_mirror_does_not_override_declared_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="sk-or-test",
+        api_base="https://openrouter.ai/api/v1",
+        default_model="vendor/qwen-ish",
+        provider_name="openrouter",
+        extra_body={"reasoning": {"enabled": False}},
+    )
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], reasoning_effort="high")
+
+    assert seen[0]["extra_body"]["reasoning"] == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_reasoning_not_mirrored_for_non_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture(monkeypatch)
+    p = _provider("my-model")
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}], reasoning_effort="high")
+
+    assert "extra_body" not in seen[0]

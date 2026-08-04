@@ -157,9 +157,10 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_five_concrete_backend_classes() -> None:
+def test_exactly_six_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
+    from raven.providers.deepseek_v4_raw_provider import DeepSeekV4RawProvider
     from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
@@ -171,6 +172,7 @@ def test_exactly_five_concrete_backend_classes() -> None:
         OpenAICodexProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
+        DeepSeekV4RawProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
