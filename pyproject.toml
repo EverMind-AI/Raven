@@ -192,6 +192,10 @@ ignore = ["E501"]
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
 "raven/tracing/instrument.py" = ["N803"]
 
+# Vendored verbatim from the DeepSeek-V4 official encoding reference; keep
+# diffs against upstream at zero, so upstream's style stays untouched.
+"raven/providers/_dsv4_encoding.py" = ["E722", "E731", "F841", "I001", "N806", "S101", "S105"]
+
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
 "raven/cli/cron_commands.py" = ["E402"]

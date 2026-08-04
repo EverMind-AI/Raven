@@ -101,6 +101,88 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
     assert isinstance(provider, LiteLLMProvider)
 
 
+def test_make_provider_forwards_config_extra_body(tmp_path: Path) -> None:
+    """providers.<name>.extraBody must reach the provider verbatim.
+
+    It used to be silently dropped by ProviderConfig, so configs believed
+    reasoning-effort extras were active when they never left the process.
+    """
+    from raven.config.loader import load_config
+
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+                "providers": {
+                    "custom": {
+                        "apiKey": "sk-x",
+                        "apiBase": "http://localhost:9000/v1",
+                        "extraBody": {"reasoning": {"effort": "max"}, "top_p": 0.95},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _helpers.make_provider(load_config(p))
+    assert provider.extra_body == {"reasoning": {"effort": "max"}, "top_p": 0.95}
+
+
+def test_make_provider_dispatches_deepseek_v4_raw(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+    from raven.providers.deepseek_v4_raw_provider import DeepSeekV4RawProvider
+
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {
+                        "model": "deepseek/deepseek-v4-flash-0731",
+                        "provider": "deepseek_v4_raw",
+                        "reasoningEffort": "max",
+                    }
+                },
+                "providers": {
+                    "deepseek_v4_raw": {
+                        "apiKey": "sk-x",
+                        "apiBase": "http://localhost:9000/v1",
+                        "extraBody": {"top_p": 0.95, "reasoning": {"effort": "max"}},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _helpers.make_provider(load_config(p))
+    assert isinstance(provider, DeepSeekV4RawProvider)
+    assert provider.extra_body == {"top_p": 0.95}
+    assert provider.generation.reasoning_effort == "max"
+
+
+def test_make_provider_qwen_default_does_not_override_config_extra_body(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "qwen3.6-35B", "provider": "openrouter"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-x",
+                        "extraBody": {"reasoning": {"effort": "high"}},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = _helpers.make_provider(load_config(p))
+    assert provider.extra_body == {"reasoning": {"effort": "high"}}
+
+
 # ---------------------------------------------------------------------------
 # check_provider_credentials — fail-fast without importing litellm
 # ---------------------------------------------------------------------------
