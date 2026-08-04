@@ -43,6 +43,14 @@ def workspace():
         ("ok, wrote 3 files", False),
         ("Error: 429 rate limit, retry later", False),  # transient → not hard
         ("request timed out", False),  # transient → not hard
+        ("Error: Command timed out after 60s", False),  # transient marker in head
+        # Success that merely quotes error-ish text must not count as failure.
+        ("src/net.c:12: error: expected ';' before token", False),
+        ("--- old\n+++ new\n-    on_timeout()\n+    on_error()", False),
+        # A deterministic failure is not exempted by a transient word buried
+        # deep in the command's own output.
+        ("Error: old_text not found in file\n" + "x" * 400 + " timeout", True),
+        ("Exit code: 1\n" + "y" * 400 + " connection timed out", True),
     ],
 )
 def test_is_hard_tool_failure(result, expected):

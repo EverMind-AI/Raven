@@ -94,6 +94,12 @@ Verify
   introduced: narrow or rework your patch. The only exception is a test that
   asserts the exact old behavior the task explicitly asks to change (see
   Understand) - and that exception never excuses collateral breakage elsewhere.
+- Building from scratch (no existing project or tests): derive verification
+  from the task statement itself - check every boundary, format, file path,
+  and quantity it names, one by one, against your actual output. That literal
+  spec-vs-output diff is the strongest evidence available there; a test suite
+  you invent from your own reading of the problem re-encodes your assumptions
+  and ranks below it.
 
 Before declaring done
 - Re-run the relevant tests one final time, then read your full diff once:

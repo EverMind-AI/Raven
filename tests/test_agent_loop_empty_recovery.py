@@ -48,7 +48,15 @@ def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits |
 
 
 def _classify(
-    response, visible, *, prev_had_tool_calls=False, nudges_done=0, prefill_retries=0, empty_retries=0, limits=None
+    response,
+    visible,
+    *,
+    prev_had_tool_calls=False,
+    nudges_done=0,
+    prefill_retries=0,
+    empty_retries=0,
+    limits=None,
+    length_nudges=0,
 ):
     return classify_empty_response(
         response,
@@ -58,6 +66,7 @@ def _classify(
         prefill_retries=prefill_retries,
         empty_retries=empty_retries,
         limits=limits or RecoveryLimits(),
+        length_nudges=length_nudges,
     )
 
 
@@ -324,3 +333,135 @@ async def test_recovery_disabled_falls_back_immediately(workspace):
     assert out is not None
     assert provider.calls == 1  # no retries when disabled
     assert "no response" in out[0].lower()
+
+
+def test_classify_length_capped_gets_act_now_nudge():
+    r = LLMResponse(content=None, reasoning_content="x" * 100, finish_reason="length")
+    assert _classify(r, None) is RecoveryAction.TRUNCATED
+    assert _classify(r, None, length_nudges=1) is RecoveryAction.TRUNCATED
+    assert _classify(r, None, length_nudges=2) is not RecoveryAction.TRUNCATED
+
+
+def test_classify_length_with_visible_text_completes():
+    r = LLMResponse(content="partial answer", finish_reason="length")
+    assert _classify(r, "partial answer") is RecoveryAction.COMPLETE
+
+
+# --------------------------------------------------------------------------- #
+# loop: synthetics + mid-turn checkpoint must not lose trailing real messages  #
+# --------------------------------------------------------------------------- #
+
+
+class _NudgeThenLongToolRunProvider(LLMProvider):
+    """Call 2 is empty (spawns nudge synthetics), then enough tool calls to
+    cross the mid-turn checkpoint interval, then a real answer.
+
+    Regression: checkpoint indices are taken against the in-loop message list
+    including synthetics; stripping synthetics before the final save shifted
+    the slice and silently dropped trailing real messages from the session.
+    """
+
+    def __init__(self, tool_iters: int):
+        super().__init__(api_key="test")
+        self.calls = 0
+        self._tool_iters = tool_iters
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.calls += 1
+        if self.calls == 2:
+            return LLMResponse(content="", finish_reason="stop")
+        if self.calls <= self._tool_iters:
+            from raven.providers.base import ToolCallRequest
+
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id=f"c{self.calls}", name="no_such_tool", arguments={"n": self.calls})],
+                finish_reason="tool_calls",
+            )
+        return LLMResponse(content="real answer", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_mid_turn_checkpoint_with_synthetics_keeps_tail_messages(workspace):
+    provider = _NudgeThenLongToolRunProvider(tool_iters=14)
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=30,
+        restrict_to_workspace=True,
+    )
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert out is not None
+    assert out[0] == "real answer"
+    session = agent.sessions.get_or_create("s1")
+    contents = [str(m.get("content", "")) for m in session.messages]
+    # the final assistant reply survives persistence...
+    assert any("real answer" in c for c in contents)
+    # ...no synthetic scaffolding leaks...
+    for m in session.messages:
+        assert not m.get("_recovery_synthetic")
+    # ...and every executed tool call's result is persisted exactly once.
+    tool_msgs = [m for m in session.messages if m.get("role") == "tool"]
+    assert len(tool_msgs) == len({m.get("tool_call_id") for m in tool_msgs})
+    assert len(tool_msgs) == 13  # calls 1, 3..14 → 13 tool iterations
+
+
+# --------------------------------------------------------------------------- #
+# unit: mid-stream kill detection (provider aborts generation mid-reasoning)   #
+# --------------------------------------------------------------------------- #
+
+
+def test_midstream_kill_retries_instead_of_prefill():
+    r = LLMResponse(
+        content="",
+        reasoning_content="x" * 5000,
+        finish_reason="stop",
+        usage={"prompt_tokens": 90_000, "completion_tokens": 1},
+    )
+    assert _classify(r, "", empty_retries=0) is RecoveryAction.RETRY
+
+
+def test_genuine_thinking_only_still_prefills():
+    # A real thinking-only turn bills its reasoning as completion tokens.
+    r = LLMResponse(
+        content="",
+        reasoning_content="x" * 5000,
+        finish_reason="stop",
+        usage={"prompt_tokens": 90_000, "completion_tokens": 1400},
+    )
+    assert _classify(r, "") is RecoveryAction.PREFILL
+
+
+def test_missing_usage_keeps_prefill_path():
+    r = LLMResponse(content="", reasoning_content="x" * 5000, finish_reason="stop")
+    assert _classify(r, "") is RecoveryAction.PREFILL
+
+
+def test_midstream_kill_with_small_reasoning_not_flagged():
+    from raven.agent.loop.recovery import is_midstream_kill
+
+    r = LLMResponse(content="", reasoning_content="short", finish_reason="stop",
+                    usage={"completion_tokens": 1})
+    assert is_midstream_kill(r) is False

@@ -17,11 +17,13 @@ from loguru import logger
 
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.recovery import (
+    LENGTH_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
 )
+from raven.agent.loop.time_budget import TimeBudgetReminder
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.background import (
@@ -37,7 +39,7 @@ from raven.agent.tools.deep_research import (
     deep_research_mode,
 )
 from raven.agent.tools.file_search import FindTool, GrepTool
-from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from raven.agent.tools.filesystem import EditFileTool, FileReadTracker, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (
     ImageGenerateTool,
     SpeechGenerateTool,
@@ -191,21 +193,30 @@ def _is_hard_tool_failure(result: object) -> bool:
 
     False for success or a transient/retryable error. Used to decide whether a
     repeated identical tool call is a stuck loop worth breaking.
+
+    Order matters: decide *failure vs success* first (exit code / "Error"
+    prefix), and only then check transient markers — and only in the head of
+    the text. Scanning the whole result meant any successful read whose
+    content mentioned "timeout" or "502" (network code, logs, diffs) was
+    permanently exempt, silencing the breaker in its main scenario; and a
+    bare "error:" scan flagged successful output that merely quoted compiler
+    or log lines as failures, arming the breaker against legitimate polling.
     """
     s = str(result)
     low = s.lower()
-    if any(m in low for m in _TRANSIENT_FAILURE_MARKERS):
+    m = re.search(r"Exit code:\s*(-?\d+)", s)
+    if m and m.group(1) == "0":
         return False
     if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
         return False
-    m = re.search(r"Exit code:\s*(-?\d+)", s)
-    if m:
-        return m.group(1) != "0"
-    # Real not-found failures (file / dir / path / old_text) all start with
-    # "Error:" or carry a non-zero exit code, so those are already covered; a
-    # bare "not found" scan would only risk flagging successful output that
-    # merely mentions the phrase.
-    return s.lstrip().startswith("Error") or "error:" in low[:80]
+    if not m and not s.lstrip().startswith("Error"):
+        # Real not-found failures (file / dir / path / old_text) all start
+        # with "Error:" or carry a non-zero exit code; anything else is
+        # successful output regardless of what phrases it contains.
+        return False
+    # A failure — transient only if the retryable marker appears where error
+    # messages live (the head), not anywhere in pages of command output.
+    return not any(t in low[:400] for t in _TRANSIENT_FAILURE_MARKERS)
 
 
 def _same_call_break_message(tool: str, n: int) -> str:
@@ -275,6 +286,10 @@ class AgentLoop:
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
+    # Keep more recent reasoning than tool results: the immediate chain-of-thought
+    # is what the model needs to continue coherently, and the current turn's
+    # reasoning already survives (it is not yet in the message list).
+    _SHRINK_KEEP_RECENT_REASONING = 4
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -314,6 +329,25 @@ class AgentLoop:
         "use the repo's bundled runner (e.g. `bin/test` or `runtests.py`) or "
         "`python -m unittest`. Only reply TASK_COMPLETE after the relevant "
         "tests actually pass."
+    )
+    # Requirement-verification gate (opt-in via RAVEN_VERIFY_BEFORE_COMPLETE):
+    # a single one-shot nudge fired the first time the model tries to finish,
+    # re-surfacing the system prompt's "verify every deliverable" instruction at
+    # the moment it matters (a long trajectory buries the static instruction).
+    # Task-agnostic: it asks the model to check the task's OWN stated
+    # requirements, not any specific deliverable. Gentle by design — if the
+    # solution already satisfies everything the model just replies complete
+    # again, so a correct solution is not pushed off course.
+    _VERIFY_COMPLETE_NUDGE = (
+        "Before finalizing: re-read the original task and confirm, concretely, "
+        "that your solution satisfies EVERY stated requirement — not only the "
+        "main one. Check each explicitly: does every required output file exist "
+        "at the exact path named? Does the output meet all stated constraints "
+        "(format, size limits, value ranges, ordering, naming)? Are the edge "
+        "cases the task calls out actually handled? Where you can, run a "
+        "concrete command to verify each (inspect the file, check its size, "
+        "exercise a boundary input) rather than assuming. If everything checks "
+        "out, reply TASK_COMPLETE again. If any check fails, fix it first."
     )
     # Soft completion reminders (opt-in via RAVEN_GATE_STALE / RAVEN_GATE_RED,
     # both require RAVEN_REQUIRE_REAL_TEST_EVIDENCE). Design contract: fire at
@@ -386,6 +420,7 @@ class AgentLoop:
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
         profile: str = "assistant",
+        wrap_tool_outputs: str = "all",
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
@@ -509,6 +544,7 @@ class AgentLoop:
             llm_provider=provider,
             now_fn=now_fn,
             profile=profile,
+            wrap_tool_outputs=wrap_tool_outputs,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Tool names to omit from the registry — applied after default-tool
@@ -608,10 +644,13 @@ class AgentLoop:
             owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
+            wrap_tool_outputs=wrap_tool_outputs,
         )
 
         # Executor: synchronous construction only; VM starts in _start_executor()
-        self._executor: SandboxExecutor = build_executor(sandbox_config, workspace, self._owned_ids)
+        self._executor: SandboxExecutor = build_executor(
+            sandbox_config, workspace, self._owned_ids, inherit_env=self.exec_config.inherit_env
+        )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
@@ -738,10 +777,11 @@ class AgentLoop:
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
+        read_tracker = FileReadTracker()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir, tracker=read_tracker))
         self._exec_sessions = ExecSessionRegistry(self._executor)
-        self._background_jobs = BackgroundJobRegistry(self._executor)
+        self._background_jobs = BackgroundJobRegistry(self._executor, workspace=self.workspace)
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
@@ -1599,28 +1639,68 @@ class AgentLoop:
             return repaired
         return messages
 
+    @staticmethod
+    def _estimate_message_tokens(messages: list[dict]) -> int:
+        """Cheap upper-ish token estimate for the assembled prompt (~4 chars/token).
+
+        Deliberately crude and dependency-free: it only gates the
+        overflow-recovery fallback, where being roughly right is enough and a
+        real tokenizer call per failed request would not pay for itself.
+        """
+        chars = 0
+        for m in messages:
+            for c in (m.get("content"), m.get("reasoning_content")):
+                if isinstance(c, str):
+                    chars += len(c)
+                elif isinstance(c, list):
+                    chars += sum(len(str(part)) for part in c)
+        return chars // 4
+
     @classmethod
     def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
-        """Elide the bodies of older tool-result messages to fit a tighter window.
+        """Elide older tool output and reasoning to fit a tighter window.
 
-        Mid-turn context overflow is almost always accumulated tool output, so
-        replacing the content of all but the most recent few ``role="tool"``
-        messages with a short placeholder frees the most tokens while keeping
-        system / user / assistant reasoning intact. Deterministic, no extra LLM
+        Two accumulators overflow a long turn: tool output, and — on
+        reasoning-heavy models (DSV4 keeps ``reasoning_content`` inline every
+        turn) — the reasoning itself. A 90-turn max-effort run can carry 200k+
+        tokens of past reasoning that eliding tool results alone barely dents.
+        So replace the bodies of all but the most recent few ``role="tool"``
+        messages AND strip ``reasoning_content`` / ``thinking_blocks`` from all
+        but the most recent few assistant messages. Deterministic, no extra LLM
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
-        there was nothing worth eliding (caller should not bother retrying).
+        nothing was left worth eliding (caller should not bother retrying).
         """
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
+        reasoning_idxs = [
+            i
+            for i, m in enumerate(messages)
+            if m.get("role") == "assistant" and (m.get("reasoning_content") or m.get("thinking_blocks"))
+        ]
+        elide_tools = (
+            set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
+            if len(tool_idxs) > cls._SHRINK_KEEP_RECENT_TOOL_RESULTS
+            else set()
+        )
+        elide_reasoning = (
+            set(reasoning_idxs[: -cls._SHRINK_KEEP_RECENT_REASONING])
+            if len(reasoning_idxs) > cls._SHRINK_KEEP_RECENT_REASONING
+            else set()
+        )
+        if not elide_tools and not elide_reasoning:
             return messages, 0
-        elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
         shrunk: list[dict] = []
         elided = 0
         for i, m in enumerate(messages):
-            if i in elide and m.get("content") and m.get("content") != placeholder:
+            if i in elide_tools and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
                 clean["content"] = placeholder
+                shrunk.append(clean)
+                elided += 1
+            elif i in elide_reasoning:
+                clean = dict(m)
+                clean.pop("reasoning_content", None)
+                clean.pop("thinking_blocks", None)
                 shrunk.append(clean)
                 elided += 1
             else:
@@ -1728,6 +1808,11 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # Billed context size of the last successful call. The chars//4
+        # estimator underestimates token-dense content (disassembly, C code
+        # run at ~2 chars/token) by 2x, so near_window also trusts this
+        # provider-reported ground truth when deciding overflow recovery.
+        last_context_used = 0
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1750,9 +1835,13 @@ class AgentLoop:
         truncation_retries = 0
         malformed_resamples = 0
         call_max_tokens: int | None = None
+        length_nudges = 0
+        time_budget = TimeBudgetReminder.from_env(time.time())
         test_gate_enabled = bool(os.environ.get("RAVEN_REQUIRE_REAL_TEST_EVIDENCE"))
         real_test_evidence = False
         test_gate_nudges = 0
+        verify_complete_enabled = bool(os.environ.get("RAVEN_VERIFY_BEFORE_COMPLETE"))
+        verify_complete_nudged = False
         # Evidence ledger for the soft completion reminders: what the latest
         # real-test run said (red/green/None=unparseable), and which non-doc
         # files were edited AFTER it (staleness). Both reminders are one-shot.
@@ -1836,6 +1925,12 @@ class AgentLoop:
             # per CAP-CHAT-1 wire shape. Use the wire-contract UsageSnapshot
             # fields (prompt_tokens / completion_tokens / total_tokens) — not
             # the agent-internal snapshot with model / cache / cost fields.
+            if response.usage:
+                billed = int(response.usage.get("prompt_tokens", 0) or 0) + int(
+                    response.usage.get("completion_tokens", 0) or 0
+                )
+                if billed > 0:
+                    last_context_used = billed
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
@@ -1856,11 +1951,22 @@ class AgentLoop:
             # should_compress (a smaller window won't help, but eliding the bulk
             # of accumulated tool output will). Shrink in place and retry this
             # iteration instead of surfacing it as a fatal error. Bounded.
+            #
+            # Not every provider names the overflow: OpenRouter passthrough
+            # returns an opaque "Provider returned error" 400 that classifies as
+            # ``unknown``. So also treat any hard failure as compressible when
+            # the assembled prompt is already near the window — eliding old tool
+            # output is harmless if it was something else, and recovers the turn
+            # when it was a disguised overflow.
             cls_ = response.error_classification
+            near_window = (
+                response.finish_reason == "error"
+                and (cls_ is None or not cls_.retryable)
+                and max(self._estimate_message_tokens(messages), last_context_used) >= 0.8 * self.context_window_tokens
+            )
             if (
                 response.finish_reason == "error"
-                and cls_ is not None
-                and cls_.should_compress
+                and ((cls_ is not None and cls_.should_compress) or near_window)
                 and compress_retries < self._MAX_COMPRESS_RETRIES
             ):
                 shrunk, elided = self._emergency_shrink(messages)
@@ -1972,7 +2078,11 @@ class AgentLoop:
                     # model text; the UI preview prefers the display string.
                     model_text = str(result)
                     display_src = getattr(result, "display_text", None) or model_text
-                    if test_gate_enabled and tool_call.name == "exec":
+                    # Name-keyed policies below must see the tool that actually
+                    # ran, not the model's raw spelling (execute repairs
+                    # mangled names like Web_Fetch -> web_fetch).
+                    executed_name = self.tools.canonical_name(tool_call.name)
+                    if test_gate_enabled and executed_name == "exec":
                         cmd = str((tool_call.arguments or {}).get("command", ""))
                         plain_out = self._ANSI_RE.sub("", model_text)
                         if self._TEST_GATE_CMD_RE.search(cmd) and self._TEST_GATE_OUT_RE.search(plain_out):
@@ -1984,7 +2094,7 @@ class AgentLoop:
                             edits_since_test = []
                     elif (
                         (gate_stale_enabled or gate_red_enabled)
-                        and tool_call.name in ("write_file", "edit_file")
+                        and executed_name in ("write_file", "edit_file")
                         and not _is_hard_tool_failure(model_text)
                     ):
                         path = str((tool_call.arguments or {}).get("path", ""))
@@ -2014,7 +2124,9 @@ class AgentLoop:
                                 "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    messages = self.context.add_tool_result(
+                        messages, tool_call.id, tool_call.name, model_text, fence_name=executed_name
+                    )
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(model_text):
@@ -2049,6 +2161,11 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                if time_budget is not None and messages and messages[-1].get("role") == "tool":
+                    budget_note = time_budget.poll(time.time())
+                    if budget_note:
+                        logger.info("time-budget reminder injected: {}", budget_note[:80])
+                        messages[-1]["content"] = str(messages[-1].get("content", "")) + "\n\n" + budget_note
                 # Incremental persistence for long turns: a crash at iteration
                 # 300 should not lose iterations 1-299.
                 if on_checkpoint is not None and iteration % self._MID_TURN_CHECKPOINT_ITERS == 0:
@@ -2080,7 +2197,20 @@ class AgentLoop:
                     prefill_retries=prefill_retries,
                     empty_retries=empty_retries,
                     limits=self._recovery_limits,
+                    length_nudges=length_nudges,
                 )
+                if action is RecoveryAction.TRUNCATED:
+                    length_nudges += 1
+                    logger.warning(
+                        "empty-recovery: output cap hit before any action, act-now nudge {}/{}",
+                        length_nudges,
+                        self._recovery_limits.truncated_max_nudges,
+                    )
+                    messages = self.context.add_assistant_message(messages, "(output truncated)")
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": LENGTH_NUDGE, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    continue
                 if action is RecoveryAction.PREFILL:
                     prefill_retries += 1
                     logger.warning(
@@ -2140,6 +2270,14 @@ class AgentLoop:
                         self._TEST_GATE_MAX_NUDGES,
                     )
                     messages.append({"role": "user", "content": self._TEST_GATE_NUDGE})
+                    prev_had_tool_calls = False
+                    continue
+                if verify_complete_enabled and not verify_complete_nudged and iteration < self.max_iterations:
+                    verify_complete_nudged = True
+                    logger.info(
+                        "verify-before-complete gate: one-shot requirement re-check nudge before accepting completion"
+                    )
+                    messages.append({"role": "user", "content": self._VERIFY_COMPLETE_NUDGE})
                     prev_had_tool_calls = False
                     continue
                 # Soft one-shot reminders, mutually exclusive by construction:
@@ -2232,8 +2370,11 @@ class AgentLoop:
         # was retired on feature/integrate-everos; the after-turn pipeline —
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
-        if any(m.get("_recovery_synthetic") for m in messages):
-            messages = [m for m in messages if not m.get("_recovery_synthetic")]
+        # Synthetics stay in the returned list: mid-turn checkpoints took
+        # ``_persisted_upto`` indices against the unfiltered list, so dropping
+        # entries here would shift the final save's slice and silently lose
+        # trailing real messages. ``_save_turn`` skips synthetics when writing;
+        # the caller strips them at the after-turn boundary.
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
         # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
@@ -2622,17 +2763,20 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, _persisted_upto["idx"])
         self.sessions.save(session)
+        # Recovery scaffolding is index-load-bearing for the saves above but
+        # must not reach extraction/indexing.
+        turn_msgs = [m for m in all_msgs[turn_start_idx:] if not m.get("_recovery_synthetic")]
         await self.context_engine.after_turn(
             key,
             {
                 "final_content": final_content,
-                "messages": all_msgs[turn_start_idx:],
+                "messages": turn_msgs,
             },
         )
         # AG-1: plugin-side indexing (third peer step in after-turn pipeline).
         await self._dispatch_backend_store(
             key,
-            all_msgs[turn_start_idx:],
+            turn_msgs,
         )
         # FB-1: forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
