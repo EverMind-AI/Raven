@@ -105,11 +105,17 @@ async def import_user_md_sections(
     kept = [(entry, stripped) for entry, stripped in ((e, e.strip()) for e in entries) if stripped]
     # One LLM call per entry, and the caller has no other way to tell this apart
     # from a hang: on a real install three entries took 9.4s, all of it here.
+    # Reported as *completed*, before each call rather than after it: counting
+    # the call about to be made showed 3/3 while the third was still in flight,
+    # which is the 100%-then-wait this progress line exists to remove. The close
+    # after the loop is what still reaches N/N.
     headings: list[str] = []
-    for index, (entry, _) in enumerate(kept, start=1):
+    for index, (entry, _) in enumerate(kept):
         if on_progress is not None:
             on_progress(index, len(kept))
         headings.append(await _pick_heading(entry, provider=provider, model=model))
+    if on_progress is not None and kept:
+        on_progress(len(kept), len(kept))
 
     written: list[str] = []
     skipped = 0

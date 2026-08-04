@@ -82,6 +82,34 @@ async def test_provider_called_with_classification_settings(tmp_path: Path) -> N
     assert call["max_tokens"] < 4096
 
 
+async def test_progress_counts_finished_calls_not_started_ones(tmp_path: Path) -> None:
+    """The bar showed 3/3 while the third LLM call was still in flight, which is
+    the 100%-then-wait it was added to remove. Each report has to be a count of
+    what is done, and the last one still has to reach N/N.
+    """
+    store = MemoryStore(tmp_path)
+    provider = _Provider(["Goals", "Preferences", "Notes"])
+    seen: list[tuple[int, int]] = []
+    reports: list[tuple[int, int]] = []
+
+    def _on_progress(done: int, total: int) -> None:
+        # Captured against the provider's call count: that is the only way to
+        # tell "about to start #3" from "finished #2" at the same number.
+        reports.append((done, total))
+        seen.append((done, len(provider.calls)))
+
+    await import_user_md_sections(
+        ["a", "b", "c"],
+        store,
+        provider=provider,
+        model="m",
+        on_progress=_on_progress,
+    )
+
+    assert all(done == made for done, made in seen), f"a report ran ahead of the calls: {seen}"
+    assert reports[-1] == (3, 3), reports
+
+
 async def test_no_provider_falls_back_to_notes(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     headings = await import_user_md_sections(["a fact"], store, provider=None)
