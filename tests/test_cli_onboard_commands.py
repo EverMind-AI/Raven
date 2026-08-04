@@ -2134,14 +2134,20 @@ class _ScriptedSelect:
         self.asked: list[str] = []
         self.offered: list[tuple[str, list[Any]]] = []
         self.raw_choices: list[tuple[str, list[Any]]] = []
+        self.prompt_kwargs: list[tuple[str, dict[str, Any]]] = []
 
-    def select(self, message: str, choices: list[Any] | None = None, **_kwargs: Any) -> Any:
+    def select(self, message: str, choices: list[Any] | None = None, **kwargs: Any) -> Any:
         self.asked.append(message)
         # Recorded so a test can assert a choice was actually offered: scripting
         # an answer by prompt text alone would still "work" if the choice that
         # produces it had been deleted from the menu.
         self.offered.append((message, [getattr(c, "value", c) for c in (choices or [])]))
         self.raw_choices.append((message, list(choices or [])))
+        # Everything else the prompt was given, verbatim. Swallowed kwargs are
+        # invisible defects: while this dropped them, a prompt could lose
+        # `style=RAVEN_STYLE` and fall back to questionary's own colours with the
+        # suite still green.
+        self.prompt_kwargs.append((message, dict(kwargs)))
         for index, (needle, value) in enumerate(self._answers):
             if needle in message:
                 self._answers.pop(index)
@@ -2153,10 +2159,12 @@ class _ScriptedSelect:
 
     @staticmethod
     def Choice(title: str, value: Any = None, **kwargs: Any) -> Any:  # noqa: N802
-        # `disabled` is kept, not swallowed: it is what greys a row and makes the
-        # arrow keys skip it, so a test asserting a row is unpickable has to be
-        # able to see it. Dropping it let `disabled=True` be deleted silently.
-        return SimpleNamespace(title=title, value=value, disabled=kwargs.get("disabled"))
+        # Every keyword survives, not a hand-picked few. `disabled` -- which greys
+        # a row and makes the arrow keys skip it -- was droppable with the suite
+        # green until it was recorded, and the next keyword to matter would have
+        # repeated that. `disabled` is defaulted so a test can read it off any
+        # choice without asking whether it was passed.
+        return SimpleNamespace(title=title, value=value, **{"disabled": None, **kwargs})
 
 
 class _Answer:
@@ -3755,3 +3763,17 @@ def test_the_coming_soon_label_keeps_the_full_width_parens(monkeypatch: pytest.M
     for choice in coming:
         assert "（即将支持）" in choice.title, choice.title
         assert choice.disabled is True, f"a reason string would bring ASCII parens: {choice.disabled!r}"
+
+
+def test_every_import_prompt_carries_the_shared_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prompt that forgets `style` falls back to questionary's own colours and
+    marker, which reads as a different program mid-wizard. Unassertable until the
+    fake stopped swallowing the prompt's keywords."""
+    from raven.cli._theme import QMARK
+
+    scripted = _run_import_step(monkeypatch, [("import conversation history", "yes"), ("Select platform", "skip")])
+
+    assert scripted.prompt_kwargs, "no prompt was raised at all"
+    for message, kwargs in scripted.prompt_kwargs:
+        assert kwargs.get("style") is not None, f"{message!r} has no style"
+        assert kwargs.get("qmark") == QMARK, f"{message!r} has qmark {kwargs.get('qmark')!r}"
