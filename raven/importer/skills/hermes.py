@@ -59,6 +59,17 @@ _EXCLUDED_DIRS = frozenset(
 )
 _SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
+# The org mirror is gated separately from _EXCLUDED_DIRS upstream, by a token
+# rather than by name: Hermes prunes `_org` entirely when the marker is absent
+# and otherwise descends only into the org the marker names
+# (agent/skill_utils.py:877-890, "leave an org and its skills stop resolving").
+# So a mirror left behind by a former org is content Hermes itself no longer
+# loads, and importing it would resurrect skills the user already left.
+# Excluding `_org` outright is the opposite error -- it drops the active org's
+# skills, which Hermes does load.
+_ORG_MIRROR_DIR = "_org"
+_ORG_ACTIVE_MARKER = ".active_org"
+
 
 class HermesSkillSource:
     platform = Platform.HERMES
@@ -81,9 +92,11 @@ class HermesSkillSource:
         hub = _read_hub_names(root)
         usage = _read_usage(root)
 
+        active_org = _read_active_org(root)
+
         out: list[DiscoveredSkill] = []
         for skill_md in sorted(root.rglob("SKILL.md")):
-            if not _is_discoverable(skill_md, root):
+            if not _is_discoverable(skill_md, root, active_org):
                 continue
             directory = skill_md.parent
             frontmatter_name = _frontmatter_name(skill_md)
@@ -98,10 +111,25 @@ class HermesSkillSource:
         return out
 
 
-def _is_discoverable(skill_md: Path, root: Path) -> bool:
+def _read_active_org(root: Path) -> str | None:
+    """Mirrors Hermes' ``read_active_org_id`` (agent/skill_utils.py:70-79).
+
+    ``None`` means no org mirror resolves at all -- that is the gate, not a
+    default -- and a blank marker counts as absent, as it does upstream.
+    """
+    try:
+        marker = (root / _ORG_MIRROR_DIR / _ORG_ACTIVE_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return marker or None
+
+
+def _is_discoverable(skill_md: Path, root: Path, active_org: str | None) -> bool:
     parts = skill_md.relative_to(root).parts
     if any(part in _EXCLUDED_DIRS for part in parts):
         return False
+    if parts and parts[0] == _ORG_MIRROR_DIR:
+        return active_org is not None and len(parts) >= 2 and parts[1] == active_org
     for idx, part in enumerate(parts[:-1]):
         # A support dir is only support when it sits inside a skill package, so
         # a category legitimately named scripts/ keeps its skills discoverable.
