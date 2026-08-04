@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from raven.memory_engine.consolidate.consolidator import _parse_user_md_sections as parse_user_md_sections
+from raven.memory_engine.consolidate.consolidator import parse_user_md_sections
 
 if TYPE_CHECKING:
     from raven.memory_engine.consolidate.consolidator import MemoryStore
