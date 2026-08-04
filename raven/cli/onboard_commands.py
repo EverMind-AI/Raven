@@ -712,7 +712,9 @@ def _prompt_local_api_base(spec: Any, *, current: str = "", allow_back: bool = F
         qmark=_QMARK,
     ).ask()
     if url is None:
-        return None
+        # Ctrl+C quits, like the sibling credential prompts. Returning None left
+        # each caller to decide what it meant, and they did not agree.
+        raise typer.Exit(1)
     url = url.strip()
     if allow_back and not url:
         return _BACK
@@ -1454,8 +1456,6 @@ def _collect_credentials(
             base_url = _prompt_local_api_base(spec, current=stored, allow_back=True)
             if base_url is _BACK:
                 return _BACK
-            if base_url is None:
-                raise typer.Exit(1)
         _write_provider_fields(provider, {"api_base": base_url})
         return None
 
@@ -1567,11 +1567,6 @@ def _resolve_model_with_test(
                 except KeyError:
                     stored = ""
                 retyped = _prompt_local_api_base(spec, current=stored)
-                if retyped is None:
-                    # Ctrl+C means quit, as it does in the sibling "re-enter key"
-                    # branch. Returning None here would have been read as "switch
-                    # provider" and silently rolled the setup back instead.
-                    raise typer.Exit(1)
                 _write_provider_fields(provider, {"api_base": retyped})
                 continue
             if choice == "reauth" and not non_interactive:
@@ -1756,8 +1751,6 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 except KeyError:
                     stored = ""
                 retyped = _prompt_local_api_base(target_spec, current=stored)
-                if retyped is None:
-                    continue
                 _write_provider_fields(target, {"api_base": retyped})
             elif credential_kind(target) == CRED_ENDPOINT:
                 # A self-hosted endpoint is a key *and* the address it is sent
