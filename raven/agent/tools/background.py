@@ -23,8 +23,11 @@ teardown look attractive in the first place.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import hashlib
 import json
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass, field
@@ -44,14 +47,39 @@ _KILL_GRACE_S = 3.0
 _MAX_LOG_CHARS = 30_000
 
 
-def _jobs_root() -> Path:
+def _jobs_root(workspace: Path | None = None) -> Path:
     """Where job logs and the registry live.
 
     Deliberately under the raven home rather than the workspace: the workspace is
     often the thing being graded or diffed, and job logs are scaffolding, not work
-    product.
+    product. Scoped per workspace so processes working on the same project share
+    one job view (a continue/restart must see the server its predecessor
+    started) while concurrent sessions on other projects cannot see — or
+    cancel — each other's jobs.
     """
-    return Path(os.path.expanduser("~/.raven/jobs"))
+    base = Path(os.path.expanduser("~/.raven/jobs"))
+    if workspace is None:
+        return base
+    digest = hashlib.sha256(str(Path(workspace).resolve()).encode("utf-8")).hexdigest()[:12]
+    return base / f"ws-{digest}"
+
+
+def _pid_start_epoch(pid: int) -> float | None:
+    """Approximate epoch time a pid started, from /proc (Linux only, else None).
+
+    Field 22 of /proc/<pid>/stat is start-time in clock ticks since boot;
+    combined with /proc/uptime this dates the process independently of what
+    the pid *used* to belong to — the only defense against pid reuse.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+        # Comm field may contain spaces/parens; parse after the closing paren.
+        ticks = float(stat.rsplit(")", 1)[1].split()[19])
+        hz = os.sysconf("SC_CLK_TCK")
+        return time.time() - uptime + ticks / hz
+    except (OSError, IndexError, ValueError):
+        return None
 
 
 @dataclass
@@ -111,13 +139,43 @@ class BackgroundJob:
         except PermissionError:
             # Alive, owned by somebody else. Still running as far as we can tell.
             return True
+        # PID-reuse guard: after a wraparound an unrelated process can occupy
+        # this pid. A leader that "started" well after the job did is not ours.
+        started = _pid_start_epoch(self.pid)
+        if started is not None and started > self.started_at + 60:
+            return False
+        return True
+
+    @property
+    def group_alive(self) -> bool:
+        """True while any process from the job's group survives.
+
+        The wrapper shell is a session leader (pgid == pid), and `cmd &`
+        children stay in that group under a non-interactive shell. So a
+        wrapper that exited (status file written) can leave the real workload
+        alive — the group probe is what makes that state observable.
+        """
+        if not hasattr(os, "killpg"):
+            return False
+        try:
+            os.killpg(self.pid, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
         return True
 
     def describe(self) -> str:
+        code = self.exit_code
         if self.running:
             state = f"running (pid {self.pid})"
+        elif code is not None and self.group_alive:
+            state = (
+                f"wrapper exited (code {code}) but processes it started are still "
+                f"running — the command likely backgrounded itself with '&'. "
+                f"job_cancel can still stop them"
+            )
         else:
-            code = self.exit_code
             state = f"exited (code {code})" if code is not None else "gone (no exit status)"
         age = int(time.time() - self.started_at)
         return f"{self.name}: {state}, {age}s old, log {self.log_path}\n  $ {self.command}"
@@ -133,12 +191,52 @@ class BackgroundJobRegistry:
 
     MAX_JOBS = 16
 
-    def __init__(self, executor: SandboxExecutor, owner: str = "", root: Path | None = None):
+    def __init__(
+        self,
+        executor: SandboxExecutor,
+        owner: str = "",
+        root: Path | None = None,
+        workspace: Path | None = None,
+        adopt: bool = True,
+    ):
         self._executor = executor
         self._owner = owner or f"pid{os.getpid()}"
-        self._root = root or _jobs_root()
+        self._root = root or _jobs_root(workspace)
         self._jobs: dict[str, BackgroundJob] = {}
         self._seq = 0
+        if adopt:
+            self._adopt_persisted()
+
+    def _adopt_persisted(self) -> None:
+        """Reload every owner's persisted jobs so a fresh process can see them.
+
+        Jobs outlive the process that started them by design — a follow-up
+        agent invocation (continue prompt, restart) that cannot see the server
+        it started a minute ago will start a second one or report it missing.
+        Adoption is read-only bookkeeping: state still comes from the status
+        file and the live process group.
+        """
+        path = self._root / "registry.json"
+        try:
+            records = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(records, dict):
+            return
+        fields = {f.name for f in dataclasses.fields(BackgroundJob)} - {"read_offset"}
+        for recs in records.values():
+            if not isinstance(recs, list):
+                continue
+            for rec in recs:
+                if not isinstance(rec, dict) or not fields.issubset(rec):
+                    continue
+                name = str(rec["name"])
+                if name in self._jobs:
+                    continue
+                self._jobs[name] = BackgroundJob(**{k: rec[k] for k in fields})
+                num = re.fullmatch(r"job(\d+)", name)
+                if num:
+                    self._seq = max(self._seq, int(num.group(1)))
 
     @property
     def supported(self) -> bool:
@@ -250,12 +348,15 @@ class BackgroundJobRegistry:
         job = self._jobs.get(name)
         if job is None:
             return f"Error: no background job named {name!r}. Running: {', '.join(self.names()) or 'none'}"
-        if not job.running:
+        # "Wrapper exited" is not "job finished": a `cmd &` inside the job exits
+        # the wrapper instantly while the workload lives on in the process
+        # group. Refuse only when the whole group is gone.
+        if not job.running and not job.group_alive:
             return f"[job {name} was already finished, exit code: {job.exit_code}]"
         await self._executor.signal_background(job.pid, signal.SIGTERM)
         deadline = time.monotonic() + _KILL_GRACE_S
         while time.monotonic() < deadline:
-            if not job.running:
+            if not job.running and not job.group_alive:
                 await self._settle(job)
                 self._record_signal_exit(job, signal.SIGTERM)
                 self._persist()
@@ -296,7 +397,7 @@ class BackgroundJobRegistry:
         if not alive:
             return
         logger.info(
-            "{} background job(s) still running after shutdown; reap with `raven jobs` or kill the pid:\n{}",
+            "{} background job(s) still running after shutdown; check the log or `kill -- -<pid>` the group:\n{}",
             len(alive),
             "\n".join(f"  {job.name}  pid {job.pid}  {job.log_path}  $ {job.command}" for job in alive),
         )
@@ -374,6 +475,12 @@ class JobStatusTool(_JobTool):
 class JobWaitTool(_JobTool):
     """Tool to block until a background job finishes."""
 
+    # The `timeout` parameter allows up to _MAX_WAIT_S; without this the
+    # registry's 300s default ceiling killed waits the schema had just allowed
+    # (and raced the 300s parameter default).
+    _MAX_WAIT_S = 1800
+    timeout_seconds = float(_MAX_WAIT_S + 60)
+
     @property
     def name(self) -> str:
         return "job_wait"
@@ -397,7 +504,7 @@ class JobWaitTool(_JobTool):
                     "type": "integer",
                     "description": "Seconds to wait (default 300)",
                     "minimum": 1,
-                    "maximum": 3600,
+                    "maximum": self._MAX_WAIT_S,
                 },
             },
             "required": ["name"],

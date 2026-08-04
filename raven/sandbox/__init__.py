@@ -48,6 +48,7 @@ def build_executor(
     sandbox_cfg: SandboxConfig | None,
     workspace: Path,
     owned_ids: set[str] | None = None,
+    inherit_env: bool = False,
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
@@ -71,7 +72,7 @@ def build_executor(
                 "full host privileges. Set tools.sandbox.backend to 'auto' or "
                 "'boxlite' to contain them."
             )
-        return DirectExecutor()
+        return DirectExecutor(inherit_env=inherit_env)
 
     if backend in ("auto", "boxlite"):
         try:

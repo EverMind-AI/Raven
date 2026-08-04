@@ -11,7 +11,23 @@ from pathlib import Path
 from raven.sandbox.interfaces import ExecResult, ExecSession, SandboxExecutor, SessionOutput
 
 _DEFAULT_TIMEOUT = 60
-_MAX_TIMEOUT = 600
+
+# Models write bash (bashisms like [[ ]], source, arrays are routine), but
+# create_subprocess_shell uses /bin/sh, which is dash on Debian-family systems
+# and fails or silently diverges on them. Prefer bash when the host has it.
+_SHELL_BIN = "/bin/bash" if os.path.exists("/bin/bash") else None
+
+# Under a container memory limit the OOM killer picks the process with the
+# highest badness score — often the agent itself, since tool workloads (pip,
+# make -j) spread their memory across many small children while the agent is
+# the single largest process. Raising the foreground command shell's
+# oom_score_adj (inherited across fork/exec by its whole subtree) makes the
+# kill land on the recoverable tool command instead of ending the run.
+# Foreground only: sessions and background jobs may host deliverables (servers)
+# that must not become preferred kill targets.
+_OOM_CHILD_PREFIX = (
+    "{ echo 500 > /proc/self/oom_score_adj; } 2>/dev/null; " if os.path.exists("/proc/self/oom_score_adj") else ""
+)
 
 # DirectExecutor runs on the host with no isolation, so commands the agent is
 # coaxed into running (via prompt injection) would otherwise inherit every host
@@ -168,6 +184,19 @@ class PtyExecSession(ExecSession):
 class DirectExecutor(SandboxExecutor):
     """No-op sandbox: runs commands directly on the host (current behavior)."""
 
+    def __init__(self, inherit_env: bool = False):
+        # Disposable environments (benchmark containers) opt in: the task
+        # image's ENV (LD_LIBRARY_PATH, HF_*, JAVA_HOME, ...) is part of the
+        # environment the workload needs, silently stripping it breaks tasks
+        # in ways that look unrelated, and there are no host credentials to
+        # protect. On a real host the allowlist stays the default.
+        self._inherit_env = inherit_env
+
+    def _env(self) -> dict[str, str]:
+        if self._inherit_env:
+            return dict(os.environ)
+        return _baseline_env()
+
     @property
     def is_sandboxed(self) -> bool:
         return False
@@ -196,7 +225,7 @@ class DirectExecutor(SandboxExecutor):
                 stdout=slave_fd,
                 stderr=slave_fd,
                 cwd=cwd,
-                env={**_baseline_env(), "TERM": "dumb", **(env or {})},
+                env={**self._env(), "TERM": "dumb", **(env or {})},
                 start_new_session=True,
             )
         except BaseException:
@@ -256,10 +285,7 @@ class DirectExecutor(SandboxExecutor):
         # kind of hidden coupling to the agent that a detached job exists to avoid.
         # The launcher exits immediately and is awaited here, so nothing is left to
         # reap; the job itself is reparented to init.
-        launcher = (
-            f"setsid /bin/bash -c {shlex.quote(wrapper)} "
-            f"< /dev/null >> {shlex.quote(log_path)} 2>&1 &\n"
-        )
+        launcher = f"setsid /bin/bash -c {shlex.quote(wrapper)} < /dev/null >> {shlex.quote(log_path)} 2>&1 &\n"
         process = await asyncio.create_subprocess_exec(
             "/bin/bash",
             "-c",
@@ -268,7 +294,7 @@ class DirectExecutor(SandboxExecutor):
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env={**_baseline_env(), **(env or {})},
+            env={**self._env(), **(env or {})},
             start_new_session=True,
         )
         _, stderr = await process.communicate()
@@ -295,6 +321,34 @@ class DirectExecutor(SandboxExecutor):
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.kill(pid, sig)
 
+    @staticmethod
+    async def _drain(stream: asyncio.StreamReader | None, buf: bytearray) -> None:
+        if stream is None:
+            return
+        with contextlib.suppress(Exception):
+            while True:
+                chunk = await stream.read(65536)
+                if not chunk:
+                    return
+                buf.extend(chunk)
+
+    @staticmethod
+    async def _wait_returncode(process: asyncio.subprocess.Process, timeout: float) -> bool:
+        """True once the process has exited, False when the timeout elapses first.
+
+        Not Process.wait(): that also waits for the stdout/stderr pipes to hit
+        EOF, so a `cmd &` grandchild inheriting them would stall the call until
+        *its* exit even though the shell itself is long gone.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while process.returncode is None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.02, remaining))
+        return True
+
     async def exec(
         self,
         command: str,
@@ -302,28 +356,64 @@ class DirectExecutor(SandboxExecutor):
         timeout: int | None = None,
         env: dict[str, str] | None = None,
     ) -> ExecResult:
-        effective_timeout = min(
-            _DEFAULT_TIMEOUT if timeout is None else timeout,
-            _MAX_TIMEOUT,
+        # No ceiling here: ExecTool owns the per-command clamp. A second clamp
+        # in the executor silently defeated configured ceilings above 600s.
+        effective_timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
+        spawn_env = {**self._env(), **(env or {})}
+        command = _OOM_CHILD_PREFIX + command
+        if _SHELL_BIN:
+            process = await asyncio.create_subprocess_exec(
+                _SHELL_BIN,
+                "-c",
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=spawn_env,
+            )
+        else:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=spawn_env,
+            )
+        # Drain the pipes continuously instead of communicate(): on timeout the
+        # output captured so far survives (a killed 600s build must not report
+        # zero bytes), and a `cmd &` grandchild holding the pipe open no longer
+        # blocks the call until its own exit.
+        stdout_buf = bytearray()
+        stderr_buf = bytearray()
+        drains = (
+            asyncio.ensure_future(self._drain(process.stdout, stdout_buf)),
+            asyncio.ensure_future(self._drain(process.stderr, stderr_buf)),
         )
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env={**_baseline_env(), **(env or {})},
-        )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
-        except asyncio.TimeoutError:
-            process.kill()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                pass
-            return ExecResult(stdout="", stderr=f"Timed out after {effective_timeout}s", exit_code=-1)
+        timed_out = not await self._wait_returncode(process, effective_timeout)
+        if timed_out:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+            await self._wait_returncode(process, 5.0)
+        # Bounded: a surviving grandchild keeping the pipe open must not wedge
+        # the call after the shell itself has exited.
+        _, pending = await asyncio.wait(drains, timeout=2.0)
+        if pending:
+            for task in pending:
+                task.cancel()
+            # A grandchild still holds the pipes; close them so the transport
+            # neither buffers its output forever nor leaks the descriptors.
+            with contextlib.suppress(Exception):
+                process._transport.close()  # type: ignore[attr-defined]  # noqa: SLF001
+        stderr_text = stderr_buf.decode("utf-8", errors="replace")
+        if timed_out:
+            stderr_text = (
+                f"{stderr_text}\nTimed out after {effective_timeout}s"
+                if stderr_text
+                else (f"Timed out after {effective_timeout}s")
+            )
         return ExecResult(
-            stdout=stdout_b.decode("utf-8", errors="replace"),
-            stderr=stderr_b.decode("utf-8", errors="replace"),
-            exit_code=process.returncode,
+            stdout=stdout_buf.decode("utf-8", errors="replace"),
+            stderr=stderr_text,
+            exit_code=-1 if timed_out else process.returncode,
+            timed_out=timed_out,
         )
