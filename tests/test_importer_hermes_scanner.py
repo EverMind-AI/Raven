@@ -821,6 +821,28 @@ async def test_a_missing_binary_costs_the_conversations_not_the_memory_files(tmp
     assert isinstance(scanner.partial_failure, HermesExportError)
 
 
+async def test_a_second_scan_does_not_inherit_the_first_ones_failure(tmp_path: Path) -> None:
+    """``partial_failure`` is mutable instance state, and one instance can be
+    scanned more than once. Left over, the first run's failure is reported
+    against the second run's results -- a complete scan reading as a short one.
+    """
+    home = _make_home(tmp_path)
+    calls: list[int] = []
+
+    async def _fails_once(args: list[str]) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise FileNotFoundError("hermes")
+        return await _no_conversations(args)
+
+    scanner = HermesScanner(hermes_home=home, run_cli=_fails_once)
+    await scanner.scan()
+    assert scanner.partial_failure is not None, "the first scan must have recorded its failure"
+
+    await scanner.scan()
+    assert scanner.partial_failure is None
+
+
 async def test_read_conversation_names_the_session_when_hermes_prints_a_failure_to_stdout(
     tmp_path: Path,
 ) -> None:

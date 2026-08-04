@@ -132,6 +132,10 @@ class HermesScanner:
         scan_all so the reason reaches the user rather than only the log."""
 
     async def scan(self) -> list[ScanResult]:
+        # Cleared per scan: the same instance can be scanned twice, and a stale
+        # value would report the previous run's failure against this one's
+        # results -- a scan that succeeded reading as one that came up short.
+        self.partial_failure = None
         if not self._home.is_dir():
             logger.info("hermes not installed at {}; nothing to import", self._home)
             return []
@@ -218,8 +222,6 @@ class HermesScanner:
     async def _scan_conversations(self) -> list[ScanResult]:
         try:
             listing = await list_exportable_sessions(runner=self._run_cli)
-        except HermesExportError:
-            raise
         except OSError as exc:
             raise HermesExportError(f"cannot run the hermes CLI ({exc}); conversations cannot be imported") from exc
         if listing.unlisted:
@@ -244,8 +246,6 @@ class HermesScanner:
         args = [*_EXPORT_ARGS, "--session-id", result.source_key, "-"]
         try:
             raw = await self._run_cli(args)
-        except HermesExportError:
-            raise
         except OSError as exc:
             raise HermesExportError(f"cannot run the hermes CLI ({exc}); session not imported") from exc
         messages: list[ImportMessage] = []
