@@ -630,26 +630,29 @@ class ExecToolConfig(Base):
 class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
-    Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
-    / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (Nano Banana for images).
+    Empty fields fall back at call time: ``api_key`` → the backend's provider
+    config / env var (OpenRouter for image/speech/video, MiniMax for music);
+    ``api_base`` → the backend default; ``model`` → the tool's default.
     """
 
     api_key: str = ""
-    api_base: str = ""  # defaults to https://openrouter.ai/api/v1
+    api_base: str = ""  # backend base URL, e.g. https://openrouter.ai/api/v1
     model: str = ""
 
 
 class MediaGenConfig(Base):
     """Multimodal generation tools configuration.
 
-    OpenRouter is the only backend: image + speech via chat-completions output
-    modalities, and video via the async ``/videos`` endpoint (Kling).
+    Image + speech go through OpenRouter chat-completions output modalities,
+    video through the async OpenRouter ``/videos`` endpoint (Kling), and music
+    through the MiniMax ``/music_generation`` endpoint (``api.minimax.io``
+    global, ``api.minimaxi.com`` for mainland China).
     """
 
     image: MediaToolConfig = Field(default_factory=MediaToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
     video: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    music: MediaToolConfig = Field(default_factory=MediaToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
 
@@ -755,10 +758,14 @@ class Config(BaseSettings):
         media = self.tools.media.model_copy(deep=True)
         openrouter = self.providers.get("openrouter")
         or_key = openrouter.api_key if openrouter else ""
+        minimax = self.providers.get("minimax")
+        mm_key = minimax.api_key if minimax else ""
         for tool in (media.image, media.speech, media.video):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
                 tool.api_key = or_key
+        if (media.music.api_key or media.music.model) and mm_key and not media.music.api_key:
+            media.music.api_key = mm_key
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
