@@ -3603,3 +3603,93 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     assert "default model" in asked[0].lower() or "默认模型" in asked[0]
     # Declined, so the key is still there.
     assert json.loads(tmp_env.read_text())["providers"]["mistral"].get("apiKey") == "sk-mistral"
+
+
+# --------------------------------------------------------------------------- role cost lines
+
+
+def test_every_optional_role_states_what_skipping_it_costs() -> None:
+    """A role the user can skip has to say what skipping it loses, in the same
+    place for every role, or the three read as equally weighted choices."""
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        if not role.get("optional"):
+            continue
+        cost = role.get("cost")
+        assert cost, f"{name} is optional but never says what skipping it costs"
+        en, zh = cost
+        assert en.startswith("Without it:"), f"{name}: English cost must lead with the consequence: {en!r}"
+        assert zh.startswith("不配置："), f"{name}: Chinese cost must lead with the consequence: {zh!r}"
+
+
+@pytest.mark.parametrize("name", ["embedding", "rerank"])
+def test_the_roles_we_want_configured_say_so(name: str) -> None:
+    """Calling all three merely "optional" flattens the difference between
+    losing semantic recall and losing some ranking accuracy. These two carry the
+    encouragement in their own tag."""
+    tag = onboard_commands._EVEROS_ROLES[name].get("tag")
+
+    assert tag, f"{name} should carry its own tag"
+    en, zh = tag
+    assert "advised" in en, en
+    assert "建议" in zh, zh
+
+
+def test_the_rerank_cost_names_the_llm_call_it_saves() -> None:
+    """Skipping rerank is not just weaker ordering: the adapter has to send
+    enable_llm_rerank, which spends an LLM call on every agent-track recall --
+    and that track feeds SkillForge during context assembly, so it runs per
+    turn. A recurring cost is a better reason to configure it than ranking."""
+    en, zh = onboard_commands._EVEROS_ROLES["rerank"]["cost"]
+
+    assert "LLM call" in en, en
+    assert "LLM 调用" in zh, zh
+
+
+@pytest.mark.parametrize("lang", ["en", "zh"])
+def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: str) -> None:
+    """These blocks are hand-wrapped because rich re-wraps at the terminal width
+    and drops the leading indent, leaving a stray left-flush line mid-sentence."""
+    from rich.text import Text
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+    for name, role in onboard_commands._EVEROS_ROLES.items():
+        parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
+        for key in ("tag", "cost", "recommendation", "skip_note"):
+            if role.get(key):
+                parts.append(onboard_commands._t(*role[key]))
+        for part in parts:
+            for line in Text.from_markup(part).plain.split("\n"):
+                width = Text(line).cell_len + 2  # the two-space info column
+                assert width <= 80, f"{lang}/{name}: {width} cols: {line!r}"
+
+
+@pytest.mark.parametrize(
+    ("lang", "needle"),
+    [("en", "Without it:"), ("zh", "不配置：")],
+)
+def test_the_cost_line_actually_reaches_the_screen(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    lang: str,
+    needle: str,
+) -> None:
+    """A cost the role carries but the renderer never prints is dead data. Every
+    assertion above reads `_EVEROS_ROLES`; this one reads the terminal."""
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", lang)
+
+    class _FQ:
+        def ask(self):
+            return "skip"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+    onboard_commands._config_everos_role(
+        section="rerank", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
+    )
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert needle in out, f"{lang}: the cost line never printed"
+    assert ("LLM call" if lang == "en" else "LLM 调用") in out

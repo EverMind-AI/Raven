@@ -3173,14 +3173,14 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": False,
         "verify": True,
         "purpose": (
-            "reads each conversation to judge what matters and extract the key points",
-            "从对话中判断信息边界、抽取要点",
+            "Reads each conversation to judge what matters and extract the key points.",
+            "从对话中判断信息边界、抽取要点。",
         ),
         # Worded as a floor rather than a default: the field is pre-filled with
         # the user's own main model, because a recommended id is only reachable
         # if their key carries it. This tells them how to judge their own.
         "recommendation": (
-            "Capability floor: [bold]gpt-4.1-mini[/bold] -- anything weaker noticeably degrades extraction",
+            "Capability floor: [bold]gpt-4.1-mini[/bold] -- weaker models degrade extraction",
             "能力下限参考 [bold]gpt-4.1-mini[/bold]：低于这个水平会明显影响提取质量",
         ),
         "continue_hint": ("memory extraction may fail", "记忆抽取可能失败"),
@@ -3195,11 +3195,21 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": True,
         "purpose": (
-            "turns text into vectors so memories are stored and retrieved by meaning, not just keywords",
-            "把文字转成向量,存入记忆库并在检索时按「意思」匹配,而不只是关键词",
+            "Turns text into vectors so memories are found by meaning, not just keywords.",
+            "把文字转成向量，让记忆能按「意思」检索，而不只是按关键词。",
+        ),
+        "tag": (
+            "[accent](optional, strongly advised)[/accent]",
+            "[accent]（可选，强烈建议配置）[/accent]",
+        ),
+        "cost": (
+            "Without it: rephrase a question and it may miss a memory you have;\n"
+            "  EverOS's semantic recall goes entirely unused.",
+            "不配置：换个说法提问就可能找不到已有记忆，EverOS 的语义召回能力完全用不上。",
         ),
         "recommendation": (
-            "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold]; must be [bold yellow]1024-dim[/bold yellow] and support Chinese + English",
+            "Recommended: [bold]Qwen/Qwen3-Embedding-4B[/bold] -- must be [bold yellow]1024-dim[/bold yellow],\n"
+            "  Chinese + English",
             "推荐 [bold]Qwen/Qwen3-Embedding-4B[/bold]，需 [bold yellow]1024 维[/bold yellow]且支持中英文的模型",
         ),
         "continue_hint": ("semantic recall will be unavailable", "语义召回将不可用"),
@@ -3218,9 +3228,22 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": True,
         "purpose": (
-            "re-ranks the candidates from semantic search so the best match comes first (slightly slower); "
-            "memory works fine without it, just with slightly weaker ordering",
-            "在语义召回一批候选后再精排一遍,让结果更准,会略增延迟;不配也能正常用记忆,只是排序略逊",
+            "Re-ranks what semantic search found so the best match comes first, at a small\n  latency cost.",
+            "在语义召回一批候选后再精排一遍，让最相关的排在最前，会略增延迟。",
+        ),
+        "tag": (
+            "[accent](optional, advised)[/accent]",
+            "[accent]（可选，建议配置）[/accent]",
+        ),
+        # Not merely "weaker ordering": without a cross-encoder the adapter has to
+        # send enable_llm_rerank, which spends an LLM call on every agent-track
+        # recall -- and that track feeds SkillForge during context assembly, so it
+        # runs every turn. Configuring rerank removes a recurring cost, which is a
+        # better reason to do it than ranking quality alone.
+        "cost": (
+            "Without it: every agent-track recall spends an extra LLM call to rank,\n"
+            "  and ranks less accurately than a cross-encoder would.",
+            "不配置：每次 agent 轨召回都要多花一次 LLM 调用来排序，且精度不如专用模型。",
         ),
         "recommendation": (
             "Recommended: [bold]Qwen/Qwen3-Reranker-4B[/bold]",
@@ -3228,8 +3251,10 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         ),
         "continue_hint": ("rerank quality may degrade", "rerank 精度可能下降"),
         "skip_note": (
-            "  [dim]Skipped reranking; memory retrieval still works.[/dim]",
-            "  [dim]已跳过 rerank，记忆检索仍可用。[/dim]",
+            "  [yellow]! Skipped: agent-track recall will rank via an extra LLM call.[/yellow]\n"
+            "  [dim]Retrieval still works. Configure rerank later to drop that per-recall cost.[/dim]",
+            "  [yellow]⚠ 已跳过：agent 轨召回将改用额外的 LLM 调用来排序。[/yellow]\n"
+            "  [dim]检索仍可用。日后配好 rerank 即可省掉这笔每次召回的开销。[/dim]",
         ),
     },
     "multimodal": {
@@ -3238,18 +3263,20 @@ _EVEROS_ROLES: dict[str, dict[str, Any]] = {
         "optional": True,
         "verify": True,
         "purpose": (
-            "lets Raven store and recall images / PDFs / audio as memory\n"
-            "  only needed if you want multimodal content remembered, not merely because such files exist",
-            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索\n"
-            "  仅当你确有把多模态内容纳入记忆的需求时才配,有这类文件并不等于需要",
+            "Lets Raven understand and recall images / PDFs / audio as memory.",
+            "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索。",
+        ),
+        "cost": (
+            "Without it: those files stay out of memory. Having such files is not the same\n"
+            "  as needing them remembered -- configure it when you do.",
+            "不配置：这类文件不进入记忆；有这类文件并不等于需要，确有此需求时再配即可。",
         ),
         "recommendation": (
             "Recommended: [bold]google/gemini-3-flash-preview[/bold]",
             "推荐 [bold]google/gemini-3-flash-preview[/bold]",
         ),
         "skip_note": (
-            "  [dim]Skipped; everything else is unaffected -- configure it later if you come to need\n"
-            "  multimodal memory.[/dim]",
+            "  [dim]Skipped; nothing else is affected -- configure it if you come to need\n  multimodal memory.[/dim]",
             "  [dim]已跳过；其余功能不受影响，日后确有把多模态内容纳入记忆的需求时再配即可。[/dim]",
         ),
     },
@@ -3707,24 +3734,27 @@ def _config_everos_role(
     optional = role["optional"]
     verify_label = _t(label_en, label_zh)
 
-    # Tell the user what this model is for before asking them to configure it.
-    # Header sits on the 2-space info column (bold accent); the purpose nests
-    # one line under it (dim), matching the layout system used everywhere else.
-    tag = _t("optional", "可选")
+    # Tell the user what this model is for, and what skipping it costs, before
+    # asking them to configure it. Header sits on the 2-space info column (bold
+    # accent); purpose and cost nest under it, matching the layout used
+    # everywhere else.
+    #
+    # The cost line is dim rather than a warning colour on purpose: this is
+    # pre-decision information, and colouring it would cry wolf before the user
+    # has chosen anything. The warning comes after, from ``skip_note``.
+    #
+    # Roles that want to be configured say so in their own ``tag`` -- calling all
+    # three merely "optional" flattens the difference between losing semantic
+    # recall entirely and losing a little ranking accuracy.
+    tag_markup = _t(*role["tag"]) if role.get("tag") else _t("[dim](optional)[/dim]", "[dim]（可选）[/dim]")
+    lines = [f"  [bold][accent]{_t(label_en, label_zh)}[/accent][/bold]" + (f" {tag_markup}" if optional else "")]
+    lines.append(f"  [dim]{_t(purpose_en, purpose_zh)}[/dim]")
+    if role.get("cost"):
+        lines.append(f"  [dim]{_t(*role['cost'])}[/dim]")
     console.print()
     # highlight=False so Rich's default highlighter doesn't tint the dim prose
     # (parens/numbers/words) and make an informational hint read like an error.
-    console.print(
-        _t(
-            f"  [bold][accent]{label_en}[/accent][/bold]"
-            + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_en}[/dim]",
-            f"  [bold][accent]{label_zh}[/accent][/bold]"
-            + (f" [dim]({tag})[/dim]" if optional else "")
-            + f"\n  [dim]{purpose_zh}[/dim]",
-        ),
-        highlight=False,
-    )
+    console.print("\n".join(lines), highlight=False)
 
     while True:  # role-menu loop — a back-out of the source picker returns here
         current = _everos_section(section).get("model") if _everos_role_configured(section) else None
