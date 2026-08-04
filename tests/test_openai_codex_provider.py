@@ -8,13 +8,19 @@ trips a test.
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
 
+import oauth_cli_kit
 import pytest
 
+from raven.providers import openai_codex_provider as codex_module
+from raven.providers.base import LLMProvider
 from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,
     _build_headers,
+    _consume_sse,
     _convert_messages,
     _convert_tool_output,
     _iter_sse,
@@ -51,6 +57,177 @@ class _FakeStreamResponse:
         for line in self._lines:
             yield line
         await asyncio.sleep(10)
+
+
+def _sse_response(event: dict) -> _FakeStreamResponse:
+    return _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+
+_OVERLOADED_ERROR = {
+    "type": "service_unavailable_error",
+    "code": "server_is_overloaded",
+    "message": "Our servers are currently overloaded. Please try again later.",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "error", "error": _OVERLOADED_ERROR},
+        {"type": "response.failed", "response": {"error": _OVERLOADED_ERROR}},
+    ],
+)
+async def test_consume_sse_preserves_structured_error_details(event: dict):
+    with pytest.raises(RuntimeError) as raised:
+        await _consume_sse(_sse_response(event), timeout=0.05)
+
+    message = str(raised.value)
+    assert "service_unavailable_error" in message
+    assert "server_is_overloaded" in message
+    assert _OVERLOADED_ERROR["message"] in message
+
+    classification = LLMProvider.classify_error(raised.value)
+    assert classification.category == "server"
+    assert classification.retryable is True
+    assert classification.should_fallback is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"type": "service_unavailable_error"},
+        {"code": "server_is_overloaded"},
+    ],
+)
+async def test_consume_sse_classifies_sparse_capacity_errors_as_retryable(error: dict):
+    with pytest.raises(RuntimeError) as raised:
+        await _consume_sse(_sse_response({"type": "error", "error": error}), timeout=0.05)
+
+    classification = LLMProvider.classify_error(raised.value)
+    assert classification.category == "server"
+    assert classification.retryable is True
+    assert classification.should_fallback is True
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_bounds_error_fields_and_ignores_nested_values():
+    event = {
+        "type": "error",
+        "error": {
+            "type": {"unexpected": "nested"},
+            "code": "x" * 1_000,
+            "message": "line one\n\x1b[31m" + "m" * 2_000,
+            "request": {"authorization": "must not be serialized"},
+        },
+    }
+
+    with pytest.raises(RuntimeError) as raised:
+        await _consume_sse(_sse_response(event), timeout=0.05)
+
+    message = str(raised.value)
+    assert "unexpected" not in message
+    assert "authorization" not in message
+    assert "\n" not in message
+    assert "\x1b" not in message
+    assert "x" * 100 in message
+    assert "line one" in message
+    assert len(message) < 1_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "error", "error": "unstructured failure"},
+        {"type": "response.failed", "response": None},
+    ],
+)
+async def test_consume_sse_uses_generic_message_for_malformed_error(event: dict):
+    with pytest.raises(RuntimeError, match=r"^Codex response failed$"):
+        await _consume_sse(_sse_response(event), timeout=0.05)
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_keeps_unrelated_error_non_retryable():
+    event = {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "invalid_prompt",
+            "message": "Invalid request: malformed input",
+        },
+    }
+
+    with pytest.raises(RuntimeError) as raised:
+        await _consume_sse(_sse_response(event), timeout=0.05)
+
+    classification = LLMProvider.classify_error(raised.value)
+    assert classification.category == "invalid_request"
+    assert classification.retryable is False
+    assert classification.should_fallback is False
+
+
+def _patch_codex_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oauth_cli_kit,
+        "get_token",
+        lambda: SimpleNamespace(account_id="acct-test", access="token-test"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_sse_overload_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch):
+    _patch_codex_token(monkeypatch)
+    calls = 0
+
+    async def request(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await _consume_sse(
+                _sse_response({"type": "response.failed", "response": {"error": _OVERLOADED_ERROR}}),
+                timeout=0.05,
+            )
+        return "recovered", [], "stop"
+
+    monkeypatch.setattr(codex_module, "_request_codex", request)
+    provider = OpenAICodexProvider()
+    provider._CHAT_RETRY_DELAYS = (0,)
+
+    response = await provider.chat_with_retry(messages=[], model=provider.default_model)
+
+    assert response.content == "recovered"
+    assert response.finish_reason == "stop"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_codex_sse_overload_exhausts_retry_ladder(monkeypatch: pytest.MonkeyPatch):
+    _patch_codex_token(monkeypatch)
+    calls = 0
+
+    async def request(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await _consume_sse(
+            _sse_response({"type": "error", "error": _OVERLOADED_ERROR}),
+            timeout=0.05,
+        )
+
+    monkeypatch.setattr(codex_module, "_request_codex", request)
+    provider = OpenAICodexProvider()
+    provider._CHAT_RETRY_DELAYS = (0, 0, 0)
+
+    response = await provider.chat_with_retry(messages=[], model=provider.default_model)
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "server"
+    assert response.error_classification.retryable is True
+    assert "server_is_overloaded" in response.content
+    assert calls == 4
 
 
 @pytest.mark.asyncio

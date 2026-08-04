@@ -14,6 +14,51 @@ from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
+_SSE_ERROR_TYPE_LIMIT = 128
+_SSE_ERROR_CODE_LIMIT = 128
+_SSE_ERROR_MESSAGE_LIMIT = 512
+
+
+def _bounded_error_field(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = " ".join("".join(char if char.isprintable() else " " for char in value).split())
+    if not value:
+        return None
+    if len(value) > limit:
+        return value[: limit - 3] + "..."
+    return value
+
+
+class _CodexSSEError(RuntimeError):
+    def __init__(self, payload: Any):
+        payload = payload if isinstance(payload, dict) else {}
+        self.error_type = _bounded_error_field(payload.get("type"), _SSE_ERROR_TYPE_LIMIT)
+        self.code = _bounded_error_field(payload.get("code"), _SSE_ERROR_CODE_LIMIT)
+        self.message = _bounded_error_field(payload.get("message"), _SSE_ERROR_MESSAGE_LIMIT)
+
+        details = [
+            f"{name}={value}"
+            for name, value in (("type", self.error_type), ("code", self.code), ("message", self.message))
+            if value is not None
+        ]
+        summary = "Codex response failed"
+        if details:
+            summary += ": " + ", ".join(details)
+        super().__init__(summary)
+
+
+class ServiceUnavailableError(_CodexSSEError):
+    """Codex capacity error recognized by the shared provider classifier."""
+
+
+def _codex_sse_error(payload: Any) -> _CodexSSEError:
+    if isinstance(payload, dict):
+        error_type = payload.get("type")
+        code = payload.get("code")
+        if error_type == "service_unavailable_error" or code == "server_is_overloaded":
+            return ServiceUnavailableError(payload)
+    return _CodexSSEError(payload)
 
 
 class OpenAICodexProvider(LLMProvider):
@@ -372,7 +417,12 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:
-            raise RuntimeError("Codex response failed")
+            if event_type == "error":
+                error = event.get("error")
+            else:
+                response_payload = event.get("response")
+                error = response_payload.get("error") if isinstance(response_payload, dict) else None
+            raise _codex_sse_error(error)
 
     return content, tool_calls, finish_reason
 
