@@ -250,7 +250,10 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
-        sync_workspace_templates(config.workspace_path)
+        # Coding profile works in a project/task directory: skip the assistant
+        # persona + memory scaffolding files there, keep only tool guidance.
+        _bootstrap_only = ["TOOLS.md"] if config.agents.defaults.profile == "coding" else None
+        sync_workspace_templates(config.workspace_path, only=_bootstrap_only)
 
         provider = make_provider(config)
         session_manager = SessionManager(config.workspace_path)
@@ -343,6 +346,7 @@ def register(app: typer.Typer) -> None:
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
+            wrap_tool_outputs=config.tools.wrap_tool_outputs,
             profile=config.agents.defaults.profile,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,

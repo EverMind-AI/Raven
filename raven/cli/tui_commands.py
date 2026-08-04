@@ -418,6 +418,7 @@ def _build_tui_agent_loop():
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
+            wrap_tool_outputs=config.tools.wrap_tool_outputs,
             profile=config.agents.defaults.profile,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,

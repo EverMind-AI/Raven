@@ -18,6 +18,31 @@ from __future__ import annotations
 
 import secrets
 
+# Tools whose output crosses a trust boundary: content authored outside this
+# machine (web pages, search results, MCP servers). Local tools (exec, file
+# reads, greps) echo state the agent itself manipulates; fencing every one of
+# their results costs ~50 tokens each — tens of thousands over a long run —
+# which the "external" policy trades away only where the content is local.
+_EXTERNAL_TOOLS = frozenset({"web_search", "web_fetch", "deep_research"})
+_EXTERNAL_TOOL_PREFIXES = ("mcp_",)
+
+
+def is_external_tool(tool_name: str) -> bool:
+    return tool_name in _EXTERNAL_TOOLS or tool_name.startswith(_EXTERNAL_TOOL_PREFIXES)
+
+
+def wrap_tool_result(text: str, *, tool_name: str, policy: str = "all") -> str:
+    """Fence a tool result according to the wrap policy.
+
+    ``"all"`` fences every tool result (the product default). ``"external"``
+    fences only tools whose output originates outside the local machine —
+    appropriate where the local filesystem is trusted (e.g. a disposable
+    benchmark container the agent itself populated).
+    """
+    if policy == "external" and not is_external_tool(tool_name):
+        return text
+    return wrap_untrusted(text, source=tool_name)
+
 
 def wrap_untrusted(text: str, *, source: str) -> str:
     """Fence external/untrusted ``text`` in a nonce-tagged data boundary.

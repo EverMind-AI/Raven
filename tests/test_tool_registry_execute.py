@@ -88,13 +88,14 @@ async def test_plain_string_tools_carry_no_display_text():
 
 
 @pytest.mark.asyncio
-async def test_error_prefixed_tool_result_keeps_hint_and_display():
+async def test_error_prefixed_tool_result_keeps_display_without_generic_hint():
+    # Tool-authored errors carry their own targeted guidance; the registry must
+    # not stack the generic change-approach suffix on top of them.
     reg = _registry(_Split("Error: broker unavailable", "asked -> nothing"))
 
     result = await reg.execute("split", {})
 
-    assert result.startswith("Error: broker unavailable")
-    assert "try a different approach" in result
+    assert result == "Error: broker unavailable"
     assert result.display_text == "asked -> nothing"  # type: ignore[attr-defined]
 
 
@@ -116,3 +117,16 @@ def test_tool_output_is_a_str_subclass():
     assert out.display_text == "display"
     # Attribute is always present, so callers can getattr without a default dance.
     assert ToolOutput("text").display_text is None
+
+
+def test_canonical_name_exact_and_repaired():
+    reg = _registry(_Plain())
+    assert reg.canonical_name("plain") == "plain"
+    # execute() repairs mangled spellings, so classification must follow.
+    assert reg.canonical_name("Plain") == "plain"
+    assert reg.canonical_name("PLAIN") == "plain"
+
+
+def test_canonical_name_unknown_passes_through():
+    reg = _registry(_Plain())
+    assert reg.canonical_name("no_such_tool") == "no_such_tool"

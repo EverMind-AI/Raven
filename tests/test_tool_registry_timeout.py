@@ -105,6 +105,15 @@ async def test_long_running_tools_keep_generous_ceilings():
     assert ExecTool(max_timeout=3600).timeout_seconds >= 3600
     assert VideoGenerateTool.timeout_seconds >= 600
     assert SpawnTool.timeout_seconds >= 600
+    # Session/job tools accept a `timeout` parameter; their registry backstop
+    # must sit above that parameter's schema maximum, or the registry kills
+    # waits the schema just allowed (observed as spurious exec_read timeouts).
+    from raven.agent.tools.background import JobWaitTool
+    from raven.agent.tools.shell import ExecReadTool, ExecWriteTool
+
+    assert ExecReadTool.timeout_seconds > 600
+    assert ExecWriteTool.timeout_seconds > 600
+    assert JobWaitTool.timeout_seconds > JobWaitTool._MAX_WAIT_S
     # Default-class tools inherit None -> registry default applies.
     assert Tool.timeout_seconds is None
     assert Tool.blocking_interaction is False

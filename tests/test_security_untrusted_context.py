@@ -93,3 +93,18 @@ async def test_subagent_result_is_fenced(tmp_path: Path) -> None:
     assert poison in text
     assert "[BEGIN UNTRUSTED subagent #" in text
     assert "[END UNTRUSTED subagent #" in text
+
+
+def test_external_policy_fences_by_executed_name_not_raw_spelling(tmp_path: Path) -> None:
+    """A mangled call like Web_Fetch executes the real web_fetch (registry
+    repair) — the fencing decision must classify the executed tool, or the
+    mangled spelling walks external content past the fence."""
+    b = ContextBuilder(workspace=tmp_path, wrap_tool_outputs="external")
+    payload = "external page content"
+
+    unfixed = b.add_tool_result([], "c1", "Web_Fetch", payload)
+    assert unfixed[0]["content"] == payload  # raw spelling alone: bypass
+
+    fenced = b.add_tool_result([], "c1", "Web_Fetch", payload, fence_name="web_fetch")
+    assert fenced[0]["content"].startswith("[BEGIN UNTRUSTED web_fetch #")
+    assert fenced[0]["name"] == "Web_Fetch"  # call/result pairing keeps the raw name
