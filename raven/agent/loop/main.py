@@ -49,6 +49,7 @@ from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.spawn import SpawnTool
+from raven.agent.tools.todo import TodoStore, TodoWriteTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
@@ -782,6 +783,7 @@ class AgentLoop:
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir, tracker=read_tracker))
         self._exec_sessions = ExecSessionRegistry(self._executor)
         self._background_jobs = BackgroundJobRegistry(self._executor, workspace=self.workspace)
+        self._todos = TodoStore()
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
@@ -850,6 +852,7 @@ class AgentLoop:
         else:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
+        self.tools.register(TodoWriteTool(self._todos))
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
