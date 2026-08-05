@@ -31,21 +31,23 @@ def _detach_tty_handlers(loggers: list[logging.Logger]) -> None:
                 lg.removeHandler(handler)
 
 
-def _point_copilot_tokens_at_raven() -> None:
-    """Send LiteLLM's Copilot credentials to raven's OAuth directory.
+def _point_oauth_tokens_at_raven() -> None:
+    """Send the credentials LiteLLM's drivers own to raven's OAuth directory.
 
-    LiteLLM's ``Authenticator`` reads this variable in ``__init__`` and creates
-    the directory, so it has to be set before litellm is imported at all. An
+    Both authenticators read their variable in ``__init__`` and create the
+    directory, so these have to be set before litellm is imported at all. An
     explicit setting by the user wins.
     """
     from raven.config.paths import get_oauth_dir
 
-    os.environ.setdefault("GITHUB_COPILOT_TOKEN_DIR", str(get_oauth_dir() / "github_copilot"))
+    oauth_dir = get_oauth_dir()
+    os.environ.setdefault("GITHUB_COPILOT_TOKEN_DIR", str(oauth_dir / "github_copilot"))
+    os.environ.setdefault("CHATGPT_TOKEN_DIR", str(oauth_dir / "chatgpt"))
 
 
 def import_litellm():
     """Import litellm with its banner disabled and its terminal handler detached."""
-    _point_copilot_tokens_at_raven()
+    _point_oauth_tokens_at_raven()
     loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
     prev_levels = [lg.level for lg in loggers]
     for lg in loggers:

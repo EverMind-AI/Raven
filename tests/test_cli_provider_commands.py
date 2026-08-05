@@ -51,65 +51,64 @@ def test_provider_login_unknown_provider_exits_1() -> None:
     assert "openai-codex" in r.stdout or "github-copilot" in r.stdout
 
 
-def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Login starts an interactive flow even when a cached token exists."""
-    from types import SimpleNamespace
+def _fake_chatgpt_authenticator(monkeypatch: pytest.MonkeyPatch, token: str | None) -> list[str]:
+    """Stand in for LiteLLM's ChatGPT driver, which owns this flow.
 
-    fake_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
-    login_calls = 0
+    Patched on the module the command imports from, so the command's own wiring --
+    import litellm first, then ask its authenticator -- is what runs.
+    """
+    calls: list[str] = []
 
-    def fake_login(**_):
-        nonlocal login_calls
-        login_calls += 1
-        return fake_token
+    class _Authenticator:
+        def get_access_token(self) -> str | None:
+            calls.append("get_access_token")
 
-    fake_module = SimpleNamespace(
-        get_token=lambda: fake_token,
-        login_oauth_interactive=fake_login,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+            return token
+
+    import sys
+    from types import ModuleType
+
+    module = ModuleType("litellm.llms.chatgpt.authenticator")
+    module.Authenticator = _Authenticator  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm.llms.chatgpt.authenticator", module)
+
+    common = ModuleType("litellm.llms.chatgpt.common_utils")
+    common.CHATGPT_DEVICE_VERIFY_URL = "https://auth.openai.com/codex/device"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm.llms.chatgpt.common_utils", common)
+
+    return calls
+
+
+def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch, opened_urls: list[str]) -> None:
+    """The login is one call into the driver that owns the device flow."""
+    calls = _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
     assert r.exit_code == 0
-    assert login_calls == 1
+    assert calls == ["get_access_token"]
     assert "Authenticated with OpenAI Codex" in r.stdout
+    assert opened_urls == ["https://auth.openai.com/codex/device"]
 
 
-def test_provider_login_openai_codex_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If oauth_cli_kit returns no access token, the command exits 1."""
-    from types import SimpleNamespace
-
-    empty_token = SimpleNamespace(access=None, account_id=None)
-
-    fake_module = SimpleNamespace(
-        get_token=lambda: empty_token,
-        login_oauth_interactive=lambda **_: empty_token,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+def test_provider_login_openai_codex_failure_exits_1(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """No token back means the flow did not complete."""
+    _fake_chatgpt_authenticator(monkeypatch, None)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
     assert r.exit_code == 1
     assert "Authentication failed" in r.stdout
 
 
-def test_provider_login_openai_codex_disables_browser_without_linux_display(
+def test_provider_login_openai_codex_opens_nothing_without_a_display(
     monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
 ) -> None:
-    from types import SimpleNamespace
-
-    empty_token = SimpleNamespace(access=None, account_id=None)
-    authenticated_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
-    login_kwargs: dict[str, object] = {}
-
-    def fake_login(**kwargs):
-        login_kwargs.update(kwargs)
-        return authenticated_token
-
-    fake_module = SimpleNamespace(
-        get_token=lambda: empty_token,
-        login_oauth_interactive=fake_login,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+    _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
     monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -117,7 +116,7 @@ def test_provider_login_openai_codex_disables_browser_without_linux_display(
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
 
     assert r.exit_code == 0
-    assert login_kwargs["open_browser"] is False
+    assert opened_urls == []
 
 
 @pytest.fixture
@@ -308,9 +307,10 @@ def test_reset_clears_oauth_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token_file = tmp_path / "codex.json"
-    token_file.write_text('{"access":"X","refresh":"R","expires":0}')
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    token_file = tmp_path / "chatgpt" / "auth.json"
+    token_file.parent.mkdir()
+    token_file.write_text('{"access_token":"X","refresh_token":"R"}')
 
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
@@ -322,7 +322,7 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
 

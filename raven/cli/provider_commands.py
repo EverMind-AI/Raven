@@ -79,6 +79,23 @@ def provider_login(
     handler()
 
 
+def _open_device_page(url: str) -> None:
+    """Hand the user a browser on the page their device code goes into.
+
+    The drivers that own these flows print the URL and stop there, so this is the
+    only reason the login commands differ from just calling them.
+    """
+    if not _can_open_browser():
+        return
+
+    import webbrowser
+
+    if webbrowser.open(url):
+        console.print(f"[dim]opened {url}[/dim]")
+    else:
+        console.print(f"visit {url} and enter the code below")
+
+
 def _can_open_browser() -> bool:
     """Whether this session has a browser to hand the user off to.
 
@@ -92,26 +109,29 @@ def _can_open_browser() -> bool:
 
 @_register_login("openai_codex")
 def _login_openai_codex() -> None:
+    # LiteLLM's driver owns this flow: it requests the device code, prints the
+    # page and the code, polls, and writes the credential where the request path
+    # will look for it. Asking it for a token is the whole login.
+    from raven.providers.litellm_setup import import_litellm
+
+    import_litellm()
+    from litellm.llms.chatgpt.authenticator import Authenticator
+    from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL
+
+    console.print("[cyan]Starting ChatGPT device flow...[/cyan]\n")
+    _open_device_page(CHATGPT_DEVICE_VERIFY_URL)
+
     try:
-        from oauth_cli_kit import login_oauth_interactive
-
-        from raven.providers.codex_token import codex_storage
-
-        console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-        token = login_oauth_interactive(
-            print_fn=lambda s: console.print(s),
-            prompt_fn=lambda s: typer.prompt(s),
-            # None lets the kit decide off-Linux, which is what it did before.
-            open_browser=_can_open_browser() if sys.platform.startswith("linux") else None,
-            storage=codex_storage(),
-        )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
-        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
+        token = Authenticator().get_access_token()
+    except Exception as exc:
+        console.print(f"[red]Authentication error: {exc}[/red]")
         raise typer.Exit(1)
+
+    if not token:
+        console.print("[red]✗ Authentication failed[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]✓ Authenticated with OpenAI Codex[/green]")
 
 
 @_register_login("github_copilot")
@@ -120,17 +140,10 @@ def _login_github_copilot() -> None:
 
     console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
 
-    # LiteLLM owns this flow and only prints the code, so the browser is opened
-    # here to match the other two families. The page is the same URL GitHub's
-    # device-code response returns, and the code has to be typed into it either
-    # way -- opening it before the code appears costs the user nothing.
-    if _can_open_browser():
-        import webbrowser
-
-        if webbrowser.open(_GITHUB_DEVICE_URL):
-            console.print(f"[dim]opened {_GITHUB_DEVICE_URL}[/dim]")
-        else:
-            console.print(f"visit {_GITHUB_DEVICE_URL} and enter the code below")
+    # The page is the same URL GitHub's device-code response returns, and the code
+    # has to be typed into it either way -- opening it before the code appears
+    # costs the user nothing.
+    _open_device_page(_GITHUB_DEVICE_URL)
 
     async def _trigger():
         from raven.providers.litellm_setup import import_litellm
@@ -452,9 +465,9 @@ def _register_config_commands(app: typer.Typer) -> None:
     ):
         """Restore a provider to schema defaults. Key preserved, values reset.
 
-        For OAuth providers the on-disk token
-        file written by ``oauth_cli_kit`` is also deleted, so the user is
-        effectively logged out and must re-run ``provider login`` to use it.
+        For OAuth providers the credential files under ``~/.raven/oauth`` are
+        deleted too, so the user is effectively logged out and must re-run
+        ``provider login`` to use it.
         """
         from raven.config.update_providers import (
             get_provider_config,

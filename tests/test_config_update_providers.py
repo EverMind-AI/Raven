@@ -209,9 +209,10 @@ def test_reset_clears_oauth_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token_file = tmp_path / "codex.json"
-    token_file.write_text('{"access":"X","refresh":"R","expires":0}')
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    token_file = tmp_path / "chatgpt" / "auth.json"
+    token_file.parent.mkdir()
+    token_file.write_text('{"access_token":"X","refresh_token":"R"}')
 
     reset_provider("openai_codex", config_path=cfg_path)
 
@@ -223,16 +224,20 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
     reset_provider("openai_codex", config_path=cfg_path)
 
 
 @pytest.fixture
 def oauth_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point every OAuth credential lookup, new home and old, inside tmp_path."""
+    """Point every OAuth credential lookup inside tmp_path.
+
+    The two families LiteLLM's drivers own read their directory from an
+    environment variable, which jumps out of the patched home.
+    """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
-    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
     return tmp_path
 
 
@@ -259,6 +264,12 @@ def _write_credential(path: Path, slug: str) -> None:
             "resource_url": config.default_resource_url,
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
+
+        return
+
+    if slug == "openai_codex":
+        # LiteLLM's driver names these fields, not the kit that used to.
+        path.write_text('{"access_token":"X","refresh_token":"R"}', encoding="utf-8")
 
         return
 
@@ -317,11 +328,11 @@ def test_reset_clears_copilots_api_key_too(cfg_path: Path, oauth_home: Path) -> 
     assert list(token_dir.glob("*")) == []
 
 
-def test_codex_detection_asks_the_storage_its_login_writes_through(oauth_home: Path) -> None:
+def test_codex_detection_asks_the_module_that_speaks_for_the_driver(oauth_home: Path) -> None:
     """Two derivations of one path is the bug this directory exists to prevent."""
-    from raven.providers.codex_token import codex_storage
+    from raven.providers.chatgpt_token import auth_file
 
-    assert _oauth_token_path("openai_codex") == codex_storage().get_token_path()
+    assert _oauth_token_path("openai_codex") == auth_file()
 
 
 # ---------------------------------------------------------------------------
@@ -510,18 +521,16 @@ def test_test_provider_not_configured_when_api_key_empty(cfg_path: Path) -> None
     assert result["status"] == "not_configured"
 
 
-def test_test_provider_oauth_reads_token_from_oauth_cli_kit(
+def test_test_provider_oauth_sends_the_stored_token(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sys
-
-    fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
-    # The probe passes raven's own storage, so the stub takes it and the storage
-    # itself is stubbed out -- the kit package is not importable here.
-    fake_module = SimpleNamespace(get_token=lambda **_: fake_token)
-    monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
-    monkeypatch.setattr("raven.providers.codex_token.codex_storage", lambda: None)
+    # Asked of the module that speaks for the driver, so the probe cannot open a
+    # device flow behind a command that is only meant to report.
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("oauth-token-xyz", "me@x"),
+    )
 
     seen: dict[str, Any] = {}
 

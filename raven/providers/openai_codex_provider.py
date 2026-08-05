@@ -36,18 +36,11 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
-        try:
-            from oauth_cli_kit import get_token as get_codex_token
+        from raven.providers.chatgpt_token import access_token_and_account
 
-            from raven.providers.codex_token import codex_storage
-        except ImportError as e:
-            raise RuntimeError(
-                "OpenAICodexProvider requires the 'tools' extra. "
-                "Install with: pip install -e '.[tools]'  (or uv pip install -e '.[tools]')"
-            ) from e
-
-        token = await asyncio.to_thread(lambda: get_codex_token(storage=codex_storage()))
-        headers = _build_headers(token.account_id, token.access)
+        # Refreshing can block, and the credential belongs to LiteLLM's driver.
+        access, account_id = await asyncio.to_thread(access_token_and_account)
+        headers = _build_headers(account_id, access)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),

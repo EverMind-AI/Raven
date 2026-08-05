@@ -5,13 +5,13 @@ points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
 providers section is forbidden -- see plan rule.
 
-OAuth providers have a separate
-auth path via ``provider_commands._LOGIN_HANDLERS`` and store tokens via
-``oauth_cli_kit``, not in ``config.json``. ``set_provider_fields`` refuses
-to write ``api_key`` for those providers; callers must invoke
-``provider login`` for that. ``reset_provider`` handles both cases:
-schema-default rewrite for config fields, plus unlinking the
-``oauth_cli_kit`` token file when the provider has ``is_oauth=True``.
+OAuth providers have a separate auth path via
+``provider_commands._LOGIN_HANDLERS`` and keep their credentials in files under
+``~/.raven/oauth``, not in ``config.json``. ``set_provider_fields`` refuses to
+write ``api_key`` for those providers; callers must invoke ``provider login`` for
+that. ``reset_provider`` handles both cases: schema-default rewrite for config
+fields, plus deleting the credential files when the provider has
+``is_oauth=True``.
 """
 
 from __future__ import annotations
@@ -432,11 +432,9 @@ def _oauth_token_path(provider_name: str) -> Path:
 
     One derivation for every family, because the alternative -- each client
     keeping its own default -- is what wrote ``openai_codex`` under one name and
-    read it under another.
-
-    Honors ``OAUTH_CLI_KIT_TOKEN_PATH`` so tests and kit users can redirect a
-    single file; Copilot is resolved before it because that override belongs to
-    the kit and LiteLLM has never heard of it.
+    read it under another. The two families LiteLLM's drivers own are asked of
+    the module that speaks for that driver, so this cannot drift from what the
+    login writes.
     """
     from raven.config.paths import get_oauth_dir
 
@@ -444,19 +442,9 @@ def _oauth_token_path(provider_name: str) -> Path:
         return _copilot_token_dir() / _COPILOT_TOKEN_FILES[0]
 
     if provider_name == "openai_codex":
-        # Ask the storage the login writes through rather than deriving a second
-        # answer: the kit inserts its own ``auth/`` level under the data dir, and
-        # honors the override itself.
-        try:
-            from raven.providers.codex_token import codex_storage
+        from raven.providers.chatgpt_token import auth_file
 
-            return codex_storage().get_token_path()
-        except ImportError:
-            pass
-
-    override = os.environ.get("OAUTH_CLI_KIT_TOKEN_PATH")
-    if override:
-        return Path(override)
+        return auth_file()
 
     return get_oauth_dir() / f"{provider_name}.json"
 
@@ -495,12 +483,9 @@ def _oauth_credentials_present(provider_name: str) -> bool:
         return load_token("global" if provider_name == "minimax_global" else "cn") is not None
 
     if provider_name == "openai_codex":
-        try:
-            from raven.providers.codex_token import codex_storage
+        from raven.providers.chatgpt_token import stored_credentials
 
-            return codex_storage().load() is not None
-        except ImportError:
-            return _oauth_token_path(provider_name).exists()
+        return stored_credentials() is not None
 
     if provider_name == "github_copilot":
         # LiteLLM stores the device token as bare text, so "parses" is only
@@ -738,11 +723,10 @@ def reset_provider(
        for Gemini, ``api_key_list=[]`` etc.). For OAuth providers those are
        already at defaults, so the write is a no-op for them but harmless.
 
-    2. **OAuth token file** (``is_oauth=True``) — unlinked from disk so the
-       user is effectively logged out. Path resolution follows
-       ``oauth_cli_kit``'s own convention (honoring the
-       ``OAUTH_CLI_KIT_TOKEN_PATH`` env override). Idempotent: ``missing_ok``
-       so reset can run multiple times without raising.
+    2. **OAuth credential files** (``is_oauth=True``) — unlinked from disk so the
+       user is effectively logged out. Every file a sign-in can leave behind
+       goes, Copilot's API key included. Idempotent: ``missing_ok`` so reset can
+       run multiple times without raising.
 
     Callers don't need to know which case applies — one mental model covers
     both API-key and OAuth providers.
@@ -904,13 +888,12 @@ def test_provider(
                 from raven.providers.minimax_oauth import get_token
 
                 token = get_token("global" if spec.name == "minimax_global" else "cn")
+                oauth_access = token.access
                 api_base = token.resource_url
             else:
-                from oauth_cli_kit import get_token
+                from raven.providers.chatgpt_token import access_token_and_account
 
-                from raven.providers.codex_token import codex_storage
-
-                token = get_token(storage=codex_storage())
+                oauth_access, _ = access_token_and_account()
         except ImportError:
             return {
                 "ok": False,
@@ -931,7 +914,7 @@ def test_provider(
                 "model_ids": None,
                 "error": str(exc),
             }
-        if not (token and getattr(token, "access", None)):
+        if not oauth_access:
             return {
                 "ok": False,
                 "status": "oauth_token_missing",
@@ -941,7 +924,7 @@ def test_provider(
                 "model_ids": None,
                 "error": "no OAuth token stored",
             }
-        api_key = token.access
+        api_key = oauth_access
 
     if not api_key and not (spec and spec.is_local):
         return {
