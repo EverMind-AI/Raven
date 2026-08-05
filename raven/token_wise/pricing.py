@@ -126,6 +126,31 @@ def _numeric(entry: dict | None, *fields: str) -> float | None:
     return None
 
 
+def _candidates(model: str) -> list[str]:
+    """Which ids to ask LiteLLM's table about, best first.
+
+    A provider reached by region or by subscription is filed in that table under
+    the vendor's own spelling, and the registry says which
+    ("minimax-global/MiniMax-M3" -> "minimax/MiniMax-M3"). Asking with the
+    routing id instead missed every time, and each miss cost a second guess and
+    the live catalogue fetch behind it.
+
+    Everything else keeps the pair it always had: the id itself plus an
+    ``openrouter/`` alias, since OpenRouter fronts other vendors' models and
+    prices them under its own prefix.
+    """
+    from raven.providers.registry import metadata_model_id
+
+    filed_as = metadata_model_id(model)
+    if filed_as:
+        return [filed_as]
+
+    if model.startswith("openrouter/"):
+        return [model]
+
+    return [f"openrouter/{model}", model]
+
+
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
@@ -135,9 +160,7 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     except Exception:
         return None
 
-    candidates = [model]
-    if not model.startswith("openrouter/"):
-        candidates.insert(0, f"openrouter/{model}")
+    candidates = _candidates(model)
 
     # litellm.cost_per_token expects *at least* 1 non-zero token to compute.
     # We pass synthetic tokens to recover the per-token rate.
@@ -257,11 +280,7 @@ def _try_litellm_context_window(model: str) -> int | None:
     except Exception:
         return None
 
-    candidates = [model]
-    if not model.startswith("openrouter/"):
-        candidates.insert(0, f"openrouter/{model}")
-
-    for candidate in candidates:
+    for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")

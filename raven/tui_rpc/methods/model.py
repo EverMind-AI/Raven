@@ -85,6 +85,7 @@ def _provider_models(slug: str) -> list[str]:
         if candidate not in seen:
             seen.add(candidate)
             out.append(candidate)
+
     return out
 
 

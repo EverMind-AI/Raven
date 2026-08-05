@@ -51,6 +51,15 @@ class ProviderSpec:
     # A vendor LiteLLM merely spells differently is NOT this: adopt LiteLLM's
     # spelling as `name` and keep ours in `name_aliases` (see hosted_vllm).
     via_driver: str = ""
+    # Prefix LiteLLM's metadata table files this provider's models under, when
+    # that is not the routing prefix. Routing says where a request goes;
+    # metadata says what the model is, and the table is keyed by the vendor's own
+    # spelling -- so a provider we reach by region or by subscription
+    # ("minimax-global/MiniMax-M3") has to name the entry that holds its price
+    # and context window ("minimax/MiniMax-M3") or every lookup misses. None
+    # means the two coincide, which is the case wherever `name` is LiteLLM's own
+    # spelling.
+    metadata_prefix: str | None = None
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
     # Former names this provider answered to, so model ids saved under the old
     # one ("zhipu/glm-4.6") still resolve after a rename.
@@ -318,6 +327,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_key_prefix="",
         detect_by_base_keyword="codex",
         default_api_base="https://chatgpt.com/backend-api",
+        metadata_prefix="chatgpt",
         strip_model_prefix=False,
         model_overrides=(),
         is_oauth=True,  # OAuth-based authentication
@@ -456,6 +466,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimax.io/anthropic/v1",
+        metadata_prefix="minimax",
         is_oauth=True,
         default_model="minimax-global/MiniMax-M3",
     ),
@@ -467,6 +478,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimaxi.com/anthropic/v1",
+        metadata_prefix="minimax",
         is_oauth=True,
         default_model="minimax-cn/MiniMax-M3",
     ),
@@ -627,6 +639,22 @@ def names_same_provider(key: str, name: str) -> bool:
     if key.lower() == to_camel(name).lower():
         return True
     return normalize_provider_name(key) == normalize_provider_name(name)
+
+
+def metadata_model_id(model: str) -> str | None:
+    """The id LiteLLM's metadata table files this model under, when it differs.
+
+    Returns None when the routing id is already the metadata id -- the caller
+    then keeps whatever candidates it had. One answer here rather than a mapping
+    beside every consumer: price, context window and capability lookups all ask
+    the same question.
+    """
+    spec = find_by_name(split_model_id(model)[0]) if "/" in (model or "") else None
+    if spec is None or spec.metadata_prefix is None:
+        return None
+
+    _, rest = split_model_id(model)
+    return f"{spec.metadata_prefix}/{rest}" if spec.metadata_prefix else rest
 
 
 def split_model_id(model: str) -> tuple[str, str]:

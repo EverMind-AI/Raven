@@ -422,6 +422,28 @@ def test_which_drivers_can_prompt_is_read_from_the_installed_litellm():
         assert not _may_prompt(safe), safe
 
 
+def test_a_model_reached_by_region_or_subscription_is_looked_up_as_the_vendor_files_it():
+    """Routing says where the request goes; the table is keyed by what the model
+    is. Asking with the routing id missed every time, so a Codex or MiniMax OAuth
+    model had no context window and no price at all."""
+    assert pricing._candidates("openai-codex/gpt-5.3-codex") == ["chatgpt/gpt-5.3-codex"]
+    assert pricing._candidates("minimax-global/MiniMax-M3") == ["minimax/MiniMax-M3"]
+    assert pricing._candidates("minimax-cn/MiniMax-M3") == ["minimax/MiniMax-M3"]
+
+    # Everything whose name is already LiteLLM's keeps the pair it always had.
+    assert pricing._candidates("deepseek/deepseek-chat") == [
+        "openrouter/deepseek/deepseek-chat",
+        "deepseek/deepseek-chat",
+    ]
+    assert pricing._candidates("openrouter/anthropic/claude-opus-4.8") == ["openrouter/anthropic/claude-opus-4.8"]
+
+
+def test_the_window_those_families_report_is_the_vendors_own():
+    """Read from LiteLLM's table offline, so this is the number, not a default."""
+    assert pricing._try_litellm_context_window("openai-codex/gpt-5.3-codex") == 128_000
+    assert pricing._try_litellm_context_window("minimax-global/MiniMax-M3") == 1_000_000
+
+
 def test_one_place_decides_whether_a_model_can_be_handed_to_litellm():
     """Both lookups reach the same authenticator, so both consult one answer.
 

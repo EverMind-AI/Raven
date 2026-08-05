@@ -501,3 +501,26 @@ def test_a_prefix_stripping_gateway_drops_one_segment_not_all_but_the_last(confi
 
     provider = LiteLLMProvider(api_key="K", provider_name="aihubmix", default_model="probe")
     assert provider._resolve_model(configured) == sent
+
+
+def test_a_metadata_prefix_is_declared_only_where_it_differs_from_routing() -> None:
+    """One answer to "what is this model", asked of the registry.
+
+    LiteLLM's table is keyed by the vendor's spelling, so a provider reached by
+    region or by subscription has to name the entry that holds its price and
+    window. Where a provider's name is already LiteLLM's, the two coincide and
+    the spec stays silent.
+    """
+    from raven.providers.registry import PROVIDERS, metadata_model_id
+
+    declared = {spec.name: spec.metadata_prefix for spec in PROVIDERS if spec.metadata_prefix is not None}
+    assert declared == {
+        "openai_codex": "chatgpt",
+        "minimax_global": "minimax",
+        "minimax_cn": "minimax",
+    }
+
+    assert metadata_model_id("openai-codex/gpt-5.3-codex") == "chatgpt/gpt-5.3-codex"
+    assert metadata_model_id("minimax-cn/MiniMax-M3") == "minimax/MiniMax-M3"
+    assert metadata_model_id("deepseek/deepseek-chat") is None, "routing id is already the metadata id"
+    assert metadata_model_id("gpt-4o") is None, "a bare id claims no provider"
