@@ -171,7 +171,13 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
     if (stage === 'model' || stage === 'key' || stage === 'disconnect' || stage === 'oauthLogin') {
       // Backing out of a set-up that did not happen returns to the list it was
       // opened from, rather than one level further out than the user asked for.
-      const toAddList = (stage === 'key' || stage === 'oauthLogin') && fromAddList && provider?.authenticated === false
+      // The sign-in screen asks about its own target: a successful login moves
+      // that provider off the unconfigured list, so reading the row under the
+      // cursor answers for whichever provider slid into its index.
+      const settled = loginTarget
+        ? providers.find(p => p.slug === loginTarget.slug)?.authenticated === false
+        : provider?.authenticated === false
+      const toAddList = (stage === 'key' || stage === 'oauthLogin') && fromAddList && settled
       setStage(toAddList ? 'addProvider' : 'provider')
       setFromAddList(toAddList)
 
@@ -788,7 +794,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">
-          Ctrl+C while it runs ends the Raven session, not just the sign-in.
+          Ctrl+C while it runs cancels the sign-in and comes back here.
         </Text>
 
         <Text color={t.color.muted} wrap="truncate-end">

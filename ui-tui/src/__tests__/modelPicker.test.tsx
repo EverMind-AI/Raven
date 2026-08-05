@@ -487,6 +487,46 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('re-anchors the cursor when a sign-in empties the row it came from', async () => {
+    // The sign-in target leaves the unconfigured list on success, so the row
+    // under the cursor is now a different provider. Answering "did the set-up
+    // happen?" from that row sends the user back into the add list, pointing at
+    // somebody they never touched.
+    const other = { ...oauthProvider, name: 'Second Unconfigured', slug: 'second_unconfigured' }
+    const h = mount([anthropic, oauthProvider, other], undefined, {
+      nextProviders: [
+        anthropic,
+        { ...oauthProvider, authenticated: true, models: ['MiniMax-M2'], total_models: 1 },
+        other
+      ]
+    })
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'signed in.')
+
+    await h.type(ESCAPE)
+    await delay(30)
+
+    // Asserted through the launcher rather than the screen: `frame()` accumulates
+    // and the fake terminal drops the odd character, so a title assertion matches
+    // nothing either way. Two Enters from the configured list pick a model; two
+    // from the add list start a login for whoever took the vacated index.
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await delay(60)
+
+    expect(h.launcher).toHaveBeenCalledTimes(1)
+    expect(h.launcher).not.toHaveBeenCalledWith(['provider', 'login', 'second-unconfigured'])
+
+    h.unmount()
+  })
+
   it('reports a sign-in that leaves no credentials behind', async () => {
     const h = mount([anthropic, oauthProvider])
     await delay(60)
