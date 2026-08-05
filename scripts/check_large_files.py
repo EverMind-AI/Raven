@@ -52,6 +52,15 @@ BLOCKED_ASSET_EXTENSIONS = {
     ".wav",
 }
 
+# The asset ban targets report assets and standalone web artifacts. A product
+# frontend legitimately carries its own entry HTML and icon SVGs as source, so
+# these trees are exempt from the extension list. The size limit still applies.
+APP_SOURCE_PREFIXES = (
+    "bridge/",
+    "ui-tui/",
+    "ui-webui/",
+)
+
 
 @dataclass(frozen=True)
 class FileSizeViolation:
@@ -124,6 +133,8 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if not path or path in seen:
             continue
         seen.add(path)
+        if path.startswith(APP_SOURCE_PREFIXES):
+            continue
         candidate = root / path
         if not candidate.is_file():
             continue
