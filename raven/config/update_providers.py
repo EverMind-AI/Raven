@@ -422,21 +422,70 @@ def _redact(value: Any) -> Any:
     return "****set****"
 
 
-def _oauth_token_path(provider_name: str) -> Path:
-    """Resolve the on-disk token file path written by ``oauth_cli_kit``.
+#: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
+#: access token and the short-lived API key it is exchanged for.
+_COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
 
-    Honors the ``OAUTH_CLI_KIT_TOKEN_PATH`` override the kit itself respects,
-    so tests can point at ``tmp_path`` without touching real user data.
+
+def _oauth_token_path(provider_name: str) -> Path:
+    """Resolve where this provider's credential lives under Raven's own directory.
+
+    One derivation for every family, because the alternative -- each client
+    keeping its own default -- is what wrote ``openai_codex`` under one name and
+    read it under another.
+
+    Honors ``OAUTH_CLI_KIT_TOKEN_PATH`` so tests and kit users can redirect a
+    single file; Copilot is resolved before it because that override belongs to
+    the kit and LiteLLM has never heard of it.
     """
+    from raven.config.paths import get_oauth_dir
+
+    if provider_name == "github_copilot":
+        return _copilot_token_dir() / _COPILOT_TOKEN_FILES[0]
+
+    if provider_name == "openai_codex":
+        # Ask the storage the login writes through rather than deriving a second
+        # answer: the kit inserts its own ``auth/`` level under the data dir, and
+        # honors the override itself.
+        try:
+            from raven.providers.codex_token import codex_storage
+
+            return codex_storage().get_token_path()
+        except ImportError:
+            pass
+
     override = os.environ.get("OAUTH_CLI_KIT_TOKEN_PATH")
     if override:
         return Path(override)
-    try:
-        from platformdirs import user_data_dir
-    except ImportError:
-        return Path.home() / ".local" / "share" / "oauth-cli-kit" / "auth" / f"{provider_name}.json"
-    base_dir = Path(user_data_dir("oauth-cli-kit", appauthor=False))
-    return base_dir / "auth" / f"{provider_name}.json"
+
+    return get_oauth_dir() / f"{provider_name}.json"
+
+
+def _copilot_token_dir() -> Path:
+    """The directory LiteLLM's Copilot authenticator reads and writes.
+
+    ``import_litellm`` points ``GITHUB_COPILOT_TOKEN_DIR`` at Raven's own
+    directory before LiteLLM is imported; reading the same variable here keeps
+    one answer even when a user has set it themselves.
+    """
+    from raven.config.paths import get_oauth_dir
+
+    token_dir = os.environ.get("GITHUB_COPILOT_TOKEN_DIR")
+    return Path(token_dir).expanduser() if token_dir else get_oauth_dir() / "github_copilot"
+
+
+def _oauth_credential_files(provider_name: str) -> list[Path]:
+    """Every file a sign-in for this provider can leave behind, old homes included.
+
+    Disconnect has to clear all of them: Copilot's API key outlives the access
+    token it came from, and a credential left in the pre-``~/.raven`` location
+    would be picked back up by the read fallback.
+    """
+    if provider_name == "github_copilot":
+        token_dir = _copilot_token_dir()
+        return [token_dir / filename for filename in _COPILOT_TOKEN_FILES]
+
+    return [_oauth_token_path(provider_name)]
 
 
 # ---------------------------------------------------------------------------
@@ -679,8 +728,9 @@ def reset_provider(
                 from raven.providers.minimax_oauth import delete_token
 
                 delete_token("global" if name == "minimax_global" else "cn")
-            else:
-                _oauth_token_path(name).unlink(missing_ok=True)
+
+            for stale in _oauth_credential_files(name):
+                stale.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
                 "update_providers: failed to unlink OAuth token for {}: {}",
@@ -824,7 +874,9 @@ def test_provider(
             else:
                 from oauth_cli_kit import get_token
 
-                token = get_token()
+                from raven.providers.codex_token import codex_storage
+
+                token = get_token(storage=codex_storage())
         except ImportError:
             return {
                 "ok": False,

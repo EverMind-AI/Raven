@@ -37,6 +37,10 @@ from raven import __logo__
 
 console = Console()
 
+# Where GitHub's device-code response sends the user; LiteLLM prints it but does
+# not open it.
+_GITHUB_DEVICE_URL = "https://github.com/login/device"
+
 
 provider_app = typer.Typer(help="Manage providers")
 
@@ -75,20 +79,31 @@ def provider_login(
     handler()
 
 
+def _can_open_browser() -> bool:
+    """Whether this session has a browser to hand the user off to.
+
+    A headless Linux box has no display to open one on; every other platform is
+    assumed to have one.
+    """
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
+
 @_register_login("openai_codex")
 def _login_openai_codex() -> None:
     try:
         from oauth_cli_kit import login_oauth_interactive
 
+        from raven.providers.codex_token import codex_storage
+
         console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
         token = login_oauth_interactive(
             print_fn=lambda s: console.print(s),
             prompt_fn=lambda s: typer.prompt(s),
-            open_browser=(
-                bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-                if sys.platform.startswith("linux")
-                else None
-            ),
+            # None lets the kit decide off-Linux, which is what it did before.
+            open_browser=_can_open_browser() if sys.platform.startswith("linux") else None,
+            storage=codex_storage(),
         )
         if not (token and token.access):
             console.print("[red]✗ Authentication failed[/red]")
@@ -104,6 +119,18 @@ def _login_github_copilot() -> None:
     import asyncio
 
     console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
+
+    # LiteLLM owns this flow and only prints the code, so the browser is opened
+    # here to match the other two families. The page is the same URL GitHub's
+    # device-code response returns, and the code has to be typed into it either
+    # way -- opening it before the code appears costs the user nothing.
+    if _can_open_browser():
+        import webbrowser
+
+        if webbrowser.open(_GITHUB_DEVICE_URL):
+            console.print(f"[dim]opened {_GITHUB_DEVICE_URL}[/dim]")
+        else:
+            console.print(f"visit {_GITHUB_DEVICE_URL} and enter the code below")
 
     async def _trigger():
         from raven.providers.litellm_setup import import_litellm
@@ -131,11 +158,7 @@ def _login_minimax(region: str, label: str) -> None:
         token = login(
             region,
             print_fn=lambda message: console.print(message),
-            open_browser=(
-                bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-                if sys.platform.startswith("linux")
-                else True
-            ),
+            open_browser=_can_open_browser(),
         )
     except Exception as exc:
         console.print(f"[red]Authentication error: {exc}[/red]")

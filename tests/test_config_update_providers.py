@@ -11,6 +11,8 @@ import httpx
 import pytest
 
 from raven.config.update_providers import (
+    _copilot_token_dir,
+    _oauth_token_path,
     add_provider_model,
     get_provider_config,
     list_providers,
@@ -225,6 +227,81 @@ def test_reset_oauth_idempotent_when_no_token_file(
     reset_provider("openai_codex", config_path=cfg_path)
 
 
+@pytest.fixture
+def oauth_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point every OAuth credential lookup, new home and old, inside tmp_path."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
+    return tmp_path
+
+
+def _configured(cfg_path: Path, slug: str) -> bool:
+    return bool({p["name"]: p for p in list_providers(config_path=cfg_path)}[slug]["configured"])
+
+
+def _write_credential(path: Path, slug: str) -> None:
+    """Write whatever shape this family's reader accepts at ``path``.
+
+    MiniMax parses and validates its token file (the resource URL has to be one
+    the region actually serves), so a placeholder JSON would read as no token at
+    all and the test would pass for the wrong reason.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if slug.startswith("minimax_"):
+        from raven.providers.minimax_oauth import oauth_config
+
+        config = oauth_config("global" if slug == "minimax_global" else "cn")
+        payload = {
+            "access": "X",
+            "refresh": "R",
+            "expires": 9_999_999_999_000,
+            "resource_url": config.default_resource_url,
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        return
+
+    path.write_text('{"access":"X","refresh":"R","expires":9999999999000}', encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["openai_codex", "github_copilot", "minimax_global", "minimax_cn"],
+)
+def test_oauth_credential_is_read_from_ravens_own_directory(
+    cfg_path: Path,
+    oauth_home: Path,
+    slug: str,
+) -> None:
+    """Whatever writes the credential, one directory answers for all four."""
+    assert _configured(cfg_path, slug) is False
+
+    _write_credential(_oauth_token_path(slug), slug)
+
+    assert _configured(cfg_path, slug) is True
+
+
+def test_reset_clears_copilots_api_key_too(cfg_path: Path, oauth_home: Path) -> None:
+    """The API key outlives the access token it came from, and LiteLLM keeps
+    using it -- a disconnect that leaves it behind does not disconnect."""
+    token_dir = _copilot_token_dir()
+    token_dir.mkdir(parents=True, exist_ok=True)
+    (token_dir / "access-token").write_text("ghu_abc")
+    (token_dir / "api-key.json").write_text('{"token":"k","expires_at":9999999999}')
+
+    reset_provider("github_copilot", config_path=cfg_path)
+
+    assert list(token_dir.glob("*")) == []
+
+
+def test_codex_detection_asks_the_storage_its_login_writes_through(oauth_home: Path) -> None:
+    """Two derivations of one path is the bug this directory exists to prevent."""
+    from raven.providers.codex_token import codex_storage
+
+    assert _oauth_token_path("openai_codex") == codex_storage().get_token_path()
+
+
 # ---------------------------------------------------------------------------
 # list_providers
 # ---------------------------------------------------------------------------
@@ -418,8 +495,11 @@ def test_test_provider_oauth_reads_token_from_oauth_cli_kit(
     import sys
 
     fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
-    fake_module = SimpleNamespace(get_token=lambda: fake_token)
+    # The probe passes raven's own storage, so the stub takes it and the storage
+    # itself is stubbed out -- the kit package is not importable here.
+    fake_module = SimpleNamespace(get_token=lambda **_: fake_token)
     monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
+    monkeypatch.setattr("raven.providers.codex_token.codex_storage", lambda: None)
 
     seen: dict[str, Any] = {}
 

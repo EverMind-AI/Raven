@@ -125,6 +125,12 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
     set_config_path(cfg)
+    # Credentials live under ``~/.raven``, which ``set_config_path`` above does
+    # not cover. Left un-isolated, the wizard reports "LLM provider already
+    # configured" on a machine whose developer has signed in to one of them.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
     monkeypatch.setattr(
         "raven.config.paths.get_workspace_path",
         lambda: workspace,

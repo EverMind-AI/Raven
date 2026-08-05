@@ -31,6 +31,11 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     # Clear any process-wide config-path override a prior test left set, so
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
     monkeypatch.setattr("raven.config.loader._current_config_path", None)
+    # OAuth credentials live under ``~/.raven`` too, so the patched home covers
+    # them -- but the two environment overrides jump out of it, and left set they
+    # decide whether a provider reports itself authenticated.
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
     return tmp_path
 
 

@@ -70,6 +70,17 @@ def get_bridge_install_dir() -> Path:
     return Path.home() / ".raven" / "bridge"
 
 
+def get_oauth_dir() -> Path:
+    """Return the directory every OAuth provider's credentials live in.
+
+    One home, so that writing, reading, reporting and deleting a credential all
+    derive the same path. Letting each client keep its own default is what let
+    ``openai_codex`` be written by one name and read by another, reporting a
+    signed-in provider as unauthenticated forever.
+    """
+    return Path.home() / ".raven" / "oauth"
+
+
 def get_legacy_sessions_dir() -> Path:
     """Return the legacy global session directory used for migration fallback."""
     return Path.home() / ".raven" / "sessions"

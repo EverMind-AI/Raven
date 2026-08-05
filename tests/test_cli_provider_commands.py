@@ -120,7 +120,18 @@ def test_provider_login_openai_codex_disables_browser_without_linux_display(
     assert login_kwargs["open_browser"] is False
 
 
-def test_provider_login_github_copilot_success(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def opened_urls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture browser hand-offs; without this the suite opens real tabs."""
+    urls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url, *a, **k: urls.append(url) or True)
+    return urls
+
+
+def test_provider_login_github_copilot_success(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
     """github-copilot login triggers an acompletion → mock it returning OK."""
 
     async def fake_acompletion(**_):
@@ -133,9 +144,34 @@ def test_provider_login_github_copilot_success(monkeypatch: pytest.MonkeyPatch) 
     r = runner.invoke(app, ["provider", "login", "github-copilot"])
     assert r.exit_code == 0
     assert "Authenticated with GitHub Copilot" in r.stdout
+    # LiteLLM prints the code but opens nothing, so the command opens the page
+    # the code goes into -- the other two families already hand off a browser.
+    assert opened_urls == ["https://github.com/login/device"]
 
 
-def test_provider_login_github_copilot_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_login_github_copilot_headless_opens_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    async def fake_acompletion(**_):
+        return None
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    r = runner.invoke(app, ["provider", "login", "github-copilot"])
+    assert r.exit_code == 0
+    assert opened_urls == []
+
+
+def test_provider_login_github_copilot_error_exits_1(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
     """If litellm.acompletion raises, the command exits 1."""
 
     async def boom(**_):
