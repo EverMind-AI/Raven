@@ -1,16 +1,15 @@
 """OpenAI Codex Responses Provider.
 
-LiteLLM can reach this backend -- its ChatGPT driver owns the credential raven
-signs in with, and a chat-completions call for one of these models is bridged to
-the Responses API rather than posted to a chat endpoint the backend does not
-serve. What it cannot do yet is send the whole request: its Responses
-transformation filters the body through an allow-list of eleven keys, dropping
-``parallel_tool_calls`` and ``text`` among them. An upstream fix exists but has
-not reached the released code.
+LiteLLM owns the credential raven signs in with, but not the request. On the
+pinned 1.85.0 its bridge to this backend raises: the account streams a
+``response.completed`` whose ``output`` is empty, which 1.95.0 rebuilds from the
+``output_item.done`` events and 1.85.0 reports as an unknown response.
 
-So the request stays here while the credential does not. ``test_openai_codex_provider``
-holds that allow-list from the installed LiteLLM: when it stops dropping what
-this provider sends, this file is what should be deleted.
+Routing through it also needs the model spelled ``responses/<slug>`` (nothing an
+account offers is in LiteLLM's table, and without a table entry there is no
+bridge), and costs ``prompt_cache_key``, which its allow-list filters out. That
+last one is what ``test_openai_codex_provider`` guards; the rest is a version
+bump away.
 """
 
 from __future__ import annotations
