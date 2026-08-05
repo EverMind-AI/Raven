@@ -2,7 +2,7 @@
 
 Five methods drive the picker:
 
-* ``model.options`` — current model/provider + one row per provider (no network).
+* ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated

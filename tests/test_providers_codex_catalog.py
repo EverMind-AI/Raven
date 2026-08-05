@@ -64,8 +64,8 @@ def test_only_the_models_meant_to_be_offered_come_back(monkeypatch: pytest.Monke
 
 
 def test_the_client_version_is_sent(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
-    """The endpoint answers 200 with an empty catalogue for a version it does not
-    recognize, so a missing one looks like an account with no models."""
+    """The value a live account was observed to answer for, pinned so a change to
+    it is a decision rather than a typo."""
     seen = _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
 
     codex_catalog.account_models()
@@ -94,6 +94,48 @@ def test_a_provider_list_still_renders_when_the_catalogue_cannot_be_reached(
     monkeypatch.setattr(httpx, "get", boom)
 
     assert codex_catalog.account_models() == ()
+
+
+def test_being_offline_is_asked_about_once_not_once_per_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    """Every picker refresh rebuilds the candidate list. Without a failure cache
+    each one waits out the full timeout again, on a machine that has already been
+    told there is no network."""
+    attempts = 0
+
+    def boom(url, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+
+    assert codex_catalog.account_models() == ()
+    assert codex_catalog.account_models() == ()
+    assert codex_catalog.account_models() == ()
+
+    assert attempts == 1
+
+
+def test_a_sign_in_is_not_made_to_wait_out_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    """``reset_cache`` is what ``provider test`` and a fresh sign-in call: a cached
+    failure must not outlive the reason it was cached."""
+
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    assert codex_catalog.account_models() == ()
+
+    codex_catalog.reset_cache()
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",)
 
 
 def test_not_being_signed_in_is_an_empty_catalogue(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

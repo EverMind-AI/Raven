@@ -18,12 +18,18 @@ from typing import Any
 
 CATALOG_URL = "https://chatgpt.com/backend-api/codex/models"
 
-#: The endpoint answers 200 with an empty catalogue when it does not recognize the
-#: client version, so this is load-bearing rather than cosmetic.
+#: Sent because the endpoint takes it; a live account answered with its models for
+#: this value. What it does with an unknown one, or with none, is not established.
 CLIENT_VERSION = "0.0.0"
 
 _CACHE_TTL_SECONDS = 300
+
+#: Shorter for a failure than for an answer: being offline is a state that changes,
+#: while an account's entitlements are not going to.
+_FAILURE_TTL_SECONDS = 30
+
 _cache: tuple[float, tuple[str, ...]] | None = None
+_failed_at: float | None = None
 
 
 def account_models(*, timeout: float = 5.0) -> tuple[str, ...]:
@@ -32,29 +38,35 @@ def account_models(*, timeout: float = 5.0) -> tuple[str, ...]:
     Cached briefly: the picker rebuilds its list on every refresh, and a sign-in
     does not change what an account is entitled to from one keystroke to the next.
     Failures are empty rather than raised -- a provider list that cannot reach the
-    network is still worth showing.
+    network is still worth showing -- and are cached too, or every refresh made
+    offline pays the full timeout again.
     """
-    global _cache
+    global _cache, _failed_at
 
     now = time.monotonic()
     if _cache is not None and now - _cache[0] < _CACHE_TTL_SECONDS:
         return _cache[1]
+    if _failed_at is not None and now - _failed_at < _FAILURE_TTL_SECONDS:
+        return ()
 
     try:
         slugs = _fetch(timeout=timeout)
     except Exception:
+        _failed_at = now
         return ()
 
     _cache = (now, slugs)
+    _failed_at = None
 
     return slugs
 
 
 def reset_cache() -> None:
-    """Forget the cached catalogue (a fresh sign-in changes who is asking)."""
-    global _cache
+    """Forget both cached answers (a fresh sign-in changes who is asking)."""
+    global _cache, _failed_at
 
     _cache = None
+    _failed_at = None
 
 
 def _fetch(*, timeout: float) -> tuple[str, ...]:
