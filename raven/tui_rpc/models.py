@@ -192,6 +192,7 @@ class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
     truncated: bool
+    metadata: dict[str, JsonValue] | None = None
 
 
 class ToolCompleteEvent(_Strict):
@@ -233,6 +234,136 @@ class CronDeliveredEvent(_Strict):
     payload: CronDeliveredPayload
 
 
+DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+
+
+class DagRunStartedNode(_Strict):
+    id: str
+    subagent: str
+    depends_on: list[str]
+    instance: str | None = None
+
+
+class DagRunStartedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    nodes: list[DagRunStartedNode]
+
+
+class DagRunStartedEvent(_Strict):
+    type: Literal["dag.run_started"]
+    payload: DagRunStartedPayload
+
+
+class DagNodeUpdatedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    node: str
+    status: DagNodeStatus
+    started_at: int | None = None
+    ended_at: int | None = None
+
+
+class DagNodeUpdatedEvent(_Strict):
+    type: Literal["dag.node_updated"]
+    payload: DagNodeUpdatedPayload
+
+
+class DagRunSummary(_Strict):
+    total: int | None = None
+    completed: int | None = None
+    failed: int | None = None
+    skipped: int | None = None
+
+
+class DagRunFile(_Strict):
+    node: str
+    status: DagNodeStatus
+    output_file: str | None = None
+    error: str | None = None
+
+
+class DagRunCompletedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    dir: str
+    summary: DagRunSummary
+    files: list[DagRunFile]
+
+
+class DagRunCompletedEvent(_Strict):
+    type: Literal["dag.run_completed"]
+    payload: DagRunCompletedPayload
+
+
+# ---------------------------------------------------------------------------
+# dag.* methods -- a run read back off disk (the events are never replayed)
+# ---------------------------------------------------------------------------
+
+# Wider than DagNodeStatus: a snapshot can report ``interrupted``, which the
+# server infers for a node the registry still calls running on a run nothing is
+# executing. Nothing on the event wire may claim that.
+DagSnapshotNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "interrupted"]
+
+
+class DagSnapshotNode(_Strict):
+    node: str
+    subagent: str | None = None
+    depends_on: list[str] | None = None
+    instance: str | None = None
+    status: DagSnapshotNodeStatus
+    started_at: int | None = None
+    ended_at: int | None = None
+    prompt_file: str | None = None
+    output_file: str | None = None
+    error: str | None = None
+    prompt_template: str | None = None
+
+
+class DagTerminalOutput(_Strict):
+    node: str
+    text: str
+
+
+class DagRunSnapshot(_Strict):
+    run_id: str
+    dir: str
+    finalized: bool
+    files: list[DagSnapshotNode]
+    terminal_outputs: list[DagTerminalOutput] | None = None
+    summary: DagRunSummary
+
+
+class DagNodeDetail(_Strict):
+    run_id: str
+    node: str
+    prompt: str | None = None
+    prompt_file: str | None = None
+    output: str | None = None
+    output_file: str | None = None
+    output_chars: int
+    output_truncated: bool
+
+
+class DagGetParams(_Strict):
+    run_id: str
+    session_key: str | None = None
+
+
+class DagGetResult(_Strict):
+    run: DagRunSnapshot
+
+
+class DagNodeParams(_Strict):
+    run_id: str
+    node: str
+    max_output_chars: int | None = None
+
+
+class DagNodeResult(_Strict):
+    node: DagNodeDetail
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -245,6 +376,9 @@ TurnEvent = Annotated[
         MessageCompleteEvent,
         ErrorEvent,
         CronDeliveredEvent,
+        DagRunStartedEvent,
+        DagNodeUpdatedEvent,
+        DagRunCompletedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -883,6 +1017,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "rollback.diff": (RollbackDiffParams, StubResult),
     "rollback.restore": (RollbackRestoreParams, StubResult),
     "tools.configure": (ToolsConfigureParams, StubResult),
+    # dag.*
+    "dag.get": (DagGetParams, DagGetResult),
+    "dag.node": (DagNodeParams, DagNodeResult),
 }
 
 __all__ = [
@@ -920,6 +1057,18 @@ __all__ = [
     "ErrorEvent",
     "CronDeliveredEvent",
     "CronDeliveredPayload",
+    "DagRunStartedEvent",
+    "DagRunStartedPayload",
+    "DagNodeUpdatedEvent",
+    "DagNodeUpdatedPayload",
+    "DagRunCompletedEvent",
+    "DagRunCompletedPayload",
+    "DagGetParams",
+    "DagGetResult",
+    "DagNodeParams",
+    "DagNodeResult",
+    "DagRunSnapshot",
+    "DagNodeDetail",
     # registry
     "METHOD_MODELS",
 ]

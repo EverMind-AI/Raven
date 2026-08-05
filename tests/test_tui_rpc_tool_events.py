@@ -128,6 +128,36 @@ async def test_tool_start_and_complete_emitted(workspace) -> None:
     assert complete_info["truncated"] is False
 
 
+async def test_tool_start_carries_blocking_for_a_blocking_tool(workspace) -> None:
+    """``tool.start`` must report the registry's blocking verdict.
+
+    A consumer that streams a turn (the web channel) has no tool table of its
+    own, so the flag has to ride the event or it would have to hard-code tool
+    names — a second fact source that drifts the moment a tool is added.
+    """
+    tool = _FakeTool("run_subagent_dag")
+    tool.blocking_interaction = True
+    agent = _make_agent(workspace, _tool_then_final("run_subagent_dag"), tool)
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "x"}], on_tool_event=on_tool_event)
+    assert events[0][1]["blocking"] is True
+
+
+async def test_tool_start_carries_blocking_false_for_a_plain_tool(workspace) -> None:
+    agent = _make_agent(workspace, _tool_then_final("grep"), _FakeTool("grep"))
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "x"}], on_tool_event=on_tool_event)
+    assert events[0][1]["blocking"] is False
+
+
 async def test_tool_complete_truncated_flag(workspace) -> None:
     tool = _FakeTool("grep", result="X" * 500)
     agent = _make_agent(workspace, _tool_then_final("grep", "X" * 500), tool)
@@ -220,3 +250,68 @@ async def test_message_tool_skipped_by_general_path(workspace) -> None:
     # turn.py owns the message tool's tool.complete; the general path skips it
     # to avoid a double-emit.
     assert events == [], f"message tool must not emit general tool events; got {events}"
+
+
+async def test_tool_start_carries_blocking_through_a_tool_call_passthrough(workspace) -> None:
+    """A blocking tool reached via the ``tool_call`` meta-tool must still be
+    flagged, or a compacted catalog reintroduces the clocked-turn bug."""
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+
+    target = _FakeTool("run_subagent_dag")
+    target.blocking_interaction = True
+    agent = _make_agent(
+        workspace,
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="tool_call",
+                        arguments={"name": "run_subagent_dag", "arguments": {}},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="final", finish_reason="stop"),
+        ],
+        target,
+    )
+    agent.tools.register(ToolCallTool(ToolSearchController(agent.tools, always_visible=set())))
+    events: list[tuple[str, dict]] = []
+
+    async def on_tool_event(phase: str, info: dict) -> None:
+        events.append((phase, info))
+
+    await agent._run_agent_loop([{"role": "user", "content": "x"}], on_tool_event=on_tool_event)
+
+    assert events[0][1]["name"] == "tool_call"
+    assert events[0][1]["blocking"] is True
+
+
+async def test_tool_complete_wire_payload_carries_metadata() -> None:
+    """The manifest must survive the one tool.complete serialization site, which
+    the TUI and the web channel share."""
+    from raven.spine.events import ToolEvent, ToolPhase
+
+    emitted: list[dict] = []
+
+    class _Emitter:
+        async def emit(self, cid: str, frame: dict) -> None:
+            emitted.append(frame)
+
+    from raven.tui_rpc.spine import TuiOutlet
+
+    outlet = TuiOutlet("tui", _Emitter())
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.COMPLETE,
+            tool_call_id="t1",
+            result_preview="done",
+            metadata={"raven_delivery": {"files": [], "invalid": []}},
+        )
+    )
+
+    complete = [f for f in emitted if f["type"] == "tool.complete"]
+    assert complete, f"expected a tool.complete frame, got {emitted}"
+    assert complete[0]["payload"]["metadata"] == {"raven_delivery": {"files": [], "invalid": []}}

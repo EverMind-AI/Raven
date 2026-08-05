@@ -100,6 +100,14 @@ def _write_skill(root: Path, name: str, *, body: str, desc: str = "") -> None:
     )
 
 
+class _FakeAlwaysMeta:
+    """The two fields the always-set sort key reads."""
+
+    def __init__(self, name: str, source: str) -> None:
+        self.name = name
+        self.source = source
+
+
 class TestLocalSkillSource:
     @pytest.fixture
     def pool_and_registry(self, tmp_path: Path):
@@ -231,6 +239,57 @@ class TestLocalSkillCatalog:
         always = {m.name for m in catalog.get_always_skills()}
         assert "memory" in always
         assert "pdf-tool" not in always
+
+    def test_always_truncation_ranks_sources_explicitly(self) -> None:
+        """Sorting on the source *label* is alphabetical, which put ``external``
+        ahead of ``workspace`` — so the user's own always-skill was the first one
+        dropped at the cap. The rank is explicit: builtin (documents the runtime's
+        own tools) > workspace (the user's pool) > external > mirror sources."""
+        key = LocalSkillCatalog._always_sort_key
+        ranked = sorted(
+            [
+                _FakeAlwaysMeta("z-builtin", "builtin"),
+                _FakeAlwaysMeta("a-workspace", "workspace"),
+                _FakeAlwaysMeta("a-external", "external"),
+                _FakeAlwaysMeta("a-mirror", "anthropics"),
+                _FakeAlwaysMeta("a-builtin", "builtin"),
+            ],
+            key=key,
+        )
+        assert [m.source for m in ranked] == [
+            "builtin",
+            "builtin",
+            "workspace",
+            "external",
+            "anthropics",
+        ]
+        # Within one source, by name — stable regardless of disk scan order.
+        assert [m.name for m in ranked[:2]] == ["a-builtin", "z-builtin"]
+
+    def test_always_cap_drops_the_lowest_ranked_source(self, tmp_path: Path) -> None:
+        ws = tmp_path / "ws"
+        (ws / "skills").mkdir(parents=True)
+        builtin = tmp_path / "builtin"
+        builtin.mkdir()
+        for root, name in ((ws / "skills", "mine"), (builtin, "shipped")):
+            d = root / name
+            d.mkdir(parents=True)
+            (d / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: d\nalways: true\n---\n\nbody",
+                encoding="utf-8",
+            )
+
+        class _Cfg:
+            always_max = 1
+            disable_always = False
+
+        catalog = LocalSkillCatalog(
+            ws,
+            builtin_skills_dir=builtin,
+            config=_Cfg(),
+            start_watcher=False,
+        )
+        assert [m.name for m in catalog.get_always_skills()] == ["shipped"]
 
     def test_load_skills_for_context_renders_body(self, catalog) -> None:
         metas = [m for m in catalog.registry.list_all() if m.name == "pdf-tool"]

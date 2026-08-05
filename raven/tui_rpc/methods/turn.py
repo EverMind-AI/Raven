@@ -100,6 +100,7 @@ async def turn_send(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -143,7 +144,7 @@ async def turn_send(
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(
-            channel=parsed.channel or "tui",
+            channel=parsed.channel or default_channel,
             chat_id=parsed.chat_id or "default",
             sender_id=parsed.sender_id or "user",
             chat_type=ChatType.DM,
@@ -270,6 +271,7 @@ def register_turn_methods(
     scheduler: Scheduler | None = None,
     turn_ids: dict[str, str] | None = None,
     build_error: RpcError | None = None,
+    default_channel: str = "tui",
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -277,6 +279,11 @@ def register_turn_methods(
     pre-bind the ``emitter`` and the build_tui spine bundle (``scheduler`` /
     ``turn_ids``) plus the latched ``build_error``, per the dispatcher's
     single-argument handler contract.
+
+    ``default_channel`` is the ``source.channel`` stamped on a turn when the
+    client omits one — and it MUST match the channel the outlet was registered
+    under (the hub routes deliverables by ``source.channel``), or the reply is
+    dropped. Defaults to ``"tui"``; the web channel (build_web) passes ``"web"``.
     """
 
     async def _send(params: dict[str, Any]) -> dict[str, Any]:
@@ -286,6 +293,7 @@ def register_turn_methods(
             scheduler=scheduler,
             turn_ids=turn_ids,
             build_error=build_error,
+            default_channel=default_channel,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:

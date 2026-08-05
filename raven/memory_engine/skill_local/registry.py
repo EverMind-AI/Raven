@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import threading
+from collections.abc import Collection
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -451,6 +452,7 @@ class SkillRegistry:
         always = _resolve_always(frontmatter, nested)
         if not always_enabled:
             always = False
+        inject = _resolve_inject(frontmatter, nested)
         content = _strip_frontmatter(body)
 
         # ``stable_key`` is the directory name. For everos it is
@@ -473,6 +475,7 @@ class SkillRegistry:
             content=content,
             source=source,  # type: ignore[arg-type]
             always=always,
+            inject=inject,
             requires=requires,
             raw_frontmatter=frontmatter,
         )
@@ -575,15 +578,104 @@ def _resolve_always(frontmatter: dict, nested: dict) -> bool:
     return _parse_always_value(frontmatter.get("always"))
 
 
-def _check_requirements(requires: dict) -> bool:
-    for b in requires.get("bins", []):
-        if not isinstance(b, str):
+_INJECT_MODES = {"full", "description"}
+
+
+def _resolve_inject(frontmatter: dict, nested: dict) -> str:
+    """Resolve the always-injection mode, nested metadata taking priority.
+
+    Anything unrecognized falls back to ``full`` — the pre-existing
+    behavior — so a typo degrades to "too much context", never to a
+    silently missing skill.
+    """
+    raw = nested.get("inject")
+    if raw is None:
+        raw = frontmatter.get("inject")
+    if raw is None:
+        return "full"
+    value = str(raw).strip().lower()
+    if value not in _INJECT_MODES:
+        log.warning(
+            "Unrecognized 'inject' value '%s' — treated as full. Expected one of %s.",
+            raw,
+            "/".join(sorted(_INJECT_MODES)),
+        )
+        return "full"
+    return value
+
+
+def requires_list(requires: object, key: str) -> list[str]:
+    """Normalize ``requires[<key>]`` to a list of names. Never raises.
+
+    Every ``requires`` sub-key is optional and hand-authored, so all shapes
+    turn up. Two must not be taken literally: a bare string
+    (``requires: {bins: curl}``) would otherwise iterate character by
+    character into a check for ``c``, ``u``, ``r``, ``l``, and a non-iterable
+    (``{tools: 3}``) would raise — out of prompt assembly, which fails the
+    whole turn. Both degrade to "no requirement declared" instead, so a
+    malformed declaration can never silently withhold a skill or kill a turn.
+    """
+    if not isinstance(requires, dict):
+        return []
+    raw = requires.get(key)
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return [raw.strip()] if raw.strip() else []
+    if isinstance(raw, (list, tuple, set)):
+        return [x.strip() for x in raw if isinstance(x, str) and x.strip()]
+    log.warning(
+        "Ignoring 'requires.%s' of unsupported type %s — expected a string or a list of strings.",
+        key,
+        type(raw).__name__,
+    )
+    return []
+
+
+def filter_by_required_tools(
+    skills: "list[SkillMeta]",
+    available: "Collection[str] | None",
+) -> "list[SkillMeta]":
+    """Drop skills whose ``requires.tools`` are not in ``available``.
+
+    The one implementation of the tool gate, shared by every surface that
+    renders skills into a prompt — the main agent's ``# Active Skills`` segment
+    and the sub-agent prompt. A per-surface copy is how a rule like "the DAG
+    guide must never reach a sub-agent" ends up enforced by a hardcoded list of
+    skill names on one side and by the declaration on the other, so the next
+    tool-gated skill is only remembered on one of them.
+
+    ``available=None`` means *unknowable* (a caller built without tool
+    awareness, or its lookup raised) and gates nothing: showing too much beats
+    blanking the section over a wiring gap. An empty collection is a different
+    statement — "this surface has no tools" — and does gate.
+    """
+    if available is None:
+        return list(skills)
+    have = set(available)
+    kept: list[SkillMeta] = []
+    for m in skills:
+        missing = [t for t in requires_list(getattr(m, "requires", None), "tools") if t not in have]
+        if missing:
+            log.debug("skill %r withheld — tools not registered: %s", m.name, ", ".join(missing))
             continue
+        kept.append(m)
+    return kept
+
+
+def _check_requirements(requires: dict) -> bool:
+    """Process-static requirements only: ``bins`` and ``env``.
+
+    ``requires.tools`` is deliberately not checked here. Tool availability is
+    live runtime state owned by the agent's ToolRegistry, which this module
+    cannot see, and it changes within a process (config hot-apply registers
+    ``run_subagent_dag`` mid-session). The callers that hold a tool list
+    enforce it instead, through :func:`filter_by_required_tools`.
+    """
+    for b in requires_list(requires, "bins"):
         if not shutil.which(b):
             return False
-    for env in requires.get("env", []):
-        if not isinstance(env, str):
-            continue
+    for env in requires_list(requires, "env"):
         if not os.environ.get(env):
             return False
     return True
@@ -591,14 +683,10 @@ def _check_requirements(requires: dict) -> bool:
 
 def _missing_requirements(requires: dict) -> str:
     missing: list[str] = []
-    for b in requires.get("bins", []):
-        if not isinstance(b, str):
-            continue
+    for b in requires_list(requires, "bins"):
         if not shutil.which(b):
             missing.append(f"CLI: {b}")
-    for env in requires.get("env", []):
-        if not isinstance(env, str):
-            continue
+    for env in requires_list(requires, "env"):
         if not os.environ.get(env):
             missing.append(f"ENV: {env}")
     return ", ".join(missing)

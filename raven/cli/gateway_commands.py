@@ -19,49 +19,16 @@ from rich.console import Console
 
 from raven import __logo__
 from raven.cli._helpers import (
+    build_model_routing,
     load_runtime_config,
-    make_provider,
+    make_resolving_provider,
     parse_fake_now,
     print_deprecated_memory_window_notice,
 )
-from raven.cli._plugin_stack import maybe_build_memory_backend
+from raven.cli._plugin_stack import build_plugin_registry, build_plugin_tools, maybe_build_memory_backend
 from raven.utils.helpers import sync_workspace_templates
 
 console = Console()
-
-
-def build_model_routing(config, provider):
-    """Return ``(router, provider)`` for the configured routing backend.
-
-    - ``knn``: build a :class:`KNNModelRouter` and wrap ``provider`` in a
-      :class:`PerModelProvider` so routed model names reach their endpoints
-      (other models fall back to ``provider`` unchanged).
-    - ``ecoclaw``: build the PinchBench :class:`ModelRouter`.
-    - routing disabled, or ecoclaw with no API key: return ``(None, provider)``.
-    """
-    if not config.routing.enabled:
-        return None, provider
-
-    if config.routing.backend == "knn":
-        from raven.providers.per_model_provider import PerModelProvider
-        from raven.routing.knn_router import KNNModelRouter
-
-        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
-        return router, PerModelProvider(config.routing.models, fallback=provider)
-
-    from raven.routing.router import ModelRouter
-
-    openrouter = config.providers.get("openrouter")
-    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
-    if not api_key:
-        console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
-        return None, provider
-
-    from raven.routing.types import RoutingProfileName
-
-    profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
-    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
-    return router, provider
 
 
 _GATEWAY_IM_CHANNELS: tuple[str, ...] = (
@@ -93,6 +60,23 @@ def _build_gateway_channels(config) -> set[str]:
     deferred cron-delivery-ownership design, not this set.
     """
     return {name for name in _GATEWAY_IM_CHANNELS if getattr(getattr(config.channels, name, None), "enabled", False)}
+
+
+def _build_deliverable_store(config):
+    """Build the store backing ``deliver_files``, gated on the web channel.
+
+    The web UI is the only surface with a download box for delivered files, so
+    the store (and, through it, the tool) exists only when
+    ``config.gateway.web.enabled`` is true. Returns ``None`` otherwise, which
+    keeps the tool unregistered everywhere else.
+    """
+    if not config.gateway.web.enabled:
+        return None
+
+    from raven.agent.tools._deliverables import DeliverableStore
+    from raven.config.paths import get_deliverables_path
+
+    return DeliverableStore(get_deliverables_path())
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -178,7 +162,7 @@ def register(app: typer.Typer) -> None:
         console.print(f"{__logo__} Starting Raven gateway on port {port}...")
         console.print(f"[dim]📝 Logs → {log_path}[/dim]")
         sync_workspace_templates(config.workspace_path)
-        provider = make_provider(config)
+        provider = make_resolving_provider(config)
         session_manager = SessionManager(config.workspace_path)
 
         # Create cron service first (callback set after agent creation).
@@ -219,7 +203,20 @@ def register(app: typer.Typer) -> None:
         # plugin contributes the configured backend — AgentLoop falls
         # back to its legacy ``self.memory`` path. Lifecycle (start /
         # stop) lands inside the run-loop coroutine below.
-        backend = maybe_build_memory_backend(config.workspace_path, ec_config)
+        # One registry shared by both contribution points, so plugins are
+        # discovered and activated once rather than per consumer.
+        plugin_registry = build_plugin_registry(ec_config)
+        backend = maybe_build_memory_backend(config.workspace_path, ec_config, registry=plugin_registry)
+        # The ``tools`` contribution point, at parity with agent / tui. Without
+        # it a plugin-contributed tool (everos's understand_media, which reads
+        # the attachments only the web UI can upload) is missing from the web UI
+        # while present in both terminal surfaces.
+        plugin_tools = build_plugin_tools(config.workspace_path, ec_config, registry=plugin_registry)
+
+        # Built before AgentLoop (registration happens in its constructor) so
+        # the same instance can also be handed to the web JSON-RPC server
+        # further down, once it is built inside run().
+        deliverables = _build_deliverable_store(config)
 
         # Create agent with cron service
         agent = AgentLoop(
@@ -246,6 +243,7 @@ def register(app: typer.Typer) -> None:
             tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
+            deliverables=deliverables,
             router=router,
             skill_forge_config=skill_forge_cfg,
             context_config=ec_config.context,
@@ -256,8 +254,10 @@ def register(app: typer.Typer) -> None:
             response_modifier=sentinel_response_modifier,
             on_user_inbound=sentinel_on_user_inbound,
             backend=backend,
+            plugin_tools=plugin_tools,
             memory_config=ec_config.memory,
             skill_forge_router_config=ec_config.skill_forge.router,
+            third_party_subagents=config.subagents.third_party,
         )
         agent.configure_personalization(config.agents.defaults.enable_personalization)
 
@@ -358,6 +358,8 @@ def register(app: typer.Typer) -> None:
             gw_teardown = None
             heartbeat = None
             question_broker = None
+            web_server = None
+            web_teardown = None
             # Bring the memory backend online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired;
             # the start / stop awaits are then skipped entirely.
@@ -387,14 +389,103 @@ def register(app: typer.Typer) -> None:
                     system_pool=config.gateway.system_pool,
                     send_max_retries=config.gateway.send_max_retries,
                 )
+
+                # Web-app channel (ui-webui P1): its own streaming spine + a
+                # WebSocket JSON-RPC server the web backend connects to as a
+                # client, built alongside the gateway's spine and sharing this
+                # agent_loop. The gateway runner is non-streaming (proactive
+                # replies are one Text); the web UI wants token streaming, so it
+                # gets its own streaming runner (build_web). Built here, BEFORE
+                # the proactive wiring, so proactive producers can target it.
+                web_cfg = config.gateway.web
+                web_scheduler = None
+                web_hub = None
+                if web_cfg.enabled:
+                    from raven.tui_rpc.dispatcher import Dispatcher
+                    from raven.tui_rpc.methods.system import register_system_methods
+                    from raven.tui_rpc.methods.turn import clear_active, register_turn_methods
+                    from raven.tui_rpc.subscriptions import SubscriptionEmitter
+                    from raven.web_rpc.server import WebSocketRpcServer
+                    from raven.web_rpc.spine import build_web
+
+                    web_readback_texts: dict[str, str] = {}
+                    web_server = WebSocketRpcServer(
+                        host=web_cfg.host,
+                        port=web_cfg.port,
+                        auth_token=web_cfg.auth_token or None,
+                        deliverables=deliverables,
+                    )
+                    web_emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
+                    web_scheduler, web_hub, web_turn_ids, web_teardown = build_web(
+                        agent,
+                        web_emitter,
+                        on_turn_end=clear_active,
+                        readback_texts=web_readback_texts,
+                        user_pool=config.gateway.user_pool,
+                        system_pool=config.gateway.system_pool,
+                    )
+                    web_dispatcher = Dispatcher()
+                    register_system_methods(web_dispatcher)
+                    register_turn_methods(
+                        web_dispatcher,
+                        emitter=web_emitter,
+                        scheduler=web_scheduler,
+                        turn_ids=web_turn_ids,
+                        default_channel="web",
+                    )
+                    # Raven config-admin methods (P4): validate + write + hot-apply
+                    # third-party sub-agent config to this live agent loop.
+                    from raven.web_rpc.methods_config import register_config_methods
+
+                    register_config_methods(web_dispatcher, agent=agent, cron=cron, config=config)
+                    web_server.bind(web_dispatcher)
+
+                    # Fan run_subagent_dag progress (dag_run_started / _node_updated
+                    # / _run_completed) to the turn's conversation on the web
+                    # channel, as a "custom" wire event the service translates to
+                    # an AgentScope CustomEvent (lights up the web UI's DAG graph).
+                    async def _dag_progress_to_web(conversation: str, name: str, payload: dict) -> None:
+                        await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+
+                    agent.set_dag_progress_sink(_dag_progress_to_web)
+
+                    # Fan per-turn SkillForge-injected skills to the web UI's
+                    # skill panel as a "skills_injected" custom event (same
+                    # translation path as DAG progress above).
+                    async def _skills_to_web(conversation: str, name: str, payload: dict) -> None:
+                        await web_emitter.emit(conversation, {"type": "custom", "name": name, "payload": payload})
+
+                    agent.set_skills_sink(_skills_to_web)
+                    console.print(f"[green]✓[/green] Web channel: ws://{web_cfg.host}:{web_cfg.port}/ws")
+
+                # Proactive target (cron / sentinel / heartbeat / subagent /
+                # deep_research). Single-user + web-primary (P1.2): when the web
+                # channel is on, proactive output is routed to it (source.channel
+                # == "web") so it surfaces in the web UI; otherwise it stays on the
+                # gateway spine (IM/cli). Channel *inbound* and the ask_user
+                # round-trip stay on the gateway spine regardless (P1.2 does not
+                # bridge ask_user to the web client yet).
+                if web_cfg.enabled:
+                    pro_submit = web_scheduler.submit
+                    pro_hub = web_hub
+                    pro_readback = web_readback_texts
+                    pro_channel = "web"
+                    pro_heartbeat_target: tuple[str, str] | None = ("web", "default")
+                else:
+                    pro_submit = gw_scheduler.submit
+                    pro_hub = gw_hub
+                    pro_readback = gw_readback_texts
+                    pro_channel = "cli"
+                    pro_heartbeat_target = None
+
                 cron.on_job = make_on_cron_job(
                     agent,
-                    gw_hub,
-                    submit=gw_scheduler.submit,
-                    readback_texts=gw_readback_texts,
+                    pro_hub,
+                    submit=pro_submit,
+                    readback_texts=pro_readback,
                     channel_manager=channels,
                     session_manager=session_manager,
-                    default_channel="cli",
+                    default_channel=pro_channel,
                     system_events=system_events,
                     wake=wake,
                 )
@@ -406,7 +497,7 @@ def register(app: typer.Typer) -> None:
                     hub delivers the reply to the picked channel. Deliver-only — no
                     one reads the reply back (HeartbeatService is wired on_notify=
                     None, the hub already delivered), so the return is unused."""
-                    channel, chat_id = _pick_heartbeat_target()
+                    channel, chat_id = pro_heartbeat_target or _pick_heartbeat_target()
                     req = TurnRequest(
                         origin=Origin.HEARTBEAT,
                         source=Source(
@@ -418,7 +509,7 @@ def register(app: typer.Typer) -> None:
                         text=tasks,
                         conversation="heartbeat",
                     )
-                    await gw_scheduler.submit(req).result()
+                    await pro_submit(req).result()
                     return ""
 
                 heartbeat = HeartbeatService(
@@ -437,22 +528,22 @@ def register(app: typer.Typer) -> None:
                 # existed): the supersede notice (task_discoverer) and the
                 # menu-pick execution (decision_consumer's ActionExecutor).
                 if sentinel_runner is not None and sentinel_runner.dispatcher is not None:
-                    sentinel_runner.dispatcher.set_post(gw_hub.post)
+                    sentinel_runner.dispatcher.set_post(pro_hub.post)
                 if sentinel_runner is not None and sentinel_runner.task_discoverer is not None:
-                    sentinel_runner.task_discoverer.set_submit(gw_scheduler.submit)
+                    sentinel_runner.task_discoverer.set_submit(pro_submit)
                 if (
                     agent.decision_consumer is not None
                     and getattr(agent.decision_consumer, "executor", None) is not None
                 ):
-                    agent.decision_consumer.executor.set_submit(gw_scheduler.submit)
+                    agent.decision_consumer.executor.set_submit(pro_submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
-                agent.subagents.set_submit(gw_scheduler.submit)
+                agent.subagents.set_submit(pro_submit)
                 # Deep research (channel/async) delivers its finished answer back
                 # via a deliver_text turn; wiring submit here (gateway only) is
                 # what flips the tool from its synchronous path to the async one.
                 # Goes through the loop so a manager built later by promotion (a
                 # mid-session enable) inherits the handle too, not just this one.
-                agent.set_deep_research_submit(gw_scheduler.submit)
+                agent.set_deep_research_submit(pro_submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the
@@ -554,6 +645,8 @@ def register(app: typer.Typer) -> None:
                 ]
                 if health_server is not None:
                     coros.append(health_server.serve_forever())
+                if web_server is not None:
+                    coros.append(web_server.serve_forever())
                 await asyncio.gather(*coros)
             except KeyboardInterrupt:
                 console.print("\nShutting down...")
@@ -570,9 +663,18 @@ def register(app: typer.Typer) -> None:
                     await sentinel_runner.stop()
                 if question_broker is not None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
+                if web_server is not None:
+                    await web_server.stop()
+                if web_teardown is not None:
+                    await web_teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
                 await agent.close_mcp()
+                # Cancel every still-running spawn before stopping the agent: a
+                # CLI subagent's process group is detached from the gateway's
+                # own (start_new_session=True), and with every automatic
+                # timeout removed nothing else would ever reach it.
+                await agent.subagents.cancel_all()
                 agent.stop()
                 await channels.stop_all()
                 # Stop the memory-backend plugin last so any

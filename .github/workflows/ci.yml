@@ -66,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: make install-deps
 
-      - name: Focused Python lint
+      - name: Python lint
         run: make lint-python
 
   unit:

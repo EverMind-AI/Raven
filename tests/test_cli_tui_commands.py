@@ -87,6 +87,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     captured["fake_backend"] = fake_backend
     captured["fake_tools"] = fake_tools
     captured["config"] = config
+    captured["ec_config"] = ec_config
     return captured
 
 
@@ -142,6 +143,108 @@ def test_tui_agent_loop_receives_tool_search_config(patched_tui_loop_deps) -> No
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert "tool_search_config" in kwargs, "AgentLoop must receive tool_search_config kwarg"
     assert kwargs["tool_search_config"] is patched_tui_loop_deps["config"].tools.tool_search
+
+
+# ---------------------------------------------------------------------------
+# disabled_tools wired into AgentLoop
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_disabled_tools(patched_tui_loop_deps) -> None:
+    """``_build_tui_agent_loop`` must forward ``disabled_tools=`` so
+    ``tools.disabled_tools`` is honored in the TUI at parity with the
+    ``agent`` / ``gateway`` entrypoints; else a tool blacklisted in config
+    stays registered in the primary interactive surface."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert "disabled_tools" in kwargs, "AgentLoop must receive disabled_tools kwarg"
+    assert kwargs["disabled_tools"] is patched_tui_loop_deps["config"].tools.disabled_tools
+
+
+# ---------------------------------------------------------------------------
+# config slices the TUI used to drop on the floor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwarg", "attr_path"),
+    [
+        ("context_config", "context"),
+        ("memory_config", "memory"),
+    ],
+)
+def test_tui_agent_loop_forwards_raven_config_slices(patched_tui_loop_deps, kwarg: str, attr_path: str) -> None:
+    """Slices of the loaded RavenConfig must reach AgentLoop.
+
+    Omitting one is silent: AgentLoop falls back to a default (an empty
+    ContextConfig, no memory config), so the user's configuration is ignored
+    rather than rejected.
+    """
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert kwarg in kwargs, f"AgentLoop must receive {kwarg} kwarg"
+    assert kwargs[kwarg] is getattr(patched_tui_loop_deps["ec_config"], attr_path)
+
+
+def test_tui_agent_loop_forwards_the_skill_forge_router_slice(patched_tui_loop_deps) -> None:
+    """The TUI forwarded skill_forge_config but not the router slice of the same
+    block, so SkillForge routing behaved differently here than in agent/gateway."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert kwargs["skill_forge_router_config"] is patched_tui_loop_deps["ec_config"].skill_forge.router
+
+
+def test_tui_agent_loop_forwards_the_jina_key(patched_tui_loop_deps) -> None:
+    """Without it web_fetch silently loses the Jina reader in the TUI only."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    assert "jina_api_key" in patched_tui_loop_deps["agent_loop_kwargs"]
+
+
+def test_tui_agent_loop_receives_a_router_slot(patched_tui_loop_deps) -> None:
+    """Model routing (config.routing) used to be reachable from the gateway only,
+    because its builder was module-private there. Routing disabled yields None --
+    what matters is that the wiring exists at all."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    assert "router" in patched_tui_loop_deps["agent_loop_kwargs"]
+
+
+# ---------------------------------------------------------------------------
+# third-party sub-agents wired into AgentLoop (gates run_subagent_dag)
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_third_party_subagents(patched_tui_loop_deps) -> None:
+    """``_build_tui_agent_loop`` must forward ``third_party_subagents=``.
+
+    ``AgentLoop.__init__`` registers ``run_subagent_dag`` only when that list is
+    non-empty (``agent/loop/main.py`` -- the tool's nodes dispatch to those
+    agents). Without the kwarg the TUI's loop keeps an empty roster, the tool is
+    never registered, and the model has no way to call it at all -- while the
+    gateway, which does pass it, can. The DAG progress events the TUI renders
+    are emitted by that same tool, so they never fire either.
+    """
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert "third_party_subagents" in kwargs, "AgentLoop must receive third_party_subagents kwarg"
+    assert kwargs["third_party_subagents"] is patched_tui_loop_deps["config"].subagents.third_party
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +636,20 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
         assert f"(exit {exit_code})" in result.stderr
     else:
         assert "TUI logs" not in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# deliver_files is web-only: the TUI must not get a deliverable store
+# ---------------------------------------------------------------------------
+
+
+def test_tui_agent_loop_receives_no_deliverables_store(patched_tui_loop_deps) -> None:
+    """deliver_files is a web-UI-only tool (its download box exists only there),
+    and registration is gated on the store's presence, so the TUI must pass
+    nothing. Passing a store here would put the tool in the TUI model's schema."""
+    from raven.cli.tui_commands import _build_tui_agent_loop
+
+    _build_tui_agent_loop()
+
+    kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
+    assert kwargs.get("deliverables") is None

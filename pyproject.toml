@@ -181,7 +181,11 @@ constraint-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
+extend-exclude = [
+    "benchmarks/**/data",
+    "benchmarks/**/results",
+    "benchmarks/**/output",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]

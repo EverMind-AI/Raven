@@ -28,6 +28,7 @@ from rich.text import Text
 
 from raven import __logo__
 from raven.cli._helpers import (
+    build_model_routing,
     load_runtime_config,
     make_provider,
     parse_fake_now,
@@ -252,6 +253,10 @@ def register(app: typer.Typer) -> None:
         sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
+        # Model routing (config.routing). Returns the provider unchanged when
+        # routing is disabled, and wraps it for the knn backend so routed model
+        # names reach their own endpoints.
+        router, provider = build_model_routing(config, provider)
         session_manager = SessionManager(config.workspace_path)
 
         # New-session-by-default: independent one-shots don't bleed into each other.
@@ -333,6 +338,10 @@ def register(app: typer.Typer) -> None:
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            router=router,
+            # Gates run_subagent_dag: AgentLoop registers it only when the roster
+            # is non-empty, since its nodes dispatch to these agents.
+            third_party_subagents=config.subagents.third_party,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,

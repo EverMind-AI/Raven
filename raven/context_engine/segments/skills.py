@@ -225,26 +225,10 @@ class SkillsSegmentBuilder:
         return list(await asyncio.gather(*(_hydrate_one(h) for h in gated)))
 
     def _collect_tool_names(self) -> list[str] | None:
-        """Return tool names for the gate's hard-constraint block.
+        """Tool names for the gate's hard-constraint block.
 
-        ``get_tool_definitions`` is a callable injected at construction; when
-        absent the gate runs without the tool-constraint hint (still
-        works, just less aggressive at culling env-mismatched skills).
+        ``None`` (no callable wired, or the lookup raised) means the gate runs
+        without the tool-constraint hint — still works, just less aggressive
+        at culling env-mismatched skills.
         """
-        if self._get_tool_definitions is None:
-            return None
-        try:
-            defs = self._get_tool_definitions()
-        except Exception:
-            return None
-        names: list[str] = []
-        for d in defs or []:
-            if isinstance(d, dict):
-                # OpenAI function-call schema → name lives under
-                # ``function.name``; also accept a flat ``name``.
-                fn = d.get("function") if isinstance(d.get("function"), dict) else None
-                if fn and isinstance(fn.get("name"), str):
-                    names.append(fn["name"])
-                elif isinstance(d.get("name"), str):
-                    names.append(d["name"])
-        return names or None
+        return render.collect_tool_names(self._get_tool_definitions)

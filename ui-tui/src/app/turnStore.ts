@@ -6,12 +6,14 @@
 import { atom } from 'nanostores'
 import { useSyncExternalStore } from 'react'
 
+import type { DagRunState } from '../domain/dagRun.js'
 import type { ActiveTool, ActivityItem, Episode, Msg, SubagentProgress, TodoItem } from '../types.js'
 
 import { isTodoDone } from '../lib/liveProgress.js'
 
 const buildTurnState = (): TurnState => ({
   activity: [],
+  dagRuns: [],
   episodes: [],
   outcome: '',
   reasoning: '',
@@ -75,6 +77,9 @@ export const resetTurnState = () => $turnState.set(buildTurnState())
 
 export interface TurnState {
   activity: ActivityItem[]
+  // In-flight run_subagent_dag graphs, keyed by run id in submission order. One
+  // turn may issue several DAG calls, so this is a list, not a single run.
+  dagRuns: DagRunState[]
   episodes: Episode[]
   outcome: string
   reasoning: string

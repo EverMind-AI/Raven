@@ -155,6 +155,14 @@ class LiteLLMProvider(LLMProvider):
             # prefix entirely -- sending the gateway's key to the vendor named in
             # the model id.
             prefix = self._gateway.model_prefix
+            if prefix:
+                # A config model name is `<config section>/<name the endpoint knows>`,
+                # while LiteLLM wants `<its own route>/<name the endpoint knows>` and
+                # consumes exactly that first segment. The two heads coincide for
+                # openrouter and volcengine and differ everywhere else, so without
+                # this the section name survives into the upstream request as part
+                # of the model name (`custom/MiniMax-M3`).
+                model = self._canonicalize_explicit_prefix(model, self._gateway, prefix)
             if self._gateway.strip_model_prefix:
                 # One leading vendor segment, not everything but the last: a
                 # model id may itself contain a slash ("openai/gpt-oss-120b" is

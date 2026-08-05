@@ -72,4 +72,49 @@ describe('EpisodeView (flat, one-level)', () => {
     // ...and the in-progress text streams as prose.
     expect(f).toContain('LIVE OUTPUT')
   })
+
+  it('draws a run_subagent_dag call graph under its tool row', () => {
+    // The DAG tool's result text is clamped to 200 chars, so a fan-out of any
+    // size leaves the transcript with no record of which node did what unless
+    // the pinned graph renders here.
+    const dagStep: Episode = {
+      index: 0,
+      narration: 'fanning out',
+      tools: [
+        {
+          id: 'call-a',
+          name: 'run_subagent_dag',
+          summary: '3 nodes: fetch, parse, report',
+          ok: true,
+          done: true,
+          resultPreview: 'DAG dag-1: 2/3 completed, 1 failed (parse)',
+          dag: {
+            runId: 'dag-1',
+            done: true,
+            dir: '/w/.ravenx_dag/dag-1',
+            summary: { total: 3, completed: 2, failed: 1, skipped: 0 },
+            nodes: [
+              { id: 'fetch', subagent: 'echo', dependsOn: [], status: 'completed' },
+              { id: 'parse', subagent: 'echo', dependsOn: ['fetch'], status: 'failed', error: 'exited 1' },
+              { id: 'report', subagent: 'echo', dependsOn: ['fetch'], status: 'completed' }
+            ]
+          }
+        }
+      ]
+    }
+
+    const f = frame(<EpisodeView episodes={[dagStep]} t={DEFAULT_THEME} text="done" />)
+
+    expect(f).toContain('fetch')
+    expect(f).toContain('parse')
+    expect(f).toContain('report')
+    expect(f).toContain('exited 1')
+  })
+
+  it('leaves a tool with no graph unchanged', () => {
+    const f = frame(<EpisodeView episodes={[narratedStep]} t={DEFAULT_THEME} text="done" />)
+
+    expect(f).toContain('ctrl.go')
+    expect(f).not.toContain('L1')
+  })
 })

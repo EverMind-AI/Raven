@@ -19,6 +19,9 @@ can hold many sessions while the `session_key={channel}:{chat_id}` invariant is
 unchanged. Channel is a dimension (key prefix + store subdirectory + metadata
 field), not part of the user-facing identity.
 
+A session's `metadata["model"]`, when present, is the model its turns run on; it
+outranks the router and falls back to `agents.defaults.model` when absent.
+
 **Session id** (user-facing term only):
 The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
@@ -171,6 +174,18 @@ _Avoid_: using "CLI" for the interactive REPL (retiring)
 **Routing Tag**:
 The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
 
+**Deliverable**:
+An output file the agent hands to the user through the `deliver_files` tool, addressed by an
+opaque token in the persisted registry (`deliverables/deliverables.json`) rather than by path.
+Web-channel only: the download UI exists only there, and the tool is not registered on any
+other surface.
+_Avoid_: calling any file the agent wrote a Deliverable - only a `deliver_files` call makes one.
+
+**Delivery Manifest**:
+The structured list of Deliverables a single `deliver_files` call produced (name, size, media
+type, token), carried on `ToolEvent.metadata` so it reaches the web UI and persists in message
+history. Never carries file bytes.
+
 ### Token Efficiency
 
 **TokenWise**:
@@ -206,6 +221,18 @@ cache-write / reasoning tokens plus the estimated USD cost.
 An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by the
 agent loop and the Curator.
 _Avoid_: conflating provider (vendor) with model (a model name a provider serves)
+
+**ResolvingProvider**:
+The Provider the gateway is built with (`providers/resolving_provider.py`): it
+holds no endpoint of its own and dispatches each call to the vendor adapter that
+`Config.get_provider_name(model)` resolves to, memoized per vendor. Lets two
+sessions on two vendors run concurrently without swapping a shared adapter. It is
+the gateway's entire provider only with routing off or on the `ecoclaw` backend;
+with `routing.backend == "knn"`, `build_model_routing` wraps it as
+`PerModelProvider(..., fallback=ResolvingProvider)`, so routed model names go to
+their configured endpoints and every other model still resolves through it.
+_Avoid_: confusing it with ModelRouter / KNNModelRouter, which select a *model*;
+this selects the *vendor* for an already-chosen model.
 
 ### TUI-RPC
 
@@ -255,6 +282,25 @@ SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (Segment 6).
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
+**Inject Mode**:
+How an `always` skill occupies `# Active Skills`, declared per skill as
+`inject: full` (default — the whole SKILL.md body) or `inject: description`
+(a digest entry: name, description, and the absolute SKILL.md path to read on
+demand). Description mode keeps a skill permanently discoverable at a few dozen
+tokens; it is the only way to surface an `always` skill cheaply, since being
+`always` also excludes it from BM25 routing into `# Skills`.
+_Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
+
+**Skill Requirements**:
+A skill's optional `requires` block, declaring what its procedure needs before
+it is worth showing. `bins` / `env` are process-static and resolved in
+`SkillRegistry.check_available`; `tools` is live runtime state (the DAG tool
+registers only when third-party sub-agents are configured, and hot-applies) and
+is enforced per turn by `ActiveSkillsSegmentBuilder` against the definitions
+actually being sent. Every sub-key is optional and every malformed shape
+degrades to "nothing declared" — see `requires_list`.
+_Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
+
 **Curator**:
 An internal, bounded agent loop whose only job is to build the main agent's next
 context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
@@ -291,7 +337,17 @@ _Avoid_: summarize, compact (ambiguous between this and Archive)
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
-protected, archived) — what the Slow Path reads instead of full history.
+protected, pinned, archived) — what the Slow Path reads instead of full history.
+
+**Pinned**:
+A Manifest flag on the messages that fetched a skill body the agent cannot
+re-derive (`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole
+tool exchange is added to every later ContextPlan whether or not the plan names
+it, refused by Archive, and trimmed last. Set on the latest fetch per skill id
+only, so a re-read moves the pin instead of adding a second copy.
+_Avoid_: using "protected" for this — Protected means the head-of-session
+exchanges, and it only shields an id from budget trimming, not from a
+ContextPlan that never mentioned it.
 
 **Working State**:
 The distilled session notes (goals, open threads, decisions) the Curator maintains

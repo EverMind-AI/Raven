@@ -34,6 +34,11 @@ def get_sentinel_dir() -> Path:
     return get_runtime_subdir("sentinel")
 
 
+def get_deliverables_path() -> Path:
+    """Return the delivered-files token registry path."""
+    return get_runtime_subdir("deliverables") / "deliverables.json"
+
+
 def get_cache_dir() -> Path:
     """Return the disposable, refetchable on-disk cache directory."""
     return get_runtime_subdir("cache")

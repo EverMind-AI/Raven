@@ -1,10 +1,12 @@
-"""Shared low-level rendering helpers for segment builders.
+"""Shared low-level helpers for segment builders.
 
-These are the pure(ish) render functions formerly living as
+Mostly the pure(ish) render functions formerly living as
 ``ContextBuilder`` methods. Keeping them here lets each
 :class:`SegmentBuilder` (and the ``UserBuilder`` inside
 :class:`ContextAssembler`) share one implementation without a
-``ContextBuilder`` instance.
+``ContextBuilder`` instance. :func:`collect_tool_names` is the one
+non-render entry, shared by the two builders that gate content on which
+tools the agent actually holds.
 """
 
 from __future__ import annotations
@@ -54,6 +56,34 @@ def _language_directive() -> str:
             "unless the user explicitly writes in another language.\n"
         )
     return ""
+
+
+def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> list[str] | None:
+    """Names in the agent's live tool list, or ``None`` when unknowable.
+
+    ``None`` is not "no tools" — it means the caller was built without tool
+    awareness, or the lookup raised. Callers must read it as "do not gate",
+    never as an empty set, so a wiring gap degrades to showing too much
+    rather than silently suppressing content.
+    """
+    if get_tool_definitions is None:
+        return None
+    try:
+        defs = get_tool_definitions()
+    except Exception:
+        return None
+    names: list[str] = []
+    for d in defs or []:
+        if not isinstance(d, dict):
+            continue
+        # OpenAI function-call schema → name lives under ``function.name``;
+        # also accept a flat ``name``.
+        fn = d.get("function") if isinstance(d.get("function"), dict) else None
+        if fn and isinstance(fn.get("name"), str):
+            names.append(fn["name"])
+        elif isinstance(d.get("name"), str):
+            names.append(d["name"])
+    return names or None
 
 
 def identity_text(workspace: Path) -> str:

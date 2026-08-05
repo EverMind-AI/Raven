@@ -18,6 +18,20 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNodeStatus".
+ */
+export type DagNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+/**
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagSnapshotNodeStatus".
+ */
+export type DagSnapshotNodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'interrupted';
+/**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -33,7 +47,10 @@ export type TurnEvent =
   | ToolCompleteEvent
   | MessageCompleteEvent
   | ErrorEvent
-  | CronDeliveredEvent;
+  | CronDeliveredEvent
+  | DagRunStartedEvent
+  | DagNodeUpdatedEvent
+  | DagRunCompletedEvent;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -348,6 +365,9 @@ export interface ToolCompleteEvent {
     tool_call_id: string;
     result_preview: string;
     truncated: boolean;
+    metadata?: {
+      [k: string]: JsonValue;
+    };
   };
 }
 /**
@@ -385,6 +405,129 @@ export interface CronDeliveredEvent {
     name: string;
     text: string;
     fired_at: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagSnapshotNode".
+ */
+export interface DagSnapshotNode {
+  node: string;
+  subagent?: string;
+  depends_on?: string[];
+  instance?: string;
+  status: DagSnapshotNodeStatus;
+  started_at?: number;
+  ended_at?: number;
+  prompt_file?: string;
+  output_file?: string;
+  error?: string;
+  prompt_template?: string;
+}
+/**
+ * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagRunSnapshot".
+ */
+export interface DagRunSnapshot {
+  run_id: string;
+  dir: string;
+  finalized: boolean;
+  files: DagSnapshotNode[];
+  terminal_outputs?: {
+    node: string;
+    text: string;
+  }[];
+  summary: {
+    total?: number;
+    completed?: number;
+    failed?: number;
+    skipped?: number;
+  };
+}
+/**
+ * One node's rendered prompt and the head of its output. Either text is absent when its file does not exist: a node that never ran has no prompt, a failed one no output.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNodeDetail".
+ */
+export interface DagNodeDetail {
+  run_id: string;
+  node: string;
+  prompt?: string;
+  prompt_file?: string;
+  output?: string;
+  output_file?: string;
+  output_chars: number;
+  output_truncated: boolean;
+}
+/**
+ * A run_subagent_dag call accepted a graph. Carries the whole topology so a client can lay the graph out before any node reports.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagRunStartedEvent".
+ */
+export interface DagRunStartedEvent {
+  type: 'dag.run_started';
+  payload: {
+    run_id: string;
+    /**
+     * The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.
+     */
+    tool_call_id?: string;
+    nodes: {
+      id: string;
+      subagent: string;
+      depends_on: string[];
+      /**
+       * Shared stateful handle. Nodes naming the same one run sequentially.
+       */
+      instance?: string;
+    }[];
+  };
+}
+/**
+ * One node changed state.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNodeUpdatedEvent".
+ */
+export interface DagNodeUpdatedEvent {
+  type: 'dag.node_updated';
+  payload: {
+    run_id: string;
+    tool_call_id?: string;
+    node: string;
+    status: DagNodeStatus;
+    started_at?: number;
+    ended_at?: number;
+  };
+}
+/**
+ * The run finished. Terminal node output text is deliberately absent -- it is already in the tool result.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagRunCompletedEvent".
+ */
+export interface DagRunCompletedEvent {
+  type: 'dag.run_completed';
+  payload: {
+    run_id: string;
+    tool_call_id?: string;
+    dir: string;
+    summary: {
+      total?: number;
+      completed?: number;
+      failed?: number;
+      skipped?: number;
+    };
+    files: {
+      node: string;
+      status: DagNodeStatus;
+      output_file?: string;
+      error?: string;
+    }[];
   };
 }
 /**
@@ -1043,6 +1186,37 @@ export interface RollbackRestoreParams {
  * via the `definition` "ToolsConfigureParams".
  */
 export interface ToolsConfigureParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagGetParams".
+ */
+export interface DagGetParams {
+  run_id: string;
+  session_key?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagGetResult".
+ */
+export interface DagGetResult {
+  run: DagRunSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNodeParams".
+ */
+export interface DagNodeParams {
+  run_id: string;
+  node: string;
+  max_output_chars?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DagNodeResult".
+ */
+export interface DagNodeResult {
+  node: DagNodeDetail;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;

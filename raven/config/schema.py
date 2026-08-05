@@ -1,7 +1,7 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
@@ -589,6 +589,24 @@ class GatewayLogConfig(Base):
     console_level: str = "INFO"
 
 
+class GatewayWebConfig(Base):
+    """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint the
+    web backend connects to as a client (ui-webui P1).
+
+    Off by default. When enabled, the gateway hosts a ``web`` channel — its own
+    streaming spine (build_web) plus a WS server — alongside the IM channels,
+    reusing the TUI RPC wire protocol (token.delta / thinking.delta / tool.* /
+    message.complete). Single-user by design: bound to loopback, not exposed
+    off-box; ``auth_token`` (if set) is a shared secret the client sends as the
+    first line, mirroring the TUI RpcServer's trust gate.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auth_token: str | None = None
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
@@ -599,6 +617,7 @@ class GatewayConfig(Base):
     send_max_retries: int = 3
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     log: GatewayLogConfig = Field(default_factory=GatewayLogConfig)
+    web: GatewayWebConfig = Field(default_factory=GatewayWebConfig)
 
 
 class WebSearchConfig(Base):
@@ -715,9 +734,137 @@ class ToolsConfig(Base):
     tool_search: ToolSearchConfig = Field(default_factory=ToolSearchConfig)
     disabled_tools: list[str] = Field(default_factory=list)
     """Tool names to unregister after default-tool registration and MCP connect.
-    Used by eval harnesses (e.g. BrowseComp-Plus) that need to constrain the
-    agent to a specific tool subset. Names match those in ``ToolRegistry``
-    (e.g. ``read_file``, ``web_search``, or ``mcp_bcp-search_search``)."""
+    The general off switch for a tool this deploy does not want, and the only one
+    that covers a tool with an unconfigured stand-in variant (``deep_research``),
+    where clearing the tool's own config only swaps which variant registers. Also
+    used by eval harnesses (e.g. BrowseComp-Plus) to constrain the agent to a
+    specific tool subset. Names match those in ``ToolRegistry`` (e.g.
+    ``read_file``, ``web_search``, or ``mcp_bcp-search_search``). Read at startup,
+    so a change needs a restart."""
+
+
+class ThirdPartyCliSubagentConfig(Base):
+    """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
+
+    ``command`` is an argv template: a ``{prompt}`` token is replaced by the task
+    text as a single argv token (injection-safe), ``{prompt_file}`` by a path to
+    a file holding the prompt. With neither placeholder, the prompt is delivered
+    on the child's stdin.
+
+    Setting ``resume_command`` makes the agent stateful: a caller-supplied
+    instance handle is bound to the CLI's own session id, substituted as
+    ``{agent_id}``. With ``id_source="provisioned"`` raven mints the id and
+    passes it on the create call; with ``"derived"`` the CLI mints it and raven
+    reads it back out of the transcript.
+
+    ``timeout`` is ``None`` by default, meaning no automatic limit: the run is
+    ended by hand (manual stop), not by a timer. Set it to opt into an
+    automatic backstop instead.
+    """
+
+    name: str
+    kind: Literal["cli"] = "cli"
+    description: str = ""
+    command: str
+    resume_command: str | None = None
+    stateful: bool | None = None
+    """Declares whether reusing an instance handle continues this agent's
+    session. ``None`` derives it from ``resume_command``; an explicit value must
+    agree with that (``true`` needs ``resumeCommand`` set, ``false`` needs it
+    unset), so the declaration the roster advertises can never contradict the
+    mechanism that would have to deliver it."""
+    reads_local_files: bool = True
+    """Whether this agent can open paths on this machine. A CLI agent is a local
+    subprocess, so it can by default. Set ``false`` for one that runs elsewhere
+    (a container / remote host without the shared filesystem): DAG nodes then
+    have to pass file *contents* rather than paths."""
+    id_source: Literal["provisioned", "derived"] = "provisioned"
+    session_id_pattern: str | None = None
+    output_pattern: str | None = None
+    transcript_format: Literal["text", "codex_jsonl", "claude_stream_json"] = "text"
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout: int | None = None
+    max_output_chars: int = 30000
+
+    @model_validator(mode="after")
+    def _check_stateful_matches_resume(self) -> "ThirdPartyCliSubagentConfig":
+        if self.stateful is None:
+            return self
+        if self.stateful and not self.resume_command:
+            raise ValueError("stateful is true but resumeCommand is unset (nothing can resume a session)")
+        if not self.stateful and self.resume_command:
+            raise ValueError("stateful is false but resumeCommand is set (remove resumeCommand to make it stateless)")
+        return self
+
+    @model_validator(mode="after")
+    def _check_agent_id_placeholders(self) -> "ThirdPartyCliSubagentConfig":
+        # An {agent_id} left unsubstituted reaches the CLI as a literal string
+        # and the run fails obscurely, so reject the bad combinations at write time.
+        in_command = "{agent_id}" in self.command
+        if not self.resume_command:
+            if in_command:
+                raise ValueError("command uses {agent_id} but resumeCommand is unset (agent is stateless)")
+            return self
+        if "{agent_id}" not in self.resume_command:
+            raise ValueError("resumeCommand must contain {agent_id}")
+        if self.id_source == "provisioned" and not in_command:
+            raise ValueError("command must contain {agent_id} when idSource is 'provisioned'")
+        if self.id_source == "derived" and in_command:
+            raise ValueError("command must not contain {agent_id} when idSource is 'derived'")
+        return self
+
+
+class ThirdPartyOpenAISubagentConfig(Base):
+    """A third-party OpenAI-compatible HTTP agent (mirothinker, …) as a subagent.
+
+    ``timeout`` is ``None`` by default, meaning no automatic limit: the run is
+    ended by hand (manual stop), not by a timer. Set it to opt into an
+    automatic backstop instead.
+    """
+
+    name: str
+    kind: Literal["openai"] = "openai"
+    description: str = ""
+    base_url: str
+    model: str
+    api_key: str = ""
+    stateful: bool | None = None
+    """An HTTP agent is one-shot per call, so this may only be ``None`` or
+    ``false``; ``true`` is rejected rather than advertised, since no resume
+    mechanism exists for a DAG node to reuse."""
+    reads_local_files: bool = False
+    """Whether this agent can open paths on this machine. Defaults to ``false``
+    because the endpoint is normally remote; set ``true`` for one served from
+    this host, which can therefore read the run directory."""
+    system_prompt: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    timeout: int | None = None
+    max_output_chars: int = 128000
+
+    @model_validator(mode="after")
+    def _reject_declared_stateful(self) -> "ThirdPartyOpenAISubagentConfig":
+        if self.stateful:
+            raise ValueError("stateful is not supported for kind 'openai' (an HTTP agent has no resumable session)")
+        return self
+
+
+ThirdPartySubagentConfig = Annotated[
+    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig,
+    Field(discriminator="kind"),
+]
+
+
+class SubagentsConfig(Base):
+    """Native subagent config, including third-party agents (req5).
+
+    ``third_party`` lists heterogeneous external agents the main agent can
+    dispatch to via ``spawn(agent=<name>)``; each spawns concurrently in the
+    background like any raven subagent.
+    """
+
+    third_party: list[ThirdPartySubagentConfig] = Field(default_factory=list)
 
 
 class Config(BaseSettings):
@@ -730,6 +877,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     cron: CronConfig = Field(default_factory=CronConfig)
+    subagents: SubagentsConfig = Field(default_factory=SubagentsConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"
@@ -775,6 +923,18 @@ class Config(BaseSettings):
 
         model_id = model or self.agents.defaults.model
         prefix, _ = split_model_id(model_id)
+
+        # A curated `models` entry is the user naming the vendor, so it outranks the
+        # prefix/keyword rule below: OpenRouter's catalog is full of names carrying
+        # another vendor's prefix (`openai/...`), which that rule attributes to that
+        # vendor -- or, when it has no key, to whatever the last rung falls back to.
+        # Must stay the same predicate as serving_provider_for_model, which gates what
+        # the model picker may store: disagreement means a model validates as servable
+        # and is then routed to a different vendor's api_base and api_key.
+        for spec in PROVIDERS:
+            p = self.providers.get(spec.name)
+            if p is not None and model_id in self._offered_models(spec):
+                return p, spec.name
 
         # `spec.claims` is the whole prefix-beats-keyword rule: a prefixed id is
         # answered only by the provider it names (so `github-copilot/...codex`
@@ -847,12 +1007,69 @@ class Config(BaseSettings):
         p, name = self._match_provider(model)
         if p and p.api_base:
             return p.api_base
-        # Only gateways get a default api_base here. Standard providers
-        # (like Moonshot) set their base URL via env vars in _setup_env.
+        # Only gateways / local providers get a default api_base here. A
+        # standard provider (like Moonshot) reaches its base URL through the env
+        # vars LiteLLMProvider._setup_env writes; what is returned here travels
+        # as the per-call ``api_base`` kwarg, which would override LiteLLM's own
+        # routing for that vendor.
         if name:
             spec = find_by_name(name)
             if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:
                 return spec.default_api_base
+        return None
+
+    def _provider_is_configured(self, spec) -> bool:
+        """Whether ``spec``'s section carries enough config to be usable.
+
+        Deliberately the same predicate as the ``configured`` flag in
+        ``update_providers.list_providers``, which is what the web model picker
+        filters its options on: the picker's offer set and any accept/reject
+        check built on this must agree, or one offers what the other refuses.
+        """
+        p = self.providers.get(spec.name)
+        if p is None:
+            return False
+        if spec.is_oauth:
+            from raven.config.update_providers import _oauth_token_path
+
+            return _oauth_token_path(spec.name).exists()
+        if spec.is_local:
+            return bool(p.api_base or p.api_key)
+        return bool(p.api_key or getattr(p, "api_key_list", None))
+
+    def _offered_models(self, spec) -> list[str]:
+        """Models ``spec`` serves, per the config -- empty when it is unconfigured.
+
+        Exactly what the web model picker lists for the provider: its curated
+        ``models``, or the registry default when that list is empty. Shared by
+        ``_match_provider`` (routing) and ``serving_provider_for_model`` (the
+        accept check) so the two cannot drift apart.
+        """
+        p = self.providers.get(spec.name)
+        if p is None or not self._provider_is_configured(spec):
+            return []
+        return list(p.models) or ([spec.default_model] if spec.default_model else [])
+
+    def serving_provider_for_model(self, model: str) -> str | None:
+        """Name of a configured provider that can actually serve ``model``, else ``None``.
+
+        The question ``get_provider_name`` answers is "which credentials would
+        this call use", and its last two ladder rungs fall back to any
+        configured provider, so it never reports a model as unservable. This
+        answers "can anything serve it at all": a model is servable when a
+        configured provider offers it (its curated ``models``, or the registry
+        default when that list is empty -- exactly what the picker lists) or
+        when the registry resolves the model name to a configured provider.
+        """
+        from raven.providers.registry import PROVIDERS, find_by_model
+
+        for spec in PROVIDERS:
+            if model in self._offered_models(spec):
+                return spec.name
+
+        spec = find_by_model(model)
+        if spec is not None and self._provider_is_configured(spec):
+            return spec.name
         return None
 
     @property

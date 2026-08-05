@@ -89,6 +89,24 @@ class ContextConfig(_Base):
     protect_first_n: int = 3
     """Number of head exchanges always preserved in context."""
 
+    pinned_skill_ids: list[str] = Field(default_factory=lambda: ["local/subagent-dag-orchestration"])
+    """Skills whose fetched body is pinned into every later context window.
+
+    A skill body arrives as a ``use_skill`` / ``read_skill`` tool result, which
+    is an ordinary history message: only the first ``protect_first_n`` exchanges
+    are protected, so a body read mid-session is dropped like any other old one.
+    For instruction material that is usually fine -- re-fetch it. It is not fine
+    when a tool's own description says "unless the guide is already in your
+    context": the agent cannot observe whether it still is, so it either
+    re-fetches every turn or builds from the memory of a body that is gone.
+
+    Pinning keeps that fetch (the assistant tool_call and its results) in every
+    later window of the session, at the cost of those tokens of history budget.
+    Only for bodies whose absence is silently wrong; the default is the sub-agent
+    DAG guide, whose wiring rules the tool description cannot restate in full.
+    Re-fetching the same id supersedes the earlier pin, so one body is never
+    pinned twice. Set to ``[]`` to disable."""
+
     archive_dir: str = "memory/.curator/archive"
     """Relative path under workspace for lossless message archives."""
 

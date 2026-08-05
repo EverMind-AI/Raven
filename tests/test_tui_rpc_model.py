@@ -313,6 +313,9 @@ _SEEDED_DIRECT_PROVIDERS = [
     ("zai", "zai/"),
     ("groq", "groq/"),
     ("dashscope", "dashscope/"),
+    ("moonshot", "moonshot/"),
+    ("minimax", "minimax/"),
+    ("volcengine", "volcengine/"),
 ]
 
 
@@ -362,16 +365,20 @@ async def test_save_key_accepts_a_provider_without_a_spec(fake_home: Path) -> No
 
 
 @pytest.mark.parametrize("slug", ["moonshot", "minimax", "volcengine", "ollama_chat", "github_copilot"])
-def test_litellm_catalogue_fills_providers_with_no_curated_shortlist(slug: str) -> None:
-    """Eleven providers had no shortlist, so the picker offered them nothing.
+def test_litellm_catalogue_resolves_for_the_providers_it_used_to_carry_alone(slug: str) -> None:
+    """These five were the catalogue tier's whole reason to exist, so it breaks here first.
 
     Ollama is the case that proves the lookup has to go through every name the
     provider answers to: LiteLLM files its models under "ollama" while the
     section is "ollama_chat", so a lookup by section name alone finds none.
-    """
-    from raven.providers.common_models import common_models_for, litellm_models_for
 
-    assert not common_models_for(slug), f"{slug} now has a shortlist; pick another provider for this test"
+    It no longer *fills* an empty shortlist for anyone -- each of these five was
+    curated once the WebUI needed them, because that service runs without LiteLLM
+    installed and so cannot reach this tier at all. What is left is widening a
+    curated head, which is why the shortlist is no longer asserted empty here.
+    """
+    from raven.providers.common_models import litellm_models_for
+
     models = litellm_models_for(slug)
     assert models, f"{slug}: the catalogue tier found nothing"
     assert all("/" in m for m in models), models[:3]

@@ -61,13 +61,13 @@ def warn_about_pending_cli_reminders(cron_service, config: Config) -> None:
         )
 
 
-def check_provider_credentials(config: Config) -> None:
+def check_provider_credentials(config: Config, model: str | None = None) -> None:
     """Fail-fast when the configured provider is missing required credentials.
 
     Cheap (no litellm import), so it can run at startup even when the real
     provider is built lazily. Kept in sync with the branches of make_provider.
     """
-    model = config.agents.defaults.model
+    model = model or config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
@@ -89,15 +89,15 @@ def check_provider_credentials(config: Config) -> None:
         raise typer.Exit(1)
 
 
-def make_provider(config: Config):
-    """Create the appropriate LLM provider from config."""
+def make_provider(config: Config, model: str | None = None):
+    """Create the appropriate LLM provider from config, for ``model`` (default:
+    the configured agent default)."""
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
 
-    check_provider_credentials(config)
-
-    model = config.agents.defaults.model
+    model = model or config.agents.defaults.model
+    check_provider_credentials(config, model)
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
@@ -287,6 +287,49 @@ def print_deprecated_memory_window_notice(config: Config) -> None:
         )
 
 
+def make_resolving_provider(config: Config):
+    """Provider that resolves each call's vendor from its model name. Used by the
+    gateway, where different sessions can be on different vendors at once."""
+    from raven.providers.resolving_provider import ResolvingProvider
+
+    check_provider_credentials(config)
+    return ResolvingProvider(config)
+
+
+def build_model_routing(config, provider):
+    """Return ``(router, provider)`` for the configured routing backend.
+
+    - ``knn``: build a :class:`KNNModelRouter` and wrap ``provider`` in a
+      :class:`PerModelProvider` so routed model names reach their endpoints
+      (other models fall back to ``provider`` unchanged).
+    - ``ecoclaw``: build the PinchBench :class:`ModelRouter`.
+    - routing disabled, or ecoclaw with no API key: return ``(None, provider)``.
+    """
+    if not config.routing.enabled:
+        return None, provider
+
+    if config.routing.backend == "knn":
+        from raven.providers.per_model_provider import PerModelProvider
+        from raven.routing.knn_router import KNNModelRouter
+
+        router = KNNModelRouter(config.routing, default_model=config.agents.defaults.model)
+        return router, PerModelProvider(config.routing.models, fallback=provider)
+
+    from raven.routing.router import ModelRouter
+
+    openrouter = config.providers.get("openrouter")
+    api_key = config.routing.api_key or getattr(openrouter, "api_key", "") or ""
+    if not api_key:
+        console.print("[yellow]⚠[/yellow] Routing enabled but no OpenRouter API key found — routing disabled")
+        return None, provider
+
+    from raven.routing.types import RoutingProfileName
+
+    profile: RoutingProfileName = config.routing.profile  # type: ignore[assignment]
+    router = ModelRouter(api_key=api_key, profile=profile, fallback_model=config.agents.defaults.model)
+    return router, provider
+
+
 __all__ = [
     "DEFAULT_PROBE_MESSAGE",
     "warn_about_pending_cli_reminders",
@@ -294,6 +337,7 @@ __all__ = [
     "send_probe",
     "print_probe_troubleshooting",
     "load_runtime_config",
+    "build_model_routing",
     "parse_fake_now",
     "print_deprecated_memory_window_notice",
 ]

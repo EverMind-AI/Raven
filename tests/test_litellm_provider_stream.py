@@ -180,3 +180,14 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
     assert captured["tools"] == tools
     # model should be resolved (openai/gpt-4o-mini already has prefix → stays the same)
     assert "gpt-4o-mini" in captured["model"]
+
+
+def test_construction_does_not_set_the_litellm_module_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two adapters must not fight over litellm.api_base (R1): a per-vendor
+    api_base travels per call, never process-wide."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "api_base", None, raising=False)
+    LiteLLMProvider(api_key="KA", api_base="http://a/v1", default_model="a/one")
+    LiteLLMProvider(api_key="KB", api_base="http://b/v1", default_model="b/two")
+    assert litellm.api_base is None

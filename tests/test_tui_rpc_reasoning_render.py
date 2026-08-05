@@ -34,7 +34,10 @@ class _FakeProvider:
 
 
 def _bind_helper(provider: _FakeProvider):
-    fake_self = SimpleNamespace(provider=provider)
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+    )
     return AgentLoop._llm_call_stream.__get__(fake_self)
 
 

@@ -101,6 +101,34 @@ def test_make_provider_custom_routes_through_litellm(tmp_path: Path) -> None:
     assert isinstance(provider, LiteLLMProvider)
 
 
+def _model_config(tmp_path: Path) -> Path:
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+                "providers": {"custom": {"apiKey": "sk-x", "apiBase": "http://localhost:9000/v1"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_make_provider_honours_explicit_model(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    provider = _helpers.make_provider(load_config(_model_config(tmp_path)), "other-model")
+    assert provider.get_default_model() == "other-model"
+
+
+def test_make_provider_defaults_to_the_config_model(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+
+    provider = _helpers.make_provider(load_config(_model_config(tmp_path)))
+    assert provider.get_default_model() == "my-model"
+
+
 # ---------------------------------------------------------------------------
 # check_provider_credentials — fail-fast without importing litellm
 # ---------------------------------------------------------------------------

@@ -364,7 +364,7 @@ def _build_tui_agent_loop():
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
-        from raven.cli._helpers import load_runtime_config, make_lazy_provider
+        from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
             build_plugin_tools,
@@ -381,6 +381,10 @@ def _build_tui_agent_loop():
         skill_forge_cfg = ec_config.skill_forge
 
         provider = make_lazy_provider(config)
+        # Model routing (config.routing). A no-op when routing is disabled; the
+        # knn wrapper only reads the lazy provider's plain fields, so deferring
+        # the litellm build survives it.
+        router, provider = build_model_routing(config, provider)
         session_manager = SessionManager(config.workspace_path)
 
         cron = CronService(
@@ -409,7 +413,9 @@ def _build_tui_agent_loop():
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            router=router,
             brave_api_key=config.tools.web.search.api_key or None,
+            jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,
             media_config=config.effective_media_config(),
             deep_research_config=config.tools.deep_research,
@@ -418,13 +424,20 @@ def _build_tui_agent_loop():
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
+            disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,
             sandbox_config=config.tools.sandbox,
             channels_config=config.channels,
             skill_forge_config=skill_forge_cfg,
+            skill_forge_router_config=ec_config.skill_forge.router,
             runtime_config=ec_config.runtime,
+            context_config=ec_config.context,
+            memory_config=ec_config.memory,
             backend=backend,
             plugin_tools=plugin_tools,
+            # Gates run_subagent_dag: AgentLoop registers it only when the roster
+            # is non-empty, since its nodes dispatch to these agents.
+            third_party_subagents=config.subagents.third_party,
             # TUI is always a multi-turn interactive session.
             interactive=True,
         )
@@ -500,7 +513,7 @@ async def _run_rpc_server_until_done(
     )
     from raven.tui_rpc.question_broker import QuestionBroker
     from raven.tui_rpc.server import RpcServer
-    from raven.tui_rpc.spine import build_tui
+    from raven.tui_rpc.spine import build_tui, make_dag_progress_sink
     from raven.tui_rpc.subscriptions import SubscriptionEmitter
 
     handshake_done = asyncio.Event()
@@ -554,6 +567,10 @@ async def _run_rpc_server_until_done(
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
         agent_loop.set_deep_research_broker(question_broker)
+        # Fan run_subagent_dag progress to the turn's conversation so the TUI can
+        # draw the graph. Goes through the loop (not the tool) so a DAG tool
+        # registered later by a mid-session config apply inherits the sink too.
+        agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
 
     def _agent_loop_factory():
         if agent_loop is not None:

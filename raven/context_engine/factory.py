@@ -121,7 +121,7 @@ def build_context_engine(
             user_id=memory_config.user_id,
             memory_top_k=memory_config.memory_top_k,
         ),
-        ActiveSkillsSegmentBuilder(builder.skills),
+        ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
         SkillsSegmentBuilder(
             router,
             skill_top_k=skill_forge_router_config.top_k,
