@@ -72,6 +72,13 @@ class ToolEvent:
     truncated: bool = False
     source: Source | None = None
     conversation_id: str | None = None
+    # START only: the tool is a blocking interaction, so it has no automatic
+    # deadline and may emit nothing for as long as it runs. An outlet whose
+    # client clocks the stream must suspend that clock while it is in flight.
+    blocking: bool = False
+    # COMPLETE only: opt-in structured payload from Tool.take_metadata (e.g. a
+    # deliver_files manifest). Outlets that do not understand a key ignore it.
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

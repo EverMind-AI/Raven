@@ -43,13 +43,12 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
-from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import effective_context_window, resolve_context_window
-from raven.providers.reasoning import split_orphan_think
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
+from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
@@ -69,6 +68,7 @@ _ABORTED_ACTION_REPLY = (
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
+    from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
     from raven.config.raven import (
         ContextConfig,
@@ -280,6 +280,9 @@ class AgentLoop:
     # the model is currently reasoning about is worth keeping, older ones are the
     # cheapest thing to give up.
     _SHRINK_KEEP_RECENT_IMAGES = 1
+    # Reconnects allowed for a streamed call that failed before its first delta
+    # (after one, the caller has output that a retry would duplicate).
+    _MAX_STREAM_RECONNECTS = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -291,7 +294,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int | None = None,
+        context_window_tokens: int = 65_536,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -301,6 +304,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
         channels_config: ChannelsConfig | None = None,
+        deliverables: "DeliverableStore | None" = None,
         router: "ModelRouter | None" = None,
         strategies: "StrategyRegistry | None" = None,
         skill_forge_config: Any = None,
@@ -315,6 +319,7 @@ class AgentLoop:
         jina_api_key: str | None = None,
         max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
+        third_party_subagents: list | None = None,
         media_config: Any = None,
         deep_research_config: Any = None,
         disabled_tools: list[str] | None = None,
@@ -366,6 +371,7 @@ class AgentLoop:
         # Returning None means "fall through to normal flow".
         self.decision_consumer = decision_consumer
         self.channels_config = channels_config
+        self._deliverables = deliverables
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
@@ -374,34 +380,10 @@ class AgentLoop:
         # takes a per-call model (strategies rewrite it, and the model chain
         # falls back), so one model's verdict must not answer for another's.
         self._image_tool_result_ok: dict[str, bool] = {}
-        self._vision_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        # A caller that passed a positive value set the window explicitly;
-        # None/0 means "figure it out", resolved once here against the model's
-        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
-        # registered term, see CONTEXT.md.)
-        self._context_window_explicit = bool(context_window_tokens)
-        if context_window_tokens == 65536:
-            # The retired schema default, which the old bootstrap wrote to
-            # disk verbatim -- so on upgraded installs this exact value is
-            # more often a fossil than a choice. The config is deliberately
-            # not rewritten (a value the user can see in their own file stays
-            # theirs); this line is what keeps that stance from failing
-            # silently.
-            logger.warning(
-                "contextWindowTokens: 65536 is pinning the context window (the old default, "
-                "written out by earlier versions); remove the line from config.json to size "
-                "it from each model's real window"
-            )
-        # allow_fetch=False: construction must not block on a synchronous
-        # network call for an OpenRouter model's window -- whatever is already
-        # cached (in-process or on disk, any age) answers instead. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = context_window_tokens or effective_context_window(
-            self.model, None, allow_fetch=False
-        )
+        self.context_window_tokens = context_window_tokens
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -488,7 +470,7 @@ class AgentLoop:
             builder=self.context,
             provider=provider,
             model=self.model,
-            context_window_tokens=self.context_window_tokens,
+            context_window_tokens=context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -543,7 +525,16 @@ class AgentLoop:
             owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
+            third_party_subagents=third_party_subagents,
         )
+        # Kept for _register_default_tools to build the optional DAG tool (req4)
+        # and for hot-applying web config changes (P4).
+        self._third_party_subagents = third_party_subagents or []
+        self._dag_progress_sink = None
+        # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
+        # the web UI's skill panel (host wires it to the web channel's emitter,
+        # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
+        self._skills_sink = None
 
         # Executor: synchronous construction only; VM starts in _start_executor()
         self._executor: SandboxExecutor = build_executor(sandbox_config, workspace, self._owned_ids)
@@ -570,28 +561,13 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             sessions=self.sessions,
-            context_window_tokens=self.context_window_tokens,
+            context_window_tokens=context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
         )
 
         self._consolidation_tasks: set[asyncio.Task] = set()
-
-        # A switch that arrives mid-turn is parked here until no turn is
-        # running, so a turn in flight finishes on the provider it started
-        # with. A depth counter, not a flag: OriginPools gates USER and
-        # system origins on independent semaphores with no global cap
-        # (spine/scheduler.py), so a user turn and a cron turn overlap on
-        # this loop under the TUI defaults.
-        self._pending_provider: tuple[LLMProvider, str] | None = None
-        self._turns_in_flight = 0
-
-        # ``self.subagents``, ``self.context_engine`` and
-        # ``self.memory_consolidator`` were each handed ``provider`` earlier in
-        # this constructor and hold their own reference; ``_adopt_provider`` is
-        # what keeps them from outliving a live model switch. Add the call
-        # there when adding another holder.
 
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
@@ -633,15 +609,6 @@ class AgentLoop:
         self._register_default_tools()
         self._apply_disabled_tools()
 
-        # LazyProvider defers the litellm import behind a background prewarm
-        # thread (see providers.lazy); the window this constructor just
-        # resolved above was answered with allow_import=False, so it can be
-        # wrong until that import lands. Wiring the callback fixes it up in
-        # place once the real provider is built -- a no-op for any other
-        # provider, which has no ``on_built`` to set.
-        if hasattr(provider, "on_built"):
-            provider.on_built = self.refresh_context_window
-
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
 
@@ -655,72 +622,6 @@ class AgentLoop:
         for name in list(self._disabled_tools):
             if self.tools.has(name):
                 self.tools.unregister(name)
-
-    def set_provider(self, provider: LLMProvider, model: str) -> None:
-        """Point the loop and everything it built at a new provider/model.
-
-        ``config.set model`` builds a provider from the prospective config
-        and hands it here. Assigning ``self.provider`` alone is not enough:
-        the subagent manager, the context engine's LLM-backed segments and
-        the consolidator each captured the provider handed to them in
-        ``__init__``. Left behind, they keep calling the old endpoint for
-        the rest of the process -- which is how switching away from a dead
-        credential fixed the main loop while subagents and the skill
-        rewriter/gate went on failing to authenticate.
-
-        A switch that lands while any turn is running is parked rather than
-        applied: the loop reads ``self.provider`` at call time (eight sites
-        in this module, plus the context engine and consolidator
-        underneath), so adopting mid-turn would relay one conversation
-        across two vendors. How that surfaces depends on the path: the
-        ``chat_with_retry`` sites turn a rejected request into
-        ``finish_reason="error"`` content, so the turn reports a failure
-        with no sign that its endpoint moved, while ``_llm_call_stream``
-        (which a TUI turn takes) catches only ``TimeoutError`` and lets the
-        rejection propagate. Neither is a diagnosis the user can act on.
-
-        The park is the second line of defence, not the first: the RPC
-        rejects a switch outright when the caller's own session has a turn
-        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
-        covers what that guard cannot see -- a caller that passes no
-        ``session_id``, and the proactive turns that run in their own lanes.
-        Note the RPC still answers ``applied: True`` and the config file is
-        already written, so a parked switch is applied on disk while the
-        loop reports the old model until the last turn drains.
-
-        Detached subagents are not covered by that park -- they outlive the
-        turn that spawned them -- so ``SubagentManager`` snapshots instead.
-        """
-        if self._turns_in_flight:
-            # The only trace of the window the docstring describes.
-            logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
-            self._pending_provider = (provider, model)
-            return
-        self._adopt_provider(provider, model)
-
-    def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
-        """Hand a provider to the loop and every subsystem holding the old one."""
-        logger.info("adopting provider switch: model={}", model)
-        self.provider = provider
-        self.model = model
-        # Cached per model id but computed from the provider, so a swap that
-        # keeps the model id would keep serving the old transport's verdict.
-        self._image_tool_result_ok.clear()
-        self.subagents.set_provider(provider, model)
-        self.context_engine.set_provider(provider, model)
-        self.memory_consolidator.set_provider(provider, model)
-        # Here rather than at the RPC call site: a parked switch adopts long
-        # after that call returns, and the window must follow the pair that
-        # was actually adopted, not the model the RPC saw.
-        self.refresh_context_window()
-
-    def _adopt_pending_provider(self) -> None:
-        """Apply a parked switch. Callers must check that no turn is running."""
-        pending = self._pending_provider
-        if pending is None:
-            return
-        self._pending_provider = None
-        self._adopt_provider(*pending)
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
@@ -736,40 +637,15 @@ class AgentLoop:
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
 
-    def refresh_context_window(self) -> None:
-        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
-
-        A no-op once the window was set explicitly at construction -- an
-        explicit value is a deliberate override, and a model switch afterwards
-        must not quietly discard it. Otherwise the ladder is re-walked so a
-        ``/model`` switch picks up the new model's real window instead of
-        keeping the old one's.
-
-        Also the callback ``LazyProvider.on_built`` fires from its prewarm
-        thread, i.e. off the event loop -- safe because every write this
-        method triggers, transitively through the consolidator and the
-        context engine's builders, is a plain ``int`` attribute assignment,
-        and the GIL makes each one atomic.
-        """
-        if self._context_window_explicit:
-            return
-        # allow_fetch=False: a /model switch runs inside the running event
-        # loop, so this must not block it on a synchronous network call. See
-        # rates._fetch_openrouter_models.
-        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
-        # Cascade into the builders that sized themselves against the window
-        # at construction (the Curator's trimmer) and the consolidator --
-        # both would otherwise keep budgeting against the pre-switch model's
-        # window for the rest of the session. The consolidator's window is a
-        # plain attribute (no setter of its own), set directly here.
-        self.context_engine.set_context_window(self.context_window_tokens)
-        self.memory_consolidator.context_window_tokens = self.context_window_tokens
-
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
         allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+        if self._deliverables is not None:
+            from raven.agent.tools.deliver import DeliverFilesTool
+
+            self.tools.register(DeliverFilesTool(self._deliverables, workspace=self.workspace, allowed_dir=allowed_dir))
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
@@ -821,6 +697,19 @@ class AgentLoop:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
+        # Sub-agent DAG orchestration (req4): a decoupled, optional tool,
+        # registered only when third-party sub-agents are configured (its nodes
+        # dispatch to them). Runs its own scheduler off the spine.
+        if self._third_party_subagents:
+            from raven.agent.subagent_dag.tool import SubAgentDagTool
+
+            self.tools.register(
+                SubAgentDagTool(
+                    workspace=self.subagents.workspace,
+                    third_party_subagents=self._third_party_subagents,
+                    guide_skill_id=self._dag_guide_skill_id(),
+                )
+            )
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -840,11 +729,12 @@ class AgentLoop:
         for tool in self.plugin_tools:
             self.tools.register(tool)
 
-        # Skill Hub retrieval tools. ``use_skill`` is source-agnostic — it
-        # resolves local/everos skills on disk too — so it registers whenever
-        # the skill registry is reachable. ``read_skill`` only fetches Hub
-        # bodies (local/everos bodies already ride in context), so it
-        # registers only when a Hub endpoint is configured.
+        # Skill retrieval tools (body -> scripts). Both are source-agnostic and
+        # both serve local/everos straight from the registry, so both register
+        # whenever the registry is reachable; a Hub endpoint only adds their
+        # ``hub/`` branch. Gating ``read_skill`` on the client would take the
+        # body-fetch route away from the skills that ship with Raven, whose
+        # ``inject: description`` entry advertises exactly that route.
         skill_registry = getattr(
             getattr(self.context, "skills", None),
             "registry",
@@ -854,15 +744,11 @@ class AgentLoop:
             from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
 
             self.tools.register(
+                ReadSkillTool(client=self._skill_hub_client, registry=skill_registry),
+            )
+            self.tools.register(
                 UseSkillTool(client=self._skill_hub_client, registry=skill_registry),
             )
-            if self._skill_hub_client is not None:
-                self.tools.register(
-                    ReadSkillTool(
-                        client=self._skill_hub_client,
-                        registry=skill_registry,
-                    ),
-                )
 
         # Progressive tool disclosure. Registered last so the catalog it
         # searches covers every built-in/plugin tool above; MCP tools join
@@ -896,6 +782,27 @@ class AgentLoop:
                 ),
                 first=True,
             )
+
+    def _dag_guide_skill_id(self) -> str | None:
+        """The orchestration guide's id for the DAG tool description, or None.
+
+        The tool tells the agent to load this skill before its first call, so
+        the pointer must be real: a deployment that removed the builtin skills
+        would otherwise burn a turn on a read_skill that cannot resolve. When
+        the registry itself is unreachable, keep the pointer — the shipped
+        skill is there by default, and losing the instruction is the worse
+        failure of the two.
+        """
+        from raven.agent.subagent_dag.tool import GUIDE_SKILL_ID
+
+        registry = getattr(getattr(self.context, "skills", None), "registry", None)
+        if registry is None:
+            return GUIDE_SKILL_ID
+        try:
+            found = registry.get(GUIDE_SKILL_ID.split("/", 1)[1]) is not None
+        except Exception:  # noqa: BLE001 - a registry hiccup must not unregister the guide
+            return GUIDE_SKILL_ID
+        return GUIDE_SKILL_ID if found else None
 
     @staticmethod
     def _build_skill_hub_client(
@@ -942,94 +849,6 @@ class AgentLoop:
                 self._image_tool_result_ok[key],
             )
         return self._image_tool_result_ok[key]
-
-    # The tool that can read an attachment for a model that cannot see it.
-    # Contributed by the EverOS plugin, so absent on a default install.
-    _DESCRIBE_TOOL = "understand_media"
-
-    def _describe_tool_name(self) -> str | None:
-        """The description tool's name if it is registered, else ``None``.
-
-        Checked rather than assumed: the note that replaces a picture points at
-        this tool, and pointing at one the model was never given is an
-        instruction it cannot follow.
-        """
-        return self._DESCRIBE_TOOL if self.tools.get(self._DESCRIBE_TOOL) else None
-
-    def _route_result_images(
-        self,
-        model_text: str,
-        blocks: list[dict[str, Any]] | None,
-        model: str,
-    ) -> tuple[str, list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
-        """Decide how a tool result's pictures reach ``model``.
-
-        Returns the text the tool result carries, the blocks to put *in* it, and
-        the blocks to attach to a following user message. Exactly one of the last
-        two is ever populated.
-
-        Three outcomes, and the wording differs because the model's next move
-        differs. No vision at all: nothing follows, so the note must not promise
-        an attachment, and it names the description tool when one is registered.
-        Vision and a transport that carries images in a ``role="tool"`` message:
-        the blocks ride along untouched. Vision but a transport that cannot (every
-        OpenAI-style Chat Completions endpoint -- image is excluded from the tool
-        role at the schema level): the result carries text and the picture follows
-        in a user message, the shape OpenClaw uses.
-
-        A method rather than a branch inside the loop so it can be tested at all:
-        the loop reaches this point only through a live provider and a real tool
-        call, and the wrong choice here is silent -- the model answers about a
-        picture it never received.
-        """
-        if not blocks:
-            return model_text, blocks, None
-        if not self._supports_vision(model):
-            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
-        if self._supports_image_tool_result(model):
-            return model_text, blocks, None
-        attach = [b for b in blocks if b.get("type") == "image_url"]
-        return image_placeholder_text(blocks), None, attach
-
-    def _supports_vision(self, model: str | None = None) -> bool:
-        """Cached per model: whether this model can see a picture at all.
-
-        Asked once per turn and once per tool result that returns an image, and
-        the lookup joins the model string against the gateway catalogue -- same
-        reason the sibling probe above is cached.
-
-        Only a real verdict is cached. ``vision_verdict`` returns ``None`` while
-        the catalog has no answer -- a cold install, before the background warm
-        lands -- and that is optimism rather than knowledge: caching it would
-        freeze the guess for the life of this loop, which is the life of the
-        process, and the warm would then fill a table nothing re-reads. An
-        unknown model is re-asked each turn, which costs a dict lookup.
-
-        The verdict is the routed primary's. A fallback further down the chain is
-        sent the same message list, so a vision-capable primary with a blind
-        fallback hands the blind endpoint an image block it will refuse; that
-        refusal classifies as fatal and stops the chain rather than answering
-        blind. Pre-existing in the sibling probe too, and it needs the fallback
-        chain to be assembled per candidate to fix properly.
-        """
-        key = model or self.model
-        cached = self._vision_ok.get(key)
-        if cached is not None:
-            return cached
-
-        spec = None
-        try:
-            from raven.providers.registry import find_by_model
-
-            spec = find_by_model(key)
-        except Exception:
-            pass
-        verdict = vision_verdict(key, spec, self.provider)
-        logger.debug("vision support for {}: {}", key, verdict)
-        if verdict is None:
-            return True
-        self._vision_ok[key] = verdict
-        return verdict
 
     # ── Context engine helpers ──────────────────────────────────────────
 
@@ -1097,15 +916,8 @@ class AgentLoop:
         channel: str | None = None,
         chat_id: str | None = None,
         selected_skills: list[Any] | None = None,
-        model: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Ask the active context engine for the main-agent message window.
-
-        ``model`` is the id the request will actually reach (the router's pick,
-        when there is one). It decides whether an attachment is inlined as a
-        picture, so defaulting it to ``self.model`` would let the configured
-        model answer for a routed one.
-        """
+        """Ask the active context engine for the main-agent message window."""
         from raven.context_engine import TurnContext  # deferred — see module note
 
         # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
@@ -1122,8 +934,6 @@ class AgentLoop:
             turn=TurnContext(
                 current_message=current_message,
                 media=media,
-                can_see_images=self._supports_vision(model),
-                describe_tool=self._describe_tool_name(),
                 channel=channel,
                 chat_id=chat_id,
                 selected_skills=selected_skills,
@@ -1515,16 +1325,71 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron", "deep_research"):
+        for name in ("message", "spawn", "cron", "deep_research", "run_subagent_dag", "deliver_files"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research"):
+                elif name in ("spawn", "deep_research", "run_subagent_dag", "deliver_files"):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
+
+    def set_dag_progress_sink(self, sink) -> None:
+        """Late-bind the DAG tool's progress sink (host wires it to the web
+        channel's emitter so run_subagent_dag events reach the web UI)."""
+        self._dag_progress_sink = sink
+        if (tool := self.tools.get("run_subagent_dag")) is not None and hasattr(tool, "set_progress_sink"):
+            tool.set_progress_sink(sink)
+
+    def set_skills_sink(self, sink) -> None:
+        """Late-bind the sink that reports SkillForge-injected skills to the web
+        UI (host wires it to the web channel's emitter). ``sink`` is an async
+        callable ``(conversation, name, payload)`` matching the DAG sink."""
+        self._skills_sink = sink
+
+    async def _emit_injected_skills(self, session_key: str) -> None:
+        """Push this turn's SkillForge-injected skills to the web UI's skill
+        panel as a ``skills_injected`` custom event. Ids are source-qualified
+        (``"<source>/<name>"``), so source + display name are parsed from the id
+        itself — no registry lookup needed. No-op when there is no sink (CLI/IM)
+        or nothing was injected this turn."""
+        if self._skills_sink is None:
+            return
+        ids = self._last_injected_skill_ids or []
+        if not ids:
+            return
+        skills = []
+        for qid in ids:
+            source, _, name = str(qid).partition("/")
+            skills.append({"id": str(qid), "source": source, "name": name or str(qid)})
+        try:
+            await self._skills_sink(session_key, "skills_injected", {"skills": skills})
+        except Exception:  # never break a turn on a telemetry/UI push
+            logger.exception("skills_injected emit failed")
+
+    def apply_third_party_subagents(self, configs: list) -> None:
+        """Hot-apply new third-party sub-agent config to the live runtime (P4):
+        the manager's spawn registry and the DAG tool's node executors, with no
+        restart. Registers the DAG tool on the first non-empty apply (and re-binds
+        the progress sink)."""
+        self._third_party_subagents = list(configs)
+        self.subagents.set_third_party_subagents(configs)
+        tool = self.tools.get("run_subagent_dag")
+        if tool is not None and hasattr(tool, "set_third_party_subagents"):
+            tool.set_third_party_subagents(configs)
+        elif tool is None and configs:
+            from raven.agent.subagent_dag.tool import SubAgentDagTool
+
+            new_tool = SubAgentDagTool(
+                workspace=self.subagents.workspace,
+                third_party_subagents=configs,
+                guide_skill_id=self._dag_guide_skill_id(),
+            )
+            if self._dag_progress_sink is not None:
+                new_tool.set_progress_sink(self._dag_progress_sink)
+            self.tools.register(new_tool)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1572,9 +1437,7 @@ class AgentLoop:
         else:
             fresh = prompt_t
 
-        # Left as None for a plan-billed provider: the field is optional all the
-        # way to the status bar, which renders it only when it is a number.
-        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write)
+        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write) or 0.0
         return UsageSnapshot(
             model=model,
             input_tokens=fresh,
@@ -1608,88 +1471,82 @@ class AgentLoop:
         per-fragment arguments strings. Multi-tool / out-of-order merging is
         a v0.2 ask.
 
-        No retry on transient errors in v0.1 stream mode — adding retry to
-        a partially-streamed call requires either restarting from scratch
-        (wasteful) or resume-from-offset (provider-specific). Deferred.
+        A failure that already streamed deltas is not retried — the caller has
+        rendered them, so a second attempt would duplicate its output. Before
+        the first delta there is nothing to duplicate, so a retryable error
+        reconnects up to ``_MAX_STREAM_RECONNECTS`` times. Once the budget is
+        spent the exception propagates: per N-TURNFAILED a mid-turn provider
+        error is the turn's failure, not a text reply about one.
         """
         content_buf: list[str] = []
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
-        had_error = False
-        error_content: str | None = None
-        error_classification: ErrorClassification | None = None
 
-        # aclosing() guarantees the async generator (and its underlying stream)
-        # is closed when a TimeoutError from the per-chunk idle cap unwinds the
-        # loop, so a stalled stream terminates with a structured error instead
-        # of hanging or leaking the connection. The stream path has no retry
-        # (see docstring), so the error surfaces as the turn's response.
-        try:
-            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
-                async for delta in stream:
-                    if delta.finish_reason == "error":
-                        # A non-streaming provider's chat() error, replayed
-                        # through the fallback as its single terminal delta.
-                        # Its content is the error text, not a token to render
-                        # or accumulate -- surface it via error_classification
-                        # instead of the normal success collation below.
-                        had_error = True
-                        error_content = delta.content
-                        error_classification = delta.error_classification
+        for attempt in range(self._MAX_STREAM_RECONNECTS + 1):
+            # aclosing() guarantees the async generator (and its underlying stream)
+            # is closed when an error from the per-chunk idle cap or the provider
+            # unwinds the loop, so a stalled or broken stream never hangs or leaks
+            # the connection — and a reconnect starts from a closed socket.
+            try:
+                async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+                    async for delta in stream:
+                        reasoning_delta = getattr(delta, "reasoning_content", None)
+                        if reasoning_delta:
+                            reasoning_buf.append(reasoning_delta)
+                            if on_reasoning_delta is not None:
+                                await on_reasoning_delta(reasoning_delta)
+                        if delta.content:
+                            content_buf.append(delta.content)
+                            if on_token_delta is not None:
+                                await on_token_delta(delta.content)
+                        if delta.tool_call_delta:
+                            _merge_tool_call_fragments(
+                                tool_call_slots,
+                                delta.tool_call_delta,
+                            )
                         if delta.usage is not None:
                             final_usage = delta.usage
-                        continue
-                    reasoning_delta = getattr(delta, "reasoning_content", None)
-                    if reasoning_delta:
-                        reasoning_buf.append(reasoning_delta)
-                        if on_reasoning_delta is not None:
-                            await on_reasoning_delta(reasoning_delta)
-                    if delta.content:
-                        content_buf.append(delta.content)
-                        if on_token_delta is not None:
-                            await on_token_delta(delta.content)
-                    if delta.tool_call_delta:
-                        _merge_tool_call_fragments(
-                            tool_call_slots,
-                            delta.tool_call_delta,
-                        )
-                    if delta.usage is not None:
-                        final_usage = delta.usage
-        except TimeoutError:
-            return LLMResponse(
-                content="".join(content_buf),
-                finish_reason="error",
-                error_classification=self.provider.classify_error(TimeoutError()),
-            )
-
-        if had_error:
-            return LLMResponse(
-                content=error_content,
-                finish_reason="error",
-                error_classification=error_classification,
-                usage=final_usage or {},
-            )
+                break
+            except TimeoutError:
+                # The idle cap already waited the full timeout; reconnecting would
+                # double an already-long stall, so a stall ends the call.
+                return LLMResponse(
+                    content="".join(content_buf),
+                    finish_reason="error",
+                    error_classification=self.provider.classify_error(TimeoutError()),
+                )
+            except Exception as exc:
+                # Every path out of here is a bare `raise` so the provider's own
+                # exception reaches the caller unchanged: per N-TURNFAILED the turn
+                # must fail (the lane emits TurnFailed) rather than resolve into a
+                # "Sorry" text reply.
+                if bool(content_buf or reasoning_buf or tool_call_slots) or attempt >= self._MAX_STREAM_RECONNECTS:
+                    raise
+                # Duck-typed providers need not implement classify_error; treat a
+                # missing classifier as fatal so the real error surfaces instead of
+                # an AttributeError raised from inside this handler.
+                classify = getattr(self.provider, "classify_error", None)
+                classification = classify(exc) if classify is not None else None
+                if classification is None or not classification.retryable:
+                    raise
+                logger.warning(
+                    "Stream LLM error [{}] before first delta (attempt {}/{}), reconnecting: {}",
+                    classification.category,
+                    attempt + 1,
+                    self._MAX_STREAM_RECONNECTS + 1,
+                    exc,
+                )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)
         finish_reason = "tool_calls" if tool_calls else "stop"
 
-        content = "".join(content_buf)
-        reasoning_content = "".join(reasoning_buf) or None
-        # getattr because the loop accepts duck-typed providers (test stubs and
-        # thin adapters implement just chat/chat_stream); absent means the
-        # LLMProvider default, False.
-        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
-        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
-            split_reasoning, content = split_orphan_think(content)
-            reasoning_content = split_reasoning
-
         return LLMResponse(
-            content=content,
+            content="".join(content_buf),
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
-            reasoning_content=reasoning_content,
+            reasoning_content="".join(reasoning_buf) or None,
         )
 
     @classmethod
@@ -1991,19 +1848,9 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # An explicitly configured window always wins over the live
-                # table -- that is what setting it means. Otherwise the live
-                # window from the model's provider table (e.g. OpenRouter,
-                # when LiteLLM lags) answers instead; unknown to that table
-                # too, 0 tells the UI to show its empty state rather than a
-                # number that isn't this model's.
-                if self._context_window_explicit:
-                    context_max = self.context_window_tokens
-                else:
-                    # Off the event loop: allow_fetch=True here can hit the
-                    # network for up to 10s on an OpenRouter model with both
-                    # caches expired. See rates._fetch_openrouter_models.
-                    context_max = await asyncio.to_thread(resolve_context_window, call_model) or 0
+                # Real window from the model's provider table when LiteLLM lags
+                # (e.g. OpenRouter); otherwise the configured default.
+                context_max = resolve_context_window(call_model) or self.context_window_tokens
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens
@@ -2111,14 +1958,16 @@ class AgentLoop:
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
+                                "blocking": self.tools.is_blocking(tool_call.name, tool_call.arguments),
                                 # Tool-authored call label; None -> UI derives one.
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
-                    if tool_call.name == "exec":
-                        exec_tool = self.tools.get("exec")
-                        if isinstance(exec_tool, ExecTool):
-                            exec_tool.set_tool_call_id(tool_call.id)
+                    # A tool whose output also reaches the UI on a side channel
+                    # (exec's inline diff, run_subagent_dag's progress events)
+                    # needs this call's id to correlate with the row the UI drew.
+                    if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
+                        setter(tool_call.id)
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -2139,17 +1988,29 @@ class AgentLoop:
                         preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
+                        tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
                         await on_tool_event(
                             "complete",
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
                                 "truncated": len(display_src) > 200,
+                                "metadata": tool_metadata,
                             },
                         )
-                    model_text, blocks, attach_blocks = self._route_result_images(
-                        model_text, getattr(result, "blocks", None), call_model or effective_model
-                    )
+                    blocks = getattr(result, "blocks", None)
+                    attach_blocks: list[dict[str, Any]] | None = None
+                    if blocks:
+                        if self._supports_image_tool_result(call_model or effective_model):
+                            pass  # blocks ride in the tool result itself
+                        else:
+                            # This transport cannot put an image in a tool result,
+                            # so the tool result carries text naming the image and
+                            # the picture follows in a user message. Same shape
+                            # OpenClaw uses against Chat Completions endpoints.
+                            model_text = image_placeholder_text(blocks)
+                            attach_blocks = [b for b in blocks if b.get("type") == "image_url"]
+                            blocks = None
                     if blocks:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, tool_call.name, model_text, blocks
@@ -2654,21 +2515,6 @@ class AgentLoop:
             content,
             context_messages,
         )
-        # ── Model routing (EcoClaw-style) ────────────────────────────────────
-        # Ahead of assembly, not after it: assembly decides whether an
-        # attachment is inlined as a picture or described in text, and that
-        # question is about the model the request will actually reach. Routing
-        # needs only ``content``, so asking first costs nothing and stops one
-        # model's verdict from shaping a message another model receives.
-        routed_model: str | None = None
-        fallback_models: list[str] = []
-        if self.router is not None:
-            routed_model, fallback_models = await self.router.select_model_chain(content)
-            if routed_model and routed_model != self.model:
-                logger.info("Router: {} → {}", self.model, routed_model)
-            if fallback_models:
-                logger.info("Router fallback chain: {}", fallback_models)
-
         initial_messages = await self._assemble_context_messages(
             session=session,
             session_key=key,
@@ -2677,8 +2523,24 @@ class AgentLoop:
             channel=channel,
             chat_id=chat_id,
             selected_skills=selected_skills or None,
-            model=routed_model,
         )
+        # Surface the skills SkillForge injected this turn to the web UI's skill
+        # panel (populated into _last_injected_skill_ids by the assemble above).
+        await self._emit_injected_skills(key)
+
+        # ── Model selection: the session's own pick, else the router ─────────
+        # A per-session model is an explicit user choice, so it outranks the
+        # router's heuristic and suppresses its fallback chain.
+        routed_model: str | None = session.metadata.get("model")
+        fallback_models: list[str] = []
+        if routed_model is not None:
+            logger.info("Session model: {} → {}", self.model, routed_model)
+        elif self.router is not None:
+            routed_model, fallback_models = await self.router.select_model_chain(content)
+            if routed_model and routed_model != self.model:
+                logger.info("Router: {} → {}", self.model, routed_model)
+            if fallback_models:
+                logger.info("Router fallback chain: {}", fallback_models)
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
@@ -2839,59 +2701,13 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
-        """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
-
-        A parked switch is adopted here, before the turn reads
-        ``self.provider`` for the first time, and the count kept for the
-        duration is what parks the next one. Wrapping rather than
-        snapshotting because the provider is read from ``self`` at eight
-        sites in this module and by the context engine and consolidator
-        underneath them -- one boundary covers all of them, a snapshot
-        would have to be threaded through each.
-
-        Both ends gate on zero, because turns overlap: a user turn and a
-        proactive turn hold slots in separate pools. Adopting on the way in
-        would otherwise land a switch parked for a turn that is still
-        running, and clearing a flag on the way out would unpark it just as
-        wrongly. Adopting again on the last exit is what keeps a park from
-        outliving the turns it was waiting on.
-        """
-        if self._turns_in_flight == 0:
-            self._adopt_pending_provider()
-        self._turns_in_flight += 1
-        try:
-            return await self._run_turn(
-                req,
-                emit,
-                drain,
-                stream=stream,
-                inline_tool_stream=inline_tool_stream,
-                usage_sink=usage_sink,
-                text_sink=text_sink,
-            )
-        finally:
-            self._turns_in_flight -= 1
-            if self._turns_in_flight == 0:
-                self._adopt_pending_provider()
-
-    async def _run_turn(
-        self,
-        req: TurnRequest,
-        emit: Emit,
-        drain: Drain,
-        *,
-        stream: bool = True,
-        inline_tool_stream: bool = False,
-        usage_sink: dict[str, Any] | None = None,
-        text_sink: dict[str, Any] | None = None,
-    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
-        (executor / debug server / MCP up, then idle). A spine runner calls the
-        public ``run_turn`` to satisfy the TurnRunner protocol.
+        (executor / debug server / MCP up, then idle). A spine runner wraps this
+        method to satisfy the TurnRunner protocol.
 
         ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
         wires it True so the reply goes out as StreamDelta and dissolves (b2 — no
@@ -2979,6 +2795,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
+                        blocking=bool(info.get("blocking")),
                         display=info.get("display"),
                     )
                 )
@@ -2989,6 +2806,7 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         result_preview=info["result_preview"],
                         truncated=info["truncated"],
+                        metadata=info.get("metadata"),
                     )
                 )
 

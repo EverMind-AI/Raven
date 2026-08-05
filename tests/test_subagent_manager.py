@@ -4,19 +4,12 @@ Isolates the gate: build_executor and _run_subagent_inner are stubbed, so the
 test drives only the Semaphore in _run_subagent (no real VM, no real LLM). A
 stubbed inner holds each subagent inside the gate on an Event, letting the test
 observe the concurrent peak.
-
-Also covers: a subagent reuses the main LiteLLMProvider instance verbatim
-(SubagentManager.provider), so the api_key that instance was constructed
-with reaches acompletion on the subagent's own chat_with_retry() calls too —
-acompletion is mocked, so this stays "no real LLM".
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -25,7 +18,6 @@ from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
 from raven.providers.base import LLMResponse, ToolCallRequest
-from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
 
 
@@ -102,7 +94,7 @@ async def _drive(monkeypatch, *, max_concurrent: int, spawn_n: int) -> int:
     state = {"current": 0, "peak": 0}
     release = asyncio.Event()
 
-    async def _stub_inner(task_id, task, label, origin, executor, provider, model) -> None:
+    async def _stub_inner(task_id, task, label, origin, executor) -> None:
         state["current"] += 1
         state["peak"] = max(state["peak"], state["current"])
         await release.wait()
@@ -154,15 +146,13 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
         "delete",
         {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
         executor,
-        manager.provider,
-        manager.model,
     )
 
     assert executor.commands == []
     assert len(provider.responses) == 1
     assert announcements == [
         {
-            "result": manager_mod._ABORTED_ACTION_RESULT,
+            "result": manager_mod.ABORTED_ACTION_RESULT,
             "status": "error",
         }
     ]
@@ -257,7 +247,7 @@ async def test_cancel_by_session_cancels_live_task(monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
+    async def _blocking_inner(task_id, task, label, origin, executor) -> None:
         entered.set()
         await release.wait()  # never set — keeps the task live until cancelled
 
@@ -337,45 +327,84 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
     assert calls == [False]
 
 
-async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
-    """A subagent runs in-process against the exact provider instance the main
-    agent was built with (manager.provider), not a fresh one — so an api_key
-    set only on the main instance must still reach acompletion for the
-    subagent's own chat_with_retry() calls.
+def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
+    """The catalog handed to a sub-agent must not advertise a skill whose
+    procedure needs a tool this backend never registers — the DAG skill tells
+    the reader to call run_subagent_dag, which only the main agent has."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
-    A reported spawn-subagent 401 could not be reproduced by reading the
-    code (chat()/chat_stream() already pass api_key explicitly to
-    acompletion), but nothing in the test suite actually asserted that
-    kwarg ever arrived -- this pins it down.
-    """
-    captured: dict[str, Any] = {}
+    prompt = build_subagent_prompt(tmp_path, ["read_file", "exec"])
 
-    async def fake_acompletion(**kwargs: Any):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="ok", tool_calls=None),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
-        )
+    assert "subagent-dag-orchestration" not in prompt
+    assert "run_subagent_dag" not in prompt
+    # The filter is targeted, not a blanket catalog suppression.
+    assert "weather" in prompt
 
-    monkeypatch.setattr(
-        "raven.providers.litellm_provider.acompletion",
-        fake_acompletion,
-    )
 
-    provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
-    manager = SubagentManager(provider=provider, workspace=Path("/tmp"))
+def test_build_subagent_prompt_gates_on_the_declaration_not_a_skill_name(tmp_path):
+    """The rule is `requires.tools`, not a hardcoded name list: a sub-agent that
+    somehow did hold run_subagent_dag would see the guide, and any future
+    tool-gated skill is covered without editing this backend."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
-    assert manager.provider is provider
+    prompt = build_subagent_prompt(tmp_path, ["read_file", "run_subagent_dag"])
 
-    response = await manager.provider.chat_with_retry(
-        messages=[{"role": "user", "content": "hi"}],
-        model="openai/gpt-4o",
-    )
+    assert "subagent-dag-orchestration" in prompt
 
-    assert response.finish_reason != "error"
-    assert captured["api_key"] == "k-main"
+
+def test_build_subagent_prompt_without_a_tool_list_gates_everything_tool_bound(tmp_path):
+    """A sub-agent prompt is always built next to its own registry, so "no names"
+    means "no tools" — the opposite of the main agent's segment builder, where an
+    unanswerable tool lookup has to degrade to showing everything."""
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
+
+    prompt = build_subagent_prompt(tmp_path)
+
+    assert "subagent-dag-orchestration" not in prompt
+    assert "weather" in prompt  # declares no requires.tools
+
+
+async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
+    """Backstop for the tool layer: even if a future backend registers the DAG
+    tool on a sub-agent, the call fails loudly instead of fanning out."""
+    from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+    from raven.agent.subagent_dag.tool import SubAgentDagTool
+    from raven.agent.tools.base import ToolResult
+
+    tool = SubAgentDagTool(workspace=tmp_path)
+
+    token = IN_SUBAGENT_RUN.set(True)
+    try:
+        blocked = await tool.execute(nodes=[])
+    finally:
+        IN_SUBAGENT_RUN.reset(token)
+
+    assert blocked.startswith("Error:")
+    assert "not available inside a sub-agent run" in blocked
+
+    # Same call from the main agent's context is accepted (empty graph → no-op).
+    # A refusal is a plain error string; an accepted run comes back as a
+    # ToolResult carrying the transcript label alongside the model text.
+    assert isinstance(await tool.execute(nodes=[]), ToolResult)
+
+
+async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
+    """RavenLoopBackend.run is what sets the flag the DAG guard reads, and it
+    must restore the previous value so the main agent keeps its own tools."""
+    from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=object(), model="m")
+    seen: list[bool] = []
+
+    async def _probe(task, **kwargs):
+        seen.append(IN_SUBAGENT_RUN.get())
+        return "done"
+
+    backend._run = _probe
+
+    assert IN_SUBAGENT_RUN.get() is False
+    await backend.run("t", task_id="1", workspace=tmp_path, executor=None)
+
+    assert seen == [True]
+    assert IN_SUBAGENT_RUN.get() is False

@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.11"
+version = "0.1.10"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -36,6 +36,10 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
+    # OAuth provider login (Codex / GitHub Copilot) imports this during onboard,
+    # so it must be a runtime dep -- otherwise `uv tool install raven` users hit
+    # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
+    "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -97,6 +101,7 @@ channels = [
 ]
 tools = [
     "readability-lxml>=0.8.4,<1.0.0",
+    "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
 sandbox = [
     "anyio>=4.0",
@@ -147,8 +152,6 @@ include = [
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
-    # Bundled model-label snapshot, so a fresh install labels models offline.
-    "raven/providers/data/*.json",
     # Tracing dashboard viewer (dependency-free Node server + static client).
     "raven/tracing/viewer/**/*.js",
     "raven/tracing/viewer/**/*.css",
@@ -178,7 +181,11 @@ constraint-dependencies = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["benchmarks/**/data", "benchmarks/**/results", "benchmarks/**/output"]
+extend-exclude = [
+    "benchmarks/**/data",
+    "benchmarks/**/results",
+    "benchmarks/**/output",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "S101", "S105", "S106", "S107", "S506", "S605", "S607"]
@@ -273,6 +280,7 @@ markers = [
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
+    "oauth-cli-kit>=0.1.6",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",

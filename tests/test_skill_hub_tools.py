@@ -13,14 +13,30 @@ from raven.agent.tools.skill_hub import (
 
 
 class _FakeRegistry:
-    """Minimal SkillRegistry stand-in: ``get(name, source)`` over a dict."""
+    """Minimal SkillRegistry stand-in, keyed the way the real one is.
+
+    Entries are keyed by *physical layer* — ``workspace`` / ``builtin`` /
+    ``external`` / ``everos`` — never by the ``local`` router namespace, which
+    SkillRegistry does not know. ``source=None`` resolves to the layer-priority
+    winner. Keying a fixture under ``("local", name)`` would make a broken
+    namespace passthrough look green.
+    """
+
+    _LAYER_PRIORITY = ("workspace", "external", "builtin", "everos")
 
     def __init__(self, metas: dict[tuple[str, str], object]) -> None:
+        assert not any(layer == "local" for layer, _ in metas), "'local' is a router namespace, not a registry layer"
         self._metas = metas
         self.invalidated: list[str] = []
 
     def get(self, name: str, source: str | None = None):
-        return self._metas.get((source, name))
+        if source is not None:
+            return self._metas.get((source, name))
+        candidates = [(layer, m) for (layer, key), m in self._metas.items() if key == name]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: self._LAYER_PRIORITY.index(c[0]))
+        return candidates[0][1]
 
     def invalidate_source(self, source: str) -> None:
         self.invalidated.append(source)
@@ -98,7 +114,7 @@ class TestReadSkill:
 
     async def test_local_body_from_registry(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "local body", with_scripts=False)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await ReadSkillTool(registry=reg).execute(skill_id="local/x")
         assert "local body" in out
 
@@ -119,7 +135,7 @@ class TestUseSkill:
 
     async def test_local_with_scripts(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "body here", with_scripts=True)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await UseSkillTool(registry=reg).execute(skill_id="local/x")
         assert "scripts_dir:" in out
         assert str(tmp_path / "x" / "scripts") in out
@@ -127,7 +143,7 @@ class TestUseSkill:
 
     async def test_local_without_scripts_is_instruction_only(self, tmp_path: Path) -> None:
         meta = _meta(tmp_path, "x", "just instructions", with_scripts=False)
-        reg = _FakeRegistry({("local", "x"): meta})
+        reg = _FakeRegistry({("builtin", "x"): meta})
         out = await UseSkillTool(registry=reg).execute(skill_id="local/x")
         assert "no bundled scripts" in out
         assert "scripts_dir:" not in out
@@ -143,6 +159,33 @@ class TestUseSkill:
             skill_id="local/nope",
         )
         assert out.startswith("Error")
+
+    async def test_local_id_reaches_a_builtin_via_the_real_registry(self, tmp_path: Path) -> None:
+        """Pins the namespace translation against a real SkillRegistry.
+
+        No fake can catch this one: the bug was handing ``source="local"``
+        straight to ``SkillRegistry.get``, whose compound key only ever holds
+        physical layers (workspace / builtin / external), so every ``local/*``
+        id — the exact form the router prints in the ``# Skills`` brackets and
+        both tool descriptions tell the agent to copy — resolved to None.
+        """
+        from raven.memory_engine.skill_local import SkillRegistry
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        builtin = tmp_path / "builtin" / "demo"
+        builtin.mkdir(parents=True)
+        (builtin / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: d\n---\n\nDEMO BODY\n",
+            encoding="utf-8",
+        )
+        registry = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin")
+        assert registry.get("demo").source == "builtin"  # never "local"
+
+        for tool in (UseSkillTool(registry=registry), ReadSkillTool(registry=registry)):
+            out = await tool.execute(skill_id="local/demo")
+            assert not out.startswith("Error"), out
+            assert "DEMO BODY" in out
 
     async def test_hub_install_and_registry_invalidation(self) -> None:
         client = _FakeClient(

@@ -411,11 +411,6 @@
           "name": "sender_id",
           "required": false,
           "schema": { "type": "string" }
-        },
-        {
-          "name": "media",
-          "required": false,
-          "schema": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
         }
       ],
       "result": {
@@ -839,126 +834,6 @@
       ]
     },
     {
-      "name": "model.endpoints",
-      "summary": "List a provider's endpoints, api_key redacted for display.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "ModelEndpointsResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["endpoints"],
-          "properties": {
-            "endpoints": {
-              "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
-            }
-          }
-        }
-      },
-      "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
-      ]
-    },
-    {
-      "name": "model.add_endpoint",
-      "summary": "Add or replace one of a provider's endpoints, keyed by label.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "label",
-          "description": "Idempotency key: an existing entry with this label is replaced wholesale.",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "api_key",
-          "required": false,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "api_base",
-          "required": false,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "ModelAddEndpointResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["endpoints"],
-          "properties": {
-            "endpoints": {
-              "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
-            }
-          }
-        }
-      },
-      "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
-      ]
-    },
-    {
-      "name": "model.remove_endpoint",
-      "summary": "Remove one of a provider's endpoints by label.",
-      "params": [
-        {
-          "name": "slug",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "label",
-          "required": true,
-          "schema": { "type": "string" }
-        },
-        {
-          "name": "session_id",
-          "required": false,
-          "schema": { "type": "string" }
-        }
-      ],
-      "result": {
-        "name": "ModelRemoveEndpointResult",
-        "schema": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["endpoints"],
-          "properties": {
-            "endpoints": {
-              "type": "array",
-              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
-            }
-          }
-        }
-      },
-      "errors": [
-        { "$ref": "#/components/errors/ConfigValidationError" }
-      ]
-    },
-    {
       "name": "config.get",
       "summary": "Read hot-changeable config fields (whitelist).",
       "params": [
@@ -1369,6 +1244,57 @@
       "errors": [
         { "$ref": "#/components/errors/NotSupportedInV01" }
       ]
+    },
+    {
+      "name": "dag.get",
+      "summary": "Read one run_subagent_dag run back off disk.",
+      "description": "The live dag.* progress events are never replayed, so this is how a client that missed them rebuilds or repairs a graph. An unfinalized run has no manifest, so per-node state is overlaid from the instance registry.",
+      "params": [
+        { "name": "run_id", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "session_key",
+          "required": false,
+          "schema": { "type": "string" },
+          "description": "Scopes the registry rows consulted for an unfinalized run's overlay."
+        }
+      ],
+      "result": {
+        "name": "DagGetResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run"],
+          "properties": {
+            "run": { "$ref": "#/components/schemas/DagRunSnapshot" }
+          }
+        }
+      }
+    },
+    {
+      "name": "dag.node",
+      "summary": "Read one DAG node's rendered prompt and output.",
+      "description": "Neither is carried by the graph: the manifest inlines only the leaf nodes' text, and the tool result kept in the transcript is clamped to 200 chars.",
+      "params": [
+        { "name": "run_id", "required": true, "schema": { "type": "string" } },
+        { "name": "node", "required": true, "schema": { "type": "string" } },
+        {
+          "name": "max_output_chars",
+          "required": false,
+          "schema": { "type": "integer" },
+          "description": "Head of the output to return; the file itself is uncapped. Defaults to 20000."
+        }
+      ],
+      "result": {
+        "name": "DagNodeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["node"],
+          "properties": {
+            "node": { "$ref": "#/components/schemas/DagNodeDetail" }
+          }
+        }
+      }
     }
   ],
   "components": {
@@ -1533,40 +1459,7 @@
           },
           "total_models": { "type": "integer" },
           "needs_api_base": { "type": "boolean" },
-          "warning": { "type": "string" },
-          "model_labels": {
-            "type": "object",
-            "description": "Keyed by the model id as it appears in `models`.",
-            "additionalProperties": { "$ref": "#/components/schemas/ModelLabel" }
-          }
-        }
-      },
-      "ModelLabel": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.",
-        "required": ["label"],
-        "properties": {
-          "label": { "type": "string" },
-          "description": { "type": "string" }
-        }
-      },
-      "ProviderEndpointInfo": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.",
-        "required": ["label", "api_key"],
-        "properties": {
-          "label": { "type": "string" },
-          "api_key": {
-            "type": "string",
-            "description": "Redacted for display: `****set****` or `(empty)`."
-          },
-          "api_base": { "type": "string" },
-          "extra_headers": {
-            "type": "object",
-            "additionalProperties": { "type": "string" }
-          }
+          "warning": { "type": "string" }
         }
       },
       "UsageSnapshot": {
@@ -1784,7 +1677,11 @@
             "properties": {
               "tool_call_id": { "type": "string" },
               "result_preview": { "type": "string" },
-              "truncated": { "type": "boolean" }
+              "truncated": { "type": "boolean" },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+              }
             }
           }
         }
@@ -1847,6 +1744,187 @@
           }
         }
       },
+      "DagNodeStatus": {
+        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting.",
+        "type": "string",
+        "enum": ["pending", "running", "completed", "failed", "skipped"]
+      },
+      "DagSnapshotNodeStatus": {
+        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing.",
+        "type": "string",
+        "enum": ["pending", "running", "completed", "failed", "skipped", "interrupted"]
+      },
+      "DagSnapshotNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["node", "status"],
+        "properties": {
+          "node": { "type": "string" },
+          "subagent": { "type": "string" },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "instance": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/DagSnapshotNodeStatus" },
+          "started_at": { "type": "integer" },
+          "ended_at": { "type": "integer" },
+          "prompt_file": { "type": "string" },
+          "output_file": { "type": "string" },
+          "error": { "type": "string" },
+          "prompt_template": { "type": "string" }
+        }
+      },
+      "DagRunSnapshot": {
+        "description": "One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run_id", "dir", "finalized", "files", "summary"],
+        "properties": {
+          "run_id": { "type": "string" },
+          "dir": { "type": "string" },
+          "finalized": { "type": "boolean" },
+          "files": { "type": "array", "items": { "$ref": "#/components/schemas/DagSnapshotNode" } },
+          "terminal_outputs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["node", "text"],
+              "properties": {
+                "node": { "type": "string" },
+                "text": { "type": "string" }
+              }
+            }
+          },
+          "summary": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "total": { "type": "integer" },
+              "completed": { "type": "integer" },
+              "failed": { "type": "integer" },
+              "skipped": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "DagNodeDetail": {
+        "description": "One node's rendered prompt and the head of its output. Either text is absent when its file does not exist: a node that never ran has no prompt, a failed one no output.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run_id", "node", "output_chars", "output_truncated"],
+        "properties": {
+          "run_id": { "type": "string" },
+          "node": { "type": "string" },
+          "prompt": { "type": "string" },
+          "prompt_file": { "type": "string" },
+          "output": { "type": "string" },
+          "output_file": { "type": "string" },
+          "output_chars": { "type": "integer" },
+          "output_truncated": { "type": "boolean" }
+        }
+      },
+      "DagRunStartedEvent": {
+        "description": "A run_subagent_dag call accepted a graph. Carries the whole topology so a client can lay the graph out before any node reports.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "dag.run_started" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "nodes"],
+            "properties": {
+              "run_id": { "type": "string" },
+              "tool_call_id": {
+                "description": "The call this run belongs to. Absent on hosts that do not correlate progress with a tool row.",
+                "type": "string"
+              },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "subagent", "depends_on"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "subagent": { "type": "string" },
+                    "depends_on": { "type": "array", "items": { "type": "string" } },
+                    "instance": {
+                      "description": "Shared stateful handle. Nodes naming the same one run sequentially.",
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "DagNodeUpdatedEvent": {
+        "description": "One node changed state.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "dag.node_updated" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "node", "status"],
+            "properties": {
+              "run_id": { "type": "string" },
+              "tool_call_id": { "type": "string" },
+              "node": { "type": "string" },
+              "status": { "$ref": "#/components/schemas/DagNodeStatus" },
+              "started_at": { "type": "integer" },
+              "ended_at": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "DagRunCompletedEvent": {
+        "description": "The run finished. Terminal node output text is deliberately absent -- it is already in the tool result.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "payload"],
+        "properties": {
+          "type": { "type": "string", "const": "dag.run_completed" },
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["run_id", "dir", "summary", "files"],
+            "properties": {
+              "run_id": { "type": "string" },
+              "tool_call_id": { "type": "string" },
+              "dir": { "type": "string" },
+              "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "total": { "type": "integer" },
+                  "completed": { "type": "integer" },
+                  "failed": { "type": "integer" },
+                  "skipped": { "type": "integer" }
+                }
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["node", "status"],
+                  "properties": {
+                    "node": { "type": "string" },
+                    "status": { "$ref": "#/components/schemas/DagNodeStatus" },
+                    "output_file": { "type": "string" },
+                    "error": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "TurnEvent": {
         "description": "Discriminated union of turn streaming events. The 'type' field is the discriminator.",
         "oneOf": [
@@ -1859,7 +1937,10 @@
           { "$ref": "#/components/schemas/ToolCompleteEvent" },
           { "$ref": "#/components/schemas/MessageCompleteEvent" },
           { "$ref": "#/components/schemas/ErrorEvent" },
-          { "$ref": "#/components/schemas/CronDeliveredEvent" }
+          { "$ref": "#/components/schemas/CronDeliveredEvent" },
+          { "$ref": "#/components/schemas/DagRunStartedEvent" },
+          { "$ref": "#/components/schemas/DagNodeUpdatedEvent" },
+          { "$ref": "#/components/schemas/DagRunCompletedEvent" }
         ],
         "discriminator": {
           "propertyName": "type",
@@ -1873,7 +1954,10 @@
             "tool.complete": "#/components/schemas/ToolCompleteEvent",
             "message.complete": "#/components/schemas/MessageCompleteEvent",
             "error": "#/components/schemas/ErrorEvent",
-            "cron.delivered": "#/components/schemas/CronDeliveredEvent"
+            "cron.delivered": "#/components/schemas/CronDeliveredEvent",
+            "dag.run_started": "#/components/schemas/DagRunStartedEvent",
+            "dag.node_updated": "#/components/schemas/DagNodeUpdatedEvent",
+            "dag.run_completed": "#/components/schemas/DagRunCompletedEvent"
           }
         }
       }

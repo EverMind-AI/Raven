@@ -38,6 +38,30 @@ class ToolRegistry:
         """Check if a tool is registered."""
         return name in self._tools
 
+    def is_blocking(self, name: str, params: dict[str, Any] | None = None) -> bool:
+        """Whether this call is a blocking interaction (execute() is not timer-wrapped).
+
+        The tool's own ``blocking_for`` is the single fact source, and it takes the
+        call's params because a forwarding tool (``tool_call``) inherits the verdict
+        of whatever it forwards to. Exposed so a turn stream can tell a consumer
+        that this call has no deadline and may go silent for as long as it runs,
+        without the consumer keeping its own list of tool names.
+        """
+        tool = self._tools.get(name)
+        return bool(tool is not None and tool.blocking_for(params or {}))
+
+    def take_metadata(self, name: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Consume the structured payload this call left for the turn stream.
+
+        Takes the call's params for the same reason ``is_blocking`` does: a
+        forwarding tool (``tool_call``) owns none of the metadata it returns, so
+        the payload must be collected from whatever it forwarded to.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            return None
+        return tool.metadata_owner(params or {}).take_metadata()
+
     def get_definitions(self) -> list[dict[str, Any]]:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
@@ -61,7 +85,7 @@ class ToolRegistry:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
-            if tool.blocking_interaction:
+            if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
                 result = await tool.execute(**params)
             else:

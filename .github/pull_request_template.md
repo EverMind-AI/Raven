@@ -27,4 +27,4 @@
 
 ## Related Issues
 
-<!-- Fixes #NNN, fixes #MMM (repeat the keyword per issue), a bare #NNN to reference, or N/A -->
+<!-- Fixes #123, closes #123, or N/A -->

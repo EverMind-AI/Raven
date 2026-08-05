@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 import httpx
 import json_repair
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -32,15 +32,10 @@ class AzureOpenAIProvider(LLMProvider):
         api_key: str = "",
         api_base: str = "",
         default_model: str = "gpt-5.2-chat",
-        deployment: str = "",
-        api_version: str = "2024-10-21",
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
-        # Empty means "the model id names the deployment", which is how every
-        # config written before the field existed says it.
-        self.deployment = deployment
-        self.api_version = api_version
+        self.api_version = "2024-10-21"
 
         # Validate required parameters
         if not api_key:
@@ -54,20 +49,9 @@ class AzureOpenAIProvider(LLMProvider):
         self.api_base = api_base
 
     def _build_chat_url(self, deployment_name: str) -> str:
-        """Build the Azure OpenAI chat completions URL.
-
-        A configured ``deployment`` decides; otherwise the model id names it, as
-        it did before the field existed. Falling back rather than requiring the
-        field keeps working configs working -- and it is why the id may still not
-        carry a prefix in that case: whatever is here goes into the URL path.
-        """
+        """Build the Azure OpenAI chat completions URL."""
         # Azure OpenAI URL format:
         # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
-        from raven.providers.registry import find_by_name
-        from raven.providers.wire import wire_model
-
-        deployment_name = self.deployment or wire_model(deployment_name, spec=find_by_name("azure_openai"))
-
         base_url = self.api_base
         if not base_url.endswith("/"):
             base_url += "/"
@@ -168,13 +152,9 @@ class AzureOpenAIProvider(LLMProvider):
                     client.post(url, headers=headers, json=payload), self.generation.timeout
                 )
                 if response.status_code != 200:
-                    exc = ProviderHTTPError(
-                        response.status_code, f"Azure OpenAI API Error {response.status_code}: {response.text}"
-                    )
                     return LLMResponse(
-                        content=str(exc),
+                        content=f"Azure OpenAI API Error {response.status_code}: {response.text}",
                         finish_reason="error",
-                        error_classification=self.classify_error(exc),
                     )
 
                 response_data = response.json()

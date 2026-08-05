@@ -230,6 +230,17 @@ def test_default_always_visible_covers_core_and_interaction_primitives() -> None
     }
 
 
+def test_optional_orchestration_and_skill_fetch_stay_searchable() -> None:
+    """A minute-scale sub-agent fan-out and a skill-body fetch are deliberate
+    acts, not per-turn primitives: they are reached through tool_search so the
+    resident tool list does not grow with every optional capability. A deploy
+    that wants either resident adds it via tools.tool_search.always_visible."""
+    always = set(DEFAULT_ALWAYS_VISIBLE)
+    assert "run_subagent_dag" not in always
+    assert "read_skill" not in always
+    assert "use_skill" not in always
+
+
 def test_visible_names_are_stable_and_include_meta() -> None:
     ctrl = ToolSearchController(ToolRegistry(), always_visible={"read_file"})
     assert META_TOOL_NAMES <= ctrl.visible_names()
@@ -407,3 +418,105 @@ def test_registry_register_first_runs_before_others() -> None:
     reg.register(_Noop("front"), first=True)
     reg.register(_Noop("back"))
     assert [s.name for s in reg.strategies] == ["front", "a", "b", "back"]
+
+
+# ---- tool_call must not flatten its target's blocking verdict ----
+
+
+def test_tool_call_reports_its_target_as_blocking() -> None:
+    """``tool_call`` is a passthrough, so its blocking verdict is the target's.
+
+    Reading the meta-tool's own flag instead double-wraps a blocking target: the
+    registry applies its default ceiling to the outer ``tool_call`` and kills a
+    sub-agent run that is deliberately deadline-free, and the turn stream is told
+    the call is clockable when it is not.
+    """
+    reg = ToolRegistry()
+    reg.register(_FakeTool("grep", "search files"))
+    blocking = _FakeTool("run_subagent_dag", "orchestrate sub-agents")
+    blocking.blocking_interaction = True
+    reg.register(blocking)
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "run_subagent_dag"}) is True
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "grep"}) is False
+
+
+def test_tool_call_with_an_unknown_or_meta_target_is_not_blocking() -> None:
+    """No target, an unknown one, or a meta-tool: fall back to non-blocking so the
+    registry keeps its backstop on a call that is going to error out anyway."""
+    reg = ToolRegistry()
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    reg.register(ToolSearchTool(ctrl))
+
+    assert reg.is_blocking(TOOL_CALL_NAME, {}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "nope"}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": TOOL_CALL_NAME}) is False
+    assert reg.is_blocking(TOOL_CALL_NAME, {"name": "tool_search"}) is False
+
+
+class _MetadataTool(_FakeTool):
+    def take_metadata(self) -> dict[str, Any] | None:
+        return {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+def test_tool_call_hands_back_its_target_metadata() -> None:
+    """``tool_call`` produces no metadata of its own, so a forwarded tool's
+    payload has to be collected from the target. Reading the forwarder instead
+    strands the payload: the call succeeds, the model is told so, and the UI is
+    handed nothing at all."""
+    reg = ToolRegistry()
+    reg.register(_MetadataTool("deliver_files", "hand files to the user"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    payload = reg.take_metadata(TOOL_CALL_NAME, {"name": "deliver_files", "arguments": {}})
+
+    assert payload == {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+def test_tool_call_with_an_unknown_or_meta_target_has_no_metadata() -> None:
+    """No target, an unknown one, or a meta-tool: fall back to the forwarder's
+    own (absent) metadata rather than raising on a call that already errors."""
+    reg = ToolRegistry()
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    reg.register(ToolSearchTool(ctrl))
+
+    assert reg.take_metadata(TOOL_CALL_NAME, {}) is None
+    assert reg.take_metadata(TOOL_CALL_NAME, {"name": "nope"}) is None
+    assert reg.take_metadata(TOOL_CALL_NAME, {"name": TOOL_CALL_NAME}) is None
+    assert reg.take_metadata("nope", {}) is None
+
+
+def test_direct_call_still_takes_its_own_metadata() -> None:
+    reg = ToolRegistry()
+    reg.register(_MetadataTool("deliver_files", "hand files to the user"))
+
+    assert reg.take_metadata("deliver_files", {}) == {"raven_delivery": {"files": ["report.pdf"]}}
+
+
+@pytest.mark.asyncio
+async def test_tool_call_does_not_timer_kill_a_blocking_target() -> None:
+    """End-to-end: a slow blocking target reached via tool_call outlives the
+    registry ceiling, instead of being cut off by the outer wrapper."""
+    import asyncio
+
+    class _SlowBlocking(_FakeTool):
+        blocking_interaction = True
+
+        async def execute(self, **kwargs: Any) -> str:
+            await asyncio.sleep(0.2)
+            return "ran run_subagent_dag"
+
+    reg = ToolRegistry()
+    reg.DEFAULT_TOOL_TIMEOUT_S = 0.05
+    reg.register(_SlowBlocking("run_subagent_dag", "orchestrate sub-agents"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+
+    out = await reg.execute(TOOL_CALL_NAME, {"name": "run_subagent_dag", "arguments": {}})
+
+    assert out == "ran run_subagent_dag"

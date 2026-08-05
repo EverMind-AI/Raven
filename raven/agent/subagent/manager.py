@@ -1,7 +1,6 @@
 """Subagent manager for background task execution."""
 
 import asyncio
-import json
 import time
 import uuid
 from collections import deque
@@ -10,24 +9,49 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool
+from raven.agent.subagent.backends import (
+    ABORTED_ACTION_RESULT,
+    AgentMeta,
+    RavenLoopBackend,
+    SubagentActionAbortedError,
+    SubagentBackend,
+    build_subagent_prompt,
+    build_third_party_backend,
+    third_party_agent_meta,
+)
+from raven.agent.subagent.instances import get_registry
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.tracing import semconv, trace
-from raven.utils.helpers import build_assistant_message
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
 _SPAWN_WINDOW_SECONDS = 3600
-_ABORTED_ACTION_RESULT = (
-    "The subtask stopped because a safety decision terminated the requested operation. "
-    "No alternative method was attempted."
-)
+# A status row is never worth failing -- or hanging -- a spawn over: the gate
+# a wedged CLI subagent already holds must never stall behind a slow or
+# corrupt registry write.
+_REGISTRY_WRITE_TIMEOUT_S = 2.0
+
+
+async def _write_spawn_status(session_key: str | None, agent: str | None, handle: str, status: str) -> None:
+    """Best-effort registry write for one spawn's status, swallowing any failure.
+
+    Only third-party spawns get a row: a default raven-loop subagent has no
+    third-party agent name and must not appear as an instance row.
+    """
+    if not session_key or not agent:
+        return
+    try:
+        await asyncio.wait_for(
+            get_registry().upsert_spawn(session_key, agent, handle, status),
+            timeout=_REGISTRY_WRITE_TIMEOUT_S,
+        )
+    except Exception:  # noqa: BLE001 - a status row must never fail or hang a spawn
+        logger.opt(exception=True).warning(
+            "Subagent instance registry write failed for {}/{!r} (status={})", agent, handle, status
+        )
 
 
 class SubagentManager:
@@ -47,6 +71,7 @@ class SubagentManager:
         jina_api_key: str | None = None,
         max_concurrent: int = 4,
         max_spawns_per_hour: int = 30,
+        third_party_subagents: list | None = None,
     ):
         from raven.config.schema import ExecToolConfig
 
@@ -68,25 +93,63 @@ class SubagentManager:
         self._owned_ids = owned_ids
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        # (session_key, agent, handle) -> {task_id, ...}, for one-instance
+        # cancellation (a stop button) without touching the rest of the
+        # session's spawns. A set, not a single id: the main agent can spawn
+        # the same (agent, instance) twice concurrently before the first
+        # completes, and cancel_by_instance must reach every one of them, not
+        # just whichever spawn happened to overwrite the slot last.
+        self._instance_tasks: dict[tuple[str, str, str], set[str]] = {}
         self._gate = asyncio.Semaphore(max_concurrent)
         self._max_spawns_per_hour = max_spawns_per_hour
         # Per-session spawn timestamps (monotonic), kept per session (not
         # per-process) so one busy session can't throttle others. Each deque is
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
+        # Pluggable per-spawn execution backend. Default is an in-process raven
+        # loop; third-party backends (CLI claude/codex, OpenAI-API mirothinker;
+        # req5) register in ``_backends`` keyed by agent name.
+        self._raven_backend = RavenLoopBackend(
+            provider=self.provider,
+            model=self.model,
+            restrict_to_workspace=self.restrict_to_workspace,
+            exec_config=self.exec_config,
+            brave_api_key=self.brave_api_key,
+            jina_api_key=self.jina_api_key,
+            web_proxy=self.web_proxy,
+        )
+        self._backends: dict[str, SubagentBackend] = {}
+        # (name, description, stateful) of configured third-party agents, for
+        # the spawn tool's description so the main agent knows what it can
+        # dispatch to.
+        self._third_party_meta: list[tuple[str, str, bool]] = []
+        self.set_third_party_subagents(third_party_subagents or [])
 
-    def set_provider(self, provider: LLMProvider, model: str) -> None:
-        """Adopt the provider a live ``/model`` switch just built.
+    def set_third_party_subagents(self, configs: list) -> None:
+        """(Re)build the third-party backend registry from config. Hot-appliable
+        at runtime (P4): replaces the current set so a web config change takes
+        effect without a restart."""
+        backends: dict[str, SubagentBackend] = {}
+        meta: list[AgentMeta] = []
+        for cfg in configs or []:
+            name = getattr(cfg, "name", None)
+            try:
+                backends[name] = build_third_party_backend(cfg)
+                meta.append(third_party_agent_meta(cfg))
+            except Exception as e:  # noqa: BLE001 — a bad entry must not sink the manager
+                logger.warning("Skipping third-party subagent {!r}: {}", name, e)
+        self._backends = backends
+        self._third_party_meta = meta
 
-        Subagents run on the parent's provider, so a switch that is not
-        propagated here leaves every spawn calling the credential the loop
-        has already abandoned. Only spawns requested after this call are
-        affected: a subagent is a detached task that outlives the turn that
-        spawned it, so the loop's park cannot cover it and ``spawn``
-        snapshots the pair it was asked for.
-        """
-        self.provider = provider
-        self.model = model
+    def _resolve_backend(self, agent: str | None) -> SubagentBackend:
+        """Pick the execution backend for a spawn; unknown/None -> raven loop."""
+        if agent and agent in self._backends:
+            return self._backends[agent]
+        return self._raven_backend
+
+    def list_third_party_agents(self) -> list[AgentMeta]:
+        """Advertised capabilities of the configured third-party agents (for the spawn tool)."""
+        return list(self._third_party_meta)
 
     async def spawn(
         self,
@@ -95,6 +158,8 @@ class SubagentManager:
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         session_key: str | None = None,
+        agent: str | None = None,
+        instance: str | None = None,
     ) -> str:
         """Spawn a subagent to execute a task in the background."""
         quota_key = session_key or "default"
@@ -118,18 +183,33 @@ class SubagentManager:
         window.append(now)
         task_id = str(uuid.uuid4())[:8]
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
-        origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
+        # Computed once and carried in `origin` so the concurrency index below
+        # and the registry rows this spawn later writes can never drift from
+        # each other, or from `CliAgentBackend`'s own handle derivation.
+        handle = instance or task_id
+        origin = {
+            "channel": origin_channel,
+            "chat_id": origin_chat_id,
+            "session_key": quota_key,
+            "agent": agent,
+            "instance": instance,
+            "handle": handle,
+        }
+        instance_key = (quota_key, agent, handle) if agent else None
 
-        # Snapshot here rather than where the task starts running: it queues
-        # behind the concurrency gate and a sandbox boot first, and a switch
-        # landing in that window would hand this task an endpoint the user
-        # chose after asking for it.
-        bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
-        )
+        # A row before the task even exists: a spawn queued behind a full gate
+        # (or a sandbox VM still booting) would otherwise have no registry row
+        # at all until it starts running, making it invisible and unstoppable
+        # from the UI for however long it waits.
+        if agent:
+            await _write_spawn_status(session_key, agent, handle, "pending")
+
+        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
+        if instance_key is not None:
+            self._instance_tasks.setdefault(instance_key, set()).add(task_id)
 
         def _cleanup(_: asyncio.Task) -> None:
             self._running_tasks.pop(task_id, None)
@@ -137,6 +217,10 @@ class SubagentManager:
                 ids.discard(task_id)
                 if not ids:
                     del self._session_tasks[session_key]
+            if instance_key is not None and (ids := self._instance_tasks.get(instance_key)) is not None:
+                ids.discard(task_id)
+                if not ids:
+                    del self._instance_tasks[instance_key]
 
         bg_task.add_done_callback(_cleanup)
 
@@ -150,8 +234,6 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
-        provider: LLMProvider,
-        model: str,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
@@ -162,7 +244,7 @@ class SubagentManager:
             async with self._gate:
                 executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
                 async with executor:
-                    await self._run_subagent_inner(task_id, task, label, origin, executor, provider, model)
+                    await self._run_subagent_inner(task_id, task, label, origin, executor)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
@@ -175,101 +257,32 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
         executor: Any,
-        provider: LLMProvider,
-        model: str,
     ) -> None:
+        session_key = origin.get("session_key")
+        agent = origin.get("agent")
+        handle = origin.get("handle") or task_id
         try:
-            # Build subagent tools (no message tool, no spawn tool)
-            tools = ToolRegistry()
-            allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(
-                ExecTool(
-                    working_dir=str(self.workspace),
-                    timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
-                    path_append=self.exec_config.path_append,
-                    executor=executor,
-                    extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                )
+            await _write_spawn_status(session_key, agent, handle, "running")
+            backend = self._resolve_backend(agent)
+            final_result = await backend.run(
+                task,
+                task_id=task_id,
+                workspace=self.workspace,
+                executor=executor,
+                session_key=session_key,
+                instance=origin.get("instance"),
             )
-            tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
-            tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
-
-            system_prompt = self._build_subagent_prompt()
-            messages: list[dict[str, Any]] = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": task},
-            ]
-
-            # Run agent loop (limited iterations)
-            max_iterations = 15
-            iteration = 0
-            final_result: str | None = None
-            final_status = "ok"
-
-            while iteration < max_iterations:
-                iteration += 1
-
-                response = await provider.chat_with_retry(
-                    messages=messages,
-                    tools=tools.get_definitions(),
-                    model=model,
-                )
-
-                if response.has_tool_calls:
-                    tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
-                    messages.append(
-                        build_assistant_message(
-                            response.content or "",
-                            tool_calls=tool_call_dicts,
-                            reasoning_content=response.reasoning_content,
-                            thinking_blocks=response.thinking_blocks,
-                        )
-                    )
-
-                    # Execute tools
-                    for tool_call in response.tool_calls:
-                        args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                        logger.debug(
-                            "Subagent [{}] executing: {} with arguments: {}", task_id, tool_call.name, args_str
-                        )
-                        result = await tools.execute(tool_call.name, tool_call.arguments)
-                        # The subagent's loop is an untrusted-data path too — fence its
-                        # tool output like the main loop does in add_tool_result.
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": tool_call.name,
-                                "content": wrap_untrusted(result, source=tool_call.name),
-                            }
-                        )
-                        if getattr(result, "abort_action", False):
-                            # Subagents must enforce the same terminal safety
-                            # signal as the main loop. Returning to the model
-                            # would let it translate a rejected operation into
-                            # another command or interpreter, while continuing
-                            # this batch would execute already-proposed siblings.
-                            final_result = _ABORTED_ACTION_RESULT
-                            final_status = "error"
-                            break
-                    if final_result is not None:
-                        break
-                else:
-                    final_result = response.content
-                    break
-
-            if final_result is None:
-                final_result = "Task completed but no final response was generated."
-
-            logger.info("Subagent [{}] finished with status {}", task_id, final_status)
-            await self._announce_result(task_id, label, task, final_result, origin, final_status)
-
+            await _write_spawn_status(session_key, agent, handle, "completed")
+            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+        except asyncio.CancelledError:
+            await _write_spawn_status(session_key, agent, handle, "cancelled")
+            raise
+        except SubagentActionAbortedError:
+            await _write_spawn_status(session_key, agent, handle, "failed")
+            logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
+            await self._announce_result(task_id, label, task, ABORTED_ACTION_RESULT, origin, "error")
         except Exception as e:
+            await _write_spawn_status(session_key, agent, handle, "failed")
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
@@ -332,33 +345,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
     def _build_subagent_prompt(self) -> str:
-        """Build a focused system prompt for the subagent."""
-        from raven.agent.context import ContextBuilder
-        from raven.memory_engine.skill_forge import LocalSkillCatalog
-
-        # Use a transient ContextBuilder to access the runtime-context
-        # builder; SubagentManager doesn't have its own ContextBuilder.
-        time_ctx = ContextBuilder(self.workspace, start_watcher=False)._build_runtime_context(None, None)
-        parts = [
-            f"""# Subagent
-
-{time_ctx}
-
-You are a subagent spawned by the main agent to complete a specific task.
-Stay focused on the assigned task. Your final response will be reported back to the main agent.
-
-## Workspace
-{self.workspace}"""
-        ]
-
-        skills_summary = LocalSkillCatalog(
-            self.workspace,
-            start_watcher=False,
-        ).build_skills_summary()
-        if skills_summary:
-            parts.append(f"## Skills\n\nRead SKILL.md with read_file to use a skill.\n\n{skills_summary}")
-
-        return "\n\n".join(parts)
+        """Build a focused system prompt for the subagent (raven-loop backend)."""
+        return build_subagent_prompt(self.workspace)
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
@@ -377,6 +365,61 @@ Stay focused on the assigned task. Your final response will be reported back to 
         self._session_spawn_times.pop(session_key, None)
         return len(tasks)
 
+    async def cancel_by_instance(self, session_key: str, agent: str, handle: str) -> bool:
+        """Cancel every spawn on one (session_key, agent, handle).
+
+        This is the granularity a stop button needs: cancelling unwinds each
+        `async with self._gate` the matched spawns are holding (or waiting
+        on), releasing their concurrency slots, without touching the rest of
+        the session's spawns. Usually there is exactly one live task per
+        instance key, but two spawns can race onto the same key before the
+        first completes, so this cancels *all* of them rather than only the
+        most recent. Returns whether any live task was found.
+        """
+        quota_key = session_key or "default"
+        task_ids = self._instance_tasks.get((quota_key, agent, handle), set())
+        tasks = [t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()]
+        if not tasks:
+            return False
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return True
+
+    def live_handles(self, session_key: str) -> set[tuple[str, str]]:
+        """The (agent, handle) pairs currently in flight for one session.
+
+        Lets a reader tell a genuinely running instance row from one orphaned
+        by a gateway restart (the process-wide task index does not survive
+        one, unlike the persistent registry).
+        """
+        quota_key = session_key or "default"
+        live: set[tuple[str, str]] = set()
+        for (skey, agent, handle), task_ids in self._instance_tasks.items():
+            if skey != quota_key:
+                continue
+            if any((t := self._running_tasks.get(tid)) is not None and not t.done() for tid in task_ids):
+                live.add((agent, handle))
+        return live
+
     def get_running_count(self) -> int:
         """Return the number of currently running subagents."""
         return len(self._running_tasks)
+
+    async def cancel_all(self) -> int:
+        """Cancel every subagent still running, across every session.
+
+        Used at gateway shutdown: `CliAgentBackend` runs its child with
+        `start_new_session=True` (its own process group), which detaches it
+        from the gateway's process group, so a Ctrl-C to the gateway no
+        longer reaches it. With every automatic timeout also removed, a
+        wedged CLI child would otherwise be orphaned and keep running against
+        the workspace forever once the gateway exits. Returns the count
+        cancelled.
+        """
+        tasks = [t for t in self._running_tasks.values() if not t.done()]
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return len(tasks)

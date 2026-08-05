@@ -116,6 +116,53 @@ COMMON_MODELS: dict[str, list[str]] = {
         "dashscope/qwen3-coder-flash",
         "dashscope/qwen3-vl-plus",
     ],
+    "moonshot": [
+        "moonshot/kimi-k2.6",
+        "moonshot/kimi-k2.5",
+        "moonshot/kimi-k2-thinking",
+        "moonshot/kimi-k2-thinking-turbo",
+        "moonshot/kimi-latest",
+        "moonshot/moonshot-v1-128k",
+    ],
+    "minimax": [
+        "minimax/MiniMax-M3",
+        "minimax/MiniMax-M2.5",
+        "minimax/MiniMax-M2.5-lightning",
+        "minimax/MiniMax-M2.1",
+        "minimax/MiniMax-M2",
+    ],
+    "volcengine": [
+        "volcengine/doubao-seed-2-0-pro-260215",
+        "volcengine/doubao-seed-2-0-lite-260215",
+        "volcengine/doubao-seed-2-0-mini-260215",
+        "volcengine/doubao-seed-2-0-code-preview-260215",
+        "volcengine/deepseek-v3-2-251201",
+        "volcengine/glm-4-7-251222",
+        "volcengine/kimi-k2-thinking-251104",
+    ],
+    "github_copilot": [
+        "github_copilot/gpt-4o",
+        "github_copilot/gpt-5.2",
+        "github_copilot/gpt-5.1",
+        "github_copilot/gpt-5-mini",
+        "github_copilot/gpt-4.1",
+        "github_copilot/claude-opus-4.5",
+        "github_copilot/claude-sonnet-4.5",
+        "github_copilot/claude-haiku-4.5",
+        "github_copilot/gemini-3-pro-preview",
+    ],
+    # Local: which of these actually answers depends on what the user has pulled,
+    # so this is a hint rather than an inventory -- same as every other entry here,
+    # but worth stating because for a hosted provider the key implies the catalog.
+    "ollama_chat": [
+        "ollama_chat/llama3.1",
+        "ollama_chat/llama3",
+        "ollama_chat/qwen3-coder:480b-cloud",
+        "ollama_chat/gpt-oss:120b-cloud",
+        "ollama_chat/gpt-oss:20b-cloud",
+        "ollama_chat/deepseek-v3.1:671b-cloud",
+        "ollama_chat/mistral-large-instruct-2407",
+    ],
 }
 
 
@@ -204,7 +251,7 @@ def litellm_models_for(slug: str) -> list[str]:
     do not -- and offering a bare id would route it by keyword rather than to the
     provider the user picked.
     """
-    from raven.providers.registry import find_by_name, litellm_spelling
+    from raven.providers.registry import find_by_name, litellm_spelling, normalize_provider_name
 
     spec = find_by_name(slug)
     if spec is None:
@@ -228,19 +275,23 @@ def litellm_models_for(slug: str) -> list[str]:
             bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
             out.append(f"{prefix}/{bare}")
         return out
-    from raven.providers.wire import merge_key, stored_model_id
-
+    if normalize_provider_name(spec.model_prefix) not in spec.route_names:
+        # The wire prefix names somebody else -- this provider is reached through
+        # another vendor's driver. Prefixing candidates with it would hand the
+        # user ids that resolve to the driver's owner instead of to the provider
+        # they picked. Today the catalogue has no rows for those five, so the
+        # loop below would be empty anyway; the guard states the rule rather than
+        # relying on what LiteLLM happens to contain.
+        return []
     index = _litellm_chat_models_by_provider()
+    prefix = spec.model_prefix
     out: list[str] = []
     seen: set[str] = set()
     for route_name in sorted(spec.route_names):
         for model in index.get(route_name, ()):
             bare = model.split("/", 1)[1] if "/" in model else model
-            # One spelling for a candidate and for a stored pick, so choosing an
-            # offered model cannot write a second entry for one already listed.
-            full = stored_model_id(spec.name, bare)
-            key = merge_key(spec.name, full)
-            if key not in seen:
-                seen.add(key)
+            full = f"{prefix}/{bare}" if prefix else bare
+            if full not in seen:
+                seen.add(full)
                 out.append(full)
     return out

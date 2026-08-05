@@ -103,6 +103,21 @@ def test_save_reserves_metadata_keys(tmp_path: Path):
     assert "title" in meta
 
 
+def test_metadata_model_survives_a_save_load_round_trip(tmp_path: Path):
+    """metadata["model"] is the per-session model's home; the append-only file's
+    last metadata record must win on reload."""
+    mgr = SessionManager(tmp_path)
+    s = mgr.get_or_create("web:abc")
+    s.metadata["model"] = "deepseek/deepseek-v3"
+    mgr.save(s)
+
+    s.metadata["model"] = "anthropic/claude-opus-4-5"
+    mgr.save(s)
+
+    mgr.invalidate("web:abc")
+    assert mgr.get_or_create("web:abc").metadata["model"] == "anthropic/claude-opus-4-5"
+
+
 def test_load_preserves_on_disk_message_order(tmp_path: Path):
     """Messages keep file order on load even when received_at is out of order."""
     session_dir = tmp_path / "sessions" / "tui"

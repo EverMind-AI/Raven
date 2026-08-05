@@ -579,3 +579,45 @@ def test_extract_output_text_concatenates_message_output_only():
         ]
     }
     assert _extract_output_text(body) == "AB"
+
+
+# ---- disabling the tool outright (tools.disabled_tools) ----
+
+
+@pytest.mark.parametrize("api_key", ["", "sk-test"])
+def test_disabled_tools_removes_deep_research_in_either_mode(tmp_path: Path, monkeypatch, api_key):
+    """``deep_research`` registers in one of two variants; a disable must take out
+    both, not just the working one."""
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        deep_research_config=DeepResearchToolConfig(api_key=api_key),
+        disabled_tools=["deep_research"],
+    )
+    assert loop.tools.get("deep_research") is None
+    assert "deep_research" not in loop.tools.tool_names
+
+
+def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monkeypatch):
+    """A disable must be an off switch, not just a startup one.
+
+    Promotion re-registers the working tool mid-session as soon as a key shows up
+    on disk. It keys off the stand-in still being registered, which a disable
+    removes -- so a key appearing later must not resurrect a disabled tool.
+    """
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = AgentLoop(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        deep_research_config=DeepResearchToolConfig(),
+        disabled_tools=["deep_research"],
+    )
+    assert loop.tools.get("deep_research") is None
+
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+
+    assert loop.tools.get("deep_research") is None

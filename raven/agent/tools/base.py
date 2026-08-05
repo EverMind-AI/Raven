@@ -95,6 +95,35 @@ class Tool(ABC):
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
 
+    def blocking_for(self, params: dict[str, Any]) -> bool:
+        """This call's blocking verdict. Defaults to the class flag.
+
+        Overridden by a tool that forwards to another tool (``tool_call``), where
+        the verdict belongs to the target named in ``params`` — reading the
+        forwarder's own flag would both double-wrap the target in a ceiling it
+        opted out of and misreport the call to a turn stream.
+        """
+        return self.blocking_interaction
+
+    def metadata_owner(self, params: dict[str, Any]) -> "Tool":
+        """The tool holding this call's metadata. Defaults to self.
+
+        Overridden by a tool that forwards to another tool (``tool_call``), where
+        the result — and so the metadata — is produced by the target named in
+        ``params``. Without this the forwarded tool's payload is stranded and the
+        UI silently renders nothing.
+        """
+        return self
+
+    def take_metadata(self) -> dict[str, Any] | None:
+        """Structured payload for this call's turn-stream event, consumed once.
+
+        Opt-in: ``execute`` returns only a string, so a tool whose result also
+        has to reach a UI (rather than the model) hands it back here and the loop
+        attaches it to the emitted ToolEvent.
+        """
+        return None
+
     _TYPE_MAP = {
         "string": str,
         "integer": int,

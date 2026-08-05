@@ -26,6 +26,7 @@ from raven.tui_rpc.spine import (
     TuiOutlet,
     TuiTurnRunner,
     build_tui,
+    make_dag_progress_sink,
 )
 
 
@@ -266,14 +267,40 @@ async def test_outlet_deliver_tool_event_to_tool_start_and_complete():
             "tui:c1",
             {
                 "type": "tool.start",
-                "payload": {"tool_call_id": "t1", "name": "shell", "arguments": {"cmd": "ls"}, "display": None},
+                "payload": {
+                    "tool_call_id": "t1",
+                    "name": "shell",
+                    "arguments": {"cmd": "ls"},
+                    "blocking": False,
+                    "display": None,
+                },
             },
         ),
         (
             "tui:c1",
-            {"type": "tool.complete", "payload": {"tool_call_id": "t1", "result_preview": "ok", "truncated": False}},
+            {
+                "type": "tool.complete",
+                "payload": {"tool_call_id": "t1", "result_preview": "ok", "truncated": False, "metadata": None},
+            },
         ),
     ]
+
+
+async def test_outlet_deliver_tool_start_forwards_blocking():
+    """A blocking tool must reach the wire flagged: the web client suspends its
+    turn-stream idle clock on this, and a sub-agent run outlasts that clock."""
+    emitter = FakeEmitter()
+    outlet = TuiOutlet("tui", emitter)
+    await outlet.deliver(
+        ToolEvent(
+            phase=ToolPhase.START,
+            tool_call_id="t1",
+            name="run_subagent_dag",
+            blocking=True,
+            conversation_id="tui:c1",
+        )
+    )
+    assert emitter.emitted[0][1]["payload"]["blocking"] is True
 
 
 async def test_outlet_deliver_text_to_token_delta():
@@ -523,3 +550,101 @@ async def test_cancelled_turn_does_not_emit_error():
         await teardown()
 
     assert emitter.emitted == []  # no error from the sink on cancellation
+
+
+class TestDagProgressSink:
+    """``run_subagent_dag`` publishes its progress on a side channel, not through
+    the delivery hub, so it needs its own mapping onto the wire protocol. The
+    graph is the only view the user gets of a fan-out whose tool result is
+    clamped to 200 chars, so the mapping has to carry the whole topology."""
+
+    async def test_run_started_carries_the_topology(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_started",
+            {
+                "run_id": "dag-1",
+                "tool_call_id": "call-a",
+                "nodes": [
+                    {"id": "a", "subagent": "echo", "depends_on": [], "instance": None},
+                    {"id": "b", "subagent": "echo", "depends_on": ["a"], "instance": "shared"},
+                ],
+            },
+        )
+
+        assert emitter.types() == ["dag.run_started"]
+        key, event = emitter.emitted[0]
+        assert key == "tui:c1"
+        assert event["payload"]["run_id"] == "dag-1"
+        assert event["payload"]["tool_call_id"] == "call-a"
+        assert event["payload"]["nodes"] == [
+            {"id": "a", "subagent": "echo", "depends_on": []},
+            {"id": "b", "subagent": "echo", "depends_on": ["a"], "instance": "shared"},
+        ]
+
+    async def test_node_updated_carries_status_and_timestamps(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "a", "status": "completed", "started_at": 10, "ended_at": 42},
+        )
+
+        assert emitter.types() == ["dag.node_updated"]
+        assert emitter.emitted[0][1]["payload"] == {
+            "run_id": "dag-1",
+            "node": "a",
+            "status": "completed",
+            "started_at": 10,
+            "ended_at": 42,
+        }
+
+    async def test_run_completed_flattens_the_manifest_and_drops_node_output_text(self):
+        """``terminal_outputs`` holds every sink node's full text -- already in the
+        tool result the model and the transcript both get. Repeating it here would
+        put an unbounded blob on a progress frame."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "summary": {"total": 2, "completed": 1, "failed": 1, "skipped": 0},
+                    "files": [
+                        {"node": "a", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/a.out.md"},
+                        {"node": "b", "status": "failed", "error": "boom"},
+                    ],
+                    "terminal_outputs": [{"node": "a", "text": "x" * 5000}],
+                },
+            },
+        )
+
+        assert emitter.types() == ["dag.run_completed"]
+        payload = emitter.emitted[0][1]["payload"]
+        assert payload["dir"] == "/w/.ravenx_dag/dag-1"
+        assert payload["summary"] == {"total": 2, "completed": 1, "failed": 1, "skipped": 0}
+        assert payload["files"] == [
+            {"node": "a", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/a.out.md"},
+            {"node": "b", "status": "failed", "error": "boom"},
+        ]
+        assert "terminal_outputs" not in payload
+
+    async def test_an_unknown_event_name_is_dropped(self):
+        """The sink is shared with the web channel, which may grow events this
+        wire protocol has no variant for. Forwarding one blind would reach the
+        client as an unhandled type."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink("tui:c1", "dag_something_new", {"run_id": "dag-1"})
+
+        assert emitter.emitted == []

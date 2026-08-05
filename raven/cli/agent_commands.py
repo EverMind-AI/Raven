@@ -28,6 +28,7 @@ from rich.text import Text
 
 from raven import __logo__
 from raven.cli._helpers import (
+    build_model_routing,
     load_runtime_config,
     make_provider,
     parse_fake_now,
@@ -214,13 +215,16 @@ def register(app: typer.Typer) -> None:
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
 
-        # Startup gate: a config that cannot reach a model is settled first. Only
-        # on an interactive TTY -- scripted one-shots (`-m`) and non-TTY pipes must
+        # Startup gate: when the required config (a provider key + default
+        # model) is missing, run the onboarding wizard first. Only on an
+        # interactive TTY — scripted one-shots (`-m`) and non-TTY pipes must
         # fail loudly later rather than block on prompts.
-        if message is None and _stdout_isatty():
-            from raven.cli.onboard_commands import ensure_ready_to_start
+        from raven.cli.onboard_commands import _is_config_populated
 
-            ensure_ready_to_start()
+        if message is None and _stdout_isatty() and not _is_config_populated():
+            from raven.cli.onboard_commands import ensure_configured_or_onboard
+
+            ensure_configured_or_onboard()
 
         from loguru import logger
 
@@ -249,6 +253,10 @@ def register(app: typer.Typer) -> None:
         sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
+        # Model routing (config.routing). Returns the provider unchanged when
+        # routing is disabled, and wraps it for the knn backend so routed model
+        # names reach their own endpoints.
+        router, provider = build_model_routing(config, provider)
         session_manager = SessionManager(config.workspace_path)
 
         # New-session-by-default: independent one-shots don't bleed into each other.
@@ -330,6 +338,10 @@ def register(app: typer.Typer) -> None:
             context_window_tokens=config.agents.defaults.context_window_tokens,
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
             max_subagent_spawns_per_hour=config.agents.defaults.max_subagent_spawns_per_hour,
+            router=router,
+            # Gates run_subagent_dag: AgentLoop registers it only when the roster
+            # is non-empty, since its nodes dispatch to these agents.
+            third_party_subagents=config.subagents.third_party,
             brave_api_key=config.tools.web.search.api_key or None,
             jina_api_key=config.tools.web.jina_api_key or None,
             web_proxy=config.tools.web.proxy or None,

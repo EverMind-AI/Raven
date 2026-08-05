@@ -25,7 +25,6 @@ Known divergence: ``system.hello`` still advertises ``default_session_key``
 
 from __future__ import annotations
 
-import asyncio
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -34,9 +33,9 @@ from loguru import logger
 
 from raven.cli.update_notice import update_notice
 from raven.config.loader import load_config
-from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
+from raven.token_wise.pricing import resolve_context_window
 from raven.tui_rpc.errors import TurnInProgressError
 from raven.tui_rpc.methods import turn as turn_module
 from raven.tui_rpc.methods.system import _raven_version
@@ -97,7 +96,7 @@ def _enumerate_skills(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
     return {source: sorted(names) for source, names in grouped.items()}
 
 
-async def _baseline_usage(
+def _baseline_usage(
     agent_loop: "AgentLoop | None",
     config: "Config",
 ) -> dict[str, Any]:
@@ -105,36 +104,21 @@ async def _baseline_usage(
 
     All counters are zero at session.create: a fresh session_key carries no
     prior LLM calls. Each turn's ``message.complete`` event updates them
-    post-turn. ``context_max`` follows the same ladder ``AgentLoop`` uses: a
-    pinned ``context_window_tokens`` wins outright; otherwise the model's real
-    window (live from the provider table when LiteLLM lags, e.g. OpenRouter),
-    or 0 when neither is known — the UI's empty state, not a borrowed number.
+    post-turn. ``context_max`` is the model's real window — live from the
+    provider table when LiteLLM lags (e.g. OpenRouter), else config default.
     Usage starts at zero for a fresh session by design. Resume reuses the
     zero baseline; counters refresh on the next turn.
-
-    Cost is the exception: on a subscription there is no per-token figure, so the
-    banner says so rather than opening at $0.00. Zero here read as free until the
-    first turn replaced it, which is the answer this session will never have.
-
-    ``resolve_context_window`` defaults to ``allow_fetch=True``, so a cold
-    OpenRouter model can reach for a synchronous 10s HTTP call; this handler
-    runs on the event loop (an RPC method), so that call is pushed to a
-    thread rather than blocking every other session in flight.
     """
-    from raven.providers.rates import is_plan_billed
-
+    context_max = config.agents.defaults.context_window_tokens
     model = getattr(agent_loop, "model", None)
-    configured = config.agents.defaults.context_window_tokens
-    if configured:
-        context_max = configured
-    elif model:
-        context_max = await asyncio.to_thread(resolve_context_window, model) or 0
-    else:
-        context_max = 0
+    if model:
+        live_window = resolve_context_window(model)
+        if live_window:
+            context_max = live_window
     return {
         "input": 0,
         "output": 0,
-        "cost_usd": None if model and is_plan_billed(str(model)) else 0.0,
+        "cost_usd": 0.0,
         "calls": 0,
         "context_max": context_max,
         "context_used": 0,
@@ -142,7 +126,7 @@ async def _baseline_usage(
     }
 
 
-async def _default_session_info(
+def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
 ) -> dict[str, Any]:
@@ -152,23 +136,18 @@ async def _default_session_info(
     zero usage, ``lazy=True``); version is always real (cached at module load).
     """
     model_id = config.agents.defaults.model
-    usage = await _baseline_usage(agent_loop, config)
     info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
         "provider": config.agents.defaults.provider,
-        "context_window": usage["context_max"],
+        "context_window": config.agents.defaults.context_window_tokens,
         "lazy": agent_loop is None,
         "skills": _enumerate_skills(agent_loop),
         "tools": _enumerate_tools(agent_loop),
-        "usage": usage,
+        "usage": _baseline_usage(agent_loop, config),
         "version": _RAVEN_VERSION,
         "cwd": os.getcwd(),
         "mcp_servers": [],
-        # Which of a multi-endpoint provider's endpoints this session is on.
-        # None for every single-endpoint provider -- there is one address and it
-        # carries no label worth showing.
-        "endpoint": getattr(getattr(agent_loop, "provider", None), "active_endpoint_label", None),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -255,7 +234,7 @@ async def session_create(
     session_id = f"tui:{new_chat_id()}"
     return {
         "session_id": session_id,
-        "info": await _default_session_info(agent_loop, load_config()),
+        "info": _default_session_info(agent_loop, load_config()),
     }
 
 
@@ -299,7 +278,7 @@ async def session_resume(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    info = await _default_session_info(agent_loop, config)
+    info = _default_session_info(agent_loop, config)
     session_key = params.get("session_id")
 
     if session_key:

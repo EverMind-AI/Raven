@@ -192,6 +192,7 @@ class ToolCompletePayload(_Strict):
     tool_call_id: str
     result_preview: str
     truncated: bool
+    metadata: dict[str, JsonValue] | None = None
 
 
 class ToolCompleteEvent(_Strict):
@@ -233,6 +234,136 @@ class CronDeliveredEvent(_Strict):
     payload: CronDeliveredPayload
 
 
+DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+
+
+class DagRunStartedNode(_Strict):
+    id: str
+    subagent: str
+    depends_on: list[str]
+    instance: str | None = None
+
+
+class DagRunStartedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    nodes: list[DagRunStartedNode]
+
+
+class DagRunStartedEvent(_Strict):
+    type: Literal["dag.run_started"]
+    payload: DagRunStartedPayload
+
+
+class DagNodeUpdatedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    node: str
+    status: DagNodeStatus
+    started_at: int | None = None
+    ended_at: int | None = None
+
+
+class DagNodeUpdatedEvent(_Strict):
+    type: Literal["dag.node_updated"]
+    payload: DagNodeUpdatedPayload
+
+
+class DagRunSummary(_Strict):
+    total: int | None = None
+    completed: int | None = None
+    failed: int | None = None
+    skipped: int | None = None
+
+
+class DagRunFile(_Strict):
+    node: str
+    status: DagNodeStatus
+    output_file: str | None = None
+    error: str | None = None
+
+
+class DagRunCompletedPayload(_Strict):
+    run_id: str
+    tool_call_id: str | None = None
+    dir: str
+    summary: DagRunSummary
+    files: list[DagRunFile]
+
+
+class DagRunCompletedEvent(_Strict):
+    type: Literal["dag.run_completed"]
+    payload: DagRunCompletedPayload
+
+
+# ---------------------------------------------------------------------------
+# dag.* methods -- a run read back off disk (the events are never replayed)
+# ---------------------------------------------------------------------------
+
+# Wider than DagNodeStatus: a snapshot can report ``interrupted``, which the
+# server infers for a node the registry still calls running on a run nothing is
+# executing. Nothing on the event wire may claim that.
+DagSnapshotNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "interrupted"]
+
+
+class DagSnapshotNode(_Strict):
+    node: str
+    subagent: str | None = None
+    depends_on: list[str] | None = None
+    instance: str | None = None
+    status: DagSnapshotNodeStatus
+    started_at: int | None = None
+    ended_at: int | None = None
+    prompt_file: str | None = None
+    output_file: str | None = None
+    error: str | None = None
+    prompt_template: str | None = None
+
+
+class DagTerminalOutput(_Strict):
+    node: str
+    text: str
+
+
+class DagRunSnapshot(_Strict):
+    run_id: str
+    dir: str
+    finalized: bool
+    files: list[DagSnapshotNode]
+    terminal_outputs: list[DagTerminalOutput] | None = None
+    summary: DagRunSummary
+
+
+class DagNodeDetail(_Strict):
+    run_id: str
+    node: str
+    prompt: str | None = None
+    prompt_file: str | None = None
+    output: str | None = None
+    output_file: str | None = None
+    output_chars: int
+    output_truncated: bool
+
+
+class DagGetParams(_Strict):
+    run_id: str
+    session_key: str | None = None
+
+
+class DagGetResult(_Strict):
+    run: DagRunSnapshot
+
+
+class DagNodeParams(_Strict):
+    run_id: str
+    node: str
+    max_output_chars: int | None = None
+
+
+class DagNodeResult(_Strict):
+    node: DagNodeDetail
+
+
 TurnEvent = Annotated[
     Union[
         MessageStartEvent,
@@ -245,6 +376,9 @@ TurnEvent = Annotated[
         MessageCompleteEvent,
         ErrorEvent,
         CronDeliveredEvent,
+        DagRunStartedEvent,
+        DagNodeUpdatedEvent,
+        DagRunCompletedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -421,14 +555,6 @@ class TurnSendParams(_Strict):
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
-    # Attachment paths, workspace-relative or absolute. The same lane channels
-    # already use (``TurnRequest.media``): a vision-capable model gets the
-    # picture inlined in the user message, anything else gets a note naming it.
-    # Paths rather than bytes -- the caller has already put the file in the
-    # workspace, and every file tool is workspace-scoped. Bounded here so a
-    # malformed caller is refused at the schema rather than resolving thousands
-    # of paths; the renderer caps how many are inlined regardless.
-    media: list[str] | None = Field(default=None, max_length=64)
 
 
 class TurnSendResult(_Strict):
@@ -528,18 +654,6 @@ class SkillUnpinResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
-class ModelLabel(_Strict):
-    """How a model reads to a person, for the ids in ``models``.
-
-    Present only for models a catalogue describes; one released since the
-    bundled snapshot, or served by a local deployment, has no entry and the
-    picker shows its id.
-    """
-
-    label: str
-    description: str | None = None
-
-
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -550,7 +664,6 @@ class ModelOptionProvider(_Strict):
     auth_type: str
     key_env: str | None = None
     models: list[str]
-    model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
     warning: str
@@ -606,46 +719,6 @@ class ModelRemoveModelParams(_Strict):
 
 class ModelRemoveModelResult(_Strict):
     provider: ModelOptionProvider
-
-
-class ProviderEndpointInfo(_Strict):
-    """One of a provider section's endpoints, as the picker shows it."""
-
-    label: str
-    api_key: str = Field(..., description="Redacted for display: `****set****` or `(empty)`.")
-    api_base: str | None = None
-    extra_headers: dict[str, str] | None = None
-
-
-class ModelEndpointsParams(_Strict):
-    slug: str
-    session_id: str | None = None
-
-
-class ModelEndpointsResult(_Strict):
-    endpoints: list[ProviderEndpointInfo]
-
-
-class ModelAddEndpointParams(_Strict):
-    slug: str
-    label: str = Field(..., description="Idempotency key: an existing entry with this label is replaced wholesale.")
-    api_key: str = ""
-    api_base: str | None = None
-    session_id: str | None = None
-
-
-class ModelAddEndpointResult(_Strict):
-    endpoints: list[ProviderEndpointInfo]
-
-
-class ModelRemoveEndpointParams(_Strict):
-    slug: str
-    label: str
-    session_id: str | None = None
-
-
-class ModelRemoveEndpointResult(_Strict):
-    endpoints: list[ProviderEndpointInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -921,9 +994,6 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
-    "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
-    "model.add_endpoint": (ModelAddEndpointParams, ModelAddEndpointResult),
-    "model.remove_endpoint": (ModelRemoveEndpointParams, ModelRemoveEndpointResult),
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
@@ -947,6 +1017,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "rollback.diff": (RollbackDiffParams, StubResult),
     "rollback.restore": (RollbackRestoreParams, StubResult),
     "tools.configure": (ToolsConfigureParams, StubResult),
+    # dag.*
+    "dag.get": (DagGetParams, DagGetResult),
+    "dag.node": (DagNodeParams, DagNodeResult),
 }
 
 __all__ = [
@@ -958,7 +1031,6 @@ __all__ = [
     "McpToolInfo",
     "SkillInfo",
     "ModelOptionProvider",
-    "ProviderEndpointInfo",
     "UsageSnapshot",
     "CliResult",
     "StubResult",
@@ -985,6 +1057,18 @@ __all__ = [
     "ErrorEvent",
     "CronDeliveredEvent",
     "CronDeliveredPayload",
+    "DagRunStartedEvent",
+    "DagRunStartedPayload",
+    "DagNodeUpdatedEvent",
+    "DagNodeUpdatedPayload",
+    "DagRunCompletedEvent",
+    "DagRunCompletedPayload",
+    "DagGetParams",
+    "DagGetResult",
+    "DagNodeParams",
+    "DagNodeResult",
+    "DagRunSnapshot",
+    "DagNodeDetail",
     # registry
     "METHOD_MODELS",
 ]

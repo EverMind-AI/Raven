@@ -45,9 +45,73 @@ from raven.tui_rpc.subscriptions import SubscriptionEmitter
 
 _TURN_FAILED_CODE = -32099
 
+# ``run_subagent_dag`` progress event -> wire event. A name missing from this map
+# is dropped rather than forwarded: the same sink shape serves the web channel,
+# which is free to grow events this protocol has no variant for.
+_DAG_WIRE_EVENT = {
+    "dag_run_started": "dag.run_started",
+    "dag_node_updated": "dag.node_updated",
+    "dag_run_completed": "dag.run_completed",
+}
+
 
 def _conversation_id(req: TurnRequest) -> str:
     return req.conversation or f"{req.source.channel}:{req.source.chat_id}"
+
+
+def _present(source: dict, keys: tuple[str, ...]) -> dict:
+    """The given keys that carry a value, so no wire payload ships a null for an
+    optional field the client types as absent."""
+    return {key: source[key] for key in keys if source.get(key) is not None}
+
+
+def _dag_payload(name: str, payload: dict) -> dict:
+    """One progress event's wire payload."""
+    common = {"run_id": payload.get("run_id"), **_present(payload, ("tool_call_id",))}
+    if name == "dag_run_started":
+        nodes = [
+            {
+                "id": node.get("id"),
+                "subagent": node.get("subagent"),
+                "depends_on": list(node.get("depends_on") or []),
+                **_present(node, ("instance",)),
+            }
+            for node in payload.get("nodes") or []
+        ]
+        return {**common, "nodes": nodes}
+    if name == "dag_node_updated":
+        return {
+            **common,
+            "node": payload.get("node"),
+            "status": payload.get("status"),
+            **_present(payload, ("started_at", "ended_at")),
+        }
+    # dag_run_completed. ``terminal_outputs`` is deliberately dropped: every sink
+    # node's full text is already in the tool result, and repeating it here would
+    # put an unbounded blob on a progress frame.
+    manifest = payload.get("manifest") or {}
+    files = [
+        {"node": entry.get("node"), "status": entry.get("status"), **_present(entry, ("output_file", "error"))}
+        for entry in manifest.get("files") or []
+    ]
+    return {**common, "dir": manifest.get("dir", ""), "summary": manifest.get("summary") or {}, "files": files}
+
+
+def make_dag_progress_sink(emitter: SubscriptionEmitter) -> Callable[[str, str, dict], Awaitable[None]]:
+    """Map the DAG tool's progress events onto the TUI wire protocol.
+
+    The tool publishes these on its own channel rather than through the delivery
+    hub, so they never reach :class:`TuiOutlet` -- without this the TUI has no
+    view of a fan-out at all, and its tool result is clamped to 200 chars.
+    """
+
+    async def _sink(conversation: str, name: str, payload: dict) -> None:
+        wire = _DAG_WIRE_EVENT.get(name)
+        if wire is None:
+            return
+        await emitter.emit(conversation, {"type": wire, "payload": _dag_payload(name, payload)})
+
+    return _sink
 
 
 class TuiTurnRunner(AgentTurnRunner):
@@ -159,6 +223,7 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "name": out.name,
                             "arguments": out.arguments or {},
+                            "blocking": out.blocking,
                             "display": out.display,
                         },
                     },
@@ -172,6 +237,7 @@ class TuiOutlet:
                             "tool_call_id": out.tool_call_id,
                             "result_preview": out.result_preview,
                             "truncated": out.truncated,
+                            "metadata": out.metadata,
                         },
                     },
                 )

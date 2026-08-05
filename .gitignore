@@ -85,3 +85,8 @@ benchmarks/proactivity_eval/data/discovery/*/auth_*.py
 benchmarks/proactivity_eval/data/discovery/*/cache_*.md
 benchmarks/proactivity_eval/data/discovery/*/rate_limit_*.py
 benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
+
+# Scratch workspace for local sub-agent / DAG testing (see ui-webui chat workspace picker).
+/tmp/
+.omo/*
+.ruff_cache/

@@ -19,6 +19,9 @@ can hold many sessions while the `session_key={channel}:{chat_id}` invariant is
 unchanged. Channel is a dimension (key prefix + store subdirectory + metadata
 field), not part of the user-facing identity.
 
+A session's `metadata["model"]`, when present, is the model its turns run on; it
+outranks the router and falls back to `agents.defaults.model` when absent.
+
 **Session id** (user-facing term only):
 The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
@@ -171,6 +174,18 @@ _Avoid_: using "CLI" for the interactive REPL (retiring)
 **Routing Tag**:
 The `channel` field on a `TurnRequest`; names the recipient — a Channel, or the TUI.
 
+**Deliverable**:
+An output file the agent hands to the user through the `deliver_files` tool, addressed by an
+opaque token in the persisted registry (`deliverables/deliverables.json`) rather than by path.
+Web-channel only: the download UI exists only there, and the tool is not registered on any
+other surface.
+_Avoid_: calling any file the agent wrote a Deliverable - only a `deliver_files` call makes one.
+
+**Delivery Manifest**:
+The structured list of Deliverables a single `deliver_files` call produced (name, size, media
+type, token), carried on `ToolEvent.metadata` so it reaches the web UI and persists in message
+history. Never carries file bytes.
+
 ### Token Efficiency
 
 **TokenWise**:
@@ -207,96 +222,17 @@ An LLM vendor adapter (`providers/`: Anthropic, OpenAI, Gemini, …), shared by 
 agent loop and the Curator.
 _Avoid_: conflating provider (vendor) with model (a model name a provider serves)
 
-A Provider is described along four independent axes -- identity, connection, routing,
-and what its models can do -- each with its own home. Mixing them in one record is what
-left per-model facts nowhere to live and per-provider facts stated in several places at
-once. The terms below name the pieces those axes are built from; they are properties of
-a model or of a connection, not four synonyms for Provider.
-
-**Model Ref**:
-The canonical way a model is written down: `provider/model`, naming whoever serves it.
-Usually that is the section it was configured under; where a Provider declares
-`skip_prefixes` it may instead be the gateway already named in the id
-(`openrouter/z-ai/glm-4.6` stored under `zai` keeps OpenRouter's name, because
-OpenRouter is what serves it). Produced by `providers/wire.py::stored_model_id`, which
-every surface that persists a choice goes through.
-_Avoid_: "model id" for the stored form when the sent form is also in play — say Model
-Ref or Wire Model.
-
-**Merge Key**:
-The identity of a Model Ref for comparison and de-duplication — the provider and the
-vendor's own id, spelling-folded. Two refs naming one model share a Merge Key whatever
-spelling either was written in.
-
-**Wire Model**:
-The form a Model Ref takes on the request: a LiteLLM route string, an Azure deployment
-name, or a Codex slug. Derived, never stored, and derived in one place
-(`providers/wire.py::wire_model`).
-_Avoid_: treating the stored and sent forms as one string — they differ per provider.
-
-**Auth Method**:
-One way of connecting to a Provider: what credential material it needs (as an AND of
-OR-groups), how that material is obtained, where it is kept, and how it is verified.
-A Provider may declare several and is usable when any one is satisfied.
-`providers/auth.py::credential_status` answers "is this Provider usable", and is the
-only place that may: seven surfaces once decided it independently and disagreed with
-each other on the two configurations that made the rewrite necessary.
-_Avoid_: "credential kind" for the whole shape — that names only the material.
-
-**Model Row**:
-One model as a person reads it: a Model Ref plus a label and a description, tagged with
-the source that supplied them. Display only — nothing shaping a request reads a Model
-Row (`providers/catalog.py`).
-_Avoid_: confusing it with what a model can *do*. Whether a request may carry
-`cache_control` blocks is a Prompt Cache Breakpoint question, not a Model Row one.
-
-**Model Overlay**:
-What a user states about a model no catalogue carries — a label and a description for a
-self-hosted deployment. Beats the catalogue for the fields it sets.
-
-**Prompt Cache Breakpoint**:
-An Anthropic-shaped `cache_control` marker placed on a request so the prefix before it is
-cached. Whether one may be placed is **(wire x model family)**: the wire has to have
-somewhere to carry the field (`ProviderSpec.supports_prompt_caching`, a property of the
-API being spoken) *and* the model's vendor has to be the one that reads it. A gateway
-accepting the field is not the same as its upstream honouring it -- OpenRouter carries it
-for every model it fronts and forwards it to vendors that bill the prompt twice.
-Decided once, in `providers/prompt_cache.py`, which every marker asks.
-_Avoid_: reading LiteLLM's per-model `supports_prompt_caching`, which answers "does this
-model cache at all" -- a different question, and the one that produced the doubled bill.
-
-**Token Rates**:
-What a model costs per token, and separately how much context it holds. Both are facts
-about a Provider's catalogue, so both are resolved in `providers/rates.py` rather than by
-whoever is about to report a number. The two are deliberately sourced differently: rates
-price a call after it happened, so the ladder may reach a community-maintained catalogue;
-a context window sizes trimming and therefore shapes the *next* request, so only the
-tables that also route may answer it. The window walks its own ladder
-(`effective_context_window`): an explicitly configured value wins outright, then the
-model's real window, then the module's documented fallback -- and a gauge that cannot
-resolve the real window reports 0 so the UI shows its empty state rather than a number
-that is nobody's.
-_Avoid_: "pricing" for the resolution -- that names the arithmetic on top
-(`token_wise/pricing.py`), which is a different module for a reason.
-
-**Provider Pin**:
-`agents.defaults.provider`: an explicit override of the Provider a Model Ref names.
-Every surface that changes the model rewrites it by one rule
-(`providers/pin.py::resolve`), because a pin left behind routes the new model to the old
-vendor with the old vendor's key.
-_Avoid_: reading it as a provider *signal* -- a pinned name says which section to ask
-about, never that the section holds credentials.
-
-**Provider Endpoint**:
-One url/key/headers group a provider section offers, of possibly several
-(`ProviderConfig.endpoints`, resolved through `providers/endpoints.py::provider_endpoints`
-whichever spelling the section used -- explicit list, Gemini's `api_key_list`, or the
-flat fields). Several endpoints on one section mean several accounts on the same vendor;
-`EndpointRotorProvider` spreads and fails over across them.
-_Avoid_: two same-sounding neighbors. Routing's `ModelEndpoint` (`RoutingConfig.models`)
-keys by *model* and picks a backend per request; a Provider Endpoint keys by *account*
-under one provider. And a bare `api_base` is one endpoint's address, not the endpoint --
-an endpoint is the whole credential group under a label.
+**ResolvingProvider**:
+The Provider the gateway is built with (`providers/resolving_provider.py`): it
+holds no endpoint of its own and dispatches each call to the vendor adapter that
+`Config.get_provider_name(model)` resolves to, memoized per vendor. Lets two
+sessions on two vendors run concurrently without swapping a shared adapter. It is
+the gateway's entire provider only with routing off or on the `ecoclaw` backend;
+with `routing.backend == "knn"`, `build_model_routing` wraps it as
+`PerModelProvider(..., fallback=ResolvingProvider)`, so routed model names go to
+their configured endpoints and every other model still resolves through it.
+_Avoid_: confusing it with ModelRouter / KNNModelRouter, which select a *model*;
+this selects the *vendor* for an already-chosen model.
 
 ### TUI-RPC
 
@@ -346,6 +282,25 @@ SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Memory`
 (Segment 6).
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
+**Inject Mode**:
+How an `always` skill occupies `# Active Skills`, declared per skill as
+`inject: full` (default — the whole SKILL.md body) or `inject: description`
+(a digest entry: name, description, and the absolute SKILL.md path to read on
+demand). Description mode keeps a skill permanently discoverable at a few dozen
+tokens; it is the only way to surface an `always` skill cheaply, since being
+`always` also excludes it from BM25 routing into `# Skills`.
+_Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
+
+**Skill Requirements**:
+A skill's optional `requires` block, declaring what its procedure needs before
+it is worth showing. `bins` / `env` are process-static and resolved in
+`SkillRegistry.check_available`; `tools` is live runtime state (the DAG tool
+registers only when third-party sub-agents are configured, and hot-applies) and
+is enforced per turn by `ActiveSkillsSegmentBuilder` against the definitions
+actually being sent. Every sub-key is optional and every malformed shape
+degrades to "nothing declared" — see `requires_list`.
+_Avoid_: checking `requires.tools` in the registry — it has no view of the live ToolRegistry.
+
 **Curator**:
 An internal, bounded agent loop whose only job is to build the main agent's next
 context window; wired in as Segment 6 (`CuratorSegmentBuilder`). It never answers the
@@ -382,7 +337,17 @@ _Avoid_: summarize, compact (ambiguous between this and Archive)
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
-protected, archived) — what the Slow Path reads instead of full history.
+protected, pinned, archived) — what the Slow Path reads instead of full history.
+
+**Pinned**:
+A Manifest flag on the messages that fetched a skill body the agent cannot
+re-derive (`context.pinnedSkillIds`, default the sub-agent DAG guide): the whole
+tool exchange is added to every later ContextPlan whether or not the plan names
+it, refused by Archive, and trimmed last. Set on the latest fetch per skill id
+only, so a re-read moves the pin instead of adding a second copy.
+_Avoid_: using "protected" for this — Protected means the head-of-session
+exchanges, and it only shields an id from budget trimming, not from a
+ContextPlan that never mentioned it.
 
 **Working State**:
 The distilled session notes (goals, open threads, decisions) the Curator maintains

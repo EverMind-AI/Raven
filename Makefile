@@ -1,7 +1,7 @@
 .PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge check-commits check-pr-title check-large-files ci clean
 
 PYTHON ?= python3
-PYTHON_LINT_TARGETS ?= scripts/check_commit_file.py scripts/check_commit_messages.py scripts/check_pr_title.py scripts/check_large_files.py scripts/commit_lint.py tests/test_commit_lint.py tests/test_large_file_check.py
+PYTHON_LINT_TARGETS ?= raven tests scripts
 COMMIT_RANGE ?= origin/main..HEAD
 
 help:
@@ -9,7 +9,7 @@ help:
 	@echo "  install        Install Python deps, Node deps, and git hooks"
 	@echo "  install-deps   Install Python deps only (CI uses this)"
 	@echo "  lint           Run Python, TUI, and bridge lint gates"
-	@echo "  lint-python    Ruff-check the current lint target set"
+	@echo "  lint-python    Ruff check + format gate over raven/, tests/, scripts/"
 	@echo "  lint-tui       TypeScript lint + RPC drift check"
 	@echo "  lint-bridge    Bridge package build check"
 	@echo "  test           Run focused Python checks and TUI tests"

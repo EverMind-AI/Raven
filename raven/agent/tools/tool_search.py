@@ -39,8 +39,15 @@ if TYPE_CHECKING:
 # search for these. Beyond the file/search/exec primitives, ``message``,
 # ``ask_user`` and ``spawn`` are interaction/orchestration primitives the agent
 # must reach on any turn (reply, unblock via a question, delegate a subagent) —
-# hiding them risks the model not thinking to search for them at all. Config
-# ``tools.tool_search.always_visible`` extends this set.
+# hiding them risks the model not thinking to search for them at all.
+#
+# Deliberately NOT here: ``run_subagent_dag`` (a fan-out of minute-scale
+# sub-agent runs is a deliberate act, not a per-turn primitive; it should be
+# reached through ``tool_search`` like any other optional capability) and
+# ``read_skill``. Under compaction that costs a ``tool_search`` hop before a
+# ``inject: description`` skill's body can be loaded — accepted, since the
+# alternative is keeping every progressive-disclosure entry point resident.
+# Config ``tools.tool_search.always_visible`` adds either one back per deploy.
 DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "read_file",
     "write_file",
@@ -114,6 +121,27 @@ class ToolSearchController:
                 }
             )
         return hits
+
+    def target_tool(self, name: Any) -> Tool | None:
+        """The tool ``tool_call`` would forward to, or None when there is none.
+
+        A meta-tool target is refused by :meth:`call`, so it resolves to None
+        here too rather than recursing back into this controller.
+        """
+        if not isinstance(name, str) or name in META_TOOL_NAMES:
+            return None
+        return self._registry.get(name)
+
+    def target_is_blocking(self, name: Any) -> bool:
+        """Whether the tool ``tool_call`` would forward to is a blocking interaction.
+
+        A meta-tool target is refused by :meth:`call`, so it reports non-blocking
+        here too — which also stops the registry lookup recursing back into this
+        controller.
+        """
+        if not isinstance(name, str) or name in META_TOOL_NAMES:
+            return False
+        return self._registry.is_blocking(name)
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -212,6 +240,12 @@ class ToolCallTool(Tool):
             },
             "required": ["name"],
         }
+
+    def blocking_for(self, params: dict[str, Any]) -> bool:
+        return self._ctrl.target_is_blocking(params.get("name"))
+
+    def metadata_owner(self, params: dict[str, Any]) -> Tool:
+        return self._ctrl.target_tool(params.get("name")) or self
 
     async def execute(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         return await self._ctrl.call(name, arguments)

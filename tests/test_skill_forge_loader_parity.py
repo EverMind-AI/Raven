@@ -24,7 +24,9 @@ from raven.memory_engine.skill_local.registry import (
     _parse_frontmatter,
     _parse_nested_metadata,
     _resolve_always,
+    _resolve_inject,
     _strip_frontmatter,
+    requires_list,
 )
 
 # ----------------------------------------------------------------------
@@ -86,6 +88,15 @@ def tmp_builtin(tmp_path: Path):
         frontmatter_extra='metadata: {"raven":{"always":true}}',
     )
 
+    # ``always`` skill that only wants its description resident
+    _write_skill(
+        builtin,
+        "always_digest",
+        description="Digest-mode always skill",
+        frontmatter_extra='metadata: {"raven":{"always":true,"inject":"description"}}',
+        body="BODY_MUST_NOT_BE_INJECTED",
+    )
+
     # Requires a fake binary that almost certainly doesn't exist
     _write_skill(
         builtin,
@@ -140,6 +151,37 @@ class TestFrontmatterParsing:
         assert _resolve_always({}, {"always": True}) is True
         assert _resolve_always({"always": "true"}, {}) is True
         assert _resolve_always({}, {}) is False
+
+
+class TestRequiresNormalization:
+    """Every ``requires`` sub-key is optional and hand-authored, so a wrong
+    shape must degrade to 'nothing declared' — never to a wrong check, and
+    never to an exception (this runs inside prompt assembly)."""
+
+    def test_absent_and_empty_shapes(self) -> None:
+        assert requires_list({}, "tools") == []
+        assert requires_list({"tools": None}, "tools") == []
+        assert requires_list(None, "tools") == []
+        assert requires_list("not a dict", "tools") == []
+
+    def test_bare_string_is_one_name_not_four_characters(self) -> None:
+        assert requires_list({"bins": "curl"}, "bins") == ["curl"]
+
+    def test_list_is_cleaned_of_junk_entries(self) -> None:
+        assert requires_list({"tools": ["a", 3, None, "  ", " b "]}, "tools") == ["a", "b"]
+
+    def test_non_iterable_degrades_instead_of_raising(self) -> None:
+        assert requires_list({"tools": 3}, "tools") == []
+        assert requires_list({"tools": {"a": 1}}, "tools") == []
+
+    def test_bare_string_bin_is_checked_as_a_whole(self, monkeypatch) -> None:
+        seen: list[str] = []
+        monkeypatch.setattr(
+            "raven.memory_engine.skill_local.registry.shutil.which",
+            lambda b: seen.append(b) or "/usr/bin/curl",
+        )
+        assert _check_requirements({"bins": "curl"}) is True
+        assert seen == ["curl"]  # not ['c', 'u', 'r', 'l']
 
 
 class TestRequirementsHelpers:
@@ -390,6 +432,62 @@ class TestSkillRegistryAlwaysResolution:
         assert m is not None and m.always is False
 
 
+class TestSkillRegistryInjectResolution:
+    def test_resolve_inject_checks_both_layers(self):
+        assert _resolve_inject({}, {"inject": "description"}) == "description"
+        assert _resolve_inject({"inject": "description"}, {}) == "description"
+        assert _resolve_inject({}, {}) == "full"
+
+    def test_nested_wins_over_top_level(self):
+        assert _resolve_inject({"inject": "description"}, {"inject": "full"}) == "full"
+
+    def test_unknown_value_falls_back_to_full(self):
+        assert _resolve_inject({}, {"inject": "summary"}) == "full"
+
+    def test_meta_carries_inject_mode(self, tmp_workspace, tmp_builtin):
+        store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
+        assert store.get("always_digest").inject == "description"
+        assert store.get("always_flag_top").inject == "full"
+
+
+class TestAlwaysBlockRendering:
+    def _catalog(self, tmp_workspace, tmp_builtin):
+        return LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            start_watcher=False,
+        )
+
+    def test_description_mode_omits_body_and_points_at_skill_md(self, tmp_workspace, tmp_builtin):
+        catalog = self._catalog(tmp_workspace, tmp_builtin)
+        meta = catalog.registry.get("always_digest")
+        block = catalog.load_always_block([meta])
+        assert "Digest-mode always skill" in block
+        assert "BODY_MUST_NOT_BE_INJECTED" not in block
+        # Two routes back to the body. read_skill leads because it reads the
+        # registry, so it survives restrictToWorkspace; the path is the
+        # second route and the only one that helps exec reach bundled scripts.
+        assert 'read_skill("local/always_digest")' in block
+        assert str(meta.path) in block
+
+    def test_full_mode_still_injects_the_body(self, tmp_workspace, tmp_builtin):
+        catalog = self._catalog(tmp_workspace, tmp_builtin)
+        block = catalog.load_always_block([catalog.registry.get("always_flag_top")])
+        assert "Body text." in block
+
+    def test_max_inject_caps_bodies_but_never_digests(self, tmp_workspace, tmp_builtin):
+        catalog = self._catalog(tmp_workspace, tmp_builtin)
+        metas = [
+            catalog.registry.get("always_flag_top"),
+            catalog.registry.get("always_flag_nested"),
+            catalog.registry.get("always_digest"),
+        ]
+        block = catalog.load_always_block(metas, max_inject=1)
+        assert "Digest-mode always skill" in block
+        # One of the two full bodies rendered, not both.
+        assert block.count("Body text.") == 1
+
+
 # ----------------------------------------------------------------------
 # SkillService — facade (legacy-compatible API)
 # ----------------------------------------------------------------------
@@ -555,7 +653,22 @@ class TestRealBuiltinSmokeTest:
         workspace = tmp_path / "ws"
         workspace.mkdir()
         store = SkillRegistry(workspace)  # default builtin dir
-        names = {m.name for m in store.list_all()}
-        # weather is the only builtin still shipped after the 8 stale
-        # builtins were retired.
-        assert "weather" in names
+        metas = {m.name: m for m in store.list_all()}
+        assert "weather" in metas
+        assert "subagent-dag-orchestration" in metas
+        for name in ("weather", "subagent-dag-orchestration"):
+            meta = metas[name]
+            assert meta.source == "builtin"
+            assert meta.description and meta.description != name
+
+        # weather is retrieval-only: BM25 surfaces it when the user asks
+        # about weather, and it costs nothing until then.
+        assert metas["weather"].always is False
+
+        # The DAG skill has to be resident: it tells the agent *when* to reach
+        # for run_subagent_dag, which the agent cannot ask for by keyword
+        # ahead of knowing it exists. Description mode keeps that cheap —
+        # ``always`` also excludes it from BM25, so a full-body always here
+        # would be the only alternative.
+        assert metas["subagent-dag-orchestration"].always is True
+        assert metas["subagent-dag-orchestration"].inject == "description"

@@ -12,6 +12,7 @@ import { episodeFailed, groupTools, toolParts, toolsSummary } from '../domain/ep
 import { fmtDuration } from '../domain/messages.js'
 import { hasMeaningfulReasoning } from '../lib/reasoning.js'
 import { boundedLiveRenderText, clipToWidth, compactPreview, tailPreview } from '../lib/text.js'
+import { DagPanel } from './dagPanel.js'
 import { Md } from './markdown.js'
 import { StreamingMd } from './streamingMarkdown.js'
 import { Spinner } from './thinking.js'
@@ -146,6 +147,15 @@ const ToolRow = memo(function ToolRow({
           </Box>
         </Box>
       ))}
+
+      {/* A DAG call's graph renders inline like the result lines above, not
+          click-to-expand: it *is* the tool's result, and the 200-char result
+          preview cannot say which node failed once the graph is any size. */}
+      {tool.dag ? (
+        <Box marginLeft={2}>
+          <DagPanel run={tool.dag} t={t} />
+        </Box>
+      ) : null}
 
       {isOpen && tool.diff ? <Md compact={compact} t={t} text={`\`\`\`diff\n${tool.diff}\n\`\`\``} /> : null}
     </Box>

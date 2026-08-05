@@ -3,7 +3,7 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
-import { useStdin } from '@hermes/ink'
+import { useStdin, withInkSuspended } from '@hermes/ink'
 import { useStore } from '@nanostores/react'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,7 +21,6 @@ import { useInputHistory } from '../hooks/useInputHistory.js'
 import { useQueue } from '../hooks/useQueue.js'
 import { isUsableClipboardText, readClipboardText } from '../lib/clipboard.js'
 import { resolveEditor } from '../lib/editor.js'
-import { suspendForHandoff } from '../lib/handoff.js'
 import { readOsc52Clipboard } from '../lib/osc52.js'
 import { isRemoteShellSession } from '../lib/terminalSetup.js'
 import { pasteTokenLabel, stripTrailingPasteNewlines } from '../lib/text.js'
@@ -278,7 +277,7 @@ export function useComposerState({
 
     let exitCode: null | number = null
 
-    await suspendForHandoff(async () => {
+    await withInkSuspended(async () => {
       exitCode = spawnSync(cmd!, [...args, file], { stdio: 'inherit' }).status
     })
 

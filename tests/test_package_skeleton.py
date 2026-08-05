@@ -114,9 +114,7 @@ def test_usage_snapshot():
         input_tokens=10_000,
         output_tokens=500,
     )
-    # None, not 0.0: no price has been established for this call yet, and a
-    # plan-billed provider never establishes one.
-    assert u.estimated_cost_usd is None
+    assert u.estimated_cost_usd == 0.0
     assert u.session_key is None
 
 

@@ -41,7 +41,6 @@ if TYPE_CHECKING:
     from raven.memory_engine.skill_forge.gate import LLMGateFilter
     from raven.memory_engine.skill_forge.rewriter import QueryRewriter
     from raven.memory_engine.skill_forge.types import RouterHit
-    from raven.providers.base import LLMProvider
     from raven.skill_hub import SkillHubClient
 
 log = logging.getLogger(__name__)
@@ -73,14 +72,6 @@ class SkillsSegmentBuilder:
         self._pool_size = gate_pool_size if gate is not None else skill_top_k
         self._hub_client = hub_client
         self._get_tool_definitions = get_tool_definitions
-
-    def set_provider(self, provider: "LLMProvider", model: str) -> None:
-        """Hand a live ``/model`` switch down to the two LLM users in this
-        segment. The router itself holds no provider."""
-        if self._rewriter is not None:
-            self._rewriter.set_provider(provider, model)
-        if self._gate is not None:
-            self._gate.set_provider(provider, model)
 
     @trace.instrument("skill.inject", kind="skill", detached=True, extract=semconv.skill_inject_skills)
     async def build(self, ctx: AssemblyContext) -> Segment | None:
@@ -234,26 +225,10 @@ class SkillsSegmentBuilder:
         return list(await asyncio.gather(*(_hydrate_one(h) for h in gated)))
 
     def _collect_tool_names(self) -> list[str] | None:
-        """Return tool names for the gate's hard-constraint block.
+        """Tool names for the gate's hard-constraint block.
 
-        ``get_tool_definitions`` is a callable injected at construction; when
-        absent the gate runs without the tool-constraint hint (still
-        works, just less aggressive at culling env-mismatched skills).
+        ``None`` (no callable wired, or the lookup raised) means the gate runs
+        without the tool-constraint hint — still works, just less aggressive
+        at culling env-mismatched skills.
         """
-        if self._get_tool_definitions is None:
-            return None
-        try:
-            defs = self._get_tool_definitions()
-        except Exception:
-            return None
-        names: list[str] = []
-        for d in defs or []:
-            if isinstance(d, dict):
-                # OpenAI function-call schema → name lives under
-                # ``function.name``; also accept a flat ``name``.
-                fn = d.get("function") if isinstance(d.get("function"), dict) else None
-                if fn and isinstance(fn.get("name"), str):
-                    names.append(fn["name"])
-                elif isinstance(d.get("name"), str):
-                    names.append(d["name"])
-        return names or None
+        return render.collect_tool_names(self._get_tool_definitions)

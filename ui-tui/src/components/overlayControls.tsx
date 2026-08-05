@@ -7,15 +7,13 @@ import { Text, useInput } from '@hermes/ink'
 
 import type { Theme } from '../theme.js'
 
-export function useOverlayKeys({ closeOnQ = true, disabled = false, onBack, onClose }: OverlayKeysOptions) {
+export function useOverlayKeys({ disabled = false, onBack, onClose }: OverlayKeysOptions) {
   useInput((ch, key) => {
     if (disabled) {
       return
     }
 
-    // A screen that takes typed input has to opt out: an API key with a `q` in
-    // it closed the overlay one character in, and the key could never be entered.
-    if (closeOnQ && ch === 'q') {
+    if (ch === 'q') {
       return onClose()
     }
 
@@ -51,7 +49,6 @@ interface OverlayHintProps {
 }
 
 interface OverlayKeysOptions {
-  closeOnQ?: boolean
   disabled?: boolean
   onBack?: () => void
   onClose: () => void

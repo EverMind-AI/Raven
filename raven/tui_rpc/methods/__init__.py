@@ -34,6 +34,7 @@ from raven.tui_rpc.methods.cli_dispatch import register_cli_methods
 from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
 from raven.tui_rpc.methods.confirm import register_confirm_methods
+from raven.tui_rpc.methods.dag import register_dag_methods
 from raven.tui_rpc.methods.model import register_model_methods
 from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
@@ -123,11 +124,11 @@ def register_aligned_methods_except_system(
     register_setup_methods(dispatcher)
     register_reload_methods(dispatcher)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
     register_stub_methods(dispatcher)
-    # model.{options,save_key,disconnect,add_model,remove_model,endpoints,
-    # add_endpoint,remove_endpoint}: real handlers
+    # model.{options,save_key,disconnect,add_model,remove_model}: real handlers
     # must come AFTER register_stub_methods (Dispatcher.register raises on
     # duplicate; the stub group no longer owns these names).
     register_model_methods(dispatcher)
@@ -181,6 +182,7 @@ __all__ = [
     "register_setup_methods",
     "register_reload_methods",
     "register_config_methods",
+    "register_dag_methods",
     "register_session_methods",
     "register_terminal_methods",
     "register_stub_methods",
