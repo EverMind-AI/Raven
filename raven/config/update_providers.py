@@ -896,9 +896,16 @@ def test_provider(
                 oauth_access = token.access
                 api_base = token.resource_url
             else:
-                from raven.providers.chatgpt_token import access_token_and_account
+                if not _oauth_credentials_present(spec.name):
+                    raise RuntimeError(
+                        f"no credentials found -- run `raven provider login {spec.name.replace('_', '-')}`"
+                    )
+                from raven.providers.litellm_setup import import_litellm
 
-                oauth_access, _ = access_token_and_account()
+                import_litellm()  # points the authenticator at raven's OAuth directory
+                from litellm.llms.github_copilot.authenticator import Authenticator
+
+                oauth_access = Authenticator().get_api_key()
         except ImportError:
             return {
                 "ok": False,

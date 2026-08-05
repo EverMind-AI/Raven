@@ -663,3 +663,52 @@ def test_probing_codex_without_a_usable_credential_says_so(
     assert result["ok"] is False
     assert result["status"] == "oauth_token_missing"
     assert "provider login" in result["error"]
+
+
+def test_probing_copilot_with_no_credential_does_not_start_a_device_flow(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM's copilot authenticator logs in when it finds no token -- a device
+    code printed underneath ``provider test`` and a wait for someone to paste it.
+    Nothing may reach it before the credential on disk has been seen."""
+
+    def never(self):  # pragma: no cover - reached only if the guard is gone
+        raise AssertionError("the authenticator was asked for a key with no credential")
+
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        never,
+    )
+
+    result = probe_provider("github_copilot", config_path=cfg_path)
+
+    assert result["ok"] is False
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login github-copilot" in result["error"]
+
+
+def test_probing_copilot_reads_its_own_credential_not_another_providers(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both providers store a credential under the same OAuth directory, and the
+    one the probe reports on has to be the one it was asked about."""
+    from raven.config.paths import get_oauth_dir
+
+    assert oauth_home in get_oauth_dir().parents
+    codex_dir = get_oauth_dir() / "chatgpt"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    (codex_dir / "auth.json").write_text('{"access_token": "codex-token"}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        lambda self: (_ for _ in ()).throw(AssertionError("asked without a copilot credential")),
+    )
+
+    result = probe_provider("github_copilot", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing"
+    assert "github-copilot" in result["error"]
