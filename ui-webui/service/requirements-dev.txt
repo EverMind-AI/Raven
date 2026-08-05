@@ -1,0 +1,20 @@
+# Test dependencies for ui-webui/service, on top of the runtime set.
+#
+# This is the file the tool install is pointed at, so the one environment that
+# runs the gateway, the CLI and the service also runs the service's tests:
+#
+#   uv tool install --force --editable . \
+#     --with-requirements ui-webui/service/requirements-dev.txt
+#
+# The repo root's pyproject sets `asyncio_mode = "auto"`, and pytest reads that
+# config for this directory too -- so pytest-asyncio is not optional here: without
+# it every run aborts on `Unknown config option: asyncio_mode` before collecting a
+# single test, rather than merely skipping the async ones.
+#
+# Run from the repo root, with the interpreter `raven` itself runs on:
+#   "$(dirname "$(readlink -f "$(command -v raven)")")/python" \
+#     -m pytest ui-webui/service/tests -q
+-r requirements.txt
+
+pytest
+pytest-asyncio

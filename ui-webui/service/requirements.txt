@@ -1,0 +1,81 @@
+# Runtime dependencies for ui-webui/service (the FastAPI agent service).
+#
+# The service imports `agentscope` from `service/agentscope/`, which is in-tree
+# rather than installed -- so its dependencies are not resolved for us and are
+# restated here. Transcribed from that package's origin pyproject.toml: the base
+# requirements plus the `service`, `storage` and `rag` extras, which are the ones
+# create_app() actually exercises (RedisStorage, QdrantStore, the KB parsers).
+#
+# Not included: the `workspace` extra (aiodocker / e2b / daytona / opensandbox) --
+# service/main.py uses LocalWorkspaceManager, so no sandbox backend is needed --
+# and the `models` extras for providers this deployment does not call.
+#
+# Also dropped, because the code that imported them was removed from
+# service/agentscope/ (see its PROVENANCE.md): the 4 `opentelemetry-*` packages
+# (middleware/_tracing/) and `ag-ui-protocol` (app/middleware/_protocol/).
+#
+# The service shares one environment with raven: the uv tool env that `raven`
+# itself is installed into, so a single interpreter runs the gateway, the CLI and
+# this service off the same editable checkout. This file is not pip-installed --
+# it is handed to that install, which is the only thing that keeps the two in step:
+#
+#   uv tool install --force --editable . \
+#     --with-requirements ui-webui/service/requirements-dev.txt
+#
+# uv expands this file into the tool receipt at install time, listing each package
+# by name. Two consequences, and they differ:
+#   - `uv tool upgrade raven` KEEPS the service's dependencies (they are in the
+#     receipt now, not merely in this file);
+#   - but it does NOT re-read this file, so a package added here reaches the env
+#     only when the command above is run again.
+# Do not `pip install` into that env: it has no pip, and a --force reinstall would
+# drop anything uv did not put there.
+#
+# Version floors are upstream's; deliberately unpinned beyond them, matching how
+# the origin package declared them.
+#
+# Test-only dependencies live in requirements-dev.txt, which includes this file.
+
+# -- agentscope base --
+aioitertools
+anthropic
+dashscope
+docstring_parser
+filetype
+json5
+json_repair
+mcp
+httpx
+numpy
+openai
+python-datauri
+python-socketio
+shortuuid
+python-frontmatter
+jinja2
+aiofiles
+tree_sitter
+tree_sitter_bash
+jsonschema
+
+# -- agentscope[service]: the FastAPI app + scheduler --
+fastapi
+uvicorn
+apscheduler
+
+# -- agentscope[storage]: RedisStorage --
+redis
+
+# -- agentscope[rag]: QdrantStore + knowledge-base document parsers --
+qdrant-client
+pypdf
+python-pptx
+python-docx
+openpyxl>=3.1.5
+xlrd>=2.0
+pandas
+
+# Nothing for `raven` here on purpose, though main.py and the raven_* route
+# modules import it directly: raven is the tool this file is installed alongside,
+# so its own dependencies (litellm, everos, oauth-cli-kit, ...) come from the root
+# pyproject.toml. Restating any of them here would only let the two drift.

@@ -1,0 +1,653 @@
+# -*- coding: utf-8 -*-
+"""The base class for the chat models."""
+import asyncio
+import inspect
+import json
+from abc import abstractmethod
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, AsyncGenerator, Type
+
+import jsonschema
+from pydantic import BaseModel
+
+from .._logging import logger
+from .._utils._common import _json_loads_with_repair
+from ..credential import CredentialBase
+from ..message import (
+    DataBlock,
+    HintBlock,
+    Msg,
+    TextBlock,
+    ThinkingBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+    UserMsg,
+)
+from ..tool import ToolChoice
+from ._model_card import ModelCard
+from ._model_response import ChatResponse, FinishedReason, StructuredResponse
+
+_TOOL_CHOICE_LITERAL_MODES = {"auto", "none", "required"}
+_MULTIMODAL_DATA_BLOCK_TOKEN_ESTIMATE = 2000
+
+
+class ChatModelBase:
+    """The base class for chat models."""
+
+    class Parameters(BaseModel):
+        """Each subclass should implement this inner class to define its
+        parameters."""
+
+    credential: CredentialBase
+    """The API credential."""
+
+    model: str
+    """The model name."""
+
+    stream: bool
+    """The enable stream output for the LLM output."""
+
+    max_retries: int
+    """The maximum number of retries for the underlying API."""
+
+    retry_delay: float
+    """Seconds to sleep between retry attempts."""
+
+    context_size: int
+    """The model context size that will be used in the context compression."""
+
+    def __init__(
+        self,
+        credential: CredentialBase,
+        model: str,
+        parameters: BaseModel,
+        stream: bool = True,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        context_size: int = 32768,
+    ) -> None:
+        """Initialize the chat model base.
+
+        Args:
+            credential (CredentialBase):
+                The API credential.
+            model (`str`):
+                The model name.
+            parameters (`BaseModel`):
+                The model parameters.
+            stream (`bool`, defaults to `True`):
+                Whether to enable streaming output for the LLM.
+            max_retries (`int`, defaults to `3`):
+                The maximum number of retries for API calls. Only exceptions
+                listed in ``_get_retryable_exceptions()`` count against this
+                budget; other exceptions are raised immediately.
+            retry_delay (`float`, defaults to `1.0`):
+                Seconds to sleep between retry attempts.
+            context_size (`int`, defaults to `32768`):
+                The model context size used for context compression.
+        """
+        self.credential = credential
+        self.model = model
+        self.parameters = parameters
+        self.stream = stream
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.context_size = context_size
+
+    @classmethod
+    def _get_retryable_exceptions(cls) -> tuple[Type[Exception], ...]:
+        """Return the exception types that should trigger a retry.
+
+        Defaults to an empty tuple (no retries). Subclasses can override to
+        declare provider-specific retryable exceptions. SDK exception types
+        should be imported lazily inside the override so the SDK stays an
+        optional dependency.
+        """
+        return ()
+
+    @classmethod
+    def list_models(
+        cls,
+        custom_yaml_dir: str | None = None,
+    ) -> list[ModelCard]:
+        """List candidate models of the API.
+
+        Args:
+            custom_yaml_dir (`str | None`):
+                The custom YAML directory.
+
+        Returns:
+            `list[ModelCard]`:
+                A list of candidate models.
+        """
+
+        # Determine YAML directory
+        if custom_yaml_dir is None:
+            # Use the ``_models`` directory that sits next to the concrete
+            # subclass's source file (not this base file).
+            subclass_file = Path(inspect.getfile(cls))
+            yaml_dir = subclass_file.parent / "_models"
+        else:
+            yaml_dir = Path(custom_yaml_dir)
+
+        # Find all .yaml files
+        yaml_files = list(yaml_dir.glob("*.yaml"))
+
+        # Load each YAML file and create ModelCard
+        model_cards = []
+        for yaml_file in yaml_files:
+            try:
+                card = ModelCard.from_yaml(
+                    yaml_path=str(yaml_file),
+                    parameter_class=cls.Parameters,
+                )
+                model_cards.append(card)
+            except Exception as e:
+                # Log error but continue with other files
+                logger.warning(
+                    "Warning: Failed to load %s: %s",
+                    yaml_file,
+                    str(e),
+                )
+                continue
+
+        return model_cards
+
+    async def __call__(
+        self,
+        messages: list[Msg],
+        tools: list[dict] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        """Call the model with retry logic.
+
+        Attempts to call the model up to ``max_retries + 1`` times. Only
+        exceptions listed in ``_get_retryable_exceptions()`` count against
+        this budget; other exceptions are raised immediately.
+
+        Args:
+            messages (`list[Msg]`):
+                The messages to send to the model.
+            tools (`list[dict] | None`, optional):
+                The tools available to the model.
+            tool_choice (`ToolChoice | None`, optional):
+                The tool choice mode or function name.
+            **kwargs:
+                Additional keyword arguments passed to the underlying API.
+        """
+
+        retryable = self._get_retryable_exceptions()
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            # The accumulated chat response
+            try:
+                res = await self._call_api(
+                    self.model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    **kwargs,
+                )
+                break
+            except asyncio.CancelledError:
+                return ChatResponse(
+                    content=[],
+                    is_last=True,
+                    finished_reason=FinishedReason.INTERRUPTED,
+                )
+
+            except Exception as e:
+                if not isinstance(e, retryable):
+                    raise
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        "Attempt %d failed for model %s: %s. "
+                        "Retrying in %.1fs...",
+                        attempt + 1,
+                        self.model,
+                        str(e),
+                        self.retry_delay,
+                    )
+                    await asyncio.sleep(self.retry_delay)
+                else:
+                    logger.warning(
+                        "All %d attempt(s) failed for model %s.",
+                        self.max_retries + 1,
+                        self.model,
+                    )
+        else:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(
+                f"Failed to call model {self.model} after "
+                f"{self.max_retries + 1} retries.",
+            )
+
+        # =====================================================================
+        # Consume the model calling result
+        # =====================================================================
+        if isinstance(res, ChatResponse):
+            return res
+
+        # The accumulated chat response
+        acc_res = ChatResponse(
+            content=[],
+            is_last=True,
+            finished_reason=FinishedReason.COMPLETED,
+        )
+
+        async def _stream() -> AsyncGenerator[ChatResponse, None]:
+            """The wrapper around model calling."""
+            # For backward compatibility
+            yield_acc_res = True
+            try:
+                async for chunk in res:
+                    if not chunk.is_last:
+                        acc_res.append_chat_response(chunk)
+                        acc_res.id = chunk.id
+                        # Empty-content deltas are "carrier" chunks used
+                        # by subclasses to propagate usage / id metadata
+                        # (e.g. OpenAI-compatible APIs emit a trailing
+                        # usage-only chunk with no choices). We absorb
+                        # their metadata into ``acc_res`` above but do
+                        # not surface them to the consumer, which keeps
+                        # the visible stream free of spurious empty
+                        # deltas.
+                        if not chunk.content:
+                            continue
+                    else:
+                        yield_acc_res = False
+                    yield chunk
+            except asyncio.CancelledError:
+                acc_res.finished_reason = FinishedReason.INTERRUPTED
+                yield_acc_res = True
+
+            if yield_acc_res:
+                yield acc_res
+
+        return _stream()
+
+    @abstractmethod
+    async def _call_api(
+        self,
+        model_name: str,
+        messages: list[Msg],
+        tools: list[dict] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        """Call the underlying API. Subclasses must implement this method.
+
+        Args:
+            model_name (`str`):
+                The model name to use for this call.
+            messages (`list[Msg]`):
+                The messages to send to the model.
+            tools (`list[dict] | None`, optional):
+                The tools available to the model.
+            tool_choice (`ToolChoice | None`, optional):
+                The tool choice mode or function name.
+            **kwargs:
+                Additional keyword arguments for the underlying API.
+        """
+
+    def _validate_tool_choice(
+        self,
+        tool_choice: ToolChoice | None,
+        tools: list[dict] | None,
+    ) -> None:
+        """Validate tool_choice parameter.
+
+        Args:
+            tool_choice (`ToolChoice | None`):
+                Tool choice with ``mode`` and optional ``tools`` fields.
+            tools (`list[dict] | None`):
+                Available tools list.
+
+        Raises:
+            `ValueError`:
+                If mode or tool names are invalid.
+        """
+        if tool_choice is None:
+            return
+
+        mode = tool_choice.mode
+        available_functions = [
+            tool["function"]["name"] for tool in (tools or [])
+        ]
+
+        tool_names = tool_choice.tools
+        if tool_names is not None:
+            for name in tool_names:
+                if name not in available_functions:
+                    raise ValueError(
+                        f"Invalid tool name '{name}' in tool_choice.tools. "
+                        f"Available tools: "
+                        f"{', '.join(sorted(available_functions))}",
+                    )
+
+        if mode not in _TOOL_CHOICE_LITERAL_MODES:
+            # mode is a specific tool name — validate it exists
+            # Fall back to all available tools when tool_names is empty or None
+            validation_scope = (
+                tool_names if tool_names else available_functions
+            )
+            if mode not in validation_scope:
+                raise ValueError(
+                    f"Invalid tool name '{mode}' in tool_choice.mode. "
+                    + (
+                        f"Available tools in tool_choice.tools: "
+                        f"{', '.join(sorted(tool_names))}"
+                        if tool_names is not None
+                        else f"Available tools: "
+                        f"{', '.join(sorted(available_functions))}"
+                    ),
+                )
+
+    async def count_tokens(
+        self,
+        messages: list[Msg],
+        tools: list[dict] | None,
+    ) -> int:
+        """A quick and unified method to estimate the token count of the
+        model input by dividing the total input size in bytes by 4.
+
+        Note a standard way to count the tokens is first formatting the input
+        messages into the API required format, then use the tokenizer of the
+        underlying API to count the tokens.
+
+        Subclasses may override this method to provide a more accurate
+        implementation tailored to their specific tokenizer.
+
+        Args:
+            messages (`list[Msg]`):
+                The messages to send to the model.
+            tools (`list[dict] | None`):
+                The tools available to the model.
+
+        Returns:
+            `int`:
+                The number of tokens in the model.
+        """
+        cnt = 0
+
+        acc_texts = []
+        data_blocks = []
+        for msg in messages:
+            for block in msg.get_content_blocks():
+                if isinstance(block, TextBlock):
+                    acc_texts.append(block.text)
+
+                elif isinstance(block, ThinkingBlock):
+                    acc_texts.append(block.thinking)
+
+                elif isinstance(block, HintBlock):
+                    # ``hint`` may be a plain string or a list of
+                    # ``TextBlock`` / ``DataBlock`` for multimodal
+                    # content; mirror the ``ToolResultBlock.output``
+                    # branching above.
+                    if isinstance(block.hint, str):
+                        acc_texts.append(block.hint)
+                    else:
+                        for item in block.hint:
+                            if isinstance(item, TextBlock):
+                                acc_texts.append(item.text)
+                            elif isinstance(item, DataBlock):
+                                data_blocks.append(item)
+
+                elif isinstance(block, ToolCallBlock):
+                    acc_texts.append(block.input)
+
+                elif isinstance(block, ToolResultBlock):
+                    if isinstance(block.output, str):
+                        acc_texts.append(block.output)
+                    elif isinstance(block.output, list):
+                        for item in block.output:
+                            if isinstance(item, TextBlock):
+                                acc_texts.append(item.text)
+                            elif isinstance(item, DataBlock):
+                                data_blocks.append(item)
+
+                elif isinstance(block, DataBlock):
+                    data_blocks.append(block)
+
+                else:
+                    logger.warning(
+                        "Unknown block type %s in token counting, skipping.",
+                        type(block),
+                    )
+
+        # Count the tokens of the tool JSON schemas
+        if tools:
+            acc_texts.append(json.dumps(tools, ensure_ascii=False))
+
+        # Add the multimodal tokens. Binary payloads are not consumed by
+        # multimodal models as base64 text, and file URLs should not count as
+        # only a path string. Use a stable flat estimate for all DataBlocks.
+        cnt += len(data_blocks) * _MULTIMODAL_DATA_BLOCK_TOKEN_ESTIMATE
+
+        # Count the text tokens
+        acc_text = "".join(acc_texts)
+        cnt += int(len(acc_text.encode("utf-8")) / 4 + 0.5)
+
+        return cnt
+
+    async def generate_structured_output(
+        self,
+        messages: list[Msg],
+        structured_model: Type[BaseModel] | dict,
+        **kwargs: Any,
+    ) -> StructuredResponse:
+        """Generate required structured output by the given model.
+
+        Shares the same retry settings (``max_retries``, ``retry_delay``, and
+        ``_get_retryable_exceptions()``) as the ``__call__`` method.
+
+        Args:
+            messages (`list[Msg]`):
+                The context for LLM to generate the structured output.
+            structured_model (`Type[BaseModel] | dict`):
+                A Pydantic model or a dict of JSON schemas.
+
+        Returns:
+            `StructuredResponse`:
+                The structured response generated by the model.
+        """
+
+        if len(messages) == 0:
+            raise ValueError(
+                "The input messages cannot be empty for the "
+                "`generate_structured_output` method.",
+            )
+
+        retryable = tuple(self._get_retryable_exceptions())
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await self._call_api_with_structured_output(
+                    self.model,
+                    messages=messages,
+                    structured_model=structured_model,
+                    **kwargs,
+                )
+            except Exception as e:
+                if not isinstance(e, retryable):
+                    raise
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        "Attempt %d failed for model %s: %s. "
+                        "Retrying in %.1fs...",
+                        attempt + 1,
+                        self.model,
+                        str(e),
+                        self.retry_delay,
+                    )
+                    await asyncio.sleep(self.retry_delay)
+                else:
+                    logger.warning(
+                        "All %d attempt(s) failed for model %s.",
+                        self.max_retries + 1,
+                        self.model,
+                    )
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"Failed to generate structured output after "
+            f"{self.max_retries + 1} retries.",
+        )
+
+    async def _call_api_with_structured_output(
+        self,
+        model_name: str,
+        messages: list[Msg],
+        structured_model: Type[BaseModel] | dict,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> StructuredResponse:
+        """This function constructs a 'generate_structured_output' tool to
+        help LLM generate structured output as a compromise for LLM APIs that
+        don't support structured output.
+
+        If your subclasses inherit from `ChatModelBase` and the underlying
+        API supports structured output, you can override this method to
+        provide a more accurate implementation.
+
+        Note by default this method forces LLM to call the
+        'generate_structured_output' tool via tool_choice, and adds
+        instructions into the input messages. Subclasses whose underlying
+        API rejects forced tool_choice in certain modes (e.g. DashScope in
+        thinking mode) can pass ``tool_choice=ToolChoice(mode="auto")`` and
+        rely solely on the injected system-reminder prompt. LLM APIs that
+        don't support "required" tool choice may still fail (e.g. generate
+        text output and ignore the tool call, or fail in validation).
+
+        Args:
+            model_name (`str`):
+                The model name to use for this call.
+            messages (`list[Msg]`):
+                The context for the LLM to generate the structured output.
+            structured_model (`Type[BaseModel] | dict`):
+                A Pydantic model class or a JSON schema dict describing the
+                required output structure.
+            tool_choice (`ToolChoice | None`, defaults to `None`):
+                The tool_choice forwarded to ``_call_api``. When ``None``,
+                defaults to forcing the ``generate_structured_output`` tool.
+            **kwargs (`Any`):
+                Additional keyword arguments forwarded to ``_call_api``.
+        """
+
+        if isinstance(structured_model, dict):
+            input_schema = structured_model
+        else:
+            input_schema = structured_model.model_json_schema()
+
+        func_name = "generate_structured_output"
+        if tool_choice is None:
+            tool_choice = ToolChoice(mode=func_name)
+        instruction = (
+            "<system-reminder>Now you **MUST** call the tool named "
+            f"'{func_name}' to generate the structured output required "
+            "by the user. DON'T do anything else.</system-reminder>"
+        )
+
+        copied_messages = deepcopy(messages)
+        # Insert instruction to ensure llm is correctly guided
+        if copied_messages[-1].role == "user":
+            # Insert a user message to the last
+            copied_messages[-1].content = copied_messages[
+                -1
+            ].get_content_blocks() + [TextBlock(text=instruction)]
+        else:
+            copied_messages.append(
+                UserMsg(name="user", content=[TextBlock(text=instruction)]),
+            )
+
+        res = await self._call_api(
+            model_name=model_name,
+            messages=copied_messages,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "description": "Call this function to generate "
+                        "structured output required by "
+                        "the user.",
+                        "parameters": input_schema,
+                    },
+                },
+            ],
+            tool_choice=tool_choice,
+            **kwargs,
+        )
+
+        completed_response: ChatResponse | None = None
+        if self.stream:
+            # ``_call_api`` yields raw incremental chunks whose ``is_last``
+            # is always ``False``; subclasses rely on the ``__call__``
+            # wrapper to accumulate them and emit a final ``is_last=True``
+            # chunk. Since this method calls ``_call_api`` directly (to
+            # avoid duplicating the retry logic in ``__call__``), we must
+            # replicate that accumulation here, otherwise the stream may
+            # end without ever producing an ``is_last=True`` chunk.
+            acc_res = ChatResponse(
+                content=[],
+                is_last=True,
+                finished_reason=FinishedReason.COMPLETED,
+            )
+            async for chunk in res:
+                if chunk.is_last:
+                    completed_response = chunk
+                    break
+                acc_res.append_chat_response(chunk)
+                acc_res.id = chunk.id
+            if completed_response is None:
+                completed_response = acc_res
+        else:
+            completed_response = res
+
+        if completed_response is None or not completed_response.content:
+            raise RuntimeError(
+                f"Failed to get the completed response from model "
+                f"{model_name}.",
+            )
+
+        structured_output: dict[str, Any] | None = None
+        for _ in completed_response.content:
+            if isinstance(_, ToolCallBlock) and _.name == func_name:
+                structured_output = _json_loads_with_repair(
+                    _.input,
+                    input_schema,
+                )
+                break
+
+        if structured_output is None:
+            raise RuntimeError(
+                "Failed to generate structured output for model.",
+            )
+
+        # Validate the output
+        if isinstance(structured_model, dict):
+            jsonschema.validate(structured_output, structured_model)
+
+        elif issubclass(structured_model, BaseModel):
+            structured_model.model_validate(structured_output)
+
+        else:
+            raise ValueError(
+                "The structured_model is expected to be a subclass of "
+                "Pydantic.BaseModel or a dict, "
+                f"but got {type(structured_model)}.",
+            )
+
+        return StructuredResponse(
+            id=completed_response.id,
+            created_at=completed_response.created_at,
+            content=structured_output,
+            usage=completed_response.usage,
+            finished_reason=completed_response.finished_reason,
+        )
