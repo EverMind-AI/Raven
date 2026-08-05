@@ -1,4 +1,17 @@
-"""OpenAI Codex Responses Provider."""
+"""OpenAI Codex Responses Provider.
+
+LiteLLM can reach this backend -- its ChatGPT driver owns the credential raven
+signs in with, and a chat-completions call for one of these models is bridged to
+the Responses API rather than posted to a chat endpoint the backend does not
+serve. What it cannot do yet is send the whole request: its Responses
+transformation filters the body through an allow-list of eleven keys, dropping
+``parallel_tool_calls`` and ``text`` among them. An upstream fix exists but has
+not reached the released code.
+
+So the request stays here while the credential does not. ``test_openai_codex_provider``
+holds that allow-list from the installed LiteLLM: when it stops dropping what
+this provider sends, this file is what should be deleted.
+"""
 
 from __future__ import annotations
 

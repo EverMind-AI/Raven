@@ -179,3 +179,29 @@ async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatc
     await OpenAICodexProvider().chat([{"role": "user", "content": "x"}])
 
     assert "prompt_cache_key" not in bodies[0]
+
+
+def test_litellm_still_drops_what_this_provider_sends() -> None:
+    """The guard that says why this provider exists.
+
+    LiteLLM reaches the same backend, so migrating looks free -- but its
+    Responses transformation filters the request through an allow-list, and the
+    fields dropped are ones this provider sends. Migrating while that is true
+    loses them silently: the tests would stay green and the requests would
+    quietly change shape.
+
+    When this fails, the allow-list has caught up and
+    ``raven/providers/openai_codex_provider.py`` can go, with codex routed
+    through ``LiteLLMProvider`` like every other family.
+    """
+    import inspect
+
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    source = inspect.getsource(ChatGPTResponsesAPIConfig.transform_responses_api_request)
+    dropped = [field for field in ("parallel_tool_calls", "text") if f'"{field}"' not in source]
+
+    assert dropped == ["parallel_tool_calls", "text"], (
+        f"LiteLLM now preserves {sorted(set(('parallel_tool_calls', 'text')) - set(dropped))}: "
+        "route codex through LiteLLMProvider and delete raven/providers/openai_codex_provider.py"
+    )
