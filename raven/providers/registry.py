@@ -60,6 +60,14 @@ class ProviderSpec:
     # means the two coincide, which is the case wherever `name` is LiteLLM's own
     # spelling.
     metadata_prefix: str | None = None
+    # What the user is billed on. A plan -- a ChatGPT subscription, a Copilot
+    # seat, a MiniMax coding plan -- is not billed per token, so no per-token
+    # figure describes what a call cost: LiteLLM files those models at zero,
+    # which read as "unknown" and sent the estimate on to a live catalogue that
+    # answered with the pay-as-you-go rate the user is not paying. Declared
+    # rather than inferred from ``is_oauth``: OAuth is how you authenticate, not
+    # how you are charged (Vertex is OAuth and metered).
+    billing: str = "per_token"
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
     # Former names this provider answered to, so model ids saved under the old
     # one ("zhipu/glm-4.6") still resolve after a rename.
@@ -328,6 +336,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="codex",
         default_api_base="https://chatgpt.com/backend-api",
         metadata_prefix="chatgpt",
+        billing="plan",
         strip_model_prefix=False,
         model_overrides=(),
         is_oauth=True,  # OAuth-based authentication
@@ -339,6 +348,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("github_copilot", "copilot"),
         env_key="",  # OAuth-based, no API key
         display_name="Github Copilot",
+        billing="plan",
         skip_prefixes=("github_copilot/",),
         env_extras=(),
         is_gateway=False,
@@ -467,6 +477,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimax.io/anthropic/v1",
         metadata_prefix="minimax",
+        billing="plan",
         is_oauth=True,
         default_model="minimax-global/MiniMax-M3",
     ),
@@ -479,6 +490,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimaxi.com/anthropic/v1",
         metadata_prefix="minimax",
+        billing="plan",
         is_oauth=True,
         default_model="minimax-cn/MiniMax-M3",
     ),

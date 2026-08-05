@@ -340,8 +340,9 @@ def test_the_rates_of_a_login_prompting_model_skip_litellm(monkeypatch):
     answering "can this be handed to LiteLLM" separately in each place is what
     made the first attempt at this wrong.
 
-    The estimate still lands: the live catalogue prices the model. Asking LiteLLM
-    is what is skipped, not estimating.
+    The estimate is absent rather than wrong: this provider is billed by seat, so
+    the live catalogue's per-token rate is not what the user pays. What this test
+    holds either way is that LiteLLM is never the one asked.
     """
     import litellm
 
@@ -349,8 +350,7 @@ def test_the_rates_of_a_login_prompting_model_skip_litellm(monkeypatch):
     monkeypatch.setattr(litellm, "cost_per_token", _forbid(asked))
     _patch_openrouter(monkeypatch, lambda req: _models_response(_COPILOT_MODELS))
 
-    cost = estimate_cost_usd("github_copilot/gpt-4.1", 1000, 100)
-    assert cost is not None and cost > 0
+    assert estimate_cost_usd("github_copilot/gpt-4.1", 1000, 100) is None
     assert not asked, f"a login-prompting model was handed to LiteLLM: {asked}"
 
 
@@ -430,12 +430,48 @@ def test_a_model_reached_by_region_or_subscription_is_looked_up_as_the_vendor_fi
     assert pricing._candidates("minimax-global/MiniMax-M3") == ["minimax/MiniMax-M3"]
     assert pricing._candidates("minimax-cn/MiniMax-M3") == ["minimax/MiniMax-M3"]
 
-    # Everything whose name is already LiteLLM's keeps the pair it always had.
+    # Everything else is asked as it routes, with the alias behind it.
     assert pricing._candidates("deepseek/deepseek-chat") == [
-        "openrouter/deepseek/deepseek-chat",
         "deepseek/deepseek-chat",
+        "openrouter/deepseek/deepseek-chat",
     ]
     assert pricing._candidates("openrouter/anthropic/claude-opus-4.8") == ["openrouter/anthropic/claude-opus-4.8"]
+
+
+def test_a_plan_billed_provider_reports_no_per_token_cost():
+    """The subscription is the price, so no per-token figure describes the call.
+
+    LiteLLM files these models at zero, which the tiers below read as "unknown"
+    and answered with the pay-as-you-go rate the user is not paying: $2.50 per
+    million tokens for a Copilot seat. Windows still resolve -- occupancy is the
+    measure that means something on a plan.
+    """
+    for model in ("github_copilot/gpt-4o", "openai-codex/gpt-5.3-codex", "minimax-global/MiniMax-M3"):
+        assert estimate_cost_usd(model, 1_000_000, 0) is None, model
+        assert pricing.resolve_context_window(model), f"{model}: window still expected"
+
+    # The same vendor's metered API is unaffected: that one is per-token.
+    assert estimate_cost_usd("minimax/MiniMax-M3", 1_000_000, 0) == pytest.approx(0.3)
+
+
+def test_plan_billing_is_declared_not_inferred_from_oauth():
+    """OAuth is how you authenticate, not how you are charged -- Vertex is OAuth
+    and metered, so the flag cannot stand in for the other."""
+    from raven.providers.registry import PROVIDERS
+
+    plan_billed = {spec.name for spec in PROVIDERS if spec.billing == "plan"}
+    assert plan_billed == {"openai_codex", "github_copilot", "minimax_global", "minimax_cn"}
+
+
+def test_a_directly_routed_model_is_priced_as_the_vendor_prices_it():
+    """The alias answers with OpenRouter's numbers, which a user routing straight
+    to the vendor does not pay. Asked alias-first, this model reported half its
+    window at half its price."""
+    assert pricing.resolve_context_window("deepseek/deepseek-chat") == 131_072
+    assert pricing.estimate_cost_usd("deepseek/deepseek-chat", 1_000_000, 0) == pytest.approx(0.28)
+
+    # Routed through the gateway, OpenRouter's own numbers are the right ones.
+    assert pricing.resolve_context_window("openrouter/deepseek/deepseek-chat") == 65_536
 
 
 def test_the_window_those_families_report_is_the_vendors_own():
