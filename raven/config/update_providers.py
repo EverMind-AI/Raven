@@ -882,6 +882,11 @@ def test_provider(
     api_key = cfg.get("api_key") or ""
     api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
 
+    # Before the token fetch below, which asks a question this backend does not
+    # answer: its catalogue is the credential check.
+    if spec and spec.name == "openai_codex":
+        return _probe_codex_catalog(timeout_s=timeout_s)
+
     if spec and spec.is_oauth:
         try:
             if spec.name in {"minimax_global", "minimax_cn"}:
@@ -1005,6 +1010,56 @@ def test_provider(
         "models_count": models_count,
         "model_ids": model_ids,
         "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}",
+    }
+
+
+def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
+    """Verify a Codex credential the way the backend will accept being asked.
+
+    The generic probe requests ``{api_base}/v1/models``, which this backend does
+    not serve: a valid OAuth credential came back refused, reading as a bad key.
+    Its catalogue endpoint is both the credential check and the answer to what the
+    account may use.
+    """
+    import time
+
+    from raven.providers.codex_catalog import account_models, reset_cache
+
+    start = time.monotonic()
+    reset_cache()  # a probe reports on now, not on what a picker asked minutes ago
+    try:
+        models = account_models(timeout=timeout_s)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    if not models:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": elapsed_ms,
+            "http_status": None,
+            "models_count": 0,
+            "model_ids": [],
+            "error": "the account returned no usable models -- run `raven provider login openai-codex`",
+        }
+
+    return {
+        "ok": True,
+        "status": "valid",
+        "elapsed_ms": elapsed_ms,
+        "http_status": 200,
+        "models_count": len(models),
+        "model_ids": list(models),
+        "error": None,
     }
 
 

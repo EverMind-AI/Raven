@@ -525,40 +525,44 @@ def test_test_provider_oauth_sends_the_stored_token(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Asked of the module that speaks for the driver, so the probe cannot open a
-    # device flow behind a command that is only meant to report.
+    """MiniMax's OAuth families go through the generic probe, with the token the
+    login stored as the bearer -- read, never re-acquired, so a report cannot open
+    a device flow behind the user."""
     monkeypatch.setattr(
-        "raven.providers.chatgpt_token.access_token_and_account",
-        lambda: ("oauth-token-xyz", "me@x"),
+        "raven.providers.minimax_oauth.get_token",
+        lambda region: SimpleNamespace(access="oauth-token-xyz", resource_url="https://api.minimax.io/anthropic/v1"),
     )
 
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["auth"] = request.headers.get("Authorization")
+        seen["x_api_key"] = request.headers.get("x-api-key")
+
         return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
-    # openai_codex has default_api_base set; github_copilot doesn't — pick
-    # the former so the request can resolve a URL without extra setup.
     result = probe_provider(
-        "openai_codex",
+        "minimax_global",
         config_path=cfg_path,
         transport=_mock_transport(handler),
     )
+
     assert result["ok"] is True
     assert seen["auth"] == "Bearer oauth-token-xyz"
+    assert seen["x_api_key"] == "oauth-token-xyz"
 
 
 def test_test_provider_oauth_missing_token_returns_oauth_token_missing(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sys
+    def no_token(region: str):
+        raise RuntimeError("no token stored")
 
-    fake_module = SimpleNamespace(get_token=lambda: SimpleNamespace(access=None, account_id=None))
-    monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
+    monkeypatch.setattr("raven.providers.minimax_oauth.get_token", no_token)
 
-    result = probe_provider("openai_codex", config_path=cfg_path)
+    result = probe_provider("minimax_global", config_path=cfg_path)
+
     assert result["status"] == "oauth_token_missing"
 
 
@@ -622,3 +626,40 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     with pytest.raises(ConfigReadError):
         set_provider_fields("openai", {"api_key": "sk-x"}, config_path=cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == original  # untouched
+
+
+def test_probing_codex_asks_the_endpoint_that_backend_serves(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic probe requests ``{api_base}/v1/models``, which this backend does
+    not serve -- a valid OAuth credential came back refused, reading as a bad key.
+    Its catalogue is both the credential check and the list of usable models."""
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda timeout=5.0: ("gpt-5.6-sol", "gpt-5.4"),
+    )
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert result["models_count"] == 2
+    assert result["model_ids"] == ["gpt-5.6-sol", "gpt-5.4"]
+
+
+def test_probing_codex_without_a_usable_credential_says_so(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", lambda timeout=5.0: ())
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["ok"] is False
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login" in result["error"]

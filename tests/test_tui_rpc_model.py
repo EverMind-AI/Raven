@@ -515,3 +515,34 @@ async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Pa
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "ollama_chat"})
     assert "api_base" in str(excinfo.value)
+
+
+async def test_options_lists_the_codex_models_the_account_reports(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the account knows: the registry default is refused by the backend and
+    LiteLLM's table carries slugs an account is not entitled to, which is why this
+    row used to offer nothing at all."""
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda: ("gpt-5.6-sol", "gpt-5.4"),
+    )
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    entry = _entry(await model_options({}), "openai_codex")
+
+    assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
+
+
+def test_only_codex_is_asked_of_the_account_catalogue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every other provider is served by the static tiers, so none of them should
+    pay for a network round trip."""
+    from raven.tui_rpc.methods.model import _provider_models
+
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda: pytest.fail("the catalogue was asked for a provider it cannot answer for"),
+    )
+
+    assert _provider_models("deepseek"), "other providers still list models"

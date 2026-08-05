@@ -81,12 +81,31 @@ def _provider_models(slug: str) -> list[str]:
     # all, which is why the picker used to offer them nothing.
     out: list[str] = []
     seen: set[str] = set()
-    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug)):
+    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug), *_account_models(slug)):
         if candidate not in seen:
             seen.add(candidate)
             out.append(candidate)
 
     return out
+
+
+def _account_models(slug: str) -> tuple[str, ...]:
+    """Models the account itself reports, for a provider only it can answer for.
+
+    Codex has no static list worth offering: the registry default is refused by
+    the backend, and the entries LiteLLM's table carries are not the slugs an
+    account is entitled to. Everyone else is served by the tiers above.
+    """
+    if slug != "openai_codex":
+        return ()
+
+    from raven.providers.codex_catalog import account_models
+
+    # Same spelling the row's own hint tells the user to type, and it normalizes
+    # back to this provider on the way in.
+    prefix = slug.replace("_", "-")
+
+    return tuple(f"{prefix}/{model}" for model in account_models())
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
