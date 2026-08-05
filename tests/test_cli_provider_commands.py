@@ -459,3 +459,25 @@ def test_provider_set_refuses_malformed_config_and_preserves_file(tmp_config: Pa
     result = runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-x"])
     assert result.exit_code != 0
     assert tmp_config.read_text(encoding="utf-8") == original  # NOT clobbered
+
+
+def test_provider_login_openai_codex_says_so_when_it_would_do_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """Asking the driver for a token returns the stored one when it is still good.
+    Announcing a device flow and opening a browser tab first made a no-op look
+    like a sign-in, and left no way to tell that switching accounts had failed."""
+    calls = _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.stored_credentials",
+        lambda: {"access_token": "already-there"},
+    )
+
+    r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
+    assert r.exit_code == 0
+    assert "Already signed in" in r.stdout
+    assert "provider remove openai-codex" in r.stdout
+    assert calls == [], "the driver was asked for a token anyway"
+    assert opened_urls == [], "a browser tab was opened for a sign-in that did not happen"

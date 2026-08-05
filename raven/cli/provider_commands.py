@@ -118,6 +118,21 @@ def _login_openai_codex() -> None:
     from litellm.llms.chatgpt.authenticator import Authenticator
     from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL
 
+    from raven.providers.chatgpt_token import clear_abandoned_device_code, stored_credentials
+
+    # Asking the driver for a token returns the stored one when it is still good,
+    # so without this the command announces a device flow, opens a browser tab and
+    # then reports success without having done anything.
+    if stored_credentials() is not None:
+        console.print("[green]Already signed in to OpenAI Codex.[/green]")
+        console.print("[dim]To sign in as someone else: raven provider remove openai-codex[/dim]")
+        return
+
+    # Otherwise the driver would wait for the earlier attempt to land rather than
+    # start this one, silently, for as long as five minutes.
+    if clear_abandoned_device_code():
+        console.print("[dim]Discarded an unfinished sign-in from an earlier attempt.[/dim]")
+
     console.print("[cyan]Starting ChatGPT device flow...[/cyan]\n")
     _open_device_page(CHATGPT_DEVICE_VERIFY_URL)
 
