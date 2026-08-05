@@ -39,6 +39,8 @@ const normalize = (raw: string) =>
 const ENTER = '\r'
 const DOWN = '[B'
 
+const ESCAPE = String.fromCharCode(27)
+
 const anthropic: ModelOptionProvider = {
   auth_type: 'key',
   authenticated: true,
@@ -95,31 +97,71 @@ const oauthProvider: ModelOptionProvider = {
   is_current: false,
   key_env: null,
   models: [],
-  name: 'OAuth Vendor',
+  name: 'MiniMax Global',
   needs_api_base: false,
-  slug: 'oauthvendor',
+  slug: 'minimax_global',
   total_models: 0,
-  warning: 'run `raven provider login openai-codex` to authenticate'
+  warning: 'run `raven provider login minimax-global` to authenticate'
+}
+
+interface MountExtras {
+  /** What the spawned `raven provider login` resolves to. */
+  launch?: { code: null | number; error?: string }
+  /** The provider list every `model.options` call after the first one returns. */
+  nextProviders?: ModelOptionProvider[]
 }
 
 interface Harness {
   frame: () => string
   gw: { request: ReturnType<typeof vi.fn> }
+  onCancel: ReturnType<typeof vi.fn>
+  launchedInsideSuspend: () => boolean
+  launcher: ReturnType<typeof vi.fn>
   onSelect: ReturnType<typeof vi.fn>
+  optionsCalls: () => number
+  suspend: ReturnType<typeof vi.fn>
   type: (s: string) => Promise<void>
   unmount: () => void
 }
 
-const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: any) => unknown): Harness => {
+const mount = (
+  providers: ModelOptionProvider[],
+  requestImpl?: (m: string, p: any) => unknown,
+  extras?: MountExtras
+): Harness => {
   const onSelect = vi.fn()
+  const onCancel = vi.fn()
+  let optionsCalls = 0
   const request = vi.fn((method: string, params: Record<string, unknown>) => {
     if (method === 'model.options') {
-      return Promise.resolve({ model: 'claude-sonnet-4-6', provider: 'anthropic', providers })
+      optionsCalls += 1
+      const list = optionsCalls > 1 && extras?.nextProviders ? extras.nextProviders : providers
+
+      return Promise.resolve({ model: 'claude-sonnet-4-6', provider: 'anthropic', providers: list })
     }
 
     return Promise.resolve(requestImpl ? requestImpl(method, params) : {})
   })
   const gw = { request } as unknown as { request: typeof request }
+
+  // The handoff is asserted through these two rather than through the screen:
+  // `frame()` accumulates every write, so the command line the provider row
+  // already printed as a warning would match a screen assertion either way.
+  let insideSuspend = false
+  let launchedInsideSuspend = false
+  const launcher = vi.fn(async (_args: string[]) => {
+    launchedInsideSuspend = insideSuspend
+
+    return extras?.launch ?? { code: 0 }
+  })
+  const suspend = vi.fn(async (run: () => Promise<void>) => {
+    insideSuspend = true
+    try {
+      await run()
+    } finally {
+      insideSuspend = false
+    }
+  })
 
   const stdout = new PassThrough()
   const stdin = new PassThrough()
@@ -136,9 +178,11 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
   const instance = renderSync(
     <ModelPicker
       gw={gw as never}
-      onCancel={() => {}}
+      launcher={launcher as never}
+      onCancel={onCancel}
       onSelect={onSelect}
       sessionId="tui:session-1"
+      suspend={suspend as never}
       t={DEFAULT_THEME}
     />,
     {
@@ -152,7 +196,12 @@ const mount = (providers: ModelOptionProvider[], requestImpl?: (m: string, p: an
   return {
     frame: () => normalize(output),
     gw: gw as never,
+    launchedInsideSuspend: () => launchedInsideSuspend,
+    launcher,
+    onCancel,
     onSelect,
+    optionsCalls: () => optionsCalls,
+    suspend,
     type: async (s: string) => {
       stdin.write(s)
       await delay(30)
@@ -306,20 +355,151 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
-  it('gates OAuth providers: no key prompt, warning shown', async () => {
+  it('sends OAuth providers to the sign-in screen, not the key prompt', async () => {
     const h = mount([anthropic, oauthProvider])
     await delay(60)
 
     await h.type(DOWN)
     await h.type(ENTER)
-    const providerFrame = h.frame()
-    expect(providerFrame).toContain('raven provider login')
+    expect(h.frame()).toContain('raven provider login')
 
     await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
 
-    // Still on the provider stage — no key prompt was opened.
-    expect(h.frame()).not.toContain('Configure OAuth Vendor')
+    // A browser flow has no key to paste, so the key stage stays out of it.
     expect(h.gw.request).not.toHaveBeenCalledWith('model.save_key', expect.anything())
+    expect(h.launcher).not.toHaveBeenCalled()
+
+    h.unmount()
+  })
+
+  it('lets a key with a q in it be typed', async () => {
+    // Bare `q` closes the overlay, which on the key screen meant the character
+    // dismissed the picker instead of landing in the field: any key containing a
+    // `q` was impossible to enter.
+    const h = mount([anthropic, custom])
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Tab switches field')
+
+    // One key at a time: a whole string arrives as a single input event, which
+    // never equals the bare `q` the overlay closes on.
+    for (const ch of 'sk-q1') {
+      await h.type(ch)
+    }
+
+    // Asserted on the callback rather than the field: ink redraws
+    // incrementally, so the accumulated output never holds the whole mask.
+    expect(h.onCancel).not.toHaveBeenCalled()
+
+    h.unmount()
+  })
+
+  it('runs `provider login` inside the Ink suspend on the sign-in screen', async () => {
+    const h = mount([anthropic, oauthProvider])
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ENTER)
+    await delay(60)
+
+    expect(h.launcher).toHaveBeenCalledWith(['provider', 'login', 'minimax-global'])
+    expect(h.suspend).toHaveBeenCalledTimes(1)
+    expect(h.launchedInsideSuspend()).toBe(true)
+
+    h.unmount()
+  })
+
+  it('refetches after a successful sign-in and stays on the sign-in screen', async () => {
+    const h = mount([anthropic, oauthProvider], undefined, {
+      nextProviders: [anthropic, { ...oauthProvider, authenticated: true, models: ['MiniMax-M2'], total_models: 1 }]
+    })
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+    expect(h.optionsCalls()).toBe(1)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'signed in.')
+
+    // The refetch happened; the stage did not move. Reading the fresh
+    // authenticated flag off the closure instead of the response is what used to
+    // report every provider as still missing its credentials.
+    expect(h.optionsCalls()).toBe(2)
+    expect(h.frame()).not.toContain('step 2/2')
+    expect(h.frame()).not.toContain('still finds no credentials')
+
+    h.unmount()
+  })
+
+  it('keeps the sign-in screen when the login command fails', async () => {
+    const h = mount([anthropic, oauthProvider], undefined, { launch: { code: 1 } })
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'exited with code 1')
+
+    // A failed login is not a refetch, and it does not move the user anywhere.
+    expect(h.optionsCalls()).toBe(1)
+    expect(h.frame()).not.toContain('step 2/2')
+
+    h.unmount()
+  })
+
+  it('returns from the sign-in screen to the list it was opened from', async () => {
+    const h = mount([anthropic, oauthProvider])
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ESCAPE)
+    await delay(30)
+
+    // Asserted by what the next Enter reaches, not by screen text: `frame()`
+    // accumulates, so the add list it came from is on screen either way. One
+    // level too far out lands on the configured list, whose first row is a
+    // provider with models.
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await delay(60)
+
+    expect(h.launcher).toHaveBeenCalledWith(['provider', 'login', 'minimax-global'])
+    expect(h.frame()).not.toContain('step 2/2')
+
+    h.unmount()
+  })
+
+  it('reports a sign-in that leaves no credentials behind', async () => {
+    const h = mount([anthropic, oauthProvider])
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'still finds no credentials')
+
+    expect(h.optionsCalls()).toBe(2)
 
     h.unmount()
   })
