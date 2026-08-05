@@ -70,7 +70,7 @@ jobs:
         run: make lint-python
 
   unit:
-    name: unit (py${{ matrix.python }} / ${{ matrix.os }})
+    name: unit (py${{ matrix.python }} / ${{ matrix.os }} / rg-${{ matrix.ripgrep }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -78,8 +78,26 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python: ["3.12"]
+        # grep/find have a ripgrep backend and a pure-Python fallback with
+        # different capabilities; one leg per backend keeps both genuinely
+        # tested (skipif on rg-only tests would otherwise show green while
+        # never running on a runner without rg).
+        ripgrep: [present, absent]
     steps:
       - uses: actions/checkout@v7
+
+      - name: Set up ripgrep (${{ matrix.ripgrep }})
+        run: |
+          if [ "${{ matrix.ripgrep }}" = "present" ]; then
+            if ! command -v rg >/dev/null; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+            fi
+            command -v rg
+          else
+            sudo apt-get remove -y -qq ripgrep >/dev/null 2>&1 || true
+            while command -v rg >/dev/null; do sudo rm -f "$(command -v rg)"; done
+            if command -v rg >/dev/null; then echo "::error::rg still on PATH"; exit 1; fi
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0

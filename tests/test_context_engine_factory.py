@@ -29,7 +29,11 @@ from raven.config.raven import (
 )
 from raven.context_engine import ContextAssembler
 from raven.context_engine.factory import build_context_engine
-from raven.context_engine.segments import MemorySegmentBuilder, SkillsSegmentBuilder
+from raven.context_engine.segments import (
+    BootstrapSegmentBuilder,
+    MemorySegmentBuilder,
+    SkillsSegmentBuilder,
+)
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     HubSkillSource,
@@ -220,3 +224,106 @@ class TestInjectedIdsFromMetadata:
         fake_meta.id = "git-resolver"
         ids = agent._collect_injected_skill_ids([fake_meta])
         assert "local/git-resolver" in ids
+
+
+class TestRepoRulesBootstrap:
+    """Raven is coding-only: segment 2 is the repository's own rules files,
+    read-only and size-capped. Nothing is ever seeded to the workspace."""
+
+    def test_injects_repo_rules_files(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path)
+        builder = next(b for b in engine._builders if isinstance(b, BootstrapSegmentBuilder))
+        assert builder._bootstrap_files is None  # renderer default
+        from raven.context_engine.segments import render
+
+        # Same list opencode reads at project level (its AGENTS.md convention,
+        # plus claude-code's CLAUDE.md and its own CONTEXT.md).
+        assert render.BOOTSTRAP_FILES == ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
+
+    def test_reads_repo_agents_md(self, tmp_path: Path) -> None:
+        from raven.context_engine.segments import render
+
+        (tmp_path / "AGENTS.md").write_text("# Repo rules\nuse uv only", encoding="utf-8")
+        text = render.load_bootstrap_files(tmp_path)
+        assert "## AGENTS.md" in text and "use uv only" in text
+
+    def test_empty_repo_injects_nothing(self, tmp_path: Path) -> None:
+        """No substitute text of raven's own when the repo has no rules file."""
+        from raven.context_engine.segments import render
+
+        assert render.load_bootstrap_files(tmp_path) == ""
+        assert not (tmp_path / "AGENTS.md").exists()
+
+    def test_injected_file_is_size_capped(self, tmp_path: Path) -> None:
+        from raven.context_engine.segments import render
+
+        (tmp_path / "AGENTS.md").write_text("x" * 60_000, encoding="utf-8")
+        text = render.load_bootstrap_files(tmp_path)
+        assert len(text) < 30_000 and "truncated" in text
+
+    def test_context_builder_reads_the_same_files(self, tmp_path: Path) -> None:
+        (tmp_path / "CLAUDE.md").write_text("repo rule", encoding="utf-8")
+        assert "repo rule" in ContextBuilder(workspace=tmp_path)._load_bootstrap_files()
+
+    def test_reads_repo_context_md(self, tmp_path: Path) -> None:
+        from raven.context_engine.segments import render
+
+        (tmp_path / "CONTEXT.md").write_text("# Terms\nsegment: one prompt block", encoding="utf-8")
+        text = render.load_bootstrap_files(tmp_path)
+        assert "## CONTEXT.md" in text and "one prompt block" in text
+
+    def test_engine_construction_leaves_the_workspace_untouched(self, tmp_path: Path) -> None:
+        """Raven is coding-only: the workspace is the user's repository, so
+        building the context engine must not create a single file in it.
+        Regression guard for the four paths AgentEval had to git-exclude
+        (``sessions``, ``agent_memory``, ``user_memory``, ``memory/.curator``)."""
+        _build_engine(tmp_path, backend=_FakeBackend())
+        assert list(tmp_path.iterdir()) == []
+
+    def test_memory_store_creates_nothing_until_a_write(self, tmp_path: Path) -> None:
+        from raven.memory_engine.consolidate.consolidator import MemoryStore
+
+        store = MemoryStore(tmp_path)
+        assert list(tmp_path.iterdir()) == []
+        assert store.read_long_term() == ""  # reads still work: absent -> empty
+        store.write_long_term("remembered")
+        assert store.memory_file.read_text(encoding="utf-8") == "remembered"
+
+    def test_curator_state_dir_moves_writes_out_of_the_workspace(self, tmp_path: Path) -> None:
+        from raven.config.raven import ContextConfig as _Ctx
+        from raven.context_engine.curator import CuratorArchiveStore
+
+        state = tmp_path / "state"
+        store = CuratorArchiveStore(tmp_path / "repo", _Ctx(), state_dir=state)
+        store.append_trace("cli:c", "t1", "curator_start", {})
+        assert not (tmp_path / "repo").exists()
+        assert list(state.glob("**/*.jsonl"))
+
+    def test_archived_messages_survive_a_relocated_state_dir(self, tmp_path: Path) -> None:
+        """``archive_ref`` is written relative to the store's base and resolved
+        back against it, so both ends must use the same anchor -- anchoring the
+        write on the workspace while the archive lives elsewhere silently loses
+        every archived message."""
+        from raven.config.raven import ContextConfig as _Ctx
+        from raven.context_engine.curator import CuratorArchiveStore
+
+        store = CuratorArchiveStore(tmp_path / "repo", _Ctx(), state_dir=tmp_path / "state")
+        messages = [
+            {"role": "user", "content": "the original request"},
+            {"role": "assistant", "content": "the original answer"},
+        ]
+        manifest = store.build_manifest("cli:c", messages)
+        outcome = store.archive_messages("cli:c", manifest, messages, [0, 1])
+        assert outcome["manifest_updated"] is True
+        assert [item.id for item in manifest if item.archived] == [0, 1]
+
+        got = store.retrieve(outcome["archive_refs"], mode="exact")
+        texts = [m["content"] for r in got["results"] for m in r["messages"]]
+        assert "the original request" in texts and "the original answer" in texts
+
+    def test_identity_is_the_coding_identity(self, tmp_path: Path) -> None:
+        from raven.context_engine.segments import render
+
+        text = render.identity_text(tmp_path)
+        assert "software engineering tasks" in text
+        assert "personal AI assistant" not in text

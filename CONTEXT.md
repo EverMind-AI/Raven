@@ -61,7 +61,8 @@ _Avoid_: conflating with a Turn — a Subagent lives outside the main turn and r
 **Tool** (`agent/tools/`):
 An agent capability behind a uniform `Tool` ABC (name, parameter schema, async
 `execute`). Built-ins: file read/write/edit/list, grep/find, exec, web search/fetch,
-message, ask_user, spawn (Subagent), MCP, media generation, and skill read/use.
+ask_user, spawn (Subagent), MCP, media generation, and skill read/use. A reply is plain
+assistant text — there is no second reply channel.
 _Avoid_: "function" — a Tool is the agent-facing capability, not a Python function.
 
 **Tool Registry** (`agent/tools/registry.py`):
@@ -287,7 +288,19 @@ _Avoid_: archive vs Consolidation confusion — Archive loses nothing
 The legacy path's lossy distillation: when the prompt outgrows the window, old
 messages are summarized into memory notes and leave the live history view; the
 originals never return to context.
-_Avoid_: summarize, compact (ambiguous between this and Archive)
+_Avoid_: summarize (ambiguous between this, Archive, and In-turn Compaction)
+
+**In-turn Compaction** (`raven/agent/loop/compaction.py`):
+The only mechanism that shrinks context INSIDE a single turn's agent loop (Curator
+and Consolidation both run at turn boundaries). Two tiers, driven by the last
+response's real token usage — plus a local estimate of what was appended since that
+report — against `window - reserved`: prune replaces older tool-result bodies with a
+placeholder; summarize replaces the transcript head with one LLM-written handoff brief
+while a recent tail stays verbatim. A context-overflow error takes the same path
+reactively. Three consecutive summary failures disable the summary tier for the rest of
+the turn (a failed summary frees nothing, so the trigger would stay armed). Configured by
+`agents.defaults.compaction`.
+_Avoid_: confusing with Consolidation (cross-session memory) or Archive (lossless).
 
 **Manifest**:
 Curator's per-message metadata index for one session (tokens, snippet, relevance,
@@ -395,24 +408,41 @@ writes completed/failed (never unknown) into `HISTORY.md`.
 ### Workspace & Onboarding
 
 **Workspace**:
-The per-agent filesystem tree (default `~/.raven/workspace`) holding the agent's and user's
-memory, skills, and root task files. Exactly one per running agent.
-_Avoid_: confusing the Workspace (the live instance) with the Workspace Template it is seeded from.
+The directory the agent works on (default `~/.raven/workspace`). Exactly one per running
+agent, and for a coding run it is the user's repository — so raven writes nothing of its
+own there: state goes to the Agent State Directory.
+_Avoid_: confusing the Workspace (what to work on) with the Agent State Directory (where
+raven's own files live); confusing it with the Workspace Template it can be seeded from.
+
+**Agent State Directory** (`paths.get_workspace_state_dir(workspace, name)`):
+A per-workspace directory under raven's instance data dir where raven keeps its own
+runtime files (Curator archives/manifests/traces, skill-injection telemetry), bucketed by
+the workspace's absolute path — the same shape claude-code uses for
+`~/.claude/projects/<escaped-path>/`. Exists because the Workspace may be a user
+repository, where raven's files would surface as untracked noise in every run.
+_Avoid_: `sessions/` — session transcripts still live in the Workspace (the one remaining
+exception, deliberately deferred).
 
 **Workspace Template** (`templates/`):
-The bundled markdown seed files copied into a Workspace on first run by
-`sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
+The bundled markdown seed files copied into a Workspace by `sync_workspace_templates()`
+(idempotent — fills only missing files, so user edits win). Called **only** by Onboarding:
+a normal `raven agent` / `raven gateway` start seeds nothing.
 `SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
 profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
 (tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
 under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
 `HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
+_Avoid_: treating these as Bootstrap Files — the injected set is the repository's own
+rules files, not these seeds.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
 The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds the
 Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
-**Bootstrap Files**:
-The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —
-rendered by the Context Builder / bootstrap segment.
-_Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not bootstrap.
+**Bootstrap Files** (`render.BOOTSTRAP_FILES`):
+The repository's own rules files concatenated into every prompt by the bootstrap segment:
+`AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` — the same project-level set opencode reads. Never
+written by raven, size-capped per file on injection, and absent files simply yield an empty
+segment.
+_Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not
+bootstrap; and lumping in the Workspace Template seeds, which are no longer injected.

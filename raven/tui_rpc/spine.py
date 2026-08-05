@@ -20,7 +20,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
-from raven.agent.tools.message import MessageTool
 from raven.spine import (
     Deliverable,
     EpisodeStart,
@@ -52,15 +51,10 @@ def _conversation_id(req: TurnRequest) -> str:
 class TuiTurnRunner(AgentTurnRunner):
     """Runs a TUI turn through the agent loop's native run_turn (stream=True), so
     token/reasoning/tool/Text all flow through the hub to the TuiOutlet (one
-    per-outlet FIFO — no dual path). Two TUI-specific bits the generic runner
-    does not carry:
-
-    - it passes its own ``usage_sink`` so the sink can attach the full usage
-      (cost / context, richer than the three-field TurnOutcome.usage) to
-      ``message.complete``; the rich usage stays TUI-internal, off the wire;
-    - it fires the synthetic tool.complete when the turn replied via the
-      message tool (the loop's general tool path skips the message tool), so the
-      UI records that the agent acted.
+    per-outlet FIFO — no dual path). The one TUI-specific bit the generic runner
+    does not carry: it passes its own ``usage_sink`` so the sink can attach the
+    full usage (cost / context, richer than the three-field TurnOutcome.usage)
+    to ``message.complete``; the rich usage stays TUI-internal, off the wire.
     """
 
     def __init__(
@@ -68,13 +62,11 @@ class TuiTurnRunner(AgentTurnRunner):
         agent_loop: Any,
         emitter: SubscriptionEmitter,
         usages: dict[str, dict[str, Any]],
-        turn_ids: dict[str, str],
         readback_texts: dict[str, str],
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
         self._usages = usages
-        self._turn_ids = turn_ids
         self._readback_texts = readback_texts
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
@@ -94,21 +86,6 @@ class TuiTurnRunner(AgentTurnRunner):
         outcome = await self._loop.run_turn(
             req, emit, drain, stream=True, inline_tool_stream=True, usage_sink=usage_sink
         )
-
-        # A synthetic tool.complete when the message tool fired (the loop
-        # skips it on the general tool path), so the UI records the agent acted —
-        # its reply already streamed as token deltas. Emitted before returning, so
-        # it lands in the turn's event stream ahead of TurnEnded.
-        message_tool = self._loop.tools.get("message")
-        if isinstance(message_tool, MessageTool) and message_tool.sent_in_turn:
-            turn_id = self._turn_ids.get(cid, "")
-            await emit(
-                ToolEvent(
-                    phase=ToolPhase.COMPLETE,
-                    tool_call_id=f"msg-{turn_id}",
-                    result_preview="(message sent via tool)",
-                )
-            )
 
         self._usages[cid] = dict(usage_sink)
         return outcome
@@ -289,7 +266,7 @@ def build_tui(
     if readback_texts is None:
         readback_texts = {}
     scheduler = Scheduler(
-        TuiTurnRunner(agent_loop, emitter, usages, turn_ids, readback_texts),
+        TuiTurnRunner(agent_loop, emitter, usages, readback_texts),
         OriginPools(user=user_pool, system=system_pool),
         _make_tui_sink(hub, outlet, channel, turn_ids, usages, on_turn_end),
     )

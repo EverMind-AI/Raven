@@ -20,13 +20,11 @@ if TYPE_CHECKING:
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    # L4 pillar layout — agent identity/behavior live under agent_memory;
-    # user.md is omitted here because MemoryStore already injects it into
-    # the ``# Memory`` block (avoids loading the same file twice).
+    # Mirrors render.BOOTSTRAP_FILES — the repository's own instruction files.
     BOOTSTRAP_FILES = [
-        "agent_memory/profile/soul.md",
-        "agent_memory/profile/agent.md",
-        "TOOLS.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CONTEXT.md",
     ]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
@@ -38,10 +36,8 @@ class ContextBuilder:
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
-        profile: str = "assistant",
     ):
         self.workspace = workspace
-        self._profile = profile
         self.memory = MemoryStore(workspace)
         self.skills = LocalSkillCatalog(
             workspace,
@@ -119,12 +115,15 @@ class ContextBuilder:
         if mode == "full_body" and only:
             inject_max = getattr(cfg, "inject_max", 2) if cfg else 2
             # Telemetry: log which skills were injected to
-            # <workspace>/skill_injections.jsonl for offline analysis
-            # (used by claweval / PinchBench A/B to attribute scores to
-            # specific skills the agent saw inline).
+            # skill_injections.jsonl for offline analysis (used by claweval /
+            # PinchBench A/B to attribute scores to specific skills the agent
+            # saw inline). Kept under raven's own data dir, bucketed per
+            # workspace -- the workspace itself may be the user's repository.
             try:
                 import json as _json
                 import time as _time
+
+                from raven.config.paths import get_workspace_state_dir
 
                 injected_meta = []
                 for _m in only[:inject_max] if inject_max else only:
@@ -136,7 +135,7 @@ class ContextBuilder:
                             "body_len": len(getattr(_m, "content", "") or ""),
                         }
                     )
-                _path = self.workspace / "skill_injections.jsonl"
+                _path = get_workspace_state_dir(self.workspace, "telemetry") / "skill_injections.jsonl"
                 with open(_path, "a") as _f:
                     _f.write(
                         _json.dumps(
@@ -182,7 +181,7 @@ Skills with available="false" need dependencies installed first - you can try in
         """Get the core identity section (delegates to the segment renderer)."""
         from raven.context_engine.segments import render as _render
 
-        return _render.identity_text(self.workspace, self._profile)
+        return _render.identity_text(self.workspace)
 
     def _build_runtime_context(self, channel: str | None, chat_id: str | None) -> str:
         """Build untrusted runtime metadata block for injection before the user message."""

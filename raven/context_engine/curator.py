@@ -83,11 +83,24 @@ class CuratorState:
 class CuratorArchiveStore:
     """Disk storage for Curator manifest, archives, working state, and traces."""
 
-    def __init__(self, workspace: Path, config: ContextConfig, now_fn: Callable[[], datetime] | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        config: ContextConfig,
+        now_fn: Callable[[], datetime] | None = None,
+        state_dir: Path | None = None,
+    ):
         self.workspace = workspace
         self.config = config
-        self.root = ensure_dir(workspace / config.archive_dir).parent
-        self.archive_dir = ensure_dir(workspace / config.archive_dir)
+        # ``state_dir`` is where raven keeps its own files. Production wiring
+        # passes a per-workspace directory under raven's data dir, so a coding
+        # run leaves the repository it works on untouched; falling back to the
+        # workspace keeps the historical layout for direct construction.
+        # ``archive_ref`` is stored relative to this base and resolved back
+        # against it in ``retrieve``, so both ends must use the same anchor.
+        self.base = state_dir or workspace
+        self.root = ensure_dir(self.base / config.archive_dir).parent
+        self.archive_dir = ensure_dir(self.base / config.archive_dir)
         self.manifest_dir = ensure_dir(self.root / "manifest")
         self.state_dir = ensure_dir(self.root / "working_state")
         self.trace_dir = ensure_dir(self.root / "traces")
@@ -239,7 +252,7 @@ class CuratorArchiveStore:
             for mid in valid_ids:
                 f.write(json.dumps({"id": mid, "message": messages[mid]}, ensure_ascii=False) + "\n")
 
-        rel = archive_path.relative_to(self.workspace)
+        rel = archive_path.relative_to(self.base)
         ref = f"{rel}#{first}-{last}"
         archived_set = set(valid_ids)
         for item in manifest:
@@ -260,7 +273,7 @@ class CuratorArchiveStore:
         budget = max(1, max_tokens)
         for ref in refs:
             path_part = ref.split("#", 1)[0]
-            path = self.workspace / path_part
+            path = self.base / path_part
             if not path.exists():
                 results.append({"archive_ref": ref, "error": "not found", "messages": []})
                 continue

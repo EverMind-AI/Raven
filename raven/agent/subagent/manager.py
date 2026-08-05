@@ -214,6 +214,22 @@ class SubagentManager:
                     **budget_kwargs,
                 )
 
+                # Context-overflow recovery, same shape as the main loop's
+                # cheap tier: elide older tool-result bodies and retry once.
+                cls_ = response.error_classification
+                if response.finish_reason == "error" and cls_ is not None and cls_.should_compress:
+                    # Deferred import: raven.agent.loop.__init__ imports the
+                    # AgentLoop module, which imports this manager — a
+                    # module-level import here would close that cycle.
+                    from raven.agent.loop.compaction import prune_old_tool_results
+
+                    pruned, elided = prune_old_tool_results(messages, keep_recent=3)
+                    if elided:
+                        messages = pruned
+                        iteration -= 1
+                        logger.warning("Subagent [{}]: context overflow, pruned {} tool result(s)", task_id, elided)
+                        continue
+
                 if response.has_tool_calls:
                     # Same rule as the main loop: arguments cut off by the output
                     # budget parse after repair but have lost their tails, so

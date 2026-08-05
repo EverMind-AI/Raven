@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.file_search import FindTool, GrepTool
+from raven.agent.tools.file_search import FindTool, GrepTool, _expand_braces
 
 
 @pytest.fixture
@@ -145,3 +145,103 @@ async def test_find_sorted_by_recency(tree: Path):
     out = await tool.execute(pattern="*.py")
     lines = out.splitlines()
     assert lines[0].endswith("util.py")
+
+
+# ── brace expansion ─────────────────────────────────────────────────────
+
+
+def test_expand_braces_passthrough():
+    assert _expand_braces("*.py") == ["*.py"]
+
+
+def test_expand_braces_basic():
+    assert _expand_braces("*.{ts,tsx}") == ["*.ts", "*.tsx"]
+
+
+def test_expand_braces_multiple_groups():
+    assert _expand_braces("{a,b}/{c,d}.py") == ["a/c.py", "a/d.py", "b/c.py", "b/d.py"]
+
+
+def test_expand_braces_nested():
+    assert _expand_braces("*.{p{y,yc},md}") == ["*.py", "*.pyc", "*.md"]
+
+
+def test_expand_braces_single_element():
+    assert _expand_braces("*.{py}") == ["*.py"]
+
+
+def test_expand_braces_unbalanced_is_literal():
+    assert _expand_braces("*.{py") == ["*.{py"]
+
+
+def test_expand_braces_cap_aborts_before_full_expansion():
+    with pytest.raises(ValueError, match="brace expansion"):
+        _expand_braces("{a,b,c,d,e,f,g,h}{a,b,c,d,e,f,g,h}{a,b,c,d,e,f,g,h}")
+
+
+async def test_find_brace_expansion(tree: Path):
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="*.{py,md}")
+    assert "src/app.py" in out
+    assert "src/util.py" in out
+    assert "README.md" in out
+    assert "node_modules" not in out
+
+
+async def test_find_brace_path_pattern(tree: Path):
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="src/*.{py,md}")
+    assert "src/app.py" in out
+    assert "README.md" not in out
+
+
+async def test_find_brace_nested(tree: Path):
+    (tree / "src" / "app.pyc").write_text("bytecode")
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="*.{p{y,yc},md}")
+    assert "src/app.py" in out
+    assert "src/app.pyc" in out
+    assert "README.md" in out
+
+
+async def test_find_brace_dedup(tree: Path):
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="{app,*}.py")
+    assert out.splitlines().count("src/app.py") == 1
+
+
+async def test_find_brace_unbalanced_is_literal(tree: Path):
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="*.{py")
+    assert out == "No files found matching pattern."
+
+
+async def test_find_brace_cap_error(tree: Path):
+    tool = FindTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="{a,b,c,d,e,f,g,h}{a,b,c,d,e,f,g,h}{a,b,c,d,e,f,g,h}")
+    assert out.startswith("Error")
+    assert "brace expansion" in out
+
+
+async def test_grep_glob_brace_fallback(tree: Path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="hello", glob="*.{py,md}")
+    assert "app.py" in out
+    assert "README.md" in out
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="ripgrep not installed; CI runs a with-rg leg")
+async def test_grep_glob_brace_rg(tree: Path):
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="hello", glob="*.{py,md}")
+    assert "app.py" in out
+    assert "README.md" in out
+
+
+async def test_grep_fallback_path_glob_is_explicit_error(tree: Path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    tool = GrepTool(workspace=tree, allowed_dir=tree)
+    out = await tool.execute(pattern="hello", glob="src/*.py")
+    assert out.startswith("Error")
+    assert "ripgrep" in out

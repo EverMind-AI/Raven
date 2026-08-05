@@ -202,3 +202,14 @@ def test_config_read_error_is_not_runtimeerror() -> None:
 
     assert not issubclass(ConfigReadError, RuntimeError)
     assert issubclass(ConfigReadError, Exception)
+
+
+def test_unknown_config_keys_are_ignored(tmp_path: Path) -> None:
+    """Raven is coding-only, so it no longer has a profile switch. Harnesses
+    that still write one (AgentEval keeps a coding/assistant knob of its own)
+    must not break config loading."""
+    p = tmp_path / "config.json"
+    _write(p, {"agents": {"defaults": {"profile": "assistant", "maxToolIterations": 7}}})
+    cfg = load_config(p)
+    assert cfg.agents.defaults.max_tool_iterations == 7
+    assert not hasattr(cfg.agents.defaults, "profile")

@@ -60,6 +60,21 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
+def get_workspace_state_dir(workspace: Path | str, name: str) -> Path:
+    """A per-workspace directory for raven's own runtime state.
+
+    Raven's state must not land inside the directory it works on: for a coding
+    agent that directory is the user's repository, and anything written there
+    shows up as untracked files in every run. Bucketed by the workspace's
+    absolute path, the same way claude-code keeps its per-project state under
+    ``~/.claude/projects/<escaped-path>/``.
+    """
+    from raven.utils.helpers import safe_filename
+
+    key = safe_filename(str(Path(workspace).expanduser().resolve())) or "workspace"
+    return ensure_dir(get_runtime_subdir(name) / key)
+
+
 def get_cli_history_path() -> Path:
     """Return the shared CLI history file path."""
     return Path.home() / ".raven" / "history" / "cli_history"

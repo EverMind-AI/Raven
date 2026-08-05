@@ -256,10 +256,7 @@ class DirectExecutor(SandboxExecutor):
         # kind of hidden coupling to the agent that a detached job exists to avoid.
         # The launcher exits immediately and is awaited here, so nothing is left to
         # reap; the job itself is reparented to init.
-        launcher = (
-            f"setsid /bin/bash -c {shlex.quote(wrapper)} "
-            f"< /dev/null >> {shlex.quote(log_path)} 2>&1 &\n"
-        )
+        launcher = f"setsid /bin/bash -c {shlex.quote(wrapper)} < /dev/null >> {shlex.quote(log_path)} 2>&1 &\n"
         process = await asyncio.create_subprocess_exec(
             "/bin/bash",
             "-c",

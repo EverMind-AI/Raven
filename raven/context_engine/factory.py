@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from raven.agent.context import ContextBuilder
+from raven.config.paths import get_workspace_state_dir
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.base import ContextEngine
 from raven.context_engine.segments import (
@@ -77,7 +78,6 @@ def build_context_engine(
     skill_forge_router_config: "SkillForgeRouterConfig | None" = None,
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
-    profile: str = "assistant",
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -114,7 +114,8 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace, profile=profile),
+        IdentitySegmentBuilder(workspace),
+        # The repository's own rules files (AGENTS.md / CLAUDE.md), read-only.
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
@@ -142,6 +143,10 @@ def build_context_engine(
             context_window_tokens=context_window_tokens,
             get_tool_definitions=get_tool_definitions,
             now_fn=now_fn,
+            # Curator traces/manifests are raven's own state, written every turn.
+            # They go under raven's data dir, not into the workspace -- which for
+            # a coding agent is the user's repository.
+            state_dir=get_workspace_state_dir(workspace, "curator"),
         ),
     ]
     return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)

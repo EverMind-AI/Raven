@@ -242,6 +242,29 @@ class ChannelsConfig(Base):
     weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
 
+class CompactionConfig(Base):
+    """In-turn context compaction for long agentic turns.
+
+    Proactive: before each LLM call, when the last observed context size
+    crosses ``window - reserved_tokens``, older tool-result bodies are pruned
+    and, if that is not enough, the transcript head is replaced by an LLM
+    summary while a recent tail stays verbatim. Reactive: a context-overflow
+    error takes the same path and retries. Short assistant turns never reach
+    the threshold, so the product default behavior is unchanged.
+    """
+
+    auto: bool = True
+    prune: bool = True
+    # None derives min(20000, provider max_tokens) — room kept for the reply.
+    reserved_tokens: int | None = None
+    # None derives 25% of the usable window clamped to [2000, 8000] — the
+    # verbatim tail preserved through a summary compaction.
+    preserve_recent_tokens: int | None = None
+    # None summarizes with the session model itself; set to route summary
+    # calls to a cheaper model.
+    model: str | None = None
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -288,11 +311,7 @@ class AgentDefaults(Base):
     # adjust them. Entries here win over the registry's built-in defaults.
     model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
-    # System-prompt profile. "assistant" keeps the personal-assistant identity;
-    # "coding" renders a software-engineering identity (opencode-style tone,
-    # conventions and verification discipline, with raven's tool routing).
-    # Benchmark harnesses set "coding"; the product default is unchanged.
-    profile: str = "assistant"
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:

@@ -39,7 +39,6 @@ from raven.cli._plugin_stack import (
     build_plugin_tools,
     maybe_build_memory_backend,
 )
-from raven.utils.helpers import sync_workspace_templates
 
 console = Console()
 
@@ -250,7 +249,6 @@ def register(app: typer.Typer) -> None:
         sentinel_cfg = ec_config.sentinel
         skill_forge_cfg = ec_config.skill_forge
         print_deprecated_memory_window_notice(config)
-        sync_workspace_templates(config.workspace_path)
 
         provider = make_provider(config)
         session_manager = SessionManager(config.workspace_path)
@@ -343,7 +341,7 @@ def register(app: typer.Typer) -> None:
             exec_config=config.tools.exec,
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
-            profile=config.agents.defaults.profile,
+            compaction=config.agents.defaults.compaction,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
             disabled_tools=config.tools.disabled_tools,

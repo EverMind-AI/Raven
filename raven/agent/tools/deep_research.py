@@ -113,7 +113,7 @@ class DeepResearchTool(Tool):
         # is wired (gateway-only) — see ``DeepResearchManager.can_deliver``.
         self._manager = manager
         # Turn-local so a user turn and a concurrent proactive turn cannot clobber
-        # each other's routing (same reason MessageTool keeps its callback here).
+        # each other's routing.
         self._stream_cb: ContextVar[StreamCallback | None] = ContextVar("deep_research_stream_cb", default=None)
         self._routing: ContextVar[_Routing | None] = ContextVar("deep_research_routing", default=None)
         # Late-bound (transport singleton) so the tool can ask the user

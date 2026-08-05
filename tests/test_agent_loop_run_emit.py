@@ -20,7 +20,6 @@ from raven.config.schema import DeepResearchToolConfig
 from raven.providers.base import LLMResponse, StreamDelta, ToolCallRequest
 from raven.sandbox import SandboxInitError
 from raven.spine.events import EpisodeStart as EvEpisodeStart
-from raven.spine.events import MediaOut as EvMediaOut
 from raven.spine.events import Notice as EvNotice
 from raven.spine.events import NoticeKind, ToolPhase
 from raven.spine.events import Reasoning as EvReasoning
@@ -638,59 +637,6 @@ async def test_run_propagates_mid_turn_error_not_sorry_text(tmp_path):
     assert not any(isinstance(e, EvText) for e in sink.events)
 
 
-def _message_tool_call(arguments: str) -> StreamDelta:
-    return StreamDelta(
-        content=None,
-        tool_call_delta={
-            "tool_calls": [{"index": 0, "id": "m1", "function": {"name": "message", "arguments": arguments}}]
-        },
-    )
-
-
-async def test_run_message_tool_text_streams_and_dissolves(tmp_path):
-    # The message tool's reply routes through on_token -> StreamDelta (b2), then
-    # _process_message returns None -> no trailing Text. explicit_reply is still
-    # True (the agent did reply via the tool).
-    provider = _FakeStreamToolProvider(
-        [
-            [_message_tool_call('{"content": "hi via tool"}')],
-            [StreamDelta(content="")],  # second iteration: nothing more, finish
-        ]
-    )
-    loop = AgentLoop(provider=provider, workspace=tmp_path)
-    _stub_edges(loop)
-    sink = _EmitCollector()
-
-    outcome = await loop.run_turn(_req("hi"), sink, _drain)
-
-    assert any(isinstance(e, EvStreamDelta) and e.delta == "hi via tool" for e in sink.events)
-    assert not any(isinstance(e, EvText) for e in sink.events)  # tool reply dissolves
-    assert outcome.explicit_reply is True
-
-
-async def test_run_message_tool_media_is_not_dropped(tmp_path):
-    # Regression guard: a message-tool reply carrying media must emit MediaOut
-    # (media is independent of the token stream). The tool path returns None from
-    # _process_message, so the return boundary never sees it — _route_to_stream
-    # must emit the media itself, matching what the bus path delivers.
-    provider = _FakeStreamToolProvider(
-        [
-            [_message_tool_call('{"content": "see this", "media": ["/tmp/pic.png"]}')],
-            [StreamDelta(content="")],
-        ]
-    )
-    loop = AgentLoop(provider=provider, workspace=tmp_path)
-    _stub_edges(loop)
-    sink = _EmitCollector()
-
-    outcome = await loop.run_turn(_req("hi"), sink, _drain)
-
-    media = [e for e in sink.events if isinstance(e, EvMediaOut)]
-    assert media and media[0].media[0].path == "/tmp/pic.png"
-    assert any(isinstance(e, EvStreamDelta) and e.delta == "see this" for e in sink.events)
-    assert outcome.explicit_reply is True
-
-
 # ── stream=False (REPL assembly, canon Q2-D): reply is one Text, no StreamDelta ──
 
 
@@ -706,31 +652,6 @@ async def test_run_stream_false_main_reply_is_one_text(tmp_path):
 
     texts = [e for e in sink.events if isinstance(e, EvText)]
     assert len(texts) == 1 and texts[0].content == "full reply"
-    assert not any(isinstance(e, EvStreamDelta) for e in sink.events)
-    assert outcome.explicit_reply is True
-
-
-async def test_run_stream_false_message_tool_emits_text(tmp_path):
-    # The message-tool reply under stream=False must emit Text, not StreamDelta —
-    # else a non-streaming outlet (CliOutlet) would eat the delta and the REPL
-    # would go silent for tool replies.
-    provider = _FakeChatProvider(
-        [
-            LLMResponse(
-                content=None,
-                tool_calls=[ToolCallRequest(id="m1", name="message", arguments={"content": "hi via tool"})],
-                finish_reason="tool_calls",
-            ),
-            LLMResponse(content="", finish_reason="stop"),
-        ]
-    )
-    loop = AgentLoop(provider=provider, workspace=tmp_path)
-    _stub_edges(loop)
-    sink = _EmitCollector()
-
-    outcome = await loop.run_turn(_req("hi"), sink, _drain, stream=False)
-
-    assert any(isinstance(e, EvText) and e.content == "hi via tool" for e in sink.events)
     assert not any(isinstance(e, EvStreamDelta) for e in sink.events)
     assert outcome.explicit_reply is True
 
@@ -816,10 +737,10 @@ async def test_process_message_origin_none_plain_fires_hook(tmp_path):
     assert content == "hook-fired"
 
 
-async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
-    # channel metadata rides Source.extras; run_turn reconstructs it into
-    # the turn metadata so consumers (here _set_tool_context, which reads
-    # message_id for reply threading) still see it.
+async def test_run_turn_routes_source_identity_to_tool_context(tmp_path):
+    # Tool routing context comes from Source: channel / chat_id / conversation.
+    # (The transport ``message_id`` in Source.extras had exactly one consumer,
+    # the retired chat-channel message tool, so it is no longer plumbed.)
     loop = AgentLoop(
         provider=_FakeChatProvider([LLMResponse(content="ok", finish_reason="stop", tool_calls=[])]),
         workspace=tmp_path,
@@ -828,9 +749,9 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
     seen: dict = {}
     real = loop._set_tool_context
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
-        seen["message_id"] = message_id
-        return real(channel, chat_id, message_id, session_key=session_key)
+    def _spy(channel, chat_id, session_key=None):
+        seen["ctx"] = (channel, chat_id, session_key)
+        return real(channel, chat_id, session_key=session_key)
 
     loop._set_tool_context = _spy
 
@@ -844,9 +765,10 @@ async def test_run_turn_reconstructs_metadata_from_source_extras(tmp_path):
             extras={"message_id": "m1"},
         ),
         text="hi",
+        conversation="tg:c",
     )
     await loop.run_turn(req, _EmitCollector(), _drain, stream=False)
-    assert seen.get("message_id") == "m1"  # extras -> metadata -> _set_tool_context
+    assert seen["ctx"] == ("tg", "c", "tg:c")
 
 
 # ── deliver_text: verbatim background delivery, skips the model (2b) ──
@@ -965,19 +887,20 @@ async def test_run_turn_wires_deep_research_delivery_routing(tmp_path):
     assert dr.ctx == ("weixin", "c", "weixin:c")
 
 
-async def test_run_turn_empty_extras_reconstructs_empty_metadata(tmp_path):
-    # No-regression: a host source carries no extras -> metadata={} ->
-    # _set_tool_context sees message_id=None.
+async def test_run_turn_without_conversation_falls_back_to_channel_chat_key(tmp_path):
+    # No-regression: a host source with no explicit conversation still yields a
+    # session key for tool routing, derived as "<channel>:<chat_id>".
     loop = AgentLoop(
         provider=_FakeChatProvider([LLMResponse(content="ok", finish_reason="stop", tool_calls=[])]),
         workspace=tmp_path,
     )
     _stub_edges(loop)
-    seen: dict = {"message_id": "sentinel"}
+    seen: dict = {}
 
-    def _spy(channel, chat_id, message_id=None, session_key=None):
-        seen["message_id"] = message_id
+    def _spy(channel, chat_id, session_key=None):
+        seen["ctx"] = (channel, chat_id, session_key)
 
     loop._set_tool_context = _spy
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain, stream=False)
-    assert seen["message_id"] is None  # empty extras -> metadata={} -> no message_id
+    channel, chat_id, session_key = seen["ctx"]
+    assert session_key == f"{channel}:{chat_id}"

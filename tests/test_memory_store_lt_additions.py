@@ -53,10 +53,15 @@ class TestHistoryFilePath:
 class TestReadHistoryTail:
     @pytest.fixture
     def store(self, tmp_path: Path) -> MemoryStore:
-        return MemoryStore(tmp_path)
+        store = MemoryStore(tmp_path)
+        # These cases seed the file directly instead of going through
+        # append_history, which is what creates the directory (the store itself
+        # creates nothing on construction -- the workspace may be a user repo).
+        store.history_file.parent.mkdir(parents=True, exist_ok=True)
+        return store
 
-    def test_missing_file_returns_empty(self, store: MemoryStore) -> None:
-        assert store.read_history_tail(5) == ""
+    def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
+        assert MemoryStore(tmp_path).read_history_tail(5) == ""
 
     def test_returns_last_n_non_blank(self, store: MemoryStore) -> None:
         store.history_file.write_text(

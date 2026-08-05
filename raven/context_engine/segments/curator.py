@@ -64,6 +64,7 @@ class CuratorSegmentBuilder:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         now_fn: Callable[[], datetime] | None = None,
         max_steps: int = 12,
+        state_dir: Path | None = None,
     ) -> None:
         self.workspace = workspace
         self.config = config
@@ -73,7 +74,7 @@ class CuratorSegmentBuilder:
         self.context_window_tokens = context_window_tokens
         self.get_tool_definitions = get_tool_definitions
         self.max_steps = max_steps
-        self.archive = CuratorArchiveStore(workspace, config, now_fn=now_fn)
+        self.archive = CuratorArchiveStore(workspace, config, now_fn=now_fn, state_dir=state_dir)
         self.assembler = CuratorAssembler(
             provider,
             model,

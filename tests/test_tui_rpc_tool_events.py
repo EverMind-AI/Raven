@@ -1,13 +1,13 @@
 """Generalized tool progress events.
 
-Previously a synthetic ``tool.complete`` was only emitted for the MessageTool
-path; exec / read_file / grep / ... ran with zero structured tool events, so the
-TUI showed nothing during multi-tool turns. This generalizes ``tool.start`` /
-``tool.complete`` to every tool the agent dispatches.
+Structured tool progress used to exist only for the retired chat-channel
+message tool; exec / read_file / grep / ... ran with zero structured tool events,
+so the TUI showed nothing during multi-tool turns. ``tool.start`` /
+``tool.complete`` now fire for every tool the agent dispatches, with no
+per-tool exceptions.
 
 Coverage is N+1 variant (one case per registered tool + plain text), mock-forced
-(not real-LLM stochastic). MessageTool must not be double-emitted (its synthetic
-tool.complete in turn.py stays the source).
+(not real-LLM stochastic).
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.tools.base import Tool
-from raven.agent.tools.message import MessageTool
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
@@ -182,41 +181,3 @@ async def test_n_plus_1_plain_text_emits_no_tool_events(workspace) -> None:
     assert final == "hi"
     assert events == []
     assert tools_used == []
-
-
-# ---------------------------------------------------------------------------
-# MessageTool not double-emitted — its synthetic tool.complete
-# in turn.py stays the single source; the general loop path skips it.
-# ---------------------------------------------------------------------------
-
-
-async def test_message_tool_skipped_by_general_path(workspace) -> None:
-    async def _send(out) -> None:
-        pass
-
-    msg_tool = MessageTool(send_callback=_send)
-    agent = _make_agent(
-        workspace,
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[ToolCallRequest(id="m1", name="message", arguments={"content": "hi"})],
-                finish_reason="tool_calls",
-            ),
-            LLMResponse(content="done", finish_reason="stop"),
-        ],
-        msg_tool,
-    )
-    events: list = []
-
-    async def on_tool_event(phase: str, info: dict) -> None:
-        events.append((phase, info))
-
-    _, tools_used, _, _ = await agent._run_agent_loop(
-        [{"role": "user", "content": "hi"}],
-        on_tool_event=on_tool_event,
-    )
-    assert "message" in tools_used
-    # turn.py owns the message tool's tool.complete; the general path skips it
-    # to avoid a double-emit.
-    assert events == [], f"message tool must not emit general tool events; got {events}"

@@ -1,6 +1,3 @@
-from dataclasses import replace
-
-from raven.agent.tools.message import MessageTool
 from raven.spine import (
     ChatType,
     MediaOut,
@@ -83,7 +80,7 @@ def _collect():
 
 
 def test_pieces_satisfy_their_spine_protocols():
-    assert isinstance(TuiTurnRunner(object(), FakeEmitter(), {}, {}, {}), TurnRunner)
+    assert isinstance(TuiTurnRunner(object(), FakeEmitter(), {}, {}), TurnRunner)
     outlet = TuiOutlet("tui", FakeEmitter())
     assert isinstance(outlet, Outlet)
     assert isinstance(outlet, SupportsStreaming)
@@ -97,7 +94,7 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     rich = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cost_usd": 0.01, "context_used": 42}
     loop = _RunTurnLoop(events=[StreamDelta(delta="he"), StreamDelta(delta="llo")], usage=rich)
     usages: dict[str, dict] = {}
-    runner = TuiTurnRunner(loop, FakeEmitter(), usages, {}, {})
+    runner = TuiTurnRunner(loop, FakeEmitter(), usages, {})
     req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
     events, emit = _collect()
 
@@ -111,43 +108,13 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     assert outcome.explicit_reply is True
 
 
-async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():
-    message_tool = MessageTool()
-    loop = _RunTurnLoop(tools={"message": message_tool})
-
-    async def _run_turn(req, emit, drain, *, stream, inline_tool_stream=False, usage_sink=None):
-        # the message tool replied this turn (turn-local sent flag)
-        message_tool._turn.set(replace(message_tool._cur(), sent=True))
-        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
-
-    loop.run_turn = _run_turn
-    runner = TuiTurnRunner(loop, FakeEmitter(), {}, {"tui:c1": "T7"}, {})
-    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1")
-    events, emit = _collect()
-
-    await runner.run(req, emit, lambda: [])
-
-    # A lone synthetic ToolEvent(COMPLETE) keyed by the turn id (no matching start;
-    # the loop skips the message tool on its general path).
-    assert len(events) == 1 and isinstance(events[0], ToolEvent)
-    assert events[0].phase is ToolPhase.COMPLETE and events[0].tool_call_id == "msg-T7"
-
-
-async def test_runner_no_synthetic_when_message_tool_did_not_fire():
-    loop = _RunTurnLoop(tools={"message": MessageTool()})  # sent flag stays False
-    runner = TuiTurnRunner(loop, FakeEmitter(), {}, {"tui:c1": "T7"}, {})
-    events, emit = _collect()
-    await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"), emit, lambda: [])
-    assert events == []  # no synthetic completion
-
-
 async def test_runner_cron_captures_reply_non_streaming():
     # A CRON turn runs non-streaming and its reply is read back for the cron
     # fan-out (the cron:<job_id> conversation has no subscriber, so streaming it
     # would deliver nowhere). Mirrors the gateway's GatewayTurnRunner read-back.
     loop = _RunTurnLoop(reply_text="reminder fired")
     readback: dict[str, str] = {}
-    runner = TuiTurnRunner(loop, FakeEmitter(), {}, {}, readback)
+    runner = TuiTurnRunner(loop, FakeEmitter(), {}, readback)
     req = TurnRequest(origin=Origin.CRON, source=_src(chat_id="direct"), text="[cron]", conversation="cron:job1")
     events, emit = _collect()
 

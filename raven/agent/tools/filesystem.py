@@ -50,7 +50,9 @@ class ReadFileTool(_FsTool):
     @property
     def description(self) -> str:
         return (
-            "Read the contents of a file. Returns numbered lines. Use offset and limit to paginate through large files."
+            "Read the contents of a file. Returns numbered lines. Use offset and limit to paginate through large files. "
+            "Do not assume a path exists: locate it with find or list_dir instead of guessing, "
+            "and if a read fails, find the real path rather than retrying a guess."
         )
 
     @property
@@ -131,7 +133,13 @@ class WriteFileTool(_FsTool):
 
     @property
     def description(self) -> str:
-        return "Write content to a file at the given path. Creates parent directories if needed."
+        return (
+            "Write content to a file at the given path. Creates parent directories if needed. "
+            "ALWAYS prefer editing existing files in the codebase: before creating a new file, "
+            "check whether an existing file (an entry point, a stub, a TODO) already owns that "
+            "responsibility, and NEVER write new files unless the task requires it. "
+            "If the target file already exists, read it with read_file before overwriting."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -198,6 +206,8 @@ class EditFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Edit a file by replacing old_text with new_text. "
+            "Read the file with read_file before editing — old_text must match the "
+            "file's current content. "
             "Supports minor whitespace/line-ending differences. "
             "Set replace_all=true to replace every occurrence."
         )
@@ -315,7 +325,9 @@ class ListDirTool(_FsTool):
     def description(self) -> str:
         return (
             "List the contents of a directory. "
-            "Set recursive=true to explore nested structure. "
+            "For a first look at a repository, use recursive=true — a flat listing "
+            "hides everything inside subdirectories. "
+            "Do not assume a directory exists; list its parent first when unsure. "
             "Common noise directories (.git, node_modules, __pycache__, etc.) are auto-ignored."
         )
 

@@ -8,6 +8,7 @@ import os
 import re
 import time
 from contextlib import AsyncExitStack, aclosing
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
+from raven.agent.loop import compaction
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,
@@ -43,7 +45,6 @@ from raven.agent.tools.media_gen import (
     SpeechGenerateTool,
     VideoGenerateTool,
 )
-from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.spawn import SpawnTool
@@ -76,7 +77,7 @@ if TYPE_CHECKING:
         RuntimeConfig,
         SkillForgeRouterConfig,
     )
-    from raven.config.schema import ChannelsConfig, DeepResearchToolConfig, ExecToolConfig
+    from raven.config.schema import ChannelsConfig, CompactionConfig, DeepResearchToolConfig, ExecToolConfig
     from raven.context_engine import ContextEngine
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
@@ -385,7 +386,7 @@ class AgentLoop:
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
         restrict_to_workspace: bool = False,
-        profile: str = "assistant",
+        compaction: "CompactionConfig | None" = None,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
@@ -502,13 +503,23 @@ class AgentLoop:
         # path" — see that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
 
-        self.profile = profile
+        if compaction is None:
+            from raven.config.schema import CompactionConfig
+
+            compaction = CompactionConfig()
+        self._compaction = compaction
+        # Consecutive summary-call failures, reset per turn in
+        # ``_run_agent_loop``. In a ContextVar because the AgentLoop is a
+        # long-lived singleton shared across sessions: a turn runs in its own
+        # lane task, so a concurrent proactive turn's success must not reset a
+        # user turn's failure streak (which would keep the breaker from ever
+        # tripping). See ``_COMPACT_SUMMARY_MAX_FAILURES``.
+        self._compact_summary_failures: ContextVar[int] = ContextVar("compact_summary_failures", default=0)
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             llm_provider=provider,
             now_fn=now_fn,
-            profile=profile,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Tool names to omit from the registry — applied after default-tool
@@ -562,7 +573,6 @@ class AgentLoop:
             skill_forge_router_config=skill_forge_router_config,
             skill_forge_config=skill_forge_config,
             skill_hub_client=self._skill_hub_client,
-            profile=profile,
         )
 
         # Runtime discipline (5th pillar). Bug2 uses ``runtime.checkpoint``;
@@ -809,7 +819,6 @@ class AgentLoop:
             self._register_real_deep_research(self.deep_research_config)
         else:
             self.tools.register(DeepResearchOfferTool())
-        self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
@@ -1396,17 +1405,13 @@ class AgentLoop:
         self._register_real_deep_research(cfg)
         logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
 
-    def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
-    ) -> None:
+    def _set_tool_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
         """Update context for all tools that need routing info."""
-        for name in ("message", "spawn", "cron", "deep_research"):
+        for name in ("spawn", "cron", "deep_research"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
-                if name == "message":
-                    tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research"):
+                if name in ("spawn", "deep_research"):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
@@ -1610,22 +1615,123 @@ class AgentLoop:
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
         """
-        placeholder = "[earlier tool output elided to fit the context window]"
-        tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            return messages, 0
-        elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
-        shrunk: list[dict] = []
-        elided = 0
-        for i, m in enumerate(messages):
-            if i in elide and m.get("content") and m.get("content") != placeholder:
-                clean = dict(m)
-                clean["content"] = placeholder
-                shrunk.append(clean)
-                elided += 1
-            else:
-                shrunk.append(m)
-        return shrunk, elided
+        return compaction.prune_old_tool_results(messages, cls._SHRINK_KEEP_RECENT_TOOL_RESULTS)
+
+    # Consecutive failed summary calls before the summary tier is switched off
+    # for the rest of the turn. Without a breaker the trigger stays armed (a
+    # failed summary frees nothing), so every following iteration pays for
+    # another doomed summary request. Same guard claude-code uses.
+    _COMPACT_SUMMARY_MAX_FAILURES = 3
+
+    def _compaction_limits(self, model: str | None) -> tuple[int, int]:
+        """(window, reserved) for the compaction trigger and tail budget."""
+        limit = resolve_context_window(model) or self.context_window_tokens
+        provider_budget = getattr(getattr(self.provider, "generation", None), "max_tokens", None)
+        reserved = compaction.reserved_tokens(self._compaction.reserved_tokens, provider_budget)
+        return limit, reserved
+
+    async def _compact_context(
+        self,
+        messages: list[dict],
+        model: str | None,
+        *,
+        observed_used: int | None = None,
+        force_summary: bool = False,
+    ) -> tuple[list[dict], bool]:
+        """Two-tier in-turn compaction: prune old tool output, then summarize.
+
+        Prune is free and runs first. Whether the summary tier is still needed
+        is judged against real observed usage when available (local estimates
+        do not know the server's tokenizer): the estimated savings from the
+        prune are projected onto ``observed_used``. ``force_summary`` is the
+        reactive overflow path — the window is known to be blown regardless of
+        what any estimate says, so when pruning freed nothing the summary runs
+        unconditionally. Returns ``(messages, changed)``; the summary call
+        happens with tools disabled and does not count as a loop iteration.
+
+        A circuit breaker disables the summary tier after
+        ``_COMPACT_SUMMARY_MAX_FAILURES`` consecutive failures: a failed
+        summary frees nothing, so the trigger stays armed and every following
+        iteration would pay for another doomed request. Prune keeps running.
+        """
+        cfg = self._compaction
+        limit, reserved = self._compaction_limits(model)
+        changed = False
+        est_before = estimate_prompt_tokens(messages, self.tools.get_definitions())
+        if cfg.prune:
+            pruned, elided = compaction.prune_old_tool_results(messages, self._SHRINK_KEEP_RECENT_TOOL_RESULTS)
+            if elided:
+                messages = pruned
+                changed = True
+                logger.warning("Compaction: pruned {} old tool result(s)", elided)
+        estimated = estimate_prompt_tokens(messages, self.tools.get_definitions())
+        projected = estimated
+        if observed_used is not None:
+            projected = max(estimated, observed_used - max(0, est_before - estimated))
+        if not compaction.should_compact(projected, limit, reserved) and not (force_summary and not changed):
+            return messages, changed
+        if self._compact_summary_failures.get() >= self._COMPACT_SUMMARY_MAX_FAILURES:
+            return messages, changed
+        budget = compaction.tail_budget(cfg.preserve_recent_tokens, limit, reserved)
+        split = compaction.select_split(messages, budget, lambda ms: estimate_prompt_tokens(ms))
+        if split is None:
+            # Everything after the task statement fits the tail budget by local
+            # estimate, yet real usage says the window is (nearly) blown: fall
+            # back to keeping only the final exchange verbatim.
+            protect = next((i + 1 for i, m in enumerate(messages) if m.get("role") == "user"), 1)
+            fallback = len(messages) - 1
+            while protect < fallback and messages[fallback].get("role") == "tool":
+                fallback -= 1
+            if fallback - protect >= 2:
+                split = fallback
+        if split is None:
+            return messages, changed
+        protect_end = next((i + 1 for i, m in enumerate(messages) if m.get("role") == "user"), 1)
+        transcript = compaction.render_transcript(messages[protect_end:split])
+        summary_model = cfg.model or model or self.model
+        try:
+            response = await self.provider.chat(
+                messages=[
+                    {"role": "system", "content": compaction.SUMMARY_INSTRUCTIONS},
+                    {"role": "user", "content": transcript},
+                ],
+                tools=None,
+                model=summary_model,
+                max_tokens=compaction.SUMMARY_MAX_TOKENS,
+            )
+            summary = (response.content or "").strip()
+            failed = response.finish_reason == "error" or not summary
+            reason = response.content if response.finish_reason == "error" else "empty summary"
+        except Exception as exc:
+            logger.warning("Compaction: summary call raised: {}", exc)
+            summary, failed, reason = "", True, repr(exc)
+        if failed:
+            failures = self._compact_summary_failures.get() + 1
+            self._compact_summary_failures.set(failures)
+            # The reason decides the fix (transcript too long vs endpoint
+            # refusal vs empty completion), so record it -- a bare "failed"
+            # line makes a real run undiagnosable.
+            logger.warning(
+                "Compaction: summary call failed ({}/{}), {} head msg(s) / {} chars: {}",
+                failures,
+                self._COMPACT_SUMMARY_MAX_FAILURES,
+                split - protect_end,
+                len(transcript),
+                str(reason)[:300],
+            )
+            if failures >= self._COMPACT_SUMMARY_MAX_FAILURES:
+                logger.warning("Compaction: summary tier disabled for the rest of this turn")
+            return messages, changed
+        self._compact_summary_failures.set(0)
+        before = len(messages)
+        messages = compaction.build_compacted(messages, split, summary)
+        logger.warning(
+            "Compaction: summarized {} message(s) into one brief (window={}, reserved={})",
+            before - len(messages) + 1,
+            limit,
+            reserved,
+        )
+        return messages, True
 
     async def _synthesize_final_on_exhaustion(
         self,
@@ -1728,6 +1834,13 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # Proactive compaction trigger: real context size observed on the last
+        # response (prompt + completion tokens). 0 until the first usage report
+        # and after a compaction, so the trigger re-arms on fresh data only.
+        last_context_used = 0
+        # Message count at the moment that usage was reported: messages after
+        # this index are growth the server has not counted yet.
+        last_usage_msg_count = 0
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1740,6 +1853,10 @@ class AgentLoop:
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
+        # The compaction summary breaker is turn-local too (the reactive path
+        # reaches it from _compact_context, hence a ContextVar rather than a
+        # local); reset it on the same boundary as the counters above.
+        self._compact_summary_failures.set(0)
         prev_had_tool_calls = False
         post_tool_nudges = 0
         prefill_retries = 0
@@ -1793,6 +1910,29 @@ class AgentLoop:
                         messages.append({"role": "user", "content": inj_text})
                         logger.info("inject: merged a mid-turn user message")
 
+            # Proactive in-turn compaction: act on the last response's real
+            # token usage BEFORE the next call instead of waiting for the
+            # window to overflow (where recovery costs evidence). The reported
+            # usage predates the tool results appended since, so add a local
+            # estimate of those — otherwise the next request can overshoot the
+            # window by a whole round of tool output. (claude-code covers the
+            # same gap with a flat 13k buffer; measuring the growth is tighter.)
+            if self._compaction.auto and last_context_used:
+                projected_used = compaction.projected_context_used(
+                    last_context_used,
+                    messages,
+                    last_usage_msg_count,
+                    estimate_prompt_tokens,
+                )
+                limit, reserved = self._compaction_limits(effective_model)
+                if compaction.should_compact(projected_used, limit, reserved):
+                    messages, changed = await self._compact_context(
+                        messages, effective_model, observed_used=projected_used
+                    )
+                    if changed:
+                        last_context_used = 0
+                        last_usage_msg_count = len(messages)
+
             tool_defs = self.tools.get_definitions()
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
@@ -1804,14 +1944,29 @@ class AgentLoop:
             )
             budget_kwargs = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
             if on_token_delta is not None or on_reasoning_delta is not None:
-                response = await self._llm_call_stream(
-                    messages=call_messages,
-                    tools=call_tools,
-                    model=call_model,
-                    on_token_delta=on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    **budget_kwargs,
-                )
+                try:
+                    response = await self._llm_call_stream(
+                        messages=call_messages,
+                        tools=call_tools,
+                        model=call_model,
+                        on_token_delta=on_token_delta,
+                        on_reasoning_delta=on_reasoning_delta,
+                        **budget_kwargs,
+                    )
+                except Exception as stream_exc:
+                    # Stream mode has no provider-level error envelope: a
+                    # context overflow surfaces as a raw exception. Fold it
+                    # into the same classified-error path the non-stream
+                    # branch uses so the compaction retry below applies.
+                    classify = getattr(self.provider, "classify_error", None)
+                    stream_cls = classify(stream_exc) if classify is not None else None
+                    if stream_cls is None or not stream_cls.should_compress:
+                        raise
+                    response = LLMResponse(
+                        content=str(stream_exc),
+                        finish_reason="error",
+                        error_classification=stream_cls,
+                    )
             else:
                 response = await self.provider.chat_with_retry(
                     messages=call_messages,
@@ -1836,6 +1991,14 @@ class AgentLoop:
             # per CAP-CHAT-1 wire shape. Use the wire-contract UsageSnapshot
             # fields (prompt_tokens / completion_tokens / total_tokens) — not
             # the agent-internal snapshot with model / cache / cost fields.
+            if response.usage:
+                _pt = int(response.usage.get("prompt_tokens", 0) or 0)
+                _ct = int(response.usage.get("completion_tokens", 0) or 0)
+                if _pt:
+                    last_context_used = _pt + _ct
+                    # Watermark for the compaction trigger: everything appended
+                    # after this index is growth the server has not counted yet.
+                    last_usage_msg_count = len(messages)
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
@@ -1863,14 +2026,14 @@ class AgentLoop:
                 and cls_.should_compress
                 and compress_retries < self._MAX_COMPRESS_RETRIES
             ):
-                shrunk, elided = self._emergency_shrink(messages)
-                if elided > 0:
+                shrunk, changed = await self._compact_context(messages, effective_model, force_summary=True)
+                if changed:
                     messages = shrunk
                     compress_retries += 1
                     iteration -= 1  # the overflowed call did no work; don't bill it
+                    last_context_used = 0
                     logger.warning(
-                        "Context overflow; elided {} old tool result(s), retrying ({}/{})",
-                        elided,
+                        "Context overflow; compacted transcript, retrying ({}/{})",
                         compress_retries,
                         self._MAX_COMPRESS_RETRIES,
                     )
@@ -1934,9 +2097,7 @@ class AgentLoop:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
-                    # Skip the message tool: turn.py emits its tool.complete; a
-                    # second emit here would double it.
-                    emit_tool_event = on_tool_event is not None and tool_call.name != "message"
+                    emit_tool_event = on_tool_event is not None
                     if emit_tool_event:
                         _tool = self.tools.get(tool_call.name)
                         await on_tool_event(
@@ -2356,7 +2517,6 @@ class AgentLoop:
         sender_id = req.source.sender_id
         chat_id = req.source.chat_id
         content = req.text
-        metadata = dict(req.source.extras)
         media_paths = [m.path for m in req.media]
         msg_session_key = req.conversation or f"{channel}:{chat_id}"
 
@@ -2526,10 +2686,7 @@ class AgentLoop:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"), session_key=key)
-        if message_tool := self.tools.get("message"):
-            if isinstance(message_tool, MessageTool):
-                message_tool.start_turn()
+        self._set_tool_context(channel, chat_id, session_key=key)
         # ask_user keys by the true conversation_id (== the lane / gate key),
         # which is topic-aware (req.conversation), not just channel:chat_id.
         if (ask_tool := self.tools.get("ask_user")) and isinstance(ask_tool, AskUserTool):
@@ -2659,22 +2816,6 @@ class AgentLoop:
             self._consolidation_tasks.add(_t4)
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
-
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
-            # Defensive fingerprint. The silent return None
-            # previously left no trace when the agent replied via message
-            # tool, making stochastic dud-turn bugs invisible to grep. Log
-            # the would-be response so future investigations have a trail
-            # parallel to "Response to ..." below.
-            if final_content:
-                preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
-                logger.info(
-                    "MessageTool sent in turn for {}:{}: {}",
-                    channel,
-                    sender_id,
-                    preview,
-                )
-            return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
@@ -2883,31 +3024,6 @@ class AgentLoop:
                 MediaOut(media=tuple(Media(path=p, mime="application/octet-stream", kind="file") for p in paths))
             )
 
-        # Route the message tool's reply through the token stream so a
-        # tool-driven reply streams like the main response; _process_message
-        # then returns None, so the boundary below emits nothing for it. The
-        # callback is turn-local (a ContextVar in MessageTool), so a concurrent
-        # turn cannot clobber this turn's routing — no save/restore needed.
-        message_tool = self.tools.get("message")
-        if isinstance(message_tool, MessageTool):
-
-            async def _route_to_stream(content: str, media: list[str]) -> None:
-                # A message-tool reply can attach media; emit it independently so
-                # it is not dropped (_process_message returns None for a tool reply
-                # so the boundary below never sees it). The content follows the same
-                # stream switch as the main reply: StreamDelta when streaming, one
-                # Text otherwise — else a non-streaming outlet would eat the delta.
-                if media:
-                    await _emit_media(media)
-                if text_sink is not None and content:
-                    text_sink["text"] = content
-                if stream:
-                    await on_token(content)
-                elif content:
-                    await emit(Text(content=content))
-
-            message_tool.set_send_callback(_route_to_stream)
-
         # Pick up a mid-session `deep-research enable` before the wiring below, so
         # a promoted working tool gets THIS turn's stream callback and (in
         # _process_message) routing context -- not just the next turn's.
@@ -2983,10 +3099,7 @@ class AgentLoop:
             completion_tokens=int(usage_sink.get("completion_tokens", 0) or 0),
             total_tokens=int(usage_sink.get("total_tokens", 0) or 0),
         )
-        # A message-tool reply returns None from _process_message but did reply,
-        # so it counts as an explicit reply too.
-        replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
-        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool)
+        return TurnOutcome(usage=usage, explicit_reply=out is not None)
 
 
 def _merge_tool_call_fragments(

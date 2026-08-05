@@ -81,7 +81,10 @@ def test_agent_help_shows_resume_flag() -> None:
 
 
 def _invoke_agent_capturing_session(
-    monkeypatch: pytest.MonkeyPatch, workspace: Path, extra_args: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    workspace: Path,
+    extra_args: list[str],
+    stale_keys: dict | None = None,
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
@@ -95,6 +98,17 @@ def _invoke_agent_capturing_session(
     cfg = Config()
     cfg.providers.openrouter.api_key = "stub-test-key"
     save_config(cfg)
+    if stale_keys:
+        # Merged into the saved JSON, not into ``cfg``: a retired key no longer
+        # exists on the validated model, so only the raw file can carry it.
+        import json as _json
+
+        from raven.config.loader import get_config_path
+
+        path = get_config_path()
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+        raw.setdefault("agents", {}).setdefault("defaults", {}).update(stale_keys)
+        path.write_text(_json.dumps(raw), encoding="utf-8")
 
     captured: dict[str, str] = {}
 
@@ -585,3 +599,32 @@ def test_sentinel_writes_and_triggers_are_shell_only(isolated_runtime: Path, cmd
     assert "shell-only" in con.text
     # No config file was written by these REPL-rejected commands.
     assert not get_config_path().exists()
+
+
+def test_agent_never_seeds_templates_into_the_workspace(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Running the agent leaves the working directory alone: a coding workspace
+    is the user's repository, and claude-code / opencode likewise only read
+    what the repo owns. Seeding happens in `raven onboard` only."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [])
+    assert r.exit_code == 0, r.stdout
+    assert not (ws / "TOOLS.md").exists()
+    assert not (ws / "HEARTBEAT.md").exists()
+    assert not (ws / "agent_memory").exists()
+
+
+def test_agent_ignores_a_stale_profile_key_and_still_seeds_nothing(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A harness that still writes the retired ``profile`` key must not change
+    behavior: raven is coding-only and seeds nothing either way. AgentEval
+    writes that key, so a hard failure here would break every eval run."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [], stale_keys={"profile": "assistant"})
+    assert r.exit_code == 0, r.stdout
+    assert "profile" in tmp_config.read_text(encoding="utf-8")  # the key really reached the file
+    assert not (ws / "TOOLS.md").exists()

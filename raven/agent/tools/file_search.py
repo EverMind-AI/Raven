@@ -48,6 +48,66 @@ _DENY_TRAVERSAL_ROOTS = {Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run",
 # still cannot hang the loop. ripgrep already has its own _RG_TIMEOUT.
 _WALK_DEADLINE_S = 20.0
 
+_BRACE_EXPANSION_CAP = 50
+
+
+def _expand_braces(pattern: str, _budget: list[int] | None = None) -> list[str]:
+    """Expand ``{a,b}`` alternation groups into a list of plain glob patterns.
+
+    ``Path.glob``/``fnmatch`` treat braces as literal characters, while ripgrep's
+    globset expands them — so the fallback paths pre-expand to keep one syntax
+    working everywhere. Follows globset semantics: nesting is supported and a
+    single-element group (``{py}``) still expands. Unbalanced braces are left as
+    a literal pattern. The budget counter aborts mid-recursion (never
+    materializing the full cartesian product) once the count passes
+    ``_BRACE_EXPANSION_CAP``.
+    """
+    if _budget is None:
+        _budget = [_BRACE_EXPANSION_CAP]
+
+    def _leaf(value: str) -> list[str]:
+        _budget[0] -= 1
+        if _budget[0] < 0:
+            raise ValueError(f"brace expansion produced more than {_BRACE_EXPANSION_CAP} patterns")
+        return [value]
+
+    start = pattern.find("{")
+    if start == -1:
+        return _leaf(pattern)
+    depth = 0
+    end = -1
+    for i in range(start, len(pattern)):
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return _leaf(pattern)
+
+    branches: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in pattern[start + 1 : end]:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            branches.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    branches.append("".join(current))
+
+    head, tail = pattern[:start], pattern[end + 1 :]
+    expanded: list[str] = []
+    for branch in branches:
+        expanded.extend(_expand_braces(head + branch + tail, _budget))
+    return expanded
+
 
 def _denied_traversal_root(base: Path) -> bool:
     """True if ``base`` resolves to a system root that must not be tree-walked."""
@@ -84,7 +144,8 @@ class GrepTool(_FsTool):
     def description(self) -> str:
         return (
             "Search file contents by regular expression. Prefer this over running "
-            "grep/rg through exec — results are paginated, capped, and .gitignore-aware. "
+            "grep/rg through exec — results are paginated and capped, noise directories "
+            "are skipped (.gitignore-aware when ripgrep is installed). "
             "output_mode 'content' returns matching lines with path:line numbers, "
             "'files_with_matches' lists only file paths, 'count' shows match counts per file. "
             "Use glob to restrict to file types (e.g. '*.py')."
@@ -243,9 +304,18 @@ class GrepTool(_FsTool):
         context: int,
         cap: int,
     ) -> str:
+        if glob and "/" in glob:
+            return (
+                "Error: glob filters containing '/' require ripgrep, which is not installed — "
+                "the pure-Python fallback matches file names only. Filter by file name "
+                "(e.g. '*.py') or install rg."
+            )
+        globs: list[str] | None = None
+        if glob:
+            globs = _expand_braces(glob)
         flags = re.IGNORECASE if case_insensitive else 0
         rx = re.compile(pattern, flags)
-        files = self._iter_files(base, glob)
+        files = self._iter_files(base, globs)
 
         content_lines: list[str] = []
         match_files: list[str] = []
@@ -298,7 +368,7 @@ class GrepTool(_FsTool):
                 sep = ":" if i == h or context == 0 else "-"
                 out.append(f"{rel}{sep}{i + 1}{sep}{text_lines[i]}")
 
-    def _iter_files(self, base: Path, glob: str | None):
+    def _iter_files(self, base: Path, globs: list[str] | None):
         if base.is_file():
             yield base
             return
@@ -309,7 +379,7 @@ class GrepTool(_FsTool):
                 break
             dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
             for n in sorted(names):
-                if glob and not fnmatch.fnmatch(n, glob):
+                if globs and not any(fnmatch.fnmatch(n, g) for g in globs):
                     continue
                 yield Path(root) / n
 
@@ -372,7 +442,7 @@ class FindTool(_FsTool):
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Glob pattern, e.g. '*.py' or 'src/**/*.ts'",
+                    "description": "Glob pattern, e.g. '*.py', 'src/**/*.ts' or '*.{ts,tsx}'",
                 },
                 "path": {
                     "type": "string",
@@ -410,14 +480,25 @@ class FindTool(_FsTool):
             )
 
         # A path-bearing pattern globs literally; a bare pattern matches basenames
-        # recursively (fd-style), so 'foo.py' finds it at any depth.
-        glob_expr = pattern if "/" in pattern else f"**/{pattern}"
+        # recursively (fd-style), so 'foo.py' finds it at any depth. The prefix
+        # decision uses the original pattern so every brace variant gets the
+        # same treatment ('{src/a,b}.py' stays literal for both branches).
+        literal = "/" in pattern
         try:
-            matches = [
-                p for p in base.glob(glob_expr) if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
-            ]
+            variants = _expand_braces(pattern)
+        except ValueError as e:
+            return f"Error: {e}"
+        seen: dict[Path, None] = {}
+        try:
+            for variant in variants:
+                glob_expr = variant if literal else f"**/{variant}"
+                for p in base.glob(glob_expr):
+                    if any(part in _IGNORE_DIRS for part in p.relative_to(base).parts):
+                        continue
+                    seen[p] = None
         except (ValueError, OSError) as e:
             return f"Error running find: {e}"
+        matches = list(seen)
         if not matches:
             return "No files found matching pattern."
 

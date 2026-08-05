@@ -136,10 +136,14 @@ async def test_curator_slow_path_archives_and_writes_trace(tmp_path: Path):
     assert "curator_archive_messages" in trace_text
     assert "slow_path_accepted" in trace_text
 
-    manifest = json.loads((tmp_path / "memory/.curator/manifest/cli_curator-test.json").read_text(encoding="utf-8"))
+    # Curator state lives under raven's own data dir (per-workspace bucket),
+    # never inside the workspace -- which for a coding run is the user's repo.
+    archive = loop.context_engine._builders[-1].archive
+    assert tmp_path not in archive.root.parents and archive.root != tmp_path
+    manifest = json.loads((archive.manifest_dir / "cli_curator-test.json").read_text(encoding="utf-8"))
     archived = [item for item in manifest["items"] if item["archived"]]
     assert [item["id"] for item in archived] == [0, 1]
-    assert list((tmp_path / "memory/.curator/archive").glob("**/*.jsonl"))
+    assert list(archive.archive_dir.glob("**/*.jsonl"))
 
 
 @pytest.mark.asyncio
@@ -191,7 +195,8 @@ async def test_process_message_records_main_and_curator_trajectories(tmp_path: P
 
     assert response is not None
     assert response[0] == "main done"
-    traces = list((tmp_path / "memory/.curator/traces/cli_trace-test").glob("*.jsonl"))
+    trace_dir = loop.context_engine._builders[-1].archive.trace_dir
+    traces = list((trace_dir / "cli_trace-test").glob("*.jsonl"))
     assert len(traces) == 1
     trace_text = traces[0].read_text(encoding="utf-8")
     assert "curator_llm_request" in trace_text

@@ -75,6 +75,32 @@ def _no_update_check(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path):
+    """Point raven's instance data dir at a temp directory for every test.
+
+    Everything derived from ``get_data_dir()`` -- logs, cache, cron, sentinel,
+    sandbox homes, and the per-workspace state buckets a coding run writes
+    (``curator/``, ``telemetry/``) -- otherwise lands in the developer's real
+    ``~/.raven``, one bucket per pytest tmp path, growing without bound. The
+    layout under the temp root is identical, so path-shape assertions still
+    hold; tests that need a specific config path still override it themselves.
+
+    Deliberately a *sibling* of ``tmp_path``, not a child: tests routinely pass
+    ``tmp_path`` as the agent workspace, and a data dir inside it would put
+    raven's own files back in the very directory this isolation exists to keep
+    clean.
+    """
+    from raven.config import loader
+
+    original = loader._current_config_path
+    loader.set_config_path(tmp_path.parent / f"{tmp_path.name}.raven" / "config.json")
+    try:
+        yield
+    finally:
+        loader._current_config_path = original
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 

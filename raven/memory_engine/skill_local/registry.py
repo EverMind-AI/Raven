@@ -76,12 +76,13 @@ class SkillRegistry:
             scan_max_depth: R2 max recursion depth for SKILL.md scanning.
         """
         self.workspace = workspace
+        # Path only: scanning tolerates an absent directory (and the file
+        # watcher documents the missing-root retry), so nothing is created
+        # here. The workspace may be the user's repository, where an empty
+        # ``skills/`` is unwanted noise; ``raven onboard`` creates it for a
+        # real raven workspace.
         self.workspace_skills = workspace / "skills"
         self._scan_max_depth = scan_max_depth
-        try:
-            self.workspace_skills.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
         self._extra_dirs: list[tuple[Path, str, bool]] = []
         if external_skills_dir is not None:
             self._extra_dirs.append((external_skills_dir, "external", False))

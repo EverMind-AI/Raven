@@ -75,11 +75,11 @@ class TestIdentityBootstrap:
         assert seg is None
 
     async def test_bootstrap_renders_existing(self, tmp_path: Path) -> None:
-        (tmp_path / "TOOLS.md").write_text("tool docs", encoding="utf-8")
+        (tmp_path / "AGENTS.md").write_text("repo rules", encoding="utf-8")
         seg = await BootstrapSegmentBuilder(tmp_path).build(_ctx(tmp_path))
         assert seg is not None
-        assert "## TOOLS.md" in seg.text
-        assert "tool docs" in seg.text
+        assert "## AGENTS.md" in seg.text
+        assert "repo rules" in seg.text
 
 
 class TestMemory:
@@ -135,14 +135,11 @@ class TestActiveSkills:
             assert seg.text.startswith("# Active Skills")
 
 
-class TestIdentityProfile:
-    async def test_default_profile_is_assistant(self, tmp_path: Path) -> None:
-        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
-        assert "helpful AI assistant" in seg.text
-        assert "software engineering" not in seg.text
+class TestIdentity:
+    """Raven is coding-only: one identity, no profile switch."""
 
-    async def test_coding_profile_renders_engineering_identity(self, tmp_path: Path) -> None:
-        seg = await IdentitySegmentBuilder(tmp_path, profile="coding").build(_ctx(tmp_path))
+    async def test_renders_engineering_identity(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
         assert "software engineering" in seg.text
         assert "<env>" in seg.text
         # Tool routing follows raven's tool surface, not opencode's.
@@ -152,8 +149,62 @@ class TestIdentityProfile:
         assert "before declaring a task complete" in seg.text
         # opencode product content must not leak in.
         assert "opencode" not in seg.text.lower()
+        # The retired personal-assistant identity must not come back.
+        assert "helpful AI assistant" not in seg.text
 
-    async def test_coding_profile_matches_builder_delegation(self, tmp_path: Path) -> None:
-        seg = await IdentitySegmentBuilder(tmp_path, profile="coding").build(_ctx(tmp_path))
-        legacy = ContextBuilder(workspace=tmp_path, profile="coding")._get_identity()
+    async def test_matches_builder_delegation(self, tmp_path: Path) -> None:
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+        legacy = ContextBuilder(workspace=tmp_path)._get_identity()
         assert seg.text == legacy
+
+
+class TestIdentityCarriesRetiredAssistantBehaviors:
+    """Raven-X turned the assistant profile INTO the coding one; behaviors that
+    were not specific to being a personal assistant must survive that move.
+    Each assertion below marks a clause that was once assistant-only.
+    """
+
+    def _text(self, tmp_path: Path) -> str:
+        from raven.context_engine.segments import render
+
+        return render.identity_text(tmp_path)
+
+    def test_platform_policy_is_present_and_platform_aware(self, tmp_path: Path) -> None:
+        import platform as _platform
+
+        text = self._text(tmp_path)
+        assert "# Platform Policy" in text
+        if _platform.system() == "Windows":
+            assert "Do not assume GNU tools" in text
+        else:
+            assert "POSIX" in text
+
+    def test_working_discipline_clauses(self, tmp_path: Path) -> None:
+        text = self._text(tmp_path)
+        assert "NEVER predict or claim results before receiving them" in text
+        # The operative read-before-edit rule lives in the tool descriptions
+        # (see tests/test_filesystem_tools.py); the identity keeps one short line.
+        assert "Work from what you have actually read" in text
+        assert "re-read it if accuracy matters" in text
+        assert "analyze the error before retrying" in text
+
+    def test_ask_user_guidance_for_ambiguity(self, tmp_path: Path) -> None:
+        text = self._text(tmp_path)
+        assert "`ask_user`" in text
+        assert "instead of guessing" in text
+
+    def test_no_chat_channel_guidance(self, tmp_path: Path) -> None:
+        """The chat-channel `message` tool is gone; a coding identity must not
+        mention a second reply channel."""
+        text = self._text(tmp_path)
+        assert "`message` tool" not in text
+        assert "chat channel" not in text
+
+    def test_anti_injection_clause_keeps_the_strong_wording(self, tmp_path: Path) -> None:
+        text = self._text(tmp_path)
+        assert "random nonce" in text
+        assert "unmatched marker" in text
+        assert "high-impact action" in text
+
+    def test_custom_skills_path_is_advertised(self, tmp_path: Path) -> None:
+        assert "skills/{skill-name}/SKILL.md" in self._text(tmp_path)

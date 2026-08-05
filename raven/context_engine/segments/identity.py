@@ -13,9 +13,8 @@ class IdentitySegmentBuilder:
     order = 1
     needs_prefix = False
 
-    def __init__(self, workspace: Path, profile: str = "assistant") -> None:
+    def __init__(self, workspace: Path) -> None:
         self._workspace = workspace
-        self._profile = profile
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
-        return Segment(text=render.identity_text(self._workspace, self._profile))
+        return Segment(text=render.identity_text(self._workspace))

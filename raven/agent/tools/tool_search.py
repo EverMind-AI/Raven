@@ -36,10 +36,10 @@ if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry
 
 # Core tools kept exposed every turn — the agent would be crippled having to
-# search for these. Beyond the file/search/exec primitives, ``message``,
-# ``ask_user`` and ``spawn`` are interaction/orchestration primitives the agent
-# must reach on any turn (reply, unblock via a question, delegate a subagent) —
-# hiding them risks the model not thinking to search for them at all. Config
+# search for these. Beyond the file/search/exec primitives, ``ask_user`` and
+# ``spawn`` are interaction/orchestration primitives the agent must reach on any
+# turn (unblock via a question, delegate a subagent) — hiding them risks the
+# model not thinking to search for them at all. Config
 # ``tools.tool_search.always_visible`` extends this set.
 DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "read_file",
@@ -49,7 +49,6 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "grep",
     "find",
     "exec",
-    "message",
     "ask_user",
     "spawn",
 )

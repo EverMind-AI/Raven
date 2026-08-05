@@ -1,8 +1,7 @@
 """Tests for the ``tui-cron-tool`` wiring.
 
-Validates that ``_build_tui_agent_loop`` wires ``cron_service``,
-constructs the cron callback with the MessageTool swap wrapper, and starts
-the cron tick loop.
+Validates that ``_build_tui_agent_loop`` wires ``cron_service``, constructs the
+cron callback, and starts the cron tick loop.
 """
 
 from __future__ import annotations

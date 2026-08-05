@@ -224,7 +224,6 @@ def test_default_always_visible_covers_core_and_interaction_primitives() -> None
         "grep",
         "find",
         "exec",
-        "message",
         "ask_user",
         "spawn",
     }
