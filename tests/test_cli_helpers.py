@@ -151,3 +151,37 @@ def test_make_lazy_provider_returns_lazy_without_building(monkeypatch: pytest.Mo
 
     assert isinstance(provider, LazyProvider)
     assert provider.get_default_model() == "my-model"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("openai_codex", "openai-codex/gpt-5.3-codex", "OpenAICodexProvider"),
+        ("minimax_global", "minimax-global/MiniMax-M3", "MiniMaxOAuthProvider"),
+        ("azure_openai", "azure_openai/my-deployment", "AzureOpenAIProvider"),
+        ("deepseek", "deepseek/deepseek-chat", "LiteLLMProvider"),
+    ],
+)
+def test_which_client_serves_a_provider_is_read_from_the_registry(
+    provider: str,
+    model: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The factory dispatches on the spec, so a family is added by declaring it.
+
+    The name comparisons this replaces had drifted: a Codex model id spelled the
+    old way needed its own check beside the resolved provider name.
+    """
+    from raven.cli._helpers import make_provider
+    from raven.config.schema import Config
+
+    config = Config.model_validate(
+        {
+            "providers": {provider: {"apiKey": "k", "apiBase": "https://example.test"}},
+            "agents": {"defaults": {"model": model, "provider": provider}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    assert type(make_provider(config)).__name__ == expected

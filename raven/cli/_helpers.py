@@ -101,16 +101,24 @@ def make_provider(config: Config):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+    # Which client serves a provider is the registry's answer, not a chain of
+    # name comparisons here: the model id spelled the old way used to need its own
+    # check beside the resolved name, and the two could disagree.
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name(provider_name) if provider_name else None
+    client = spec.client if spec else ""
+
+    if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
-    elif provider_name in {"minimax_global", "minimax_cn"}:
+    elif client == "minimax_oauth":
         from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
 
         provider = MiniMaxOAuthProvider(
             region="global" if provider_name == "minimax_global" else "cn",
             default_model=model,
         )
-    elif provider_name == "azure_openai":
+    elif client == "azure":
         provider = AzureOpenAIProvider(
             api_key=p.api_key,
             api_base=p.api_base,

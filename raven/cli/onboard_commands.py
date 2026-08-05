@@ -353,21 +353,36 @@ def _configured_providers() -> list[str]:
 
 
 def _is_config_populated() -> bool:
-    """True iff at least one provider has a key AND a default model is set.
+    """True iff the provider that serves the configured model has its credentials.
 
     "Populated" for the startup gate means the required step (Step 1) is
-    satisfied: a provider key plus ``agents.defaults.model``. Either alone is
-    not enough to talk to a model.
+    satisfied: a default model plus credentials for whoever answers it. Either
+    alone is not enough to talk to a model.
+
+    Which provider answers is not re-derived here. The config already resolves
+    it -- honoring an explicit ``agents.defaults.provider``, then prefix over
+    keyword, and declining to fall back to an OAuth provider -- and a second
+    derivation from the model-id prefix is how this gate came to disagree with
+    ``raven status`` about a signed-in provider. What is left to ask is whether
+    that provider's credentials are actually on disk, which is the one thing the
+    resolver takes on trust for the OAuth families.
     """
-    from raven.providers.registry import split_model_id
+    from raven.config.loader import load_config
 
     data = _load_raw_config()
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
-    configured = _configured_providers()
-    model_prefix, _ = split_model_id(str(model or ""))
-    has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
-    has_provider = has_non_minimax_provider or model_prefix in configured
-    return bool(has_provider and model)
+    if not model:
+        return False
+
+    try:
+        serving = load_config().get_provider_name(str(model))
+    except Exception:
+        # A config too damaged to resolve is not a configured one, and the wizard
+        # is a better answer here than a traceback. The raw read above already
+        # raised on a syntax error, so this is the semantic case.
+        return False
+
+    return bool(serving and serving in _configured_providers())
 
 
 def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) -> None:

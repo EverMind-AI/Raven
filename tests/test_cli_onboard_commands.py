@@ -937,6 +937,49 @@ def test_is_config_populated_accepts_minimax_oauth_token(
     assert onboard_commands._is_config_populated() is True
 
 
+def test_is_config_populated_asks_who_serves_the_configured_model(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Credentials for some other provider do not make the model reachable.
+
+    The gate used to accept any configured non-MiniMax provider regardless of
+    which one the model names, so a key for one vendor let the session start on a
+    model only another vendor could answer.
+    """
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openai", {"api_key": "sk-x"})
+    set_default_model("anthropic/claude-sonnet-4-5")
+
+    assert onboard_commands._configured_providers() == ["openai"]
+    assert onboard_commands._is_config_populated() is False
+
+    set_provider_fields("anthropic", {"api_key": "sk-ant"})
+
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_honours_an_explicit_provider(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``agents.defaults.provider`` decides, so a gateway serving another
+    vendor's model id is not read as that vendor being unconfigured."""
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or-x"})
+    set_default_model("anthropic/claude-sonnet-4-5")
+    data = json.loads(tmp_env.read_text())
+    data.setdefault("agents", {}).setdefault("defaults", {})["provider"] = "openrouter"
+    tmp_env.write_text(json.dumps(data), encoding="utf-8")
+
+    assert onboard_commands._is_config_populated() is True
+
+
 def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate returns True (no wizard) when config is already complete."""
     _seed_provider()

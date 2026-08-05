@@ -115,6 +115,12 @@ class ProviderSpec:
     # over OAuth). They take no LiteLLM route prefix.
     bypasses_litellm: bool = False
 
+    # Which client constructs the provider, when it is not LiteLLM's. Stated here
+    # so that adding a family does not mean editing a chain of name comparisons
+    # in the factory -- which is how a model id spelled the old way ended up
+    # needing its own string check next to the resolved provider name.
+    client: str = ""
+
     # The endpoint is the user's to supply and there is no default that works:
     # Azure gives every tenant its own resource URL, a self-hosted endpoint is
     # wherever the user put it. Distinct from `default_api_base`, which is a
@@ -206,6 +212,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # every other provider takes a model id.
     ProviderSpec(
         name="azure_openai",
+        client="azure",
         keywords=("azure", "azure-openai"),
         env_key="",
         display_name="Azure OpenAI",
@@ -324,6 +331,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(
         name="openai_codex",
+        client="codex",
         keywords=("openai-codex",),
         env_key="",  # OAuth-based, no API key
         display_name="OpenAI Codex",
@@ -470,6 +478,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="minimax_global",
+        client="minimax_oauth",
         keywords=("minimax-global",),
         env_key="",
         display_name="MiniMax Global (OAuth)",
@@ -483,6 +492,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="minimax_cn",
+        client="minimax_oauth",
         keywords=("minimax-cn",),
         env_key="",
         display_name="MiniMax CN (OAuth)",
