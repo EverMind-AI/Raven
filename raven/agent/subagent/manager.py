@@ -11,7 +11,7 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.tools.background import BackgroundJobRegistry
-from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from raven.agent.tools.filesystem import EditFileTool, FileReadTracker, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecReadTool, ExecSessionRegistry, ExecTool, ExecWriteTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
@@ -19,7 +19,7 @@ from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.providers.tool_args import ToolArgsLimits
 from raven.sandbox import SandboxConfig, build_executor
-from raven.security.trust import wrap_untrusted
+from raven.security.trust import wrap_tool_result, wrap_untrusted
 from raven.tracing import semconv, trace
 from raven.utils.helpers import build_assistant_message
 
@@ -51,6 +51,7 @@ class SubagentManager:
         jina_api_key: str | None = None,
         max_concurrent: int = 4,
         max_spawns_per_hour: int = 30,
+        wrap_tool_outputs: str = "all",
     ):
         from raven.config.schema import ExecToolConfig
 
@@ -69,6 +70,7 @@ class SubagentManager:
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self._wrap_tool_outputs = wrap_tool_outputs
         self._sandbox_config = sandbox_config
         self._owned_ids = owned_ids
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
@@ -144,7 +146,12 @@ class SubagentManager:
             # Each subagent runs its own sandbox VM; gate the count so heavy
             # fan-out can't exhaust host resources.
             async with self._gate:
-                executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
+                executor = build_executor(
+                    self._sandbox_config,
+                    self.workspace,
+                    self._owned_ids,
+                    inherit_env=self.exec_config.inherit_env,
+                )
                 async with executor:
                     await self._run_subagent_inner(task_id, task, label, origin, executor)
         except Exception as e:
@@ -161,15 +168,19 @@ class SubagentManager:
         executor: Any,
     ) -> None:
         exec_sessions = ExecSessionRegistry(executor)
-        # Owner-scoped: a subagent can only see and cancel the jobs it started.
-        exec_jobs = BackgroundJobRegistry(executor, owner=f"subagent-{id(executor):x}")
+        # Owner-scoped: a subagent can only see and cancel the jobs it started,
+        # so it must not adopt the parent agent's persisted jobs either.
+        exec_jobs = BackgroundJobRegistry(
+            executor, owner=f"subagent-{id(executor):x}", workspace=self.workspace, adopt=False
+        )
         try:
             # Build subagent tools (no message tool, no spawn tool)
             tools = ToolRegistry()
             allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
-            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir))
+            read_tracker = FileReadTracker()
+            tools.register(ReadFileTool(workspace=self.workspace, allowed_dir=allowed_dir, tracker=read_tracker))
+            tools.register(WriteFileTool(workspace=self.workspace, allowed_dir=allowed_dir, tracker=read_tracker))
+            tools.register(EditFileTool(workspace=self.workspace, allowed_dir=allowed_dir, tracker=read_tracker))
             tools.register(ListDirTool(workspace=self.workspace, allowed_dir=allowed_dir))
             tools.register(
                 ExecTool(
@@ -269,7 +280,9 @@ class SubagentManager:
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
-                                "content": wrap_untrusted(result, source=tool_call.name),
+                                "content": wrap_tool_result(
+                                    result, tool_name=tool_call.name, policy=self._wrap_tool_outputs
+                                ),
                             }
                         )
                 else:

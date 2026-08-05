@@ -27,7 +27,7 @@ from raven.agent.loop.compaction import (
     tail_budget,
 )
 from raven.config.schema import CompactionConfig
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -396,3 +396,88 @@ def test_projected_used_is_a_noop_without_growth():
 
 def test_projected_used_is_a_noop_without_a_report():
     assert projected_context_used(0, _history(3), 0, _char_estimate) == 0
+
+
+# --------------------------------------------------------------------------- #
+# loop: a proactive compaction must not disarm the overflow heuristic          #
+# --------------------------------------------------------------------------- #
+
+
+class _CompactThenOverflowProvider(LLMProvider):
+    """Billed usage says the window is nearly full while the message text stays
+    tiny, so only the billed figure reveals the density. A proactive compaction
+    fires first, and the very next call returns an opaque 400."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.summaries = 0
+        self.overflowed = False
+        self.recovered_calls = 0
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        if not tools and any("compacting an agent" in str(m.get("content", "")) for m in messages):
+            self.summaries += 1
+            return LLMResponse(content="COMPACT-SUMMARY: goal, facts, progress", finish_reason="stop")
+        if self.overflowed:
+            self.recovered_calls += 1
+            return LLMResponse(content="recovered after compaction", finish_reason="stop")
+        n_tool = sum(1 for m in messages if m.get("role") == "tool")
+        if self.summaries and n_tool >= 4:
+            self.overflowed = True
+            return LLMResponse(
+                content="Error calling LLM: litellm.BadRequestError: OpenAIException - Provider returned error",
+                finish_reason="error",
+                error_classification=ErrorClassification("invalid_request"),
+            )
+        call = LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id=f"t{n_tool}", name="no_such_tool", arguments={})],
+            finish_reason="tool_calls",
+            # Only the pre-compaction calls report usage: the density evidence
+            # comes from earlier calls, which is the case the heuristic is for.
+            usage=None if self.summaries else {"prompt_tokens": 9_600, "completion_tokens": 100},
+        )
+        return call
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_overflow_right_after_a_compaction_is_still_recognized(workspace):
+    """The proactive trigger re-arms by zeroing its observed-usage value. The
+    overflow heuristic reads the billed size as ground truth about content
+    density, so it must not be zeroed with it: a turn that compacted and then
+    overflowed anyway is exactly when recovery is needed."""
+    provider = _CompactThenOverflowProvider()
+    agent = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        max_iterations=10,
+        restrict_to_workspace=True,
+        context_window_tokens=10_000,
+    )
+
+    out = await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="go",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.summaries >= 1
+    assert provider.overflowed is True
+    assert out is not None
+    assert out[0] == "recovered after compaction"

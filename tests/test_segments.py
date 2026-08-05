@@ -81,6 +81,16 @@ class TestIdentityBootstrap:
         assert "## AGENTS.md" in seg.text
         assert "repo rules" in seg.text
 
+    async def test_bootstrap_filter_excludes_persona_files(self, tmp_path: Path) -> None:
+        (tmp_path / "TOOLS.md").write_text("tool docs", encoding="utf-8")
+        profile_dir = tmp_path / "agent_memory" / "profile"
+        profile_dir.mkdir(parents=True)
+        (profile_dir / "soul.md").write_text("persona", encoding="utf-8")
+        seg = await BootstrapSegmentBuilder(tmp_path, ["TOOLS.md"]).build(_ctx(tmp_path))
+        assert seg is not None
+        assert "tool docs" in seg.text
+        assert "persona" not in seg.text
+
 
 class TestMemory:
     async def test_recall_merged_under_memory_heading(self, tmp_path: Path) -> None:

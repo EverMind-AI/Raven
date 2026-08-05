@@ -124,6 +124,38 @@ def prune_old_tool_results(messages: list[dict], keep_recent: int) -> tuple[list
     return pruned, elided
 
 
+def prune_old_reasoning(messages: list[dict], keep_recent: int) -> tuple[list[dict], int]:
+    """Strip reasoning from all but the newest ``keep_recent`` assistant messages.
+
+    The second accumulator of a long turn: reasoning-heavy models (DSV4 returns
+    ``reasoning_content`` inline every turn) can carry 200k+ tokens of past
+    reasoning that eliding tool results alone barely dents. Same contract as
+    :func:`prune_old_tool_results`.
+    """
+    idxs = [
+        i
+        for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and (m.get("reasoning_content") or m.get("thinking_blocks"))
+    ]
+    if len(idxs) <= keep_recent:
+        return messages, 0
+    elide = set(idxs[:-keep_recent] if keep_recent else idxs)
+    pruned: list[dict] = []
+    elided = 0
+    for i, m in enumerate(messages):
+        if i in elide:
+            clean = dict(m)
+            clean.pop("reasoning_content", None)
+            clean.pop("thinking_blocks", None)
+            pruned.append(clean)
+            elided += 1
+        else:
+            pruned.append(m)
+    if elided == 0:
+        return messages, 0
+    return pruned, elided
+
+
 def _protected_prefix_end(messages: list[dict]) -> int | None:
     """Index just past the first user message; system prefix and the task
     statement never enter the summarized head."""

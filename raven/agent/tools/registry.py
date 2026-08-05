@@ -42,6 +42,18 @@ class ToolRegistry:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
 
+    def canonical_name(self, name: str) -> str:
+        """The registered name a call to ``name`` actually executes.
+
+        Callers that classify by tool name (untrusted-output fencing, the
+        test-evidence gate) must use this, not the model's raw spelling —
+        ``execute`` repairs mangled names, so classifying by the raw name
+        lets a case-mangled call bypass name-keyed policies.
+        """
+        if name in self._tools:
+            return name
+        return self._repair_tool_name(name) or name
+
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(self, name: str, params: dict[str, Any]) -> str:
         """Execute a tool by name with given parameters."""

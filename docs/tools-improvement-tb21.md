@@ -127,6 +127,42 @@ harness 侧（独立仓库）：AgentEval raven harness 设 `denyPatterns: []`�
 
 全部改动带测试（`uv run pytest` 相关文件绿；ruff lint/format 通过）。已知无关既有失败：`TestConnectMcpSandboxGuard::test_stdio_no_executor_does_not_raise`（改动前即失败）、channels 可选依赖缺失的 collection error。
 
+### 4.1 复查后的第二批修复（2026-07-31，待提交）
+
+对落地代码复查 + 正向轨迹触点扫描后补的五项（1b killpg 因在 caffe-cifar-10 等正向题中存在"孤儿下载进程继续跑完"的依赖，暂缓）：
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| A | `DirectExecutor` 自带 `_MAX_TIMEOUT=600` 二次 clamp，静默吃掉 harness 的 `maxTimeout: 3600`（P0-3 未打通到真 executor；mock 测试没覆盖） | executor 层去掉 clamp，ExecTool 是唯一裁剪点；补真 executor 测试 |
+| B | `exec_read`/`exec_write`（schema 上限 600）与 `job_wait`（上限 3600、默认 300）没设 `timeout_seconds`，registry 300s 默认兜底会先杀——与"长构建用 job_wait"的新指引直接冲突 | `_SessionTool.timeout_seconds=660`；`job_wait` schema 上限降为 1800、backstop 1860 |
+| 1a | exec 超时仍返回 `stdout=""`，600s 构建被杀后零信息（上轮 53 次） | communicate() 改为持续 drain：超时保留已捕获输出，`ExecResult.timed_out` 结构化标记 + as_text 恢复指引；kill 语义不变（killpg 是缓做的 1b）。附带修复：`cmd &` 的孙进程占着管道不再把调用拖到自身退出 |
+| 2 | plain exec 走 `/bin/sh`（Debian 系=dash），模型写的 bashism 报错或静默变义（上轮 30+ 次 `sh:` 报错）；session/job 路径已是 bash，唯独 plain exec 不是 | 有 `/bin/bash` 时用 bash，否则回退 sh；description 注明 |
+| 3 | edit_file 多匹配只说 "appears N times" 不给位置，模型须重读全文件定位（上轮 29 次，overfull-hbox 133 次 edit） | 错误列出每处匹配的行号+首行内容（上限 8 条）；新增 `occurrence` 参数定点替换；`Warning:`→`Error:` 前缀统一（同参重试可被 same-call breaker 拦截）；空 old_text 指向 write_file |
+
+新增/更新测试：`tests/test_filesystem_tools.py`（新）、`test_sandbox_unit.py`（超时保留输出、无 executor clamp、bash、后台孙进程不阻塞）、`test_tool_registry_timeout.py`（session/job 工具 backstop ≥ schema 上限）；`test_tool_registry_execute.py` 中一个仍断言通用后缀的旧测试改为断言 G-1 的新行为。
+
+### 4.2 第三批：低风险 P1 清尾（2026-07-31，待提交）
+
+| 项 | 问题 | 修复 |
+|---|---|---|
+| inherit_env | DirectExecutor 的 env 白名单把任务镜像 `ENV`（LD_LIBRARY_PATH/HF_*/JAVA_HOME）静默剥掉，容器内失败难归因 | `tools.exec.inheritEnv`（默认 false），DirectExecutor 全部三条路径（exec/session/job）生效；AgentEval + TerminalEval harness 置 true |
+| read_file 预算 | 单次 128k chars（≈40k token）；无单行截断（minified 单行文件会把一次读爆掉，且有"首行超限返回空"的边界 bug） | 上限降 48k；单行 >2000 chars 截断并标注（对齐 opencode 三重上限）；保证至少返回一行 |
+| write_file 信号 | 只报"写了 N 字节"，模型不知道是新建还是覆盖（circuit-fibsqrt 连写 4 版自己覆盖自己） | 回显 `Created new file` / `Overwrote existing file (was N bytes, now M bytes)` |
+| web_fetch 格式 | 整个正文 `json.dumps`，换行/引号全转义，token 膨胀且难读回 | 纯文本：URL/Status/截断标注头 + `---` + 原文；错误改 `Error:` 前缀纯文本（顺带接入 registry 错误通道） |
+| 行号前缀说明 | read_file 的 `N| ` 前缀偶尔被抄进 edit 的 old_text（opencode edit.txt 有对应条款） | read_file description 声明前缀非文件内容；edit_file description 声明 old_text 不得含前缀 |
+| edit 成功快照 | 编辑成功零反馈，坏编辑到运行时才暴露 | 单点编辑成功后回显改动区 ±2 行的新内容（带行号，上限 12 行），学 opencode 的 post-edit 预览 |
+
+测试：`test_filesystem_tools.py` 扩展（read 长行/预算/单行超大、write created/overwrote、edit 快照）、`test_sandbox_unit.py`（inherit_env 对照）、`test_security_web_ssrf.py` 改断言纯文本错误。
+
+### 4.3 第四批：包裹分级 + read-before-edit（2026-07-31，待提交）
+
+| 项 | 设计 | 先例 |
+|---|---|---|
+| UNTRUSTED 分级 | `tools.wrapToolOutputs: all\|external`（默认 all，产品零变化）。external 时只有 web_search/web_fetch/deep_research/mcp_* 的结果套完整 fence，本地工具结果原文进上下文；subagent 结果播报保持恒包。省 ~50 token/条，200 轮省 1.5–2 万 token | opencode 完全不包；codex 不包工具结果、AdditionalContext 分 Untrusted/Application 两级——按来源分级是共识，全量包裹没有先例 |
+| read-before-edit | `FileReadTracker`（进程内 path→mtime_ns）。edit 一个本 session 没读过的文件 → 报错引导 read_file；读后被外部改过（sed -i 等）→ 报错引导重读。read_file/write_file/edit_file 成功都记为"已见" | opencode（edit 硬报错 + writeIfUnchanged CAS）与 Claude Code（强制先 Read + mtime 跟踪）均强制；codex 例外但 patch 上下文行等效 |
+
+harness 侧：AgentEval + TerminalEval 均设 `wrapToolOutputs: "external"`。测试：`test_security_trust.py`（策略分级）、`test_filesystem_tools.py::TestReadBeforeEdit`（未读拒绝/读后放行/自写放行/连续编辑/外部修改要求重读/无 tracker 不强制）。
+
 ---
 
 ## 5. 暂缓项（附录）

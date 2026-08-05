@@ -114,8 +114,9 @@ def build_context_engine(
     )
 
     builders = [
-        IdentitySegmentBuilder(workspace),
-        # The repository's own rules files (AGENTS.md / CLAUDE.md), read-only.
+        IdentitySegmentBuilder(workspace, model=model),
+        # The repository's own rules files (AGENTS.md / CLAUDE.md / CONTEXT.md),
+        # read-only. Raven writes none of them.
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,

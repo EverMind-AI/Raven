@@ -278,6 +278,13 @@ class AgentDefaults(Base):
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
     # finishing, which an httpx per-read timeout never catches.
     llm_call_timeout: int = 600
+    # Backend health probe between LLM retries: after a hang / 5xx failure the
+    # retry waits until a 1-token probe answers within this many seconds
+    # before re-sending the full request, so a dead backend costs one
+    # llm_call_timeout instead of one per retry attempt. 0 disables probing.
+    llm_probe_timeout: int = 0
+    # Max seconds to keep probing before the retry proceeds anyway.
+    llm_probe_budget: int = 240
     max_tool_iterations: int = 40
     # Cap on subagent VMs running at once (excess spawns queue). ge=1: a
     # 0/negative cap would deadlock every subagent (Semaphore(0)).
@@ -351,6 +358,10 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
+    # Provider-specific request body extras forwarded verbatim on every call
+    # (e.g. OpenRouter {"reasoning": {"effort": "max"}}). Silently dropping
+    # this field meant configs believed reasoning was on when it never was.
+    extra_body: dict[str, Any] | None = None
 
 
 class GeminiProviderConfig(ProviderConfig):
@@ -663,6 +674,11 @@ class ExecToolConfig(Base):
     # disables the guard, which is only appropriate when the whole filesystem is
     # disposable (benchmark container, throwaway VM).
     deny_patterns: list[str] | None = None
+    # Give commands the full host environment instead of the safe allowlist.
+    # Only for disposable environments (benchmark containers): task images set
+    # ENV vars the workload needs (LD_LIBRARY_PATH, HF_*, ...), and there are
+    # no host credentials to protect. Never enable on a real host.
+    inherit_env: bool = False
 
 
 class MediaToolConfig(Base):
@@ -756,6 +772,11 @@ class ToolsConfig(Base):
     Used by eval harnesses (e.g. BrowseComp-Plus) that need to constrain the
     agent to a specific tool subset. Names match those in ``ToolRegistry``
     (e.g. ``read_file``, ``web_search``, or ``mcp_bcp-search_search``)."""
+    # Untrusted-fence policy for tool results: "all" fences every result (the
+    # product default), "external" fences only web/MCP-sourced output. The
+    # fence costs ~50 tokens per result; "external" is for environments whose
+    # local filesystem is trusted (disposable benchmark containers).
+    wrap_tool_outputs: Literal["all", "external"] = "all"
 
 
 class Config(BaseSettings):

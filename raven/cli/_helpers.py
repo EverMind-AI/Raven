@@ -116,6 +116,16 @@ def make_provider(config: Config):
             api_base=p.api_base,
             default_model=model,
         )
+    elif provider_name == "deepseek_v4_raw":
+        from raven.providers.deepseek_v4_raw_provider import DeepSeekV4RawProvider
+
+        provider = DeepSeekV4RawProvider(
+            api_key=p.api_key if p else None,
+            api_base=p.api_base if p else None,
+            default_model=model,
+            extra_body=p.extra_body if p else None,
+            extra_headers=p.extra_headers if p else None,
+        )
     else:
         from raven.providers.litellm_provider import LiteLLMProvider
 
@@ -125,9 +135,10 @@ def make_provider(config: Config):
         # interactive use and for high-volume benchmark runs. The
         # ``reasoning.enabled=false`` flag is OpenRouter-specific and
         # forwards through LiteLLM's ``extra_body``.
-        extra_body = None
+        extra_body = dict(p.extra_body) if (p and p.extra_body) else None
         if provider_name == "openrouter" and "qwen" in (model or "").lower():
-            extra_body = {"reasoning": {"enabled": False}}
+            # Config-declared extras win; this is only the qwen default.
+            extra_body = {"reasoning": {"enabled": False}, **(extra_body or {})}
         provider = LiteLLMProvider(
             api_key=p.api_key if p else None,
             api_base=config.get_api_base(model),
@@ -144,6 +155,8 @@ def make_provider(config: Config):
         max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
+        probe_timeout=defaults.llm_probe_timeout,
+        probe_budget=defaults.llm_probe_budget,
     )
     return provider
 
@@ -165,6 +178,8 @@ def make_lazy_provider(config: Config):
             max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
+            probe_timeout=defaults.llm_probe_timeout,
+            probe_budget=defaults.llm_probe_budget,
         ),
     )
     provider.prewarm()

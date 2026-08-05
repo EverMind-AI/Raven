@@ -342,6 +342,7 @@ def register(app: typer.Typer) -> None:
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             compaction=config.agents.defaults.compaction,
+            wrap_tool_outputs=config.tools.wrap_tool_outputs,
             session_manager=session_manager,
             mcp_servers=config.tools.mcp_servers,
             disabled_tools=config.tools.disabled_tools,

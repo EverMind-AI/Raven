@@ -48,6 +48,10 @@ class ExecResult:
     stdout: str
     stderr: str
     exit_code: int
+    # True when the command was killed at its time limit. Distinct from the
+    # exit code so callers can render recovery guidance without string-sniffing
+    # stderr for the timeout marker.
+    timed_out: bool = False
 
     def as_text(self, max_chars: int = 10_000, spill_prefix: str | None = None) -> str:
         parts = []
@@ -56,6 +60,12 @@ class ExecResult:
         if self.stderr.strip():
             parts.append(f"STDERR:\n{self.stderr}")
         parts.append(f"\nExit code: {self.exit_code}")
+        if self.timed_out:
+            parts.append(
+                "[the command hit its time limit and was killed; any output above is "
+                "partial. Retry with a larger `timeout` if it just needs longer, or "
+                "run it with background:true and follow it with job_status/job_wait]"
+            )
         result = "\n".join(parts)
         if len(result) > max_chars:
             half = max_chars // 2

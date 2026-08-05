@@ -315,7 +315,8 @@ class GrepTool(_FsTool):
             globs = _expand_braces(glob)
         flags = re.IGNORECASE if case_insensitive else 0
         rx = re.compile(pattern, flags)
-        files = self._iter_files(base, globs)
+        truncated: dict[str, bool] = {"walk": False}
+        files = self._iter_files(base, globs, truncated)
 
         content_lines: list[str] = []
         match_files: list[str] = []
@@ -342,12 +343,21 @@ class GrepTool(_FsTool):
             else:
                 self._collect_content(content_lines, rel, text_lines, hits, context)
 
+        # A deadline-cut walk means absence of matches proves nothing — never
+        # report a confident empty result over a partial scan.
+        note = (
+            f"\n[warning: directory walk stopped at the {int(_WALK_DEADLINE_S)}s limit "
+            "before covering all files — results are incomplete. Narrow the path or glob.]"
+            if truncated["walk"]
+            else ""
+        )
+        empty = "No matches found in the files scanned." + note if note else "No matches found."
         if output_mode == "files_with_matches":
-            return self._format_lines(match_files, cap, "files") if match_files else "No matches found."
+            return self._format_lines(match_files, cap, "files") + note if match_files else empty
         if output_mode == "count":
             rendered = [f"{rel}:{n}" for rel, n in counts]
-            return self._format_lines(rendered, cap, "files") if rendered else "No matches found."
-        return self._format_lines(content_lines, cap, "matching lines") if content_lines else "No matches found."
+            return self._format_lines(rendered, cap, "files") + note if rendered else empty
+        return self._format_lines(content_lines, cap, "matching lines") + note if content_lines else empty
 
     @staticmethod
     def _collect_content(
@@ -368,7 +378,7 @@ class GrepTool(_FsTool):
                 sep = ":" if i == h or context == 0 else "-"
                 out.append(f"{rel}{sep}{i + 1}{sep}{text_lines[i]}")
 
-    def _iter_files(self, base: Path, globs: list[str] | None):
+    def _iter_files(self, base: Path, globs: list[str] | None, truncated: dict[str, bool] | None = None):
         if base.is_file():
             yield base
             return
@@ -376,6 +386,8 @@ class GrepTool(_FsTool):
         for root, dirs, names in os.walk(base):
             if time.monotonic() > deadline:
                 # Stop rather than hang on an unexpectedly huge / slow tree.
+                if truncated is not None:
+                    truncated["walk"] = True
                 break
             dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
             for n in sorted(names):

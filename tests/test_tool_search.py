@@ -214,7 +214,7 @@ def test_default_search_result_limit_is_ten() -> None:
 
 def test_default_always_visible_covers_core_and_interaction_primitives() -> None:
     # File/search/exec primitives plus the interaction/orchestration primitives
-    # (message / ask_user / spawn) the agent must reach on any turn. Guards
+    # (ask_user / spawn / todowrite) the agent must reach on any turn. Guards
     # against silently dropping one (which would strand it behind tool_search).
     assert set(DEFAULT_ALWAYS_VISIBLE) >= {
         "read_file",
@@ -226,6 +226,7 @@ def test_default_always_visible_covers_core_and_interaction_primitives() -> None
         "exec",
         "ask_user",
         "spawn",
+        "todowrite",
     }
 
 

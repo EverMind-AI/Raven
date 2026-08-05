@@ -60,3 +60,18 @@ def test_empty_stubs_created_when_no_legacy_source(tmp_path: Path) -> None:
 
     assert (tmp_path / "user_memory" / "attention.md").exists()
     assert (tmp_path / "user_memory" / "behaviors.md").exists()
+
+
+def test_only_filter_restricts_creation_and_skips_migration(tmp_path: Path) -> None:
+    from raven.utils.helpers import sync_workspace_templates
+
+    (tmp_path / "SOUL.md").write_text("legacy soul", encoding="utf-8")
+
+    added = sync_workspace_templates(tmp_path, silent=True, only=["TOOLS.md"])
+
+    assert added == ["TOOLS.md"]
+    assert (tmp_path / "TOOLS.md").exists()
+    assert not (tmp_path / "HEARTBEAT.md").exists()
+    assert not (tmp_path / "agent_memory").exists()
+    assert not (tmp_path / "user_memory").exists()
+    assert not (tmp_path / "skills").exists()

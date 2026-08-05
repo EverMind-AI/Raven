@@ -296,6 +296,22 @@ class LiteLLMProvider(LLMProvider):
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
         return sanitized
 
+    def _mirror_reasoning_for_gateway(self, kwargs: dict[str, Any], reasoning_effort: str) -> None:
+        """Keep reasoning_effort alive past litellm's drop_params.
+
+        drop_params silently discards reasoning_effort for any model litellm
+        cannot map — which is every newly released model behind a gateway. The
+        agent then runs with reasoning off while the config says otherwise.
+        OpenRouter accepts the reasoning object natively, so mirror the effort
+        into extra_body, which drop_params never touches. A reasoning entry
+        already present (user config, qwen default) keeps priority.
+        """
+        if not (self._gateway and self._gateway.name == "openrouter"):
+            return
+        body = dict(kwargs.get("extra_body") or {})
+        body.setdefault("reasoning", {"effort": reasoning_effort})
+        kwargs["extra_body"] = body
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -364,6 +380,7 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
+            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
 
         if tools:
             kwargs["tools"] = tools
@@ -377,10 +394,40 @@ class LiteLLMProvider(LLMProvider):
             # live exception here (status_code + type) before it's lost to a
             # string — the retry/fallback layer reads this verdict.
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM: {str(e) or type(e).__name__}",
                 finish_reason="error",
                 error_classification=self.classify_error(e),
             )
+
+    async def _probe_backend(self, model: str | None) -> bool:
+        """1-token completion with a short wall clock — answers = healthy.
+
+        Runs between retries after a hang / 5xx so the expensive request is
+        only re-sent once the backend responds again (see base class).
+        """
+        original_model = model or self.default_model
+        kwargs: dict[str, Any] = {
+            "model": self._resolve_model(original_model),
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "timeout": self.generation.probe_timeout,
+        }
+        self._apply_model_overrides(kwargs["model"], kwargs)
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
+        try:
+            await asyncio.wait_for(acompletion(**kwargs), self.generation.probe_timeout)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return False
 
     async def chat_stream(
         self,
@@ -440,6 +487,7 @@ class LiteLLMProvider(LLMProvider):
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
+            self._mirror_reasoning_for_gateway(kwargs, reasoning_effort)
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"

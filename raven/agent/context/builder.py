@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
-from raven.security.trust import wrap_untrusted
+from raven.security.trust import wrap_tool_result
 from raven.utils.helpers import build_assistant_message, detect_image_mime
 
 if TYPE_CHECKING:
@@ -36,8 +36,12 @@ class ContextBuilder:
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
+        model: str | None = None,
+        wrap_tool_outputs: str = "all",
     ):
         self.workspace = workspace
+        self._model = model
+        self._wrap_tool_outputs = wrap_tool_outputs
         self.memory = MemoryStore(workspace)
         self.skills = LocalSkillCatalog(
             workspace,
@@ -181,7 +185,7 @@ Skills with available="false" need dependencies installed first - you can try in
         """Get the core identity section (delegates to the segment renderer)."""
         from raven.context_engine.segments import render as _render
 
-        return _render.identity_text(self.workspace)
+        return _render.identity_text(self.workspace, self._model)
 
     def _build_runtime_context(self, channel: str | None, chat_id: str | None) -> str:
         """Build untrusted runtime metadata block for injection before the user message."""
@@ -268,14 +272,19 @@ Skills with available="false" need dependencies installed first - you can try in
         tool_call_id: str,
         tool_name: str,
         result: str,
+        fence_name: str | None = None,
     ) -> list[dict[str, Any]]:
         """Add a tool result to the message list.
 
         Tool output is attacker-influenceable (web pages, file/command
         contents, MCP returns), so it is fenced as untrusted data before it
-        reaches the model — every tool result funnels through here.
+        reaches the model — every tool result funnels through here. The
+        configured policy decides whether local tool results are fenced too.
+        ``fence_name`` is the tool that actually executed; the message keeps
+        ``tool_name`` (the model's spelling) so call/result pairing is intact,
+        but the fencing decision must not trust a mangled spelling.
         """
-        content = wrap_untrusted(result, source=tool_name)
+        content = wrap_tool_result(result, tool_name=fence_name or tool_name, policy=self._wrap_tool_outputs)
         messages.append({"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content})
         return messages
 

@@ -39,8 +39,10 @@ if TYPE_CHECKING:
 # search for these. Beyond the file/search/exec primitives, ``ask_user`` and
 # ``spawn`` are interaction/orchestration primitives the agent must reach on any
 # turn (unblock via a question, delegate a subagent) — hiding them risks the
-# model not thinking to search for them at all. Config
-# ``tools.tool_search.always_visible`` extends this set.
+# model not thinking to search for them at all. ``todowrite`` is here for a
+# stricter reason: the identity prompt mandates it for multi-step work, so
+# hiding it behind a search would order the model to use a tool it cannot see.
+# Config ``tools.tool_search.always_visible`` extends this set.
 DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "read_file",
     "write_file",
@@ -51,6 +53,7 @@ DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "exec",
     "ask_user",
     "spawn",
+    "todowrite",
 )
 
 TOOL_CALL_NAME: str = "tool_call"

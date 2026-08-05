@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -85,6 +86,13 @@ class TestExecResultAsText:
     def test_empty_output(self):
         r = ExecResult(stdout="", stderr="", exit_code=0)
         assert r.as_text() == "\nExit code: 0"  # exit-code line is always present
+
+    def test_timed_out_renders_recovery_guidance(self):
+        r = ExecResult(stdout="partial", stderr="Timed out after 5s", exit_code=-1, timed_out=True)
+        text = r.as_text()
+        assert "partial" in text
+        assert "time limit" in text
+        assert "background:true" in text
 
     def test_truncation(self):
         long_out = "x" * 20_000
@@ -237,12 +245,60 @@ class TestDirectExecutor:
         e = DirectExecutor()
         result = await e.exec("sleep 10", timeout=1)
         assert result.exit_code == -1
+        assert result.timed_out
         assert "Timed" in result.stderr
+
+    async def test_exec_timeout_preserves_partial_output(self):
+        # A killed long build must not report zero bytes: everything captured
+        # before the kill has to survive (P0 of the tools improvement plan).
+        e = DirectExecutor()
+        result = await e.exec("echo started; echo oops >&2; sleep 10", timeout=1)
+        assert result.exit_code == -1
+        assert result.timed_out
+        assert "started" in result.stdout
+        assert "oops" in result.stderr
+        assert "Timed out after 1s" in result.stderr
+
+    async def test_exec_honors_timeouts_above_600(self):
+        # ExecTool owns the per-command ceiling; the executor must not clamp a
+        # configured ceiling back down (maxTimeout: 3600 was silently capped).
+        import raven.sandbox.direct_executor as de
+
+        assert not hasattr(de, "_MAX_TIMEOUT")
+        result = await DirectExecutor().exec("echo ok", timeout=900)
+        assert result.exit_code == 0
+
+    @pytest.mark.skipif(not os.path.exists("/bin/bash"), reason="no bash on host")
+    async def test_exec_runs_under_bash(self):
+        # Models write bashisms; /bin/sh is dash on Debian-family hosts and
+        # rejects them ([[, source, arrays), so exec prefers bash.
+        result = await DirectExecutor().exec("[[ 1 == 1 ]] && echo bashism-ok")
+        assert result.exit_code == 0
+        assert "bashism-ok" in result.stdout
+
+    async def test_exec_backgrounded_child_does_not_block(self):
+        # `cmd &` holding the pipe open must not stall the call until the
+        # child's own exit (communicate() used to wait for pipe EOF).
+        import time
+
+        e = DirectExecutor()
+        start = time.monotonic()
+        result = await e.exec("sleep 8 & echo spawned", timeout=6)
+        assert time.monotonic() - start < 5
+        assert result.exit_code == 0
+        assert "spawned" in result.stdout
 
     async def test_exec_env(self):
         e = DirectExecutor()
         result = await e.exec("echo $MY_VAR", env={"MY_VAR": "sandwich"})
         assert "sandwich" in result.stdout
+
+    async def test_inherit_env_passes_host_vars(self, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/task/lib")
+        stripped = await DirectExecutor().exec("echo [$LD_LIBRARY_PATH]")
+        inherited = await DirectExecutor(inherit_env=True).exec("echo [$LD_LIBRARY_PATH]")
+        assert "[]" in stripped.stdout
+        assert "[/opt/task/lib]" in inherited.stdout
 
     async def test_host_env_not_inherited(self, monkeypatch):
         """A sensitive host env var must not leak to executed commands."""
@@ -1176,7 +1232,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None):
+        def _patched_build(cfg, workspace, owned_ids=None, inherit_env=False):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
@@ -1273,6 +1329,11 @@ class TestExecToolDenyListScope:
             "dd if=/dev/zero of=/dev/sda",
             "mkfs.ext4 /dev/sdb1",
             "shutdown -h now",
+            # Newline is a command separator too — a second line must not slip
+            # past the command-position anchor.
+            "echo hi\nshutdown -h now",
+            "true\nmkfs.ext4 /dev/sdb1",
+            "echo a\nformat c:",
         ],
     )
     async def test_unrecoverable_commands_still_blocked(self, tmp_path, command):
@@ -1619,3 +1680,127 @@ class TestBackgroundJobs:
         finally:
             await jobs.cancel("mine")
             await sessions.close_all()
+
+
+class TestForegroundOomDeprioritized:
+    """Foreground exec children get oom_score_adj 500 so a cgroup OOM kills the
+    recoverable tool command, not the agent (the single-largest process when a
+    build/install spreads memory across many small children)."""
+
+    @pytest.mark.skipif(not os.path.exists("/proc/self/oom_score_adj"), reason="Linux-only")
+    @pytest.mark.asyncio
+    async def test_foreground_child_reports_adj_500(self):
+        from raven.sandbox.direct_executor import DirectExecutor
+
+        # Raising oom_score_adj is unprivileged, lowering is not: when the test
+        # itself already runs at >= 500 the child write is a no-op denial.
+        if int(open("/proc/self/oom_score_adj").read()) >= 500:
+            pytest.skip("environment baseline oom_score_adj >= 500")
+        result = await DirectExecutor().exec("cat /proc/self/oom_score_adj")
+        assert result.stdout.strip() == "500"
+
+    @pytest.mark.skipif(not os.path.exists("/proc/self/oom_score_adj"), reason="Linux-only")
+    @pytest.mark.asyncio
+    async def test_background_job_not_deprioritized(self, tmp_path):
+        from raven.sandbox.direct_executor import DirectExecutor
+
+        ex = DirectExecutor()
+        log, status = str(tmp_path / "j.log"), str(tmp_path / "j.status")
+        await ex.start_background(
+            "cat /proc/self/oom_score_adj", cwd=str(tmp_path), env=None, log_path=log, status_path=status
+        )
+        for _ in range(100):
+            if os.path.exists(status):
+                break
+            await asyncio.sleep(0.05)
+        assert open(log).read().strip() != "500"
+
+
+@pytest.mark.asyncio
+class TestBackgroundJobGroupTruth:
+    """A `cmd &` inside a job exits the wrapper instantly while the workload
+    lives on in the process group. Status/cancel must track the group, not the
+    wrapper: 'exited 0' with a live server behind it misleads the model, and a
+    cancel that refuses ('already finished') strands the workload."""
+
+    @pytest.fixture
+    def jobs(self, tmp_path):
+        from raven.agent.tools.background import BackgroundJobRegistry
+
+        return BackgroundJobRegistry(DirectExecutor(), owner="test", root=tmp_path / "jobs")
+
+    async def test_ampersand_job_reports_group_alive_and_cancels(self, jobs, tmp_path):
+        await jobs.start("amp", "sleep 30 &", cwd=str(tmp_path), env=None)
+        job = await jobs.wait("amp", timeout=15)  # wrapper exits ~instantly
+        assert not isinstance(job, str)
+        assert job.exit_code == 0 and not job.running
+        assert job.group_alive, "the &-child must keep the process group alive"
+        assert "still" in job.describe()
+        out = await jobs.cancel("amp")
+        assert "already finished" not in out
+        for _ in range(50):
+            if not job.group_alive:
+                break
+            await asyncio.sleep(0.1)
+        assert not job.group_alive, "cancel must reap the whole group"
+
+    async def test_truly_finished_job_still_refuses_cancel(self, jobs, tmp_path):
+        await jobs.start("done", "true", cwd=str(tmp_path), env=None)
+        job = await jobs.wait("done", timeout=15)
+        assert not isinstance(job, str)
+        for _ in range(50):
+            if not job.group_alive:
+                break
+            await asyncio.sleep(0.1)
+        out = await jobs.cancel("done")
+        assert "already finished" in out
+
+    async def test_pid_reuse_is_not_reported_as_running(self, tmp_path):
+        from raven.agent.tools.background import BackgroundJob
+
+        job = BackgroundJob(
+            name="stale",
+            command="sleep 999",
+            pid=os.getpid(),  # alive, but started long after the job claims
+            cwd=str(tmp_path),
+            log_path=str(tmp_path / "x.log"),
+            status_path=str(tmp_path / "x.status"),
+            started_at=time.time() - 100_000,
+        )
+        assert job.running is False
+
+    async def test_registry_adopts_persisted_jobs_of_prior_process(self, tmp_path):
+        from raven.agent.tools.background import BackgroundJobRegistry
+
+        first = BackgroundJobRegistry(DirectExecutor(), owner="one", root=tmp_path / "jobs")
+        await first.start("svc", "sleep 30", cwd=str(tmp_path), env=None)
+        try:
+            second = BackgroundJobRegistry(DirectExecutor(), owner="two", root=tmp_path / "jobs")
+            adopted = second.get("svc")
+            assert adopted is not None and adopted.running
+            assert second.next_name() != "svc"
+        finally:
+            await first.cancel("svc")
+
+    async def test_registry_ignores_malformed_registry_file(self, tmp_path):
+        from raven.agent.tools.background import BackgroundJobRegistry
+
+        root = tmp_path / "jobs"
+        root.mkdir()
+        (root / "registry.json").write_text("{not json", encoding="utf-8")
+        jobs = BackgroundJobRegistry(DirectExecutor(), owner="x", root=root)
+        assert jobs.names() == []
+
+
+class TestJobsRootWorkspaceScoping:
+    """Same workspace -> shared job view (continue/restart sees its server);
+    different workspaces -> isolated (one session cannot cancel another's)."""
+
+    def test_same_workspace_same_root_different_workspace_different(self, tmp_path):
+        from raven.agent.tools.background import _jobs_root
+
+        a1 = _jobs_root(tmp_path / "proj-a")
+        a2 = _jobs_root(tmp_path / "proj-a")
+        b = _jobs_root(tmp_path / "proj-b")
+        assert a1 == a2 and a1 != b
+        assert a1 != _jobs_root(None)

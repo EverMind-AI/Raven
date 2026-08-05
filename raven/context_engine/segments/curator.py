@@ -113,7 +113,11 @@ class CuratorSegmentBuilder:
 
         history_tokens = sum(item.tokens for item in manifest)
         threshold = int(ctx.budget.available_history * self.config.fast_path_threshold)
-        if history_tokens < threshold:
+        # An empty history has nothing to curate, and a zero budget makes the
+        # comparison below false (0 < 0), so without this the slow path would
+        # spend up to ``max_steps`` LLM calls planning over an empty transcript
+        # on every turn whose prompt leaves no room for history.
+        if not manifest or history_tokens < threshold:
             history = self._history_from_messages(ctx.session_messages)
             meta = {
                 "path": "fast",

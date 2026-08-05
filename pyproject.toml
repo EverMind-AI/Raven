@@ -144,6 +144,7 @@ path = "hatch_build.py"
 include = [
     "raven/**/*.py",
     "raven/plugin/**/raven-plugin.toml",
+    "raven/context_engine/segments/prompts/**/*.txt",
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
@@ -191,6 +192,10 @@ ignore = ["E501"]
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
 "raven/tracing/instrument.py" = ["N803"]
+
+# Vendored verbatim from the DeepSeek-V4 official encoding reference; keep
+# diffs against upstream at zero, so upstream's style stays untouched.
+"raven/providers/_dsv4_encoding.py" = ["E722", "E731", "F841", "I001", "N806", "S101", "S105"]
 
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]

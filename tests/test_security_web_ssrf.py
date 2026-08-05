@@ -7,8 +7,6 @@ must refuse before any HTTP request.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from raven.agent.tools.web import WebFetchTool
@@ -31,9 +29,9 @@ async def test_rejects_url_resolving_to_private_ip(monkeypatch):
     monkeypatch.setattr("httpx.AsyncClient", _boom)
 
     out = await WebFetchTool().execute(url="http://totally-public.example.com/x")
-    parsed = json.loads(out)
-    assert "validation failed" in parsed["error"]
-    assert "private/internal" in parsed["error"]
+    assert out.startswith("Error")
+    assert "validation failed" in out
+    assert "private/internal" in out
 
 
 async def test_rejects_loopback(monkeypatch):
@@ -43,11 +41,11 @@ async def test_rejects_loopback(monkeypatch):
     monkeypatch.setattr("httpx.AsyncClient", _boom)
 
     out = await WebFetchTool().execute(url="http://127.0.0.1/admin")
-    parsed = json.loads(out)
-    assert "validation failed" in parsed["error"]
+    assert out.startswith("Error")
+    assert "validation failed" in out
 
 
 async def test_rejects_non_http_scheme(monkeypatch):
     out = await WebFetchTool().execute(url="file:///etc/passwd")
-    parsed = json.loads(out)
-    assert "validation failed" in parsed["error"]
+    assert out.startswith("Error")
+    assert "validation failed" in out

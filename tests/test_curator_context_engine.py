@@ -147,6 +147,36 @@ async def test_curator_slow_path_archives_and_writes_trace(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_empty_history_takes_the_fast_path_even_on_a_zero_budget(tmp_path: Path):
+    """A zero history budget makes the fast-path comparison false (0 < 0), so
+    without the empty-manifest guard the slow path would plan over an empty
+    transcript and bill ``max_steps`` LLM calls on every such turn."""
+    provider = CuratorScriptProvider(curator_mode="slow")
+    loop = AgentLoop(
+        provider=provider,
+        workspace=tmp_path,
+        context_config=ContextConfig(engine="curator", fast_path_threshold=0.0),
+    )
+    budget = TokenBudget(
+        context_length=4096,
+        reserved_output=512,
+        reserved_tools=100,
+        reserved_system=3484,
+        available_history=0,
+    )
+
+    assembled = await loop.context_engine.assemble(
+        "cli:empty-history",
+        [],
+        budget,
+        turn=TurnContext(current_message="go", channel="cli", chat_id="empty-history"),
+    )
+
+    assert assembled.metadata["path"] == "fast"
+    assert provider.curator_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_curator_fallback_when_internal_agent_does_not_finish(tmp_path: Path):
     provider = CuratorScriptProvider(curator_mode="fallback")
     loop = AgentLoop(

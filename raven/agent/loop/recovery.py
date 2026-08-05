@@ -40,6 +40,13 @@ POST_TOOL_NUDGE = (
     "results above to continue the task, or give your final answer now."
 )
 
+LENGTH_NUDGE = (
+    "Your previous response hit the output token limit before producing any "
+    "action. Do not restate or continue that long reasoning. Immediately emit "
+    "the next tool call or your final answer, and write large files in "
+    "smaller chunks across multiple calls."
+)
+
 
 class RecoveryAction(Enum):
     """What the loop should do about an empty assistant response."""
@@ -48,6 +55,7 @@ class RecoveryAction(Enum):
     PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
     NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
     RETRY = auto()  # plain empty → re-request as-is
+    TRUNCATED = auto()  # output cap hit before any action → inject act-now nudge
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,7 @@ class RecoveryLimits:
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    truncated_max_nudges: int = 2
 
 
 def limits_from_defaults(defaults: object) -> RecoveryLimits:
@@ -84,6 +93,24 @@ def has_thinking(response: LLMResponse) -> bool:
     return bool(response.reasoning_content or response.thinking_blocks or has_inline_thinking(response.content))
 
 
+def is_midstream_kill(response: LLMResponse) -> bool:
+    """True when the provider killed the generation mid-reasoning.
+
+    Signature: a large reasoning payload arrived, yet the billing says almost
+    no completion tokens — a genuine thinking-only turn bills its reasoning as
+    completion output, so the broken accounting marks a serving-side abort
+    (observed as Cloudflare `200 + finish_reason=error + 1 completion token`,
+    which litellm remaps to a normal-looking stop). Treated as transient:
+    re-request instead of prefilling — replaying provider-truncated reasoning
+    just re-burns the tokens the abort already wasted.
+    """
+    usage = response.usage or {}
+    ct = usage.get("completion_tokens")
+    if not isinstance(ct, int) or ct > 2:
+        return False
+    return len(response.reasoning_content or "") > 2000
+
+
 def classify_empty_response(
     response: LLMResponse,
     visible: str | None,
@@ -93,6 +120,7 @@ def classify_empty_response(
     prefill_retries: int,
     empty_retries: int,
     limits: RecoveryLimits,
+    length_nudges: int = 0,
 ) -> RecoveryAction:
     """Decide how to handle a no-tool-call assistant response.
 
@@ -106,6 +134,19 @@ def classify_empty_response(
     """
     if visible or not limits.enabled:
         return RecoveryAction.COMPLETE
+
+    # Output cap hit while still reasoning: PREFILL would re-feed the giant
+    # reasoning block and typically burn the whole budget again. A short
+    # act-now nudge is cheaper and breaks the loop (observed with
+    # reasoning-effort models whose thinking alone exceeds max_tokens).
+    if response.finish_reason == "length" and length_nudges < limits.truncated_max_nudges:
+        return RecoveryAction.TRUNCATED
+
+    # Serving-side mid-stream abort masquerading as thinking-only: plain
+    # re-request. Must run before PREFILL or the truncated reasoning gets
+    # replayed and the prefill budget burns on a provider fault.
+    if is_midstream_kill(response) and empty_retries < limits.empty_content_max_retries:
+        return RecoveryAction.RETRY
 
     thinking = has_thinking(response)
 

@@ -1,6 +1,5 @@
 """Web tools: web_search and web_fetch."""
 
-import json
 import os
 from typing import Any
 
@@ -118,7 +117,7 @@ class WebFetchTool(Tool):
         max_chars = maxChars or self.max_chars
         is_valid, error_msg = validate_url_target(url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            return f"Error: URL validation failed for {url}: {error_msg}"
 
         try:
             logger.debug("WebFetch: {}", "proxy enabled" if self.proxy else "direct connection")
@@ -135,22 +134,16 @@ class WebFetchTool(Tool):
             if truncated:
                 text = text[:max_chars]
 
-            return json.dumps(
-                {
-                    "url": url,
-                    "finalUrl": url,
-                    "status": r.status_code,
-                    "extractor": "jina-reader",
-                    "extractMode": extractMode,
-                    "truncated": truncated,
-                    "length": len(text),
-                    "text": text,
-                },
-                ensure_ascii=False,
-            )
+            # Plain text, not JSON: serialising the body would escape every
+            # newline and quote, inflating tokens and making the content hard
+            # to read back.
+            header = f"URL: {url}\nStatus: {r.status_code} (jina-reader, {extractMode})"
+            if truncated:
+                header += f"\n[content truncated at {max_chars:,} chars — pass a larger maxChars for more]"
+            return f"{header}\n---\n{text}"
         except httpx.ProxyError as e:
             logger.error("WebFetch proxy error for {}: {}", url, e)
-            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
+            return f"Error: proxy error fetching {url}: {e}"
         except Exception as e:
             logger.error("WebFetch error for {}: {}", url, e)
-            return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+            return f"Error fetching {url}: {e}"

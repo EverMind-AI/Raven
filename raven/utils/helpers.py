@@ -197,8 +197,14 @@ def estimate_prompt_tokens_chain(
     return 0, "none"
 
 
-def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files."""
+def sync_workspace_templates(workspace: Path, silent: bool = False, only: list[str] | None = None) -> list[str]:
+    """Sync bundled templates to workspace. Only creates missing files.
+
+    ``only`` restricts creation to the listed workspace-relative paths and
+    skips legacy migration — used by the coding profile, whose workspace is a
+    project/task directory where assistant persona and memory scaffolding are
+    noise (and where every stray file is visible to the work itself).
+    """
     from importlib.resources import files as pkg_files
 
     try:
@@ -211,6 +217,8 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     added: list[str] = []
 
     def _write(src, dest: Path):
+        if only is not None and str(dest.relative_to(workspace)) not in only:
+            return
         if dest.exists():
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -237,17 +245,18 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     # Step 1 — migrate legacy workspace files into the L4 layout. Each
     # rule fires only when the legacy file exists and the L4 target is
     # still missing, so user edits made directly to L4 paths win.
-    _migrate(workspace / "memory" / "MEMORY.md", workspace / "user_memory" / "profile" / "user.md")
-    _migrate(workspace / "memory" / "HISTORY.md", workspace / "user_memory" / "episodic" / "episodes.md")
-    _migrate(workspace / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
-    _migrate(workspace / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
-    _migrate(workspace / "USER.md", workspace / "user_memory" / "profile" / "user.md")
-    # feat/auto attention + behaviors content lived at workspace root.
-    # Sentinel rewrites attention.md from its own producers each tick, so
-    # the migrated file mostly serves as a head-start for the next refresh.
-    _migrate(workspace / "ATTENTION.md", workspace / "user_memory" / "attention.md")
-    _migrate(workspace / "BEHAVIORS.md", workspace / "user_memory" / "behaviors.md")
-    _migrate(workspace / "BEHAVIOR.md", workspace / "user_memory" / "behaviors.md")
+    if only is None:
+        _migrate(workspace / "memory" / "MEMORY.md", workspace / "user_memory" / "profile" / "user.md")
+        _migrate(workspace / "memory" / "HISTORY.md", workspace / "user_memory" / "episodic" / "episodes.md")
+        _migrate(workspace / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
+        _migrate(workspace / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
+        _migrate(workspace / "USER.md", workspace / "user_memory" / "profile" / "user.md")
+        # feat/auto attention + behaviors content lived at workspace root.
+        # Sentinel rewrites attention.md from its own producers each tick, so
+        # the migrated file mostly serves as a head-start for the next refresh.
+        _migrate(workspace / "ATTENTION.md", workspace / "user_memory" / "attention.md")
+        _migrate(workspace / "BEHAVIORS.md", workspace / "user_memory" / "behaviors.md")
+        _migrate(workspace / "BEHAVIOR.md", workspace / "user_memory" / "behaviors.md")
 
     # Step 2 — fall back to bundled templates for anything still missing.
     # L4 pillar files first; root-level files (TOOLS / HEARTBEAT) stay put.
@@ -263,7 +272,8 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     _write(None, workspace / "user_memory" / "behaviors.md")
     _write(tpl / "TOOLS.md", workspace / "TOOLS.md")
     _write(tpl / "HEARTBEAT.md", workspace / "HEARTBEAT.md")
-    (workspace / "skills").mkdir(exist_ok=True)
+    if only is None:
+        (workspace / "skills").mkdir(exist_ok=True)
 
     if added and not silent:
         from rich.console import Console
