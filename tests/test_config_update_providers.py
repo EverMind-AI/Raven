@@ -282,6 +282,28 @@ def test_oauth_credential_is_read_from_ravens_own_directory(
     assert _configured(cfg_path, slug) is True
 
 
+@pytest.mark.parametrize(
+    "slug",
+    ["openai_codex", "github_copilot", "minimax_global", "minimax_cn"],
+)
+def test_a_file_that_is_not_a_credential_is_not_reported_as_one(
+    cfg_path: Path,
+    oauth_home: Path,
+    slug: str,
+) -> None:
+    """A truncated write or a hand-edit passes ``exists()`` and then fails on the
+    first request, having told the picker and the startup gate it was ready."""
+    path = _oauth_token_path(slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("   ", encoding="utf-8")
+
+    assert _configured(cfg_path, slug) is False
+
+    _write_credential(path, slug)
+
+    assert _configured(cfg_path, slug) is True
+
+
 def test_reset_clears_copilots_api_key_too(cfg_path: Path, oauth_home: Path) -> None:
     """The API key outlives the access token it came from, and LiteLLM keeps
     using it -- a disconnect that leaves it behind does not disconnect."""

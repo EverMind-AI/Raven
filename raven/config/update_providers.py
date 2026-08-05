@@ -474,6 +474,45 @@ def _copilot_token_dir() -> Path:
     return Path(token_dir).expanduser() if token_dir else get_oauth_dir() / "github_copilot"
 
 
+def _oauth_credentials_present(provider_name: str) -> bool:
+    """Are this provider's credentials on disk and readable as credentials?
+
+    A file at the right path is not evidence: a truncated write, a hand-edited
+    token or an empty file all pass ``exists()`` and then fail on the first
+    request, having told the picker and the startup gate that the provider was
+    ready. What each family's own reader accepts is the answer.
+
+    Expiry is deliberately not part of it -- an expired token that still has a
+    refresh token is usable, and refreshing is the client's job.
+
+    Only presence is claimed. Whether the credential is *accepted* takes a
+    request: Copilot can hold a valid device token and still be refused the API
+    key exchange, which is what ``provider test`` is for.
+    """
+    if provider_name in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import load_token
+
+        return load_token("global" if provider_name == "minimax_global" else "cn") is not None
+
+    if provider_name == "openai_codex":
+        try:
+            from raven.providers.codex_token import codex_storage
+
+            return codex_storage().load() is not None
+        except ImportError:
+            return _oauth_token_path(provider_name).exists()
+
+    if provider_name == "github_copilot":
+        # LiteLLM stores the device token as bare text, so "parses" is only
+        # "holds something".
+        try:
+            return bool(_oauth_token_path(provider_name).read_text(encoding="utf-8").strip())
+        except OSError:
+            return False
+
+    return _oauth_token_path(provider_name).exists()
+
+
 def _oauth_credential_files(provider_name: str) -> list[Path]:
     """Every file a sign-in for this provider can leave behind, old homes included.
 
@@ -559,12 +598,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
 
         if is_oauth:
-            if fname in {"minimax_global", "minimax_cn"}:
-                from raven.providers.minimax_oauth import load_token
-
-                configured = load_token("global" if fname == "minimax_global" else "cn") is not None
-            else:
-                configured = _oauth_token_path(fname).exists()
+            configured = _oauth_credentials_present(fname)
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             configured = bool(api_base) or bool(api_key)
