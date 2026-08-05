@@ -70,7 +70,7 @@ class ContextBuilder:
         ``AgentLoop._make_token_budget`` use to *estimate* prompt size —
         it renders identity / bootstrap / host ``# Memory`` / always-
         skills / a skills summary, with no EverOS recall, router hits,
-        or Curator working state (those are owned by the assembler's
+        or history selection (those are owned by the assembler's
         segment builders now).
 
         When ``current_message`` is supplied, MemoryStore picks the H2

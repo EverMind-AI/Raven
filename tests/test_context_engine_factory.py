@@ -289,37 +289,102 @@ class TestRepoRulesBootstrap:
         store.write_long_term("remembered")
         assert store.memory_file.read_text(encoding="utf-8") == "remembered"
 
-    def test_curator_state_dir_moves_writes_out_of_the_workspace(self, tmp_path: Path) -> None:
-        from raven.config.raven import ContextConfig as _Ctx
-        from raven.context_engine.curator import CuratorArchiveStore
+    def test_history_is_bounded_by_the_budget(self, tmp_path: Path) -> None:
+        """The Curator's slow path also kept a long session inside the budget.
+        Dropping oldest-exchange-first replaces it without an LLM call."""
+        import asyncio
 
-        state = tmp_path / "state"
-        store = CuratorArchiveStore(tmp_path / "repo", _Ctx(), state_dir=state)
-        store.append_trace("cli:c", "t1", "curator_start", {})
-        assert not (tmp_path / "repo").exists()
-        assert list(state.glob("**/*.jsonl"))
+        from raven.context_engine.base import AssemblyContext
+        from raven.context_engine.segments.history import HistorySegmentBuilder
+        from raven.memory_engine import TokenBudget
 
-    def test_archived_messages_survive_a_relocated_state_dir(self, tmp_path: Path) -> None:
-        """``archive_ref`` is written relative to the store's base and resolved
-        back against it, so both ends must use the same anchor -- anchoring the
-        write on the workspace while the archive lives elsewhere silently loses
-        every archived message."""
-        from raven.config.raven import ContextConfig as _Ctx
-        from raven.context_engine.curator import CuratorArchiveStore
+        messages: list[dict] = []
+        for i in range(12):
+            messages.append({"role": "user", "content": f"request {i} " + "x" * 4_000})
+            messages.append({"role": "assistant", "content": f"answer {i}"})
 
-        store = CuratorArchiveStore(tmp_path / "repo", _Ctx(), state_dir=tmp_path / "state")
+        def _ctx(available_history: int) -> AssemblyContext:
+            return AssemblyContext(
+                session_key="cli:c",
+                current_message="next",
+                media=None,
+                channel="cli",
+                chat_id="c",
+                session_messages=messages,
+                budget=TokenBudget(
+                    context_length=32_768,
+                    reserved_output=4_096,
+                    reserved_tools=100,
+                    reserved_system=500,
+                    available_history=available_history,
+                ),
+            )
+
+        seg = asyncio.run(HistorySegmentBuilder().build(_ctx(3_000)))
+        assert len(seg.history) < len(messages)
+        assert seg.meta["dropped_exchanges"] > 0
+        # Oldest first, and never opening mid tool-exchange.
+        assert seg.history[0]["role"] == "user"
+        assert "request 0 " not in seg.history[0]["content"]
+        assert seg.history[-1]["content"] == "answer 11"
+
+        # Roomy budget: nothing is dropped.
+        roomy = asyncio.run(HistorySegmentBuilder().build(_ctx(200_000)))
+        assert len(roomy.history) == len(messages)
+        assert "dropped_exchanges" not in roomy.meta
+
+        # A non-positive budget cannot be satisfied by dropping, so the history
+        # passes through rather than vanishing.
+        starved = asyncio.run(HistorySegmentBuilder().build(_ctx(0)))
+        assert len(starved.history) == len(messages)
+
+    def test_history_builder_writes_nothing_at_all(self, tmp_path: Path) -> None:
+        """The Curator wrote a manifest, archives and per-turn traces. Its
+        deterministic replacement holds no state, so there is nothing to place
+        outside the workspace -- and nothing to leak into it."""
+        import inspect
+
+        from raven.context_engine.segments.history import HistorySegmentBuilder
+
+        source = inspect.getsource(HistorySegmentBuilder)
+        for writer in ("open(", "write_text", "mkdir", "append_trace"):
+            assert writer not in source, writer
+
+    def test_history_is_projected_and_starts_at_a_user_message(self, tmp_path: Path) -> None:
+        """Provider-safe keys only, and never opening mid tool-exchange -- the
+        two properties the Curator's fast path provided."""
+        import asyncio
+
+        from raven.context_engine.base import AssemblyContext
+        from raven.context_engine.segments.history import HistorySegmentBuilder
+        from raven.memory_engine import TokenBudget
+
         messages = [
-            {"role": "user", "content": "the original request"},
-            {"role": "assistant", "content": "the original answer"},
+            {"role": "assistant", "content": "orphan tail of an earlier turn", "internal": "drop me"},
+            {"role": "user", "content": "the request", "timestamp": "2026-08-05T00:00:00"},
+            {"role": "assistant", "content": "the answer", "cost_usd": 0.1},
         ]
-        manifest = store.build_manifest("cli:c", messages)
-        outcome = store.archive_messages("cli:c", manifest, messages, [0, 1])
-        assert outcome["manifest_updated"] is True
-        assert [item.id for item in manifest if item.archived] == [0, 1]
+        ctx = AssemblyContext(
+            session_key="cli:c",
+            current_message="the request",
+            media=None,
+            channel="cli",
+            chat_id="c",
+            session_messages=messages,
+            budget=TokenBudget(
+                context_length=4096,
+                reserved_output=512,
+                reserved_tools=100,
+                reserved_system=500,
+                available_history=2984,
+            ),
+        )
 
-        got = store.retrieve(outcome["archive_refs"], mode="exact")
-        texts = [m["content"] for r in got["results"] for m in r["messages"]]
-        assert "the original request" in texts and "the original answer" in texts
+        seg = asyncio.run(HistorySegmentBuilder().build(ctx))
+
+        assert seg.text == ""
+        assert [m["role"] for m in seg.history] == ["user", "assistant"]
+        assert all("timestamp" not in m and "cost_usd" not in m and "internal" not in m for m in seg.history)
 
     def test_identity_is_the_coding_identity(self, tmp_path: Path) -> None:
         from raven.context_engine.segments import render

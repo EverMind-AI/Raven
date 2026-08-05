@@ -4,8 +4,7 @@ Usage:
     from raven.config import RavenConfig, load_raven_config
 
     cfg = load_raven_config()
-    if cfg.context.engine == "curator":
-        ...
+    cfg.agents.defaults.model
 
 Design:
     - ``RavenConfig`` composes the base ``Config`` rather than subclassing
@@ -53,44 +52,53 @@ class _Base(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Feature 1 — Context Management (Curator)
+# Feature 1 — Context Management
 # ---------------------------------------------------------------------------
 
 
 class ContextConfig(_Base):
-    """Context engine selection and tuning."""
+    """Context engine tuning.
 
-    engine: str = "unified"
-    """Deprecated — there is now a single :class:`ContextAssembler`.
+    Every field here is retired. The Curator — an LLM-driven history selector
+    with its own tool registry, manifest and on-disk archives — was removed:
+    a coding turn's transcript is bounded by one task and the agent loop now
+    compacts in-turn (:mod:`raven.agent.loop.compaction`), so history
+    selection is a deterministic projection with nothing left to tune.
 
-    The historical ``"legacy"`` / ``"curator"`` / ``"default"`` split was
-    collapsed: every turn runs the Curator history lane + the EverOS
-    recall / SkillForgeRouter lanes in one engine. The field is retained (as a
-    free string) so existing YAML setting ``engine: legacy`` etc. still
-    loads — the value is ignored by ``build_context_engine``.
+    The fields stay declared because ``_Base`` forbids extra keys: dropping
+    them would make an existing config file (or a benchmark harness that
+    writes ``curatorModel`` / ``fastPathThreshold``) fail to load instead of
+    being ignored. Values are read by nothing.
     """
 
-    # Curator history-lane knobs.
+    engine: str = "unified"
+    """Retired — there is a single :class:`ContextAssembler`.
+
+    The historical ``"legacy"`` / ``"curator"`` / ``"default"`` split was
+    collapsed into one engine. Kept as a free string so a config setting
+    ``engine: legacy`` still loads; ignored by ``build_context_engine``.
+    """
+
     fast_path_threshold: float = 0.60
-    """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
+    """Retired — was the Curator's fast/slow cutoff."""
 
     curator_model: str = "gemini-2.5-flash"
-    """Model used by the Curator agent loop (Slow Path). Kept small & fast."""
+    """Retired — was the model behind the Curator's slow path."""
 
     curator_timeout_seconds: float = 30.0
-    """Max wall time for one Curator slow-path invocation before fallback."""
+    """Retired — was the wall-clock cap on one Curator slow-path invocation."""
 
     relevance_decay: float = 0.95
-    """Per-turn decay factor for non-recent message relevance."""
+    """Retired — was the Curator's per-turn relevance decay."""
 
     relevance_reference_boost: float = 0.15
-    """Boost applied when assistant response references older message content."""
+    """Retired — was the Curator's back-reference relevance boost."""
 
     protect_first_n: int = 3
-    """Number of head exchanges always preserved in context."""
+    """Retired — was the head-exchange protection count."""
 
     archive_dir: str = "memory/.curator/archive"
-    """Relative path under workspace for lossless message archives."""
+    """Retired — was where message archives were written."""
 
 
 # ---------------------------------------------------------------------------

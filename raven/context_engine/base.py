@@ -26,15 +26,20 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from raven.memory_engine.base import AssembledContext, TokenBudget
 
-if TYPE_CHECKING:
-    # Avoid runtime import — ``curator`` imports back from this module
-    # for ``ContextEngine``, so referencing ``TurnContext`` only in type
-    # hints keeps the loop unbroken.
-    from raven.context_engine.curator import TurnContext
+
+@dataclass
+class TurnContext:
+    """Per-turn inputs needed to build the main agent context."""
+
+    current_message: str
+    media: list[str] | None = None
+    channel: str | None = None
+    chat_id: str | None = None
+    selected_skills: list[Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -43,14 +48,14 @@ if TYPE_CHECKING:
 #
 # Every part of the turn context is produced by a :class:`SegmentBuilder`.
 # seg1–5 (identity / bootstrap / memory / active-skills / skills) and the
-# Curator are all SegmentBuilders — there is no separate "lane" category.
+# history slot are all SegmentBuilders — there is no separate "lane" category.
 # :class:`ContextAssembler` runs them in two phases and routes their
 # outputs into the system / history slots.
 
 
 @dataclass(frozen=True)
 class AssembledPrefix:
-    """Phase-A output handed to phase-B builders (the Curator).
+    """Phase-A output handed to phase-B builders.
 
     A phase-B builder needs the already-assembled system prefix + the
     user message + tool defs so it can size the *fixed* prompt overhead
@@ -87,7 +92,7 @@ class Segment:
 
     - ``text`` — the segment's contribution to the **system** slot
       (joined by ``order``); ``""`` means "no segment this turn".
-    - ``history`` — the **history** slot contribution; only the Curator
+    - ``history`` — the **history** slot contribution; only the history builder
       sets this (``None`` for every other builder).
     - ``meta`` — merged into ``AssembledContext.metadata`` (e.g.
       ``injected_skill_ids`` / ``memory_hits`` / ``path``).
@@ -100,7 +105,7 @@ class Segment:
 
 @runtime_checkable
 class SegmentBuilder(Protocol):
-    """One context contributor. seg1–5 and the Curator all implement it.
+    """One context contributor. seg1–5 and the history builder implement it.
 
     ``order`` fixes the segment's position in the system prompt.
     ``needs_prefix`` routes the builder to phase B (it reads
@@ -125,7 +130,7 @@ class ContextEngine(ABC):
     — assembles a flat list of :class:`SegmentBuilder` into the turn's
     messages. Phase A runs seg1–5 concurrently (identity / bootstrap /
     memory+recall / active-skills / router-skills); phase B runs the
-    Curator (``# Curator Working State`` + budget-trimmed ``*history``).
+    history builder (``*history``, no system-slot text).
     ``owns_compaction=True``; AgentLoop defers compaction to
     :meth:`after_turn`.
     """
@@ -139,7 +144,7 @@ class ContextEngine(ABC):
     @abstractmethod
     def owns_compaction(self) -> bool:
         """If True, AgentLoop skips ``MemoryEngine.maybe_consolidate`` and
-        lets the engine manage history compaction itself (Curator archives
+        lets the engine manage history compaction itself (the loop compacts
         messages out-of-band)."""
 
     @abstractmethod
@@ -149,7 +154,7 @@ class ContextEngine(ABC):
         session_messages: list[dict[str, Any]],
         budget: TokenBudget,
         *,
-        turn: "TurnContext",
+        turn: TurnContext,
     ) -> AssembledContext:
         """Build the exact message list passed to the main agent's LLM.
 
@@ -164,7 +169,7 @@ class ContextEngine(ABC):
         session_key: str,
         outcome: dict[str, Any],
     ) -> None:
-        """Optional post-turn hook. Curator updates its manifest / archives
+        """Optional post-turn hook for builders keeping per-turn bookkeeping
         here; Legacy ignores it. Default is no-op so future engines can
         opt in incrementally.
         """

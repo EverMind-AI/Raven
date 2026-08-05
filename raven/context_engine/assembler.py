@@ -8,9 +8,9 @@ message array. Two phases:
   concurrently. Their ``text`` joins into the system prefix; their
   ``meta`` merges into the assembled metadata.
 - **Phase B (serial)** — builders with ``needs_prefix=True`` (the
-  Curator) run with ``ctx.prefix`` populated (the assembled prefix +
+  any prefix-dependent builder) run with ``ctx.prefix`` populated (the
   user message + tool defs), so they size ``*history`` against the exact
-  fixed overhead. The Curator contributes segment 6 (``text``) and the
+  fixed overhead. The history builder contributes the
   history slot (``history``).
 
 The user message is a structural built-in (every turn has exactly one),
@@ -36,7 +36,7 @@ from raven.context_engine.segments import render
 from raven.memory_engine.base import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
-    from raven.context_engine.curator import TurnContext
+    from raven.context_engine.base import TurnContext
 
 
 class ContextAssembler(ContextEngine):
@@ -60,7 +60,7 @@ class ContextAssembler(ContextEngine):
 
     @property
     def owns_compaction(self) -> bool:
-        # The Curator lane archives history itself, so AgentLoop hands it
+        # The engine owns history compaction, so AgentLoop hands it
         # the full append-only log and skips the host MemoryConsolidator.
         return True
 
@@ -86,18 +86,26 @@ class ContextAssembler(ContextEngine):
         a_segs = await asyncio.gather(*[b.build(ctx) for b in self._phase_a])
         meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str]] = []
+        history: list[dict[str, Any]] = []
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None:
                 continue
             meta |= seg.meta
             if seg.text:
                 prefix_parts.append((builder.order, seg.text))
+            # The history slot is collected from both phases. Reading it only
+            # from phase B made ``needs_prefix`` decide whether a builder's
+            # history was heard at all, so an honest ``needs_prefix = False``
+            # meant the transcript was silently dropped and every turn looked
+            # like the first one.
+            if seg.history is not None:
+                history = seg.history
         prefix_parts.sort(key=lambda t: t[0])
         system_prefix = "\n\n---\n\n".join(text for _, text in prefix_parts)
 
         user_msg = self._build_user(ctx)
 
-        # ── Phase B — prefix-dependent builders (Curator), serial ───
+        # -- Phase B - prefix-dependent builders, serial --------------
         ctx_b = replace(
             ctx,
             prefix=AssembledPrefix(
@@ -109,7 +117,6 @@ class ContextAssembler(ContextEngine):
         b_segs = await asyncio.gather(*[b.build(ctx_b) for b in self._phase_b])
 
         system = system_prefix
-        history: list[dict[str, Any]] = []
         seg6_parts: list[tuple[int, str]] = []
         for builder, seg in zip(self._phase_b, b_segs):
             if seg is None:
@@ -117,6 +124,7 @@ class ContextAssembler(ContextEngine):
             meta |= seg.meta
             if seg.text:
                 seg6_parts.append((builder.order, seg.text))
+            # Phase B runs later and knows more, so it still wins the slot.
             if seg.history is not None:
                 history = seg.history
         seg6_parts.sort(key=lambda t: t[0])
@@ -135,7 +143,7 @@ class ContextAssembler(ContextEngine):
         outcome: dict[str, Any],
         usage: dict[str, int] | None = None,
     ) -> None:
-        # Delegate to any builder that keeps per-turn bookkeeping (Curator).
+        # Delegate to any builder that keeps per-turn bookkeeping.
         for builder in self._builders:
             hook = getattr(builder, "after_turn", None)
             if hook is not None:

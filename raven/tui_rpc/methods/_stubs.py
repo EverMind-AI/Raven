@@ -108,7 +108,7 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     (
         "session.compress",
         "session.compress not supported in Raven v0.1",
-        "Raven uses Curator context engine to manage context size; manual compress not exposed.",
+        "Raven compacts context in-turn automatically; manual compress not exposed.",
     ),
     (
         "session.save",

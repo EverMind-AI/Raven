@@ -80,7 +80,7 @@ def _isolated_data_dir(tmp_path):
 
     Everything derived from ``get_data_dir()`` -- logs, cache, cron, sentinel,
     sandbox homes, and the per-workspace state buckets a coding run writes
-    (``curator/``, ``telemetry/``) -- otherwise lands in the developer's real
+    (``telemetry/``) -- otherwise lands in the developer's real
     ``~/.raven``, one bucket per pytest tmp path, growing without bound. The
     layout under the temp root is identical, so path-shape assertions still
     hold; tests that need a specific config path still override it themselves.

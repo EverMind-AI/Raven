@@ -1,9 +1,12 @@
 """Two invariants of the context-builder design.
 
-Invariant 1 — Curator output boundary: the Curator contributes only
-``*history`` and segment 6 (``# Curator Working State``). It never
-touches system segments 1–5. Concretely, injecting a working state is
-purely additive at the tail; the rest of the prompt is byte-identical.
+Invariant 1 — history-slot output boundary: the phase-B builder that owns
+``*history`` may also contribute its own system-slot text, and nothing
+else. It never touches system segments 1-5. Concretely, injecting such
+text is purely additive at the tail; the rest of the prompt is
+byte-identical. (Exercised with a stand-in builder, so the invariant is
+pinned for whatever occupies that slot -- the retired Curator did, the
+deterministic history builder does now.)
 
 Invariant 2 — one owner per segment: each memory / skill block has
 exactly one home. The transitional ``# Recalled memory`` and
@@ -18,7 +21,6 @@ from pathlib import Path
 import pytest
 
 from raven.agent.context import ContextBuilder
-from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.base import AssemblyContext, Segment
 from raven.context_engine.segments import (
@@ -28,7 +30,7 @@ from raven.context_engine.segments import (
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.context_engine.segments.history import HistorySegmentBuilder
 from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
@@ -38,10 +40,10 @@ def builder(tmp_path: Path) -> ContextBuilder:
     return ContextBuilder(workspace=tmp_path)
 
 
-class _FakeCurator:
+class _FakeHistoryBuilder:
     """Stand-in phase-B builder: emits a fixed working-state seg + history."""
 
-    name = "curator"
+    name = "history"
     order = 6
     needs_prefix = True
 
@@ -51,7 +53,7 @@ class _FakeCurator:
 
     async def build(self, ctx: AssemblyContext) -> Segment:
         assert ctx.prefix is not None  # phase B contract
-        text = f"# Curator Working State\n\n{self._ws}" if self._ws else ""
+        text = f"# Working State\n\n{self._ws}" if self._ws else ""
         return Segment(text=text, history=self._history)
 
 
@@ -59,47 +61,47 @@ def _budget() -> TokenBudget:
     return TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000)
 
 
-async def _assemble(builder: ContextBuilder, curator, **kw):
+async def _assemble(builder: ContextBuilder, history_builder, **kw):
     eng = ContextAssembler(
-        [IdentitySegmentBuilder(builder.workspace), curator],
+        [IdentitySegmentBuilder(builder.workspace), history_builder],
         lambda: [],
     )
     return await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
 
 
 # ---------------------------------------------------------------------------
-# Invariant 1 — Curator only writes *history + segment 6
+# Invariant 1 - the history slot owner only writes *history + its own text
 # ---------------------------------------------------------------------------
 
 
-class TestCuratorBoundary:
+class TestHistorySlotBoundary:
     async def test_working_state_is_purely_additive_tail(
         self,
         builder: ContextBuilder,
     ) -> None:
-        """The Curator's seg6 appends at the tail; the prefix (seg1–5) is
+        """The phase-B builder's text appends at the tail; the prefix (seg1-5) is
         byte-identical with or without it."""
-        base = await _assemble(builder, _FakeCurator(""))
-        with_ws = await _assemble(builder, _FakeCurator("goals: ship it"))
+        base = await _assemble(builder, _FakeHistoryBuilder(""))
+        with_ws = await _assemble(builder, _FakeHistoryBuilder("goals: ship it"))
         base_sys = base.messages[0]["content"]
         ws_sys = with_ws.messages[0]["content"]
         assert ws_sys.startswith(base_sys)
-        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# Curator Working State\n\ngoals: ship it"
+        assert ws_sys[len(base_sys) :] == "\n\n---\n\n# Working State\n\ngoals: ship it"
 
     async def test_segments_1_to_5_independent_of_working_state(
         self,
         builder: ContextBuilder,
     ) -> None:
-        a = (await _assemble(builder, _FakeCurator("state A"))).messages[0]["content"]
-        b = (await _assemble(builder, _FakeCurator("state B-different"))).messages[0]["content"]
-        assert a.split("# Curator Working State")[0] == b.split("# Curator Working State")[0]
+        a = (await _assemble(builder, _FakeHistoryBuilder("state A"))).messages[0]["content"]
+        b = (await _assemble(builder, _FakeHistoryBuilder("state B-different"))).messages[0]["content"]
+        assert a.split("# Working State")[0] == b.split("# Working State")[0]
 
-    async def test_history_slot_is_curator_owned(
+    async def test_history_slot_is_owned_by_the_phase_b_builder(
         self,
         builder: ContextBuilder,
     ) -> None:
         hist = [{"role": "user", "content": "earlier"}]
-        ac = await _assemble(builder, _FakeCurator("", history=hist))
+        ac = await _assemble(builder, _FakeHistoryBuilder("", history=hist))
         # messages = [system, *history, user] → history sits in the middle.
         assert ac.messages[1] == {"role": "user", "content": "earlier"}
 
@@ -129,7 +131,7 @@ class TestOneOwnerPerSegment:
                 IdentitySegmentBuilder(builder.workspace),
                 MemorySegmentBuilder(builder.memory, backend),
                 SkillsSegmentBuilder(router),
-                _FakeCurator("ws"),
+                _FakeHistoryBuilder("ws"),
             ],
             lambda: [],
         )
@@ -143,8 +145,8 @@ class TestOneOwnerPerSegment:
         assert "### Skill: s  [local/s]" in prompt
         assert "skill body" in prompt
         # Working state is the single, final segment.
-        assert prompt.count("# Curator Working State") == 1
-        assert prompt.rstrip().endswith("# Curator Working State\n\nws")
+        assert prompt.count("# Working State") == 1
+        assert prompt.rstrip().endswith("# Working State\n\nws")
 
 
 # ---------------------------------------------------------------------------
@@ -223,14 +225,7 @@ class TestEngineAssembledInvariants:
                 MemorySegmentBuilder(builder.memory, backend),
                 ActiveSkillsSegmentBuilder(builder.skills),
                 SkillsSegmentBuilder(router),
-                CuratorSegmentBuilder(
-                    workspace=builder.workspace,
-                    config=ContextConfig(),
-                    provider=_Provider(),
-                    model="stub",
-                    context_window_tokens=100_000,
-                    get_tool_definitions=lambda: [],
-                ),
+                HistorySegmentBuilder(),
             ],
             lambda: [],
         )

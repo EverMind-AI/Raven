@@ -25,7 +25,7 @@ class ToolOutput(str):
     the optional display string attached.
 
     A ``str`` subclass on purpose. Every caller of the registry boundary --
-    the sentinel action executor, the subagent manager, the context curator,
+    the sentinel action executor, the subagent manager,
     tracing -- puts the return value straight into a message, a preview or an
     artifact, so the boundary has to return something that *is* a str; handing
     them a :class:`ToolResult` would format its repr into model context and

@@ -4,8 +4,8 @@ There is a single :class:`ContextAssembler`. Per the context-builder
 design it runs three lanes per turn (the prior ``legacy`` / ``curator`` /
 ``default`` split is gone):
 
-- **Curator lane** — manifest build + fast / slow / fallback history
-  selection + ``# Curator Working State``. Owns ``*history``.
+- **History lane** — deterministic projection of the session transcript
+  into ``*history``. Owns ``*history``.
 - **EverOS lane** — ``backend.recall(user_id=...)`` (segment 3,
   ``# Memory``) and a :class:`SkillForgeRouter` over 1–3 sources (segment 5,
   ``# Skills``).
@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from raven.agent.context import ContextBuilder
-from raven.config.paths import get_workspace_state_dir
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.base import ContextEngine
 from raven.context_engine.segments import (
@@ -44,7 +43,7 @@ from raven.context_engine.segments import (
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.context_engine.segments.history import HistorySegmentBuilder
 from raven.providers.base import LLMProvider
 
 if TYPE_CHECKING:
@@ -136,19 +135,7 @@ def build_context_engine(
             hub_client=skill_hub_client,
             get_tool_definitions=get_tool_definitions,
         ),
-        CuratorSegmentBuilder(
-            workspace=workspace,
-            config=config,
-            provider=provider,
-            model=model,
-            context_window_tokens=context_window_tokens,
-            get_tool_definitions=get_tool_definitions,
-            now_fn=now_fn,
-            # Curator traces/manifests are raven's own state, written every turn.
-            # They go under raven's data dir, not into the workspace -- which for
-            # a coding agent is the user's repository.
-            state_dir=get_workspace_state_dir(workspace, "curator"),
-        ),
+        HistorySegmentBuilder(),
     ]
     return ContextAssembler(builders, get_tool_definitions, now_fn=now_fn)
 

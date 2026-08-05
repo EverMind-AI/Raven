@@ -127,20 +127,43 @@ async def test_overflow_shrinks_and_recovers(workspace):
 
 
 # --------------------------------------------------------------------------- #
-# unit: _estimate_message_tokens                                              #
+# unit: _context_fullness                                                     #
 # --------------------------------------------------------------------------- #
 
 
-def test_estimate_message_tokens_counts_str_list_and_reasoning():
-    msgs = [
-        {"role": "system", "content": "x" * 400},
-        {"role": "tool", "content": ["a" * 200, "b" * 200]},
-        # DSV4-style history keeps reasoning inline; missing it undercounts
-        # the prompt by whole reasoning turns and defeats the near-window gate.
-        {"role": "assistant", "content": None, "reasoning_content": "r" * 400, "tool_calls": [{"id": "t"}]},
+def _fullness_loop(workspace) -> AgentLoop:
+    return AgentLoop(provider=_OpaqueOverflowProvider(big_chars=0), workspace=workspace, model="stub")
+
+
+def test_context_fullness_counts_reasoning_and_tool_calls(workspace):
+    """DSV4-style history keeps reasoning inline; missing it undercounts the
+    prompt by whole reasoning turns and defeats the near-window gate."""
+    loop = _fullness_loop(workspace)
+    base = [{"role": "system", "content": "x" * 400}]
+    with_reasoning = base + [
+        {"role": "assistant", "content": None, "reasoning_content": "r" * 4000, "tool_calls": [{"id": "t"}]}
     ]
-    # (400 + 400 + 400) chars / 4
-    assert AgentLoop._estimate_message_tokens(msgs) == 300
+
+    assert loop._context_fullness(with_reasoning, 0, 0) > loop._context_fullness(base, 0, 0)
+
+
+def test_context_fullness_is_anchored_on_billed_usage(workspace):
+    """The local estimate reads low on token-dense content, so the server's
+    own figure must win when it is higher."""
+    loop = _fullness_loop(workspace)
+    msgs = [{"role": "system", "content": "tiny"}]
+
+    assert loop._context_fullness(msgs, 50_000, len(msgs)) == 50_000
+
+
+def test_context_fullness_adds_growth_the_server_has_not_counted(workspace):
+    """Messages appended after the usage report are the whole reason a turn
+    can blow the window between two checks."""
+    loop = _fullness_loop(workspace)
+    counted = [{"role": "system", "content": "sys"}, {"role": "user", "content": "task"}]
+    grown = counted + [{"role": "tool", "content": "z" * 40_000}]
+
+    assert loop._context_fullness(grown, 9_000, len(counted)) > 9_000
 
 
 # --------------------------------------------------------------------------- #

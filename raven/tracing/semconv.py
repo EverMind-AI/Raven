@@ -427,28 +427,6 @@ def skill_gate(span, bound: dict[str, Any], result: Any, exc: BaseException | No
     span.artifact("skill.gate.output", {"selected": [_hit_ref(h) for h in selected]})
 
 
-def context_curate(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
-    """``CuratorSegmentBuilder._slow_path`` — the bounded internal curator LLM loop
-    (its per-step model + tool calls nest under this one node)."""
-    seg = result
-    state = bound.get("state")
-    history = getattr(seg, "history", None) or [] if seg is not None else []
-    span.set(
-        {
-            "context.curate.produced": seg is not None,
-            "context.curate.history_len": len(history),
-        }
-    )
-    span.artifact(
-        "context.curate.input",
-        {"turn_id": bound.get("turn_id"), "session_key": getattr(state, "session_key", None)},
-    )
-    span.artifact(
-        "context.curate.output",
-        {"produced": seg is not None, "history_len": len(history), "working_state": getattr(seg, "text", None)},
-    )
-
-
 def personalize(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
     """Personalizer steps (classify / question / extract / post_learn). These call
     ``provider.chat`` directly (not the instrumented ``chat_with_retry``), so the

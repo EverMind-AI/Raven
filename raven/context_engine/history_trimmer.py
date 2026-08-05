@@ -1,8 +1,7 @@
-"""History trimming — the Curator's contribution to ``*history``.
+"""History trimming — the deterministic operations behind ``*history``.
 
-Extracted from :class:`CuratorAssembler` so the Curator and the unified
-context engine share one implementation of the operations that decide
-which session messages reach the model:
+One implementation of the operations that decide which session messages
+reach the model:
 
 - **adjacency closure** (:meth:`canonical_ids`) — if a tool call is
   selected its result messages come along, and vice versa, so the
@@ -16,9 +15,10 @@ which session messages reach the model:
   token cost, and drop the lowest-priority non-protected messages until
   it fits.
 
-This is the *only* code path that selects ``*history``. Segment 6
-(``# Curator Working State``) is rendered by :class:`ContextBuilder`
-from the plan's working-state text — it is not this module's concern.
+This is the *only* code path that selects ``*history``.
+:class:`HistorySegmentBuilder <raven.context_engine.segments.history.HistorySegmentBuilder>`
+uses the first two on every turn; ``trim`` is here for when the history
+slot needs a cap of its own (nothing calls it today).
 """
 
 from __future__ import annotations

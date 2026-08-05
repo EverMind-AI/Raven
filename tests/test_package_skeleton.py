@@ -62,7 +62,7 @@ def test_raven_core_module_is_gone():
 #
 # ContextEngine / Monitor / SkillHandler were removed — they had zero
 # implementations and the design owners chose alternate routes
-# (SkillService, Sentinel Planner, pending Curator). The TokenStrategy
+# (SkillService, Sentinel Planner). The TokenStrategy
 # contract remains load-bearing (CacheOptimizer, UsageTracker,
 # SystemAndTailCacheStrategy all implement it), so its abstractness is still
 # part of the tier-1 contract.

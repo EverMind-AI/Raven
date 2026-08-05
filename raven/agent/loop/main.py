@@ -66,7 +66,7 @@ from raven.utils.helpers import estimate_prompt_tokens
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
 # import cycle: ``raven.agent.__init__`` eagerly loads AgentLoop,
-# while ``raven.context_engine.curator`` imports ``ContextBuilder`` from
+# while the context engine imports ``ContextBuilder`` from
 # ``raven.agent.context`` — a module-level top-down ``from
 # raven.context_engine import ...`` here re-enters a partially-initialized
 # package and raises ImportError on ``TurnContext``.
@@ -965,9 +965,9 @@ class AgentLoop:
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
         """Return the candidate message view owned by the active context engine.
 
-        Curator (``owns_compaction=True``) wants the full append-only log so
+        The engine (``owns_compaction=True``) wants the full append-only log so
         it can decide what to archive itself; Legacy wants the post-consolidation
-        slice to match the pre-Curator behavior exactly.
+        slice to match the legacy behavior exactly.
         """
         if self.context_engine.owns_compaction:
             return list(session.messages)
@@ -1647,22 +1647,52 @@ class AgentLoop:
             return repaired
         return messages
 
-    @staticmethod
-    def _estimate_message_tokens(messages: list[dict]) -> int:
-        """Cheap upper-ish token estimate for the assembled prompt (~4 chars/token).
+    def _with_todo_reminder(self, call_messages: list[dict]) -> list[dict]:
+        """Re-render the current checklist onto every request that has one.
 
-        Deliberately crude and dependency-free: it only gates the
-        overflow-recovery fallback, where being roughly right is enough and a
-        real tokenizer call per failed request would not pay for itself.
+        The checklist reaches the model as a ``todowrite`` tool result, and a
+        long turn erodes that: the prune tier replaces older tool-result bodies
+        with a placeholder, so the plan the model is working to would silently
+        disappear from its own context. Re-rendering it per call is also what
+        makes it a live plan rather than a transcript entry -- the model sees
+        the current state, not what it wrote twenty iterations ago.
+
+        Appended to the outgoing copy only, never to ``messages``: nothing
+        accumulates across iterations, nothing lands in the session
+        transcript, and there is no stale copy to keep in sync.
         """
-        chars = 0
-        for m in messages:
-            for c in (m.get("content"), m.get("reasoning_content")):
-                if isinstance(c, str):
-                    chars += len(c)
-                elif isinstance(c, list):
-                    chars += sum(len(str(part)) for part in c)
-        return chars // 4
+        if not self._todos.items:
+            return call_messages
+        return [
+            *call_messages,
+            {
+                "role": "user",
+                "content": (
+                    "<system-reminder>\nYour current checklist (todowrite):\n\n"
+                    f"{self._todos.render()}\n\n"
+                    "This is re-rendered by the system on every request, not written by the user. "
+                    "Keep it current with todowrite as you work.\n</system-reminder>"
+                ),
+            },
+        ]
+
+    def _context_fullness(self, messages: list[dict], billed: int, counted_upto: int) -> int:
+        """How full the context is right now, in tokens.
+
+        Anchored on ``billed`` -- what the server charged for the last request
+        it accepted, which is ground truth but predates everything appended
+        since -- plus a local estimate of exactly those appends. Floored by a
+        local estimate of the whole prompt, which is the only signal available
+        before the first usage report.
+
+        One reading for both consumers: the proactive compaction trigger
+        (before every call) and the overflow heuristic (after a hard failure).
+        They differ in their thresholds, not in what they measure.
+        """
+        tool_defs = self.tools.get_definitions()
+        local = estimate_prompt_tokens(messages, tool_defs)
+        projected = compaction.projected_context_used(billed, messages, counted_upto, estimate_prompt_tokens)
+        return max(local, projected)
 
     @classmethod
     def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
@@ -1907,14 +1937,15 @@ class AgentLoop:
         # usage report and after a compaction, so the trigger only ever fires
         # on fresh data.
         last_context_used = 0
-        # Same number, but never re-armed: the compaction trigger zeroes
-        # ``last_context_used`` so it only fires on fresh usage, while the
-        # overflow heuristic below must keep the density evidence -- a turn that
-        # compacted and then still overflowed is exactly when it is needed.
-        last_billed_used = 0
         # Message count at the moment that usage was reported: messages after
         # this index are growth the server has not counted yet.
         last_usage_msg_count = 0
+        # Whether anything was compacted in this turn. The trigger zeroes
+        # ``last_context_used`` to re-arm on fresh usage, so after a compaction
+        # the fullness reading is back to a local estimate -- which reads low on
+        # token-dense content, exactly where the overflow heuristic is needed.
+        # Having compacted at all is the stronger evidence, so record the fact.
+        compacted_this_turn = False
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1996,18 +2027,12 @@ class AgentLoop:
             # window by a whole round of tool output. (claude-code covers the
             # same gap with a flat 13k buffer; measuring the growth is tighter.)
             if self._compaction.auto and last_context_used:
-                projected_used = compaction.projected_context_used(
-                    last_context_used,
-                    messages,
-                    last_usage_msg_count,
-                    estimate_prompt_tokens,
-                )
+                fullness = self._context_fullness(messages, last_context_used, last_usage_msg_count)
                 limit, reserved = self._compaction_limits(effective_model)
-                if compaction.should_compact(projected_used, limit, reserved):
-                    messages, changed = await self._compact_context(
-                        messages, effective_model, observed_used=projected_used
-                    )
+                if compaction.should_compact(fullness, limit, reserved):
+                    messages, changed = await self._compact_context(messages, effective_model, observed_used=fullness)
                     if changed:
+                        compacted_this_turn = True
                         last_context_used = 0
                         last_usage_msg_count = len(messages)
 
@@ -2020,6 +2045,7 @@ class AgentLoop:
                 tool_defs,
                 effective_model,
             )
+            call_messages = self._with_todo_reminder(call_messages)
             budget_kwargs = {} if call_max_tokens is None else {"max_tokens": call_max_tokens}
             if on_token_delta is not None or on_reasoning_delta is not None:
                 try:
@@ -2075,7 +2101,6 @@ class AgentLoop:
                 )
                 if billed > 0:
                     last_context_used = billed
-                    last_billed_used = billed
                     # Watermark for the compaction trigger: everything appended
                     # after this index is growth the server has not counted yet.
                     last_usage_msg_count = len(messages)
@@ -2110,7 +2135,11 @@ class AgentLoop:
             near_window = (
                 response.finish_reason == "error"
                 and (cls_ is None or not cls_.retryable)
-                and max(self._estimate_message_tokens(messages), last_billed_used) >= 0.8 * self.context_window_tokens
+                and (
+                    compacted_this_turn
+                    or self._context_fullness(messages, last_context_used, last_usage_msg_count)
+                    >= 0.8 * self.context_window_tokens
+                )
             )
             if (
                 response.finish_reason == "error"
@@ -2120,6 +2149,7 @@ class AgentLoop:
                 shrunk, changed = await self._compact_context(messages, effective_model, force_summary=True)
                 if changed:
                     messages = shrunk
+                    compacted_this_turn = True
                     compress_retries += 1
                     iteration -= 1  # the overflowed call did no work; don't bill it
                     last_context_used = 0
@@ -3084,7 +3114,7 @@ class AgentLoop:
         # failure never leaves the user a delivered message no turn recorded.
         # The after-turn work a normal turn does in _process_message is reduced
         # to what a no-model delivery needs: backend.store indexes the report;
-        # after_turn is a no-op without a turn_id; consolidation is the curator's
+        # after_turn is a no-op without a turn_id; consolidation is the engine's
         # job on its next assemble.
         if req.deliver_text is not None:
             session = self.sessions.get_or_create(cid)

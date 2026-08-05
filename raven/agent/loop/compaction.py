@@ -12,8 +12,8 @@ both proactively (at a token threshold, before the next call) and reactively
   tail with one LLM-written handoff brief. The tail stays verbatim so the
   model keeps its most recent working state.
 
-The Curator and the MemoryConsolidator both operate at turn boundaries and
-never run inside a turn; this module is the only in-turn mechanism.
+The MemoryConsolidator operates at turn boundaries and never runs inside a
+turn; this module is the only in-turn mechanism.
 """
 
 from __future__ import annotations

@@ -121,3 +121,80 @@ def test_display_call_summarises_progress(tool):
         }
     )
     assert label == "1/2 done - b"
+
+
+# --------------------------------------------------------------------------- #
+# loop: the checklist is re-rendered onto every request                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def loop(tmp_path):
+    from raven.agent.loop import AgentLoop
+    from raven.providers.base import LLMProvider
+
+    class _Stub(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+
+        async def chat(self, messages, **kwargs):  # pragma: no cover - never called
+            raise AssertionError("not used")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    return AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub")
+
+
+def test_no_reminder_while_the_checklist_is_empty(loop):
+    msgs = [{"role": "user", "content": "go"}]
+    assert loop._with_todo_reminder(msgs) == msgs
+
+
+def test_reminder_carries_the_current_checklist(loop):
+    loop._todos.replace(
+        [
+            {"content": "read the failing test", "status": "completed", "priority": "high"},
+            {"content": "fix the parser", "status": "in_progress", "priority": "high"},
+        ]
+    )
+    out = loop._with_todo_reminder([{"role": "user", "content": "go"}])
+
+    assert len(out) == 2
+    text = out[-1]["content"]
+    assert "<system-reminder>" in text and "</system-reminder>" in text
+    assert "[x] read the failing test" in text
+    assert "[~] fix the parser" in text
+    assert "not written by the user" in text
+
+
+def test_reminder_never_accumulates_across_calls(loop):
+    """It rides on the outgoing copy only, so the caller's list is untouched and
+    two consecutive requests carry exactly one reminder each."""
+    loop._todos.replace([{"content": "a", "status": "pending", "priority": "medium"}])
+    msgs = [{"role": "user", "content": "go"}]
+
+    first = loop._with_todo_reminder(msgs)
+    second = loop._with_todo_reminder(msgs)
+
+    assert len(msgs) == 1
+    assert sum(1 for m in first if "<system-reminder>" in str(m.get("content"))) == 1
+    assert sum(1 for m in second if "<system-reminder>" in str(m.get("content"))) == 1
+
+
+def test_reminder_reflects_the_latest_write_not_the_first(loop):
+    loop._todos.replace([{"content": "old plan", "status": "pending", "priority": "medium"}])
+    loop._todos.replace([{"content": "new plan", "status": "in_progress", "priority": "medium"}])
+    text = loop._with_todo_reminder([{"role": "user", "content": "go"}])[-1]["content"]
+
+    assert "new plan" in text
+    assert "old plan" not in text
+
+
+def test_prompt_files_explain_the_system_reminder_marker():
+    """The marker is only safe if the model is told the system inserts it."""
+    from raven.context_engine.segments import identity_prompts
+
+    for family in identity_prompts.available_families():
+        text = (identity_prompts._PROMPT_DIR / f"{family}.txt").read_text(encoding="utf-8")
+        assert "`<system-reminder>`" in text, family

@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 
 from raven.agent.context import ContextBuilder
-from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
@@ -27,7 +26,7 @@ from raven.context_engine.segments import (
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
+from raven.context_engine.segments.history import HistorySegmentBuilder
 from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
@@ -155,14 +154,7 @@ def _engine(
         ),
         ActiveSkillsSegmentBuilder(builder.skills),
         SkillsSegmentBuilder(router, skill_top_k=skill_top_k),
-        CuratorSegmentBuilder(
-            workspace=builder.workspace,
-            config=ContextConfig(),
-            provider=_StubProvider(),
-            model="stub",
-            context_window_tokens=100_000,
-            get_tool_definitions=lambda: [],
-        ),
+        HistorySegmentBuilder(),
     ]
     return ContextAssembler(builders, lambda: [])
 
@@ -504,3 +496,53 @@ def test_coalesce_assistant_skips_when_merged_in_carries_reasoning():
         {"role": "assistant", "content": "b", "reasoning_content": "why"},
     ]
     assert _coalesce_assistant(history) == history
+
+
+# ---------------------------------------------------------------------------
+# History slot is collected from both phases
+# ---------------------------------------------------------------------------
+
+
+class _PhaseAHistoryBuilder:
+    """Contributes ``*history`` without needing the assembled prefix."""
+
+    name = "history"
+    order = 6
+    needs_prefix = False
+
+    def __init__(self, history: list[dict]) -> None:
+        self._history = history
+
+    async def build(self, ctx):
+        from raven.context_engine.base import Segment
+
+        return Segment(text="", history=self._history)
+
+
+@pytest.mark.asyncio
+async def test_history_from_a_phase_a_builder_is_not_dropped(tmp_path: Path):
+    from raven.context_engine.assembler import ContextAssembler
+    from raven.context_engine.base import TurnContext
+
+    prior = [
+        {"role": "user", "content": "the earlier question"},
+        {"role": "assistant", "content": "the earlier answer"},
+    ]
+    engine = ContextAssembler([_PhaseAHistoryBuilder(prior)], lambda: [])
+
+    out = await engine.assemble(
+        "cli:c",
+        prior,
+        TokenBudget(
+            context_length=4096,
+            reserved_output=512,
+            reserved_tools=100,
+            reserved_system=500,
+            available_history=2984,
+        ),
+        turn=TurnContext(current_message="the new question", channel="cli", chat_id="c"),
+    )
+
+    assert [m["role"] for m in out.messages] == ["system", "user", "assistant", "user"]
+    assert out.messages[1]["content"] == "the earlier question"
+    assert "the new question" in out.messages[-1]["content"]
