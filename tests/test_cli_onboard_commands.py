@@ -2282,8 +2282,23 @@ def _run_import_step(
         "raven.importer.scanners.scan_all",
         AsyncMock(return_value=_import_results() if results is None else results),
     )
+    # A foreground run reads the real config for a memory backend and imports
+    # into it -- the same machine-dependence as `_memory_enabled` above, and here
+    # it would write to whatever workspace the developer has configured. These
+    # tests are about the choices the step makes, not about running an import.
+    monkeypatch.setattr(
+        "raven.cli.import_commands._build_and_run",
+        AsyncMock(return_value=_no_op_import_result()),
+    )
     onboard_commands._step5_import(skip=False, non_interactive=False)
     return scripted
+
+
+def _no_op_import_result() -> Any:
+    from raven.cli.import_commands import ImportRunResult
+    from raven.importer.orchestrator import ImportSummary
+
+    return ImportRunResult(summary=ImportSummary(total=0, submitted=0, skipped=0, failed=0, errors=[]))
 
 
 def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path, *, confirm: bool = True) -> AsyncMock:
