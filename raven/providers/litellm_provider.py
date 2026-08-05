@@ -155,6 +155,16 @@ class LiteLLMProvider(LLMProvider):
             # prefix entirely -- sending the gateway's key to the vendor named in
             # the model id.
             prefix = self._gateway.model_prefix
+            # LiteLLM's plain "openai/" driver strips cache_control blocks from
+            # messages before sending; its "openrouter/" driver speaks the same
+            # OpenAI dialect but keeps them for vendors that cache. A generic
+            # gateway fronting such a vendor needs the keeping driver, or the
+            # breakpoints stamped in chat()/chat_stream() die inside LiteLLM
+            # and every call bills the full prompt uncached.
+            if prefix == "openai" and not self._gateway.supports_prompt_caching:
+                upstream = find_by_model(model) or find_by_keywords(model)
+                if upstream is not None and upstream.supports_prompt_caching:
+                    prefix = "openrouter"
             if self._gateway.strip_model_prefix:
                 # One leading vendor segment, not everything but the last: a
                 # model id may itself contain a slash ("openai/gpt-oss-120b" is
@@ -187,11 +197,14 @@ class LiteLLMProvider(LLMProvider):
 
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when the provider supports cache_control on content blocks."""
-        if self._gateway is not None:
-            return self._gateway.supports_prompt_caching
+        if self._gateway is not None and self._gateway.supports_prompt_caching:
+            return True
         # Keyword fallback for the same reason token_wise has one: an id routed
         # through a vendor we carry no spec for ("bedrock/anthropic.claude-...")
-        # still reaches a model whose caching is the upstream vendor's.
+        # still reaches a model whose caching is the upstream vendor's. A generic
+        # gateway (provider: custom) is the same situation seen from the other
+        # side: its spec can't speak for whatever vendor sits upstream, so a
+        # False there must not veto a model id that names a caching vendor.
         spec = find_by_model(model) or find_by_keywords(model)
         return spec is not None and spec.supports_prompt_caching
 
@@ -213,6 +226,33 @@ class LiteLLMProvider(LLMProvider):
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
+
+        # A system-prompt breakpoint alone caches only the prefix above the
+        # conversation; in an agent loop the history is most of every prompt
+        # and grows monotonically, so mark the tail too. Two rolling tail
+        # breakpoints (not one) keep a hit reachable when the final message
+        # moved or the vendor's backward scan from a breakpoint runs out of
+        # blocks. Budget: system + tools + 2 tail = Anthropic's 4-breakpoint cap.
+        marked = 0
+        for i in range(len(new_messages) - 1, -1, -1):
+            if marked >= 2:
+                break
+            msg = new_messages[i]
+            if msg.get("role") == "system":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str) and content:
+                new_messages[i] = {
+                    **msg,
+                    "content": [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}],
+                }
+            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                new_content = list(content)
+                new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+                new_messages[i] = {**msg, "content": new_content}
+            else:
+                continue
+            marked += 1
 
         new_tools = tools
         if tools:
