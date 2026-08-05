@@ -122,3 +122,60 @@ def test_convert_messages_wires_tool_output_into_function_call_output():
     assert items[0]["type"] == "function_call_output"
     assert items[0]["call_id"] == "call_7"
     assert items[0]["output"][1]["type"] == "input_image"
+
+
+def _capture_body(monkeypatch) -> list[dict]:
+    """Run ``chat`` without a network call or a credential, keeping the body."""
+    bodies: list[dict] = []
+
+    async def fake_request(url, headers, body, verify, timeout):
+        bodies.append(body)
+
+        return "", [], "stop"
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider._request_codex", fake_request)
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    return bodies
+
+
+async def test_the_cache_key_is_stable_while_the_conversation_grows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keyed on the transcript, it changed every turn -- so requests sharing a
+    cached prefix never landed on the same cache, which is the only thing the key
+    is for."""
+    bodies = _capture_body(monkeypatch)
+    provider = OpenAICodexProvider()
+
+    await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "one"}])
+    await provider.chat(
+        [
+            {"role": "system", "content": "you are raven"},
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "two"},
+        ]
+    )
+
+    assert bodies[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"]
+
+
+async def test_a_different_system_prompt_is_a_different_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    bodies = _capture_body(monkeypatch)
+    provider = OpenAICodexProvider()
+
+    await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "x"}])
+    await provider.chat([{"role": "system", "content": "you are something else"}, {"role": "user", "content": "x"}])
+
+    assert bodies[0]["prompt_cache_key"] != bodies[1]["prompt_cache_key"]
+
+
+async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One key shared by requests that share no prefix is worse than none."""
+    bodies = _capture_body(monkeypatch)
+
+    await OpenAICodexProvider().chat([{"role": "user", "content": "x"}])
+
+    assert "prompt_cache_key" not in bodies[0]

@@ -50,10 +50,14 @@ class OpenAICodexProvider(LLMProvider):
             "input": input_items,
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": _prompt_cache_key(messages),
             "tool_choice": tool_choice or "auto",
             "parallel_tool_calls": True,
         }
+
+        # Nothing to group without instructions: every such request would share
+        # one key while sharing no prefix.
+        if system_prompt:
+            body["prompt_cache_key"] = _prompt_cache_key(system_prompt)
 
         if reasoning_effort:
             body["reasoning"] = {"effort": reasoning_effort}
@@ -282,9 +286,14 @@ def _split_tool_call_id(tool_call_id: Any) -> tuple[str, str | None]:
     return "call_0", None
 
 
-def _prompt_cache_key(messages: list[dict[str, Any]]) -> str:
-    raw = json.dumps(messages, ensure_ascii=True, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _prompt_cache_key(system_prompt: str) -> str:
+    """Group requests that share a cached prefix -- which is the instructions.
+
+    Keyed on the whole transcript before, which grows every turn: the key was
+    different on every request, so the one thing it exists for -- landing
+    requests with a common prefix on the same cache -- never happened.
+    """
+    return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
 
 
 async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[dict[str, Any], None]:
