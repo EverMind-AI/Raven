@@ -44,6 +44,44 @@ _PACKAGED_DIST_ENTRY = Path(__file__).resolve().parent.parent / "ui-tui" / "dist
 
 _MIN_NODE_VERSION = (22, 0, 0)
 
+#: Read by the TUI when it launches a raven command of its own (``provider
+#: login``, ``onboard``). Named here because the child must be this install.
+_RAVEN_BIN_ENV = "RAVEN_BIN"
+
+
+def own_entry_point() -> Optional[Path]:
+    """The ``raven`` executable that started this process, if it can be named.
+
+    A console script is invoked by path, so ``argv[0]`` is the answer whenever
+    there is one; ``python -m raven`` leaves something else there, and the
+    executable's own directory holds the script in that case.
+    """
+    argv0 = Path(sys.argv[0])
+    if argv0.name.startswith("raven") and argv0.is_file():
+        return argv0.resolve()
+
+    sibling = Path(sys.executable).with_name("raven.exe" if os.name == "nt" else "raven")
+
+    return sibling if sibling.is_file() else None
+
+
+def child_env() -> dict[str, str]:
+    """Environment for the Node child, naming the raven it must call back into.
+
+    The TUI runs ``raven provider login`` for the user, and that writes a
+    credential. Resolved through PATH it can be a different install than the one
+    running -- one whose idea of where credentials live is its own, so the login
+    reports success and this process still sees an unauthenticated provider.
+
+    An explicit ``RAVEN_BIN`` is left alone: a developer pointing it somewhere
+    means it.
+    """
+    env = os.environ.copy()
+    if not env.get(_RAVEN_BIN_ENV) and (entry := own_entry_point()):
+        env[_RAVEN_BIN_ENV] = str(entry)
+
+    return env
+
 
 def resolve_dist_entry() -> Optional[Path]:
     """Locate the prebuilt ``entry.js`` bundle for production (non-dev) launch.
@@ -265,7 +303,7 @@ def _spawn_with_rpc_pipes(
     for fd in (req_r, notif_w):
         os.set_inheritable(fd, False)
 
-    env = os.environ.copy()
+    env = child_env()
     # Inside the child these will appear as fd 3 / 4 (Popen remaps in order).
     env["RAVEN_RPC_FD_REQUEST"] = "3"
     env["RAVEN_RPC_FD_NOTIFY"] = "4"
@@ -733,7 +771,7 @@ def _spawn_with_rpc_socket(
     host, port = server_sock.getsockname()[:2]
 
     token = secrets.token_hex(32)
-    env = os.environ.copy()
+    env = child_env()
     env[_RPC_SOCKET_ENV] = f"{host}:{port}"
     env[_RPC_TOKEN_ENV] = token
 
