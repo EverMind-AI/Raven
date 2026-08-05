@@ -232,12 +232,14 @@ def test_reset_oauth_idempotent_when_no_token_file(
 def oauth_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every OAuth credential lookup inside tmp_path.
 
-    The two families LiteLLM's drivers own read their directory from an
-    environment variable, which jumps out of the patched home.
+    Each family reads its directory from an environment variable when one is set,
+    which jumps out of the patched home -- and the suite-wide fixture sets all of
+    them. Dropping them here is what puts the patched home back in charge.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
     monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("MINIMAX_OAUTH_TOKEN_DIR", raising=False)
     return tmp_path
 
 
@@ -712,3 +714,25 @@ def test_probing_copilot_reads_its_own_credential_not_another_providers(
 
     assert result["status"] == "oauth_token_missing"
     assert "github-copilot" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [p.name for p in __import__("raven.providers.registry", fromlist=["PROVIDERS"]).PROVIDERS if p.is_oauth],
+)
+def test_every_oauth_family_has_its_own_credential_check(
+    slug: str,
+    cfg_path: Path,
+    oauth_home: Path,
+) -> None:
+    """Each family stores its credential its own way, so each needs its own check.
+    Defaulting to another family's reads the wrong file and can start that
+    provider's device flow behind a probe -- which is what happened when copilot
+    shared codex's. A family added without a check of its own lands here."""
+    result = probe_provider(slug, config_path=cfg_path, timeout_s=3)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "has no credential check" not in (result["error"] or ""), (
+        f"{slug} falls through to another family's credential check"
+    )
+    assert "provider login" in (result["error"] or "").lower(), result["error"]

@@ -499,11 +499,10 @@ def _oauth_credentials_present(provider_name: str) -> bool:
 
 
 def _oauth_credential_files(provider_name: str) -> list[Path]:
-    """Every file a sign-in for this provider can leave behind, old homes included.
+    """Every file a sign-in for this provider can leave behind.
 
     Disconnect has to clear all of them: Copilot's API key outlives the access
-    token it came from, and a credential left in the pre-``~/.raven`` location
-    would be picked back up by the read fallback.
+    token it came from, so deleting the token alone leaves a working credential.
     """
     if provider_name == "github_copilot":
         token_dir = _copilot_token_dir()
@@ -895,7 +894,7 @@ def test_provider(
                 token = get_token("global" if spec.name == "minimax_global" else "cn")
                 oauth_access = token.access
                 api_base = token.resource_url
-            else:
+            elif spec.name == "github_copilot":
                 if not _oauth_credentials_present(spec.name):
                     raise RuntimeError(
                         f"no credentials found -- run `raven provider login {spec.name.replace('_', '-')}`"
@@ -906,6 +905,12 @@ def test_provider(
                 from litellm.llms.github_copilot.authenticator import Authenticator
 
                 oauth_access = Authenticator().get_api_key()
+            else:
+                # Named rather than defaulted: this used to fall through to the
+                # branch above, which reads a different provider's credential and
+                # can start its device flow. A family arriving without a check of
+                # its own says so instead.
+                raise RuntimeError(f"{spec.label} has no credential check here yet")
         except ImportError:
             return {
                 "ok": False,
