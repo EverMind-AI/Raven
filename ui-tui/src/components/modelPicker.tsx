@@ -3,11 +3,14 @@
 // Modifications Copyright (c) 2026 EverMind.
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
+import type { RunExternalProcess } from '@hermes/ink'
+
 import { Box, Text, useInput, useStdout } from '@hermes/ink'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
 import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
+import type { LaunchResult } from '../lib/externalCli.js'
 import type { Theme } from '../theme.js'
 
 import { providerDisplayNames } from '../domain/providers.js'
@@ -18,7 +21,10 @@ const VISIBLE = 12
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
-type Stage = 'provider' | 'addProvider' | 'key' | 'model' | 'addModel' | 'disconnect'
+type Stage = 'provider' | 'addProvider' | 'key' | 'model' | 'addModel' | 'disconnect' | 'oauthLogin'
+
+/** Where the sign-in handoff is: waiting to start, running, or back from it. */
+type LoginPhase = 'idle' | 'running' | 'done'
 
 /** The row that opens the second level; not a provider. */
 const ADD_ROW = '__add_provider__'
@@ -49,7 +55,7 @@ function unconfiguredWarning(p: ModelOptionProvider): string {
 }
 type KeyField = 'api_key' | 'api_base'
 
-export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPickerProps) {
+export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspend, t }: ModelPickerProps) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([])
   const [currentModel, setCurrentModel] = useState('')
   const [err, setErr] = useState('')
@@ -64,6 +70,12 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const [keySaving, setKeySaving] = useState(false)
   const [keyError, setKeyError] = useState('')
   const [modelNameInput, setModelNameInput] = useState('')
+  // The sign-in screen names its provider from here rather than from the
+  // selection: a successful login moves that provider out of the unconfigured
+  // list the cursor is pointing into, which would rename the screen mid-flow.
+  const [loginTarget, setLoginTarget] = useState<null | { name: string; slug: string }>(null)
+  const [loginPhase, setLoginPhase] = useState<LoginPhase>('idle')
+  const [loginError, setLoginError] = useState('')
 
   const { stdout } = useStdout()
   // Pin the picker to a stable width so the FloatBox parent (which shrinks-
@@ -72,41 +84,57 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   // has an actual constraint to truncate against.
   const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
 
-  useEffect(() => {
-    gw.request<ModelOptionsResponse>('model.options', sessionId ? { session_id: sessionId } : {})
-      .then(raw => {
-        const r = asRpcResult<ModelOptionsResponse>(raw)
+  // Refetch only: no cursor, no stage. A sign-in refetches to pick up the new
+  // credential, and moving the cursor or the stage from here would drop the
+  // user on whichever provider the fresh list happens to put under the old
+  // index instead of the one they just signed in to.
+  const loadOptions = useCallback(async (): Promise<ModelOptionProvider[] | null> => {
+    try {
+      const raw = await gw.request<ModelOptionsResponse>('model.options', sessionId ? { session_id: sessionId } : {})
+      const r = asRpcResult<ModelOptionsResponse>(raw)
 
-        if (!r) {
-          setErr('invalid response: model.options')
-          setLoading(false)
-
-          return
-        }
-
-        const next = r.providers ?? []
-        setProviders(next)
-        setCurrentModel(String(r.model ?? ''))
-        // Located in the list the first screen shows, not in the whole response:
-        // the current provider's index among all of them lands past the end of
-        // the configured ones, and a selection past the end highlights no row at
-        // all -- the picker opened with no cursor on it.
-        setProviderIdx(
-          Math.max(
-            0,
-            next.filter(p => p.authenticated !== false).findIndex(p => p.is_current)
-          )
-        )
-        setModelIdx(0)
-        setStage('provider')
-        setErr('')
+      if (!r) {
+        setErr('invalid response: model.options')
         setLoading(false)
-      })
-      .catch((e: unknown) => {
-        setErr(rpcErrorMessage(e))
-        setLoading(false)
-      })
+
+        return null
+      }
+
+      const next = r.providers ?? []
+      setProviders(next)
+      setCurrentModel(String(r.model ?? ''))
+      setErr('')
+      setLoading(false)
+
+      return next
+    } catch (e: unknown) {
+      setErr(rpcErrorMessage(e))
+      setLoading(false)
+
+      return null
+    }
   }, [gw, sessionId])
+
+  useEffect(() => {
+    void loadOptions().then(next => {
+      if (!next) {
+        return
+      }
+
+      // Located in the list the first screen shows, not in the whole response:
+      // the current provider's index among all of them lands past the end of
+      // the configured ones, and a selection past the end highlights no row at
+      // all -- the picker opened with no cursor on it.
+      setProviderIdx(
+        Math.max(
+          0,
+          next.filter(p => p.authenticated !== false).findIndex(p => p.is_current)
+        )
+      )
+      setModelIdx(0)
+      setStage('provider')
+    })
+  }, [loadOptions])
 
   // Everything the picker needs is already in one response; the split is a view.
   // A provider the user has not set up is not a model they can switch to, and
@@ -121,6 +149,12 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
   const onAddRow = stage === 'provider' && providerIdx === configured.length
   const provider = onAddRow ? undefined : rowsForStage[providerIdx]
   const models = provider?.models ?? []
+  // The sign-in screen and the way back out both ask this, and both have to ask
+  // it of the target rather than of the row under the cursor: a login that landed
+  // moves its provider off the unconfigured list the cursor points into.
+  const targetStillUnauthenticated = loginTarget
+    ? providers.find(p => p.slug === loginTarget.slug)?.authenticated === false
+    : provider?.authenticated === false
   const names = useMemo(() => providerDisplayNames(rowsForStage), [rowsForStage])
 
   const back = () => {
@@ -140,18 +174,29 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       return
     }
 
-    if (stage === 'model' || stage === 'key' || stage === 'disconnect') {
+    if (stage === 'model' || stage === 'key' || stage === 'disconnect' || stage === 'oauthLogin') {
       // Backing out of a set-up that did not happen returns to the list it was
       // opened from, rather than one level further out than the user asked for.
-      const toAddList = stage === 'key' && fromAddList && provider?.authenticated === false
+      const toAddList = (stage === 'key' || stage === 'oauthLogin') && fromAddList && targetStillUnauthenticated
       setStage(toAddList ? 'addProvider' : 'provider')
       setFromAddList(toAddList)
+
+      // A set-up that did happen leaves the add list, and the index that pointed
+      // into it can be past the end of the shorter configured list -- a
+      // selection past the end highlights no row at all.
+      if (fromAddList && !toAddList) {
+        setProviderIdx(0)
+      }
+
       setModelIdx(0)
       setKeyInput('')
       setBaseInput('')
       setKeyField('api_key')
       setKeyError('')
       setKeySaving(false)
+      setLoginTarget(null)
+      setLoginPhase('idle')
+      setLoginError('')
 
       return
     }
@@ -159,7 +204,75 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     onCancel()
   }
 
-  useOverlayKeys({ onBack: back, onClose: onCancel })
+  const signIn = async (target: { name: string; slug: string }) => {
+    const args = ['provider', 'login', target.slug.replace(/_/g, '-')]
+
+    setLoginPhase('running')
+    setLoginError('')
+
+    let result: LaunchResult = { code: null }
+
+    // The child owns the real terminal for the whole browser / device-code flow,
+    // so Ink has to be suspended around it rather than redrawing over it.
+    await suspend(async () => {
+      result = await launcher(args)
+    })
+
+    if (result.error) {
+      setLoginError(result.error)
+      setLoginPhase('idle')
+
+      return
+    }
+
+    // A child killed by a signal reports no exit code, which is what Ctrl+C looks
+    // like from here -- and this screen promises that Ctrl+C cancels. Rendering it
+    // as `exited with code null` told the user their own key press was a fault.
+    if (result.code === null) {
+      setLoginPhase('idle')
+
+      return
+    }
+
+    if (result.code !== 0) {
+      setLoginError(`\`raven ${args.join(' ')}\` exited with code ${result.code}`)
+      setLoginPhase('idle')
+
+      return
+    }
+
+    const fresh = await loadOptions()
+    const signedIn = fresh?.find(p => p.slug === target.slug)
+
+    // A sign-in that took moves its provider onto the configured list, so this
+    // goes where the provider now is -- the same landing the key screen gives a
+    // provider it just set up. Staying put instead left the user to press Esc
+    // into the list the provider had just left.
+    if (signedIn?.authenticated) {
+      setFromAddList(false)
+      setProviderIdx(Math.max(0, fresh!.filter(p => p.authenticated !== false).indexOf(signedIn)))
+      setLoginTarget(null)
+      setLoginPhase('idle')
+      setStage('model')
+      setModelIdx(0)
+
+      return
+    }
+
+    // Signed in and still no credentials, or the list could not be refetched:
+    // both are reported on this screen rather than navigated away from.
+    setLoginPhase('done')
+  }
+
+  useOverlayKeys({
+    // Both stages type into a field, and the sign-in has handed the terminal to
+    // a child process -- leaving the screen from under either one loses input
+    // the user has already given.
+    closeOnQ: stage !== 'key' && stage !== 'addModel',
+    disabled: loginPhase === 'running',
+    onBack: back,
+    onClose: onCancel
+  })
 
   useInput((ch, key) => {
     // Key entry stage handles its own input (api_key + optional api_base)
@@ -396,6 +509,17 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
       return
     }
 
+    // Sign-in confirmation stage. Without its own branch the keys fall through
+    // to the list handlers below, where Enter on a provider with no models sends
+    // the user back to the list without ever starting the login.
+    if (stage === 'oauthLogin') {
+      if (key.return && loginPhase !== 'running' && loginTarget) {
+        void signIn(loginTarget)
+      }
+
+      return
+    }
+
     const onProviderList = stage === 'provider' || stage === 'addProvider'
     const addRowCount = stage === 'provider' && unconfigured.length > 0 ? 1 : 0
     const count = onProviderList ? rowsForStage.length + addRowCount : models.length
@@ -429,17 +553,24 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         }
 
         if (provider.authenticated === false) {
-          // Every shape but OAuth is completable here: the key stage asks for a
-          // key, an address, or both, from what the provider reports needing.
-          // OAuth is a browser flow plus a token file, so its row states the
-          // command that does it rather than pretending to.
-          if (provider.auth_type !== 'oauth') {
-            setStage('key')
-            setKeyInput('')
-            setBaseInput('')
-            setKeyField(provider.auth_type === 'local' ? 'api_base' : 'api_key')
-            setKeyError('')
+          // Every shape but OAuth is completable in place: the key stage asks for
+          // a key, an address, or both, from what the provider reports needing.
+          // OAuth is a browser flow, so it gets a confirmation screen and then
+          // the terminal, which is the one thing this screen cannot host.
+          if (provider.auth_type === 'oauth') {
+            setStage('oauthLogin')
+            setLoginTarget({ name: provider.name, slug: provider.slug })
+            setLoginPhase('idle')
+            setLoginError('')
+
+            return
           }
+
+          setStage('key')
+          setKeyInput('')
+          setBaseInput('')
+          setKeyField(provider.auth_type === 'local' ? 'api_base' : 'api_key')
+          setKeyError('')
 
           return
         }
@@ -666,6 +797,71 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
     )
   }
 
+  // ── OAuth sign-in stage ──────────────────────────────────────────────
+  if (stage === 'oauthLogin' && loginTarget) {
+    const command = `raven provider login ${loginTarget.slug.replace(/_/g, '-')}`
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text bold color={t.color.accent} wrap="truncate-end">
+          Sign in to {loginTarget.name}?
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          This is a browser sign-in. Raven hands the terminal over until it ends:
+        </Text>
+
+        <Text color={t.color.accent} wrap="truncate-end">
+          {'  '}
+          {command}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          Ctrl+C while it runs cancels the sign-in and comes back here.
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
+
+        {loginError ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            error: {loginError}
+          </Text>
+        ) : loginPhase === 'running' ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            signing in…
+          </Text>
+        ) : loginPhase === 'done' && targetStillUnauthenticated ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            sign-in ended, but Raven still finds no credentials for it.
+          </Text>
+        ) : loginPhase === 'done' ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            signed in.
+          </Text>
+        ) : (
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' '}
+          </Text>
+        )}
+
+        {loginPhase === 'running' ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' '}
+          </Text>
+        ) : (
+          <OverlayHint t={t}>
+            {loginPhase === 'done' ? 'Esc back · Enter run it again' : 'Enter sign in · Esc back'}
+          </OverlayHint>
+        )}
+      </Box>
+    )
+  }
+
   // ── Disconnect confirmation stage ─────────────────────────────────────
   if (stage === 'disconnect' && provider) {
     return (
@@ -685,6 +881,14 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
         <Text color={t.color.muted} wrap="truncate-end">
           You can re-authenticate later by selecting it again.
         </Text>
+
+        {/* The model id survives the disconnect and still names this provider, so
+            the session is left pointing at one that cannot answer. */}
+        {provider.is_current ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            It serves your current model - pick another one after disconnecting.
+          </Text>
+        ) : null}
 
         <Text color={t.color.muted} wrap="truncate-end">
           {' '}
@@ -841,8 +1045,10 @@ export function ModelPicker({ gw, onCancel, onSelect, sessionId, t }: ModelPicke
 
 interface ModelPickerProps {
   gw: GatewayClient
+  launcher: (args: string[]) => Promise<LaunchResult>
   onCancel: () => void
   onSelect: (model: string, providerSlug: string) => void
   sessionId: string | null
+  suspend: (run: RunExternalProcess) => Promise<void>
   t: Theme
 }

@@ -36,10 +36,6 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
-    # OAuth provider login (Codex / GitHub Copilot) imports this during onboard,
-    # so it must be a runtime dep -- otherwise `uv tool install raven` users hit
-    # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
-    "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -101,7 +97,6 @@ channels = [
 ]
 tools = [
     "readability-lxml>=0.8.4,<1.0.0",
-    "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
 sandbox = [
     "anyio>=4.0",
@@ -276,7 +271,6 @@ markers = [
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
-    "oauth-cli-kit>=0.1.6",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",

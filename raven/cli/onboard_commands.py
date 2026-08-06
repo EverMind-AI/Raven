@@ -47,6 +47,8 @@ from raven.providers.registry import (
     CRED_LOCAL,
     CRED_OAUTH,
     credential_kind,
+    needs_public_model_prefix,
+    public_model_prefix,
 )
 
 
@@ -353,21 +355,36 @@ def _configured_providers() -> list[str]:
 
 
 def _is_config_populated() -> bool:
-    """True iff at least one provider has a key AND a default model is set.
+    """True iff the provider that serves the configured model has its credentials.
 
     "Populated" for the startup gate means the required step (Step 1) is
-    satisfied: a provider key plus ``agents.defaults.model``. Either alone is
-    not enough to talk to a model.
+    satisfied: a default model plus credentials for whoever answers it. Either
+    alone is not enough to talk to a model.
+
+    Which provider answers is not re-derived here. The config already resolves
+    it -- honoring an explicit ``agents.defaults.provider``, then prefix over
+    keyword, and declining to fall back to an OAuth provider -- and a second
+    derivation from the model-id prefix is how this gate came to disagree with
+    ``raven status`` about a signed-in provider. What is left to ask is whether
+    that provider's credentials are actually on disk, which is the one thing the
+    resolver takes on trust for the OAuth families.
     """
-    from raven.providers.registry import split_model_id
+    from raven.config.loader import load_config
 
     data = _load_raw_config()
     model = (data.get("agents", {}) or {}).get("defaults", {}).get("model")
-    configured = _configured_providers()
-    model_prefix, _ = split_model_id(str(model or ""))
-    has_non_minimax_provider = any(name not in {"minimax_global", "minimax_cn"} for name in configured)
-    has_provider = has_non_minimax_provider or model_prefix in configured
-    return bool(has_provider and model)
+    if not model:
+        return False
+
+    try:
+        serving = load_config().get_provider_name(str(model))
+    except Exception:
+        # A config too damaged to resolve is not a configured one, and the wizard
+        # is a better answer here than a traceback. The raw read above already
+        # raised on a syntax error, so this is the semantic case.
+        return False
+
+    return bool(serving and serving in _configured_providers())
 
 
 def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) -> None:
@@ -970,8 +987,17 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
 
         prefix = litellm_spelling(provider)
         return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
-    if spec.name in {"minimax_global", "minimax_cn"}:
-        public_prefix = spec.name.replace("_", "-")
+    # These providers are named by a prefix their own client strips back off
+    # (``minimax_oauth`` before signing, ``_strip_model_prefix`` for codex), so the
+    # id can carry it -- and has to: written bare, "gpt-5.6-sol" is claimed by
+    # OpenAI's keywords and the request goes somewhere it does not exist.
+    #
+    # Azure is not in the list and does not reach this function either: an endpoint
+    # provider is locked in as ``is_custom`` and its model is persisted directly,
+    # so nothing here decides its spelling. It would need the opposite treatment
+    # anyway -- the id is used verbatim as a deployment name in a URL path.
+    if needs_public_model_prefix(spec):
+        public_prefix = public_model_prefix(spec)
         if model_id.startswith(f"{public_prefix}/"):
             return model_id
         return f"{public_prefix}/{model_id.split('/')[-1]}"
@@ -1055,6 +1081,13 @@ def _pick_model(
         choices = list(dict.fromkeys(choices))
         if default_value and default_value not in choices:
             choices.insert(0, default_value)
+        # A provider with no static default (codex: every id we shipped was
+        # refused, so only the account knows) still needs one here -- the empty
+        # submit below falls back to it, and without one Enter tore the wizard
+        # down. The list is newest-first, so its head is the better default a
+        # hard-coded id could not be.
+        if not default_value:
+            default_value = choices[0]
         prompt_label = _t(
             f"Default model ({len(choices)} available — type to filter, Tab to complete):",
             f"默认模型(共 {len(choices)} 个 — 输入可筛选,Tab 补全):",
@@ -1101,6 +1134,15 @@ def _pick_model(
         # default rather than tearing down the wizard. The no-default branch
         # validates non-empty, so an empty value only reaches here with a default.
         if default_value:
+            # Said out loud: the prompt has already echoed an empty answer, and the
+            # next thing on screen is a test message being sent. Without this the
+            # model it was sent with appears nowhere.
+            console.print(
+                _t(
+                    f"  [dim]No model entered - using {default_value}.[/dim]",
+                    f"  [dim]未输入模型,使用 {default_value}。[/dim]",
+                )
+            )
             return _format_model_for_provider(provider, spec, default_value)
         raise typer.Exit(1)
     return _format_model_for_provider(provider, spec, chosen)
@@ -1549,6 +1591,11 @@ def _resolve_model_with_test(
                         if credential_kind(provider) == CRED_LOCAL
                         else (_t("Re-enter key", "重新填 Key"), "rekey")
                     ),
+                    # Also retry, because this branch takes the failures that
+                    # cannot be sorted: a credential the account refused and a
+                    # refresh that could not reach the network arrive as the same
+                    # thing, and only one of them is fixed by signing in again.
+                    (_t("Retry", "重试"), "retry"),
                     (_t("Switch provider", "更换服务商"), "switch"),
                     (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
@@ -4910,18 +4957,43 @@ def _run_wizard_body(
 # ---------------------------------------------------------------------------
 
 
-def ensure_configured_or_onboard(*, non_interactive: bool = False) -> bool:
-    """Run the wizard when the required config (provider + model) is missing.
+def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
+    """Run the wizard for a config that cannot start, and only for that.
 
-    Returns ``True`` if config was already complete (caller proceeds straight
-    to the session), ``False`` if the wizard ran (config is now populated). In
-    a non-interactive context with missing config, the wizard's TTY check
-    will raise — callers on non-TTY paths must guard before invoking.
+    Two different things fail the startup check. A config with no usable provider
+    at all is a first run, and the wizard is the answer -- it configures five more
+    subsystems besides this one. A config whose default model happens to name a
+    provider that has gone unusable is not: the wizard restarts at the language
+    screen to fix one line, over a session that has other providers ready. Say
+    which line, and let the user fix it where models are chosen.
+
+    The distinction lives here rather than at each entry point, because both
+    entries were asking the same question and only one answer can be right.
     """
     if _is_config_populated():
-        return True
-    run_wizard(non_interactive=non_interactive)
-    return False
+        return
+
+    if not _configured_providers():
+        run_wizard(non_interactive=non_interactive)
+        return
+
+    model = (_load_raw_config().get("agents", {}) or {}).get("defaults", {}).get("model")
+    # Says what was found, not why: the provider it resolves to may have no
+    # credentials, or the id may resolve to a provider that never served it (a
+    # deployment name carrying another vendor's keyword does that). Naming a cause
+    # we have not established sends the user to fix the wrong thing.
+    console.print(
+        _t(
+            f"  [yellow]No usable provider resolves the default model ({model}).[/yellow]",
+            f"  [yellow]默认模型({model})解析不到可用的服务商。[/yellow]",
+        )
+    )
+    console.print(
+        _t(
+            "  [dim]Choose one that works: `raven tui` then /model. Or `raven onboard` to set this up again.[/dim]",
+            "  [dim]换一个能用的:`raven tui` 后按 /model。或用 `raven onboard` 重新配置。[/dim]",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4984,4 +5056,4 @@ def register(app: typer.Typer) -> None:
         )
 
 
-__all__ = ["register", "run_wizard", "ensure_configured_or_onboard"]
+__all__ = ["register", "run_wizard", "ensure_ready_to_start"]

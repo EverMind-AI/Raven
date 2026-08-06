@@ -151,3 +151,76 @@ def test_make_lazy_provider_returns_lazy_without_building(monkeypatch: pytest.Mo
 
     assert isinstance(provider, LazyProvider)
     assert provider.get_default_model() == "my-model"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "expected"),
+    [
+        ("openai_codex", "openai-codex/gpt-5.3-codex", "OpenAICodexProvider"),
+        ("minimax_global", "minimax-global/MiniMax-M3", "MiniMaxOAuthProvider"),
+        ("azure_openai", "azure_openai/my-deployment", "AzureOpenAIProvider"),
+        ("deepseek", "deepseek/deepseek-chat", "LiteLLMProvider"),
+    ],
+)
+def test_which_client_serves_a_provider_is_read_from_the_registry(
+    provider: str,
+    model: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The factory dispatches on the spec, so a family is added by declaring it.
+
+    The name comparisons this replaces had drifted: a Codex model id spelled the
+    old way needed its own check beside the resolved provider name.
+    """
+    from raven.cli._helpers import make_provider
+    from raven.config.schema import Config
+
+    config = Config.model_validate(
+        {
+            "providers": {provider: {"apiKey": "k", "apiBase": "https://example.test"}},
+            "agents": {"defaults": {"model": model, "provider": provider}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    assert type(make_provider(config)).__name__ == expected
+
+
+def _config_for(tmp_path: Path, provider: str, model: str, section: dict) -> Path:
+    p = tmp_path / "config.json"
+    p.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": model, "provider": provider}},
+                "providers": {provider: section},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_the_credential_check_accepts_an_oauth_provider_with_no_key(tmp_path: Path) -> None:
+    """Its docstring promises to stay in sync with ``make_provider``, and the version
+    that compared provider names drifted the moment the factory stopped doing that.
+    Asserted through behaviour: a source scan passed while the branch was dead.
+    """
+    from raven.config.loader import load_config
+
+    cfg = _config_for(tmp_path, "openai_codex", "openai-codex/gpt-5.6-sol", {})
+
+    _helpers.check_provider_credentials(load_config(cfg))  # no raise: the token is not in config
+
+
+def test_the_credential_check_wants_both_halves_of_an_azure_endpoint(tmp_path: Path) -> None:
+    import typer
+
+    from raven.config.loader import load_config
+
+    # A key without an address is the half Azure cannot work with, and the generic
+    # "no API key" message would not say which half is missing.
+    cfg = _config_for(tmp_path, "azure_openai", "my-deployment", {"apiKey": "az-key"})
+
+    with pytest.raises(typer.Exit):
+        _helpers.check_provider_credentials(load_config(cfg))

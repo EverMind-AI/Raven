@@ -1331,7 +1331,9 @@ class AgentLoop:
         else:
             fresh = prompt_t
 
-        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write) or 0.0
+        # Left as None for a plan-billed provider: the field is optional all the
+        # way to the status bar, which renders it only when it is a number.
+        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write)
         return UsageSnapshot(
             model=model,
             input_tokens=fresh,
