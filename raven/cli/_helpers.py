@@ -65,24 +65,28 @@ def check_provider_credentials(config: Config) -> None:
     """Fail-fast when the configured provider is missing required credentials.
 
     Cheap (no litellm import), so it can run at startup even when the real
-    provider is built lazily. Kept in sync with the branches of make_provider.
+    provider is built lazily. It branches on the same ``client`` that decides
+    which provider gets built: kept in sync by asking the same question, because
+    the version that compared names drifted the moment the factory stopped.
     """
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
+    from raven.providers.registry import find_by_name
+
+    spec = find_by_name(provider_name)
+    client = spec.client if spec else ""
+
+    if client == "codex":
         return
-    if provider_name == "azure_openai":
+    if client == "azure":
         if not p or not p.api_key or not p.api_base:
             console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
             console.print("Set them in ~/.raven/config.json under providers.azure_openai section")
             console.print("Use the model field to specify the deployment name.")
             raise typer.Exit(1)
         return
-    from raven.providers.registry import find_by_name
-
-    spec = find_by_name(provider_name)
     if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.raven/config.json under providers section")
