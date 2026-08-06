@@ -703,6 +703,26 @@ def set_provider_fields(
     return prev
 
 
+def serves_default_model(name: str, *, config_path: Path | None = None) -> bool:
+    """Is this provider the one that answers the configured default model?
+
+    Resetting it clears the credential and leaves the model id behind, so the
+    config still names a provider that can no longer answer -- and the startup
+    gate reads that as "not set up" and runs the wizard. Both doors that reset a
+    provider ask this so they can say so before it happens.
+    """
+    from raven.config.loader import load_config
+
+    try:
+        config = load_config(config_path) if config_path else load_config()
+        model = config.agents.defaults.model
+        return bool(model) and config.get_provider_name(str(model)) == canonical_provider_name(name)
+    except Exception:
+        # A config that cannot be resolved has no default worth protecting, and
+        # this is a warning path: it must never be the reason a reset fails.
+        return False
+
+
 def reset_provider(
     name: str,
     *,
@@ -1045,11 +1065,25 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
             "error": "no credentials found -- run `raven provider login openai-codex`",
         }
 
-    # Strict, so an unreachable catalogue is not reported as an account with
-    # nothing in it: only one of those two is fixed by signing in again, and the
-    # recovery menus branch on this status to decide what to offer.
+    # Strict, so a failure is reported rather than flattened into an empty list --
+    # and told apart by what raised it. The credential lookup raises for a token
+    # that cannot be produced (revoked, expired past refresh); the request itself
+    # raises for anything about reaching the endpoint. Only the first is fixed by
+    # signing in again, and the recovery menus offer that on one status and Retry
+    # on the other, so reporting the wrong one strands the user on a screen whose
+    # options cannot help.
     try:
         models = account_models(timeout=timeout_s, strict=True)
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         return {
             "ok": False,

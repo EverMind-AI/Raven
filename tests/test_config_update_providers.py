@@ -789,3 +789,24 @@ def test_every_oauth_family_has_its_own_credential_check(
         f"{slug} falls through to another family's credential check"
     )
     assert "provider login" in (result["error"] or "").lower(), result["error"]
+
+
+def test_probing_codex_offers_a_sign_in_when_the_credential_is_the_problem(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token that cannot be produced any more is fixed by signing in again, and
+    the recovery menu offers that on this status. Reported as a network fault it
+    landed on the branch that offers only Retry -- which cannot fix it."""
+    _codex_credential('{"refresh_token": "revoked"}')
+
+    def cannot_produce_a_token(timeout=5.0, strict=False):
+        raise RuntimeError("could not renew the ChatGPT credential")
+
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", cannot_produce_a_token)
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "could not renew" in result["error"]
