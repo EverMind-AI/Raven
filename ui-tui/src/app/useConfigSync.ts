@@ -143,10 +143,9 @@ export const applyDisplay = (
     // default comes from RAVEN_TUI_DISABLE_MOUSE, and normalizing a silent config
     // to `true` turned the environment's opt-out back on at startup.
     //
-    // Note the conditional is what makes that safe rather than the fetch: the
-    // request below asks `config.get {key:'full'}` and the handler reads `keys`
-    // (plural), so no display block is served at all today and this whole block
-    // runs on `{}`. The mismatch predates this file's changes -- see the PR.
+    // The conditional is what makes that safe, not the fetch: the request below
+    // asks `config.get {key:'full'}` while the handler reads `keys` (plural), so
+    // no display block is served today and this whole block runs on `{}`.
     ...(hasOwn(d, 'mouse_tracking') || hasOwn(d, 'tui_mouse') ? { mouseTracking: normalizeMouseTracking(d) } : {}),
     sections: resolveSections(d.sections),
     showCost: !!d.show_cost,
