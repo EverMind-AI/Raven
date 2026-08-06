@@ -34,14 +34,15 @@ class UnderstandMediaTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read and understand the contents of one or more attached files "
-            "or web pages that you cannot read directly — images (OCR / "
-            "description), PDFs, audio (transcription), Office documents "
+            "Extract the contents of attachments you cannot read directly, as "
+            "text: PDFs, audio (transcription), Office documents "
             "(docx/xlsx/pptx), and http(s) URLs (fetched and parsed by "
             "content type). Pass the file path(s) shown in the "
             "'[Attachment: ...]' notes of the user message, and/or http(s) "
-            "URLs. Returns the extracted content as text. Video is not "
-            "supported."
+            "URLs. For an image prefer read_file, which hands you the picture "
+            "itself; reach for this tool on an image only when you cannot see "
+            "images or when a scan needs OCR — it returns another model's "
+            "transcription, not the original. Video is not supported."
         )
 
     @property
