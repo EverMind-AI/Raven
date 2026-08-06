@@ -97,7 +97,7 @@ raven onboard
 raven
 ```
 
-Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
+Raven supports OpenRouter, OrcaRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
 OpenAI Codex OAuth, MiniMax Global/CN OAuth, and custom OpenAI-compatible endpoints.
 
 If setup fails or a provider is not ready, run:
