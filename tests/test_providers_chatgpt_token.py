@@ -179,6 +179,20 @@ def test_clearing_one_never_takes_a_credential_with_it(token_dir: Path) -> None:
     assert chatgpt_token.stored_credentials() == {"access_token": "live", "refresh_token": "r"}
 
 
+def test_clearing_one_leaves_the_credential_owner_only(token_dir: Path) -> None:
+    """This rewrite replaces the file rather than truncating it, so the mode the
+    credential had is on the inode being replaced -- the new one gets whatever the
+    umask says unless it is set here."""
+    import stat
+
+    auth = token_dir / "auth.json"
+    _write(token_dir, {"access_token": "live", "device_code_requested_at": 1.0})
+    auth.chmod(0o600)
+
+    assert chatgpt_token.clear_abandoned_device_code() is True
+    assert stat.S_IMODE(auth.stat().st_mode) == 0o600, "the rewrite widened the credential"
+
+
 def test_nothing_to_clear_leaves_the_file_alone(token_dir: Path) -> None:
     _write(token_dir, {"access_token": "live"})
     before = (token_dir / "auth.json").read_bytes()

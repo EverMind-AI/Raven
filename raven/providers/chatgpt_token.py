@@ -83,10 +83,13 @@ def clear_abandoned_device_code() -> bool:
     del data["device_code_requested_at"]
     if data:
         # Written through a temp file: this is the only copy of a credential, and
-        # what is left of it after dropping one key is still the whole record.
+        # what is left of it after dropping one key is still the whole record. The
+        # mode goes on the replacement, which is a new file under the umask -- the
+        # one this credential had is on the inode being replaced.
         path = auth_file()
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.chmod(0o600)
         os.replace(tmp, path)
     else:
         auth_file().unlink(missing_ok=True)

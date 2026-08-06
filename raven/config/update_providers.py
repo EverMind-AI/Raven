@@ -430,11 +430,11 @@ _COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
 def _oauth_token_path(provider_name: str) -> Path:
     """Resolve where this provider's credential lives under Raven's own directory.
 
-    One derivation for every family, because the alternative -- each client
-    keeping its own default -- is what wrote ``openai_codex`` under one name and
-    read it under another. The two families LiteLLM's drivers own are asked of
-    the module that speaks for that driver, so this cannot drift from what the
-    login writes.
+    Every family is asked of the module that writes it, so this cannot drift from
+    what a login leaves behind. Deriving it a second time here is what wrote
+    ``openai_codex`` under one name and read it under another -- and each family
+    has a way to override its directory, so a second derivation is wrong exactly
+    when a user has taken one.
     """
     from raven.config.paths import get_oauth_dir
 
@@ -445,6 +445,11 @@ def _oauth_token_path(provider_name: str) -> Path:
         from raven.providers.chatgpt_token import auth_file
 
         return auth_file()
+
+    if provider_name in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import token_path
+
+        return token_path("global" if provider_name == "minimax_global" else "cn")
 
     return get_oauth_dir() / f"{provider_name}.json"
 
@@ -493,11 +498,13 @@ def _oauth_credentials_present(provider_name: str) -> bool:
     return _oauth_token_path(provider_name).exists()
 
 
-def _oauth_credential_files(provider_name: str) -> list[Path]:
+def oauth_credential_files(provider_name: str) -> list[Path]:
     """Every file a sign-in for this provider can leave behind.
 
-    Disconnect has to clear all of them: Copilot's API key outlives the access
-    token it came from, so deleting the token alone leaves a working credential.
+    Two callers, one list. Disconnect has to clear all of them -- Copilot's API key
+    outlives the access token it came from, so deleting the token alone leaves a
+    working credential -- and a sign-in has to restrict all of them, for the same
+    reason in the other direction.
     """
     if provider_name == "github_copilot":
         token_dir = _copilot_token_dir()
@@ -761,7 +768,7 @@ def reset_provider(
 
                 delete_token("global" if name == "minimax_global" else "cn")
 
-            for stale in _oauth_credential_files(name):
+            for stale in oauth_credential_files(name):
                 stale.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
@@ -901,6 +908,9 @@ def test_provider(
     if spec and spec.name == "openai_codex":
         return _probe_codex_catalog(timeout_s=timeout_s)
 
+    if spec and spec.name == "github_copilot":
+        return _probe_copilot_seat(timeout_s=timeout_s, transport=transport)
+
     if spec and spec.is_oauth:
         try:
             if spec.name in {"minimax_global", "minimax_cn"}:
@@ -909,17 +919,6 @@ def test_provider(
                 token = get_token("global" if spec.name == "minimax_global" else "cn")
                 oauth_access = token.access
                 api_base = token.resource_url
-            elif spec.name == "github_copilot":
-                if not _oauth_credentials_present(spec.name):
-                    raise RuntimeError(
-                        f"no credentials found -- run `raven provider login {spec.name.replace('_', '-')}`"
-                    )
-                from raven.providers.litellm_setup import import_litellm
-
-                import_litellm()  # points the authenticator at raven's OAuth directory
-                from litellm.llms.github_copilot.authenticator import Authenticator
-
-                oauth_access = Authenticator().get_api_key()
             else:
                 # A new family must add its own branch: defaulting to another
                 # family's reads the wrong credential and can start its device flow.
@@ -986,6 +985,24 @@ def test_provider(
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
+    return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
+
+
+def _probe_models_endpoint(
+    url: str,
+    headers: dict[str, str],
+    *,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+) -> dict[str, Any]:
+    """GET a models endpoint and report the result in the probe's vocabulary.
+
+    What to ask and what to send is the caller's answer. A vendor that refuses the
+    request every other one accepts is the reason there is more than one caller;
+    how the answer is reported is the same for all of them.
+    """
+    import time
+
     start = time.monotonic()
     client_kwargs: dict[str, Any] = {"timeout": timeout_s}
     if transport is not None:
@@ -1036,6 +1053,81 @@ def test_provider(
         "model_ids": model_ids,
         "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}",
     }
+
+
+def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | None) -> dict[str, Any]:
+    """Verify a Copilot seat the way its backend accepts being asked.
+
+    Nothing about this one fits the generic probe. The endpoint arrives with the
+    credential rather than from the registry, so the generic path answered
+    "api_base is empty and provider has no default" without ever asking. And the
+    endpoint refuses a request carrying only an ``Authorization`` header: the
+    driver sends a set of editor headers on every call, which is what tells the
+    backend an editor is asking, so one header would report a working seat as a
+    bad credential. Both come from the driver rather than from a guess here.
+    """
+    if not _oauth_credentials_present("github_copilot"):
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no credentials found -- run `raven provider login github-copilot`",
+        }
+
+    from raven.providers.litellm_setup import import_litellm
+
+    import_litellm()  # points the authenticator at raven's OAuth directory
+    from litellm.llms.github_copilot.authenticator import Authenticator
+    from litellm.llms.github_copilot.common_utils import get_copilot_default_headers
+
+    try:
+        authenticator = Authenticator()
+        # Exchanges the stored device token for an API key when the cached one has
+        # expired, so this is where a revoked seat surfaces.
+        api_key = authenticator.get_api_key()
+        api_base = authenticator.get_api_base()
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
+
+    if not api_key:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no OAuth token stored",
+        }
+
+    if not api_base:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "the credential names no API endpoint -- run `raven provider login github-copilot`",
+        }
+
+    return _probe_models_endpoint(
+        api_base.rstrip("/") + "/models",
+        get_copilot_default_headers(api_key),
+        timeout_s=timeout_s,
+        transport=transport,
+    )
 
 
 def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:

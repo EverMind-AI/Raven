@@ -78,6 +78,15 @@ def provider_login(
     console.print(f"{__logo__} OAuth Login - {spec.label}\n")
     handler()
 
+    # Here rather than in each handler: two of the three drivers that write these
+    # files are LiteLLM's and create them under the process umask, and a family
+    # added later would be the third place to forget. What a sign-in can leave
+    # behind is already answered once, for disconnect.
+    from raven.config.paths import restrict_to_owner
+    from raven.config.update_providers import oauth_credential_files
+
+    restrict_to_owner(*oauth_credential_files(spec.name))
+
 
 def _open_device_page(url: str) -> None:
     """Hand the user a browser on the page their device code goes into.

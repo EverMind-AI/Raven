@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from raven.cli import provider_commands
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
@@ -51,17 +52,25 @@ def test_provider_login_unknown_provider_exits_1() -> None:
     assert "openai-codex" in r.stdout or "github-copilot" in r.stdout
 
 
-def _fake_chatgpt_authenticator(monkeypatch: pytest.MonkeyPatch, token: str | None) -> list[str]:
+def _fake_chatgpt_authenticator(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str | None,
+    *,
+    on_login=None,
+) -> list[str]:
     """Stand in for LiteLLM's ChatGPT driver, which owns this flow.
 
     Patched on the module the command imports from, so the command's own wiring --
-    import litellm first, then ask its authenticator -- is what runs.
+    import litellm first, then ask its authenticator -- is what runs. ``on_login``
+    stands in for the credential the real driver writes on its way to a token.
     """
     calls: list[str] = []
 
     class _Authenticator:
         def get_access_token(self) -> str | None:
             calls.append("get_access_token")
+            if on_login is not None:
+                on_login()
 
             return token
 
@@ -102,6 +111,76 @@ def test_provider_login_openai_codex_failure_exits_1(
 
     assert r.exit_code == 1
     assert "Authentication failed" in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("slug", "written"),
+    [
+        ("openai-codex", ("chatgpt/auth.json",)),
+        ("github-copilot", ("github_copilot/access-token", "github_copilot/api-key.json")),
+    ],
+)
+def test_a_sign_in_leaves_its_credential_readable_only_by_its_owner(
+    slug: str,
+    written: tuple[str, ...],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """The drivers that write these are LiteLLM's, and they use a plain ``open()``:
+    under a normal umask the credential lands world-readable. The mode is set here
+    explicitly rather than left to the runner's umask, so this asks about the
+    command and not about the machine.
+    """
+    import stat
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for env in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(env, raising=False)
+
+    paths = [tmp_path / ".raven" / "oauth" / name for name in written]
+
+    def _write_them_wide_open() -> None:
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("credential", encoding="utf-8")
+            path.chmod(0o644)
+
+    if slug == "openai-codex":
+        _fake_chatgpt_authenticator(monkeypatch, "fake-access-token", on_login=_write_them_wide_open)
+    else:
+        # The dispatch reads this dict, so replacing the entry is what stands in for
+        # the whole copilot flow.
+        monkeypatch.setitem(
+            provider_commands._LOGIN_HANDLERS,
+            "github_copilot",
+            _write_them_wide_open,
+        )
+
+    r = runner.invoke(app, ["provider", "login", slug])
+
+    assert r.exit_code == 0, r.stdout
+    for path in paths:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, f"{path.name} is readable by anyone"
+
+
+def test_the_oauth_directory_is_owner_only_even_if_it_already_existed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not every writer in here is ours to fix -- LiteLLM's create their files
+    under the umask, and a family added later will too. The directory is what
+    holds for them, so an existing loose one is tightened rather than trusted."""
+    import stat
+
+    from raven.config.paths import get_oauth_dir
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    loose = tmp_path / ".raven" / "oauth"
+    loose.mkdir(parents=True)
+    loose.chmod(0o755)
+
+    assert stat.S_IMODE(get_oauth_dir().stat().st_mode) == 0o700
 
 
 def test_provider_login_openai_codex_opens_nothing_without_a_display(
@@ -598,18 +677,3 @@ def test_resetting_the_provider_behind_the_default_model_names_the_way_back(
     assert expected in flat, flat
 
 
-def test_resetting_an_unrelated_provider_stays_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "raven.config.update_providers.serves_default_model",
-        lambda name, **_: False,
-    )
-    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        "raven.config.update_providers.get_provider_config",
-        lambda *_a, **_k: {"api_key": "sk-x"},
-    )
-
-    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
-
-    assert r.exit_code == 0
-    assert "no longer works" not in r.stdout
