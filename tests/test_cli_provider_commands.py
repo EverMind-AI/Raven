@@ -675,5 +675,3 @@ def test_resetting_the_provider_behind_the_default_model_names_the_way_back(
     flat = " ".join(r.stdout.split())
     assert "no longer works" in flat, flat
     assert expected in flat, flat
-
-

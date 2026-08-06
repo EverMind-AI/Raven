@@ -884,7 +884,6 @@ def test_provider(
     can mount an ``httpx.MockTransport`` without touching real network.
     """
     name = canonical_provider_name(name)
-    import time
 
     try:
         spec = _provider_spec(name)
