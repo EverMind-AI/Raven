@@ -18,6 +18,7 @@ EXPECTED_PROVIDER_NAMES = {
     "custom",
     "azure_openai",
     "openrouter",
+    "orcarouter",
     "aihubmix",
     "siliconflow",
     "volcengine",
@@ -39,9 +40,9 @@ EXPECTED_PROVIDER_NAMES = {
 }
 
 
-def test_registry_has_exactly_21_providers() -> None:
-    assert len(PROVIDERS) == 21
-    assert len(EXPECTED_PROVIDER_NAMES) == 21
+def test_registry_has_exactly_22_providers() -> None:
+    assert len(PROVIDERS) == 22
+    assert len(EXPECTED_PROVIDER_NAMES) == 22
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
@@ -192,6 +193,23 @@ def test_every_gateway_prefixes_the_models_it_routes() -> None:
         provider = LiteLLMProvider(api_key="K", provider_name=spec.name, default_model="probe-model")
         resolved = provider._resolve_model("probe-model")
         assert resolved.startswith(f"{spec.model_prefix}/"), f"{spec.name}: {resolved}"
+
+
+def test_orcarouter_key_prefix_wins_over_openrouter() -> None:
+    """``sk-orca-`` must be matched before the ``sk-or-`` prefix it contains.
+
+    OpenRouter's prefix is a substring of OrcaRouter's, so iteration order is
+    what decides which gateway a key routes to. OrcaRouter is registered before
+    OpenRouter on purpose.
+    """
+    from raven.providers.registry import find_gateway
+
+    orca = find_gateway(api_key="sk-orca-" + "a" * 32)
+    assert orca is not None
+    assert orca.name == "orcarouter"
+    plain = find_gateway(api_key="sk-or-" + "a" * 32)
+    assert plain is not None
+    assert plain.name == "openrouter"
 
 
 def test_a_failed_catalogue_read_is_not_cached_for_the_life_of_the_process() -> None:

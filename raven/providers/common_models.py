@@ -44,6 +44,16 @@ COMMON_MODELS: dict[str, list[str]] = {
         "openrouter/moonshotai/kimi-k2.6",
         "openrouter/qwen/qwen3.7-max",
     ],
+    # OrcaRouter is a gateway too: ids must carry the "orcarouter/" prefix so
+    # auto-detection routes them to the gateway instead of the upstream vendor.
+    "orcarouter": [
+        "orcarouter/anthropic/claude-opus-4.7",
+        "orcarouter/anthropic/claude-sonnet-4.6",
+        "orcarouter/anthropic/claude-haiku-4.5",
+        "orcarouter/openai/gpt-5.5",
+        "orcarouter/openai/gpt-4o",
+        "orcarouter/deepseek/deepseek-v4-flash",
+    ],
     "openai": [
         "openai/gpt-5.5",
         "openai/gpt-5.5-pro",

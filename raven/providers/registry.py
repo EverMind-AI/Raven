@@ -197,6 +197,27 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     # === Gateways (detected by api_key / api_base, not model name) =========
     # Gateways can route any model, so they win in fallback.
+    # OrcaRouter: global gateway, keys start with "sk-orca-". Registered
+    # BEFORE OpenRouter so the longer "sk-orca-" prefix wins the key-prefix
+    # detection loop over the generic "sk-or-" match.
+    ProviderSpec(
+        name="orcarouter",
+        keywords=("orcarouter",),
+        env_key="ORCAROUTER_API_KEY",
+        display_name="OrcaRouter",
+        via_driver="openai",  # → openai/{model} against https://api.orcarouter.ai/v1
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="sk-orca-",
+        detect_by_base_keyword="orcarouter",
+        default_api_base="https://api.orcarouter.ai/v1",
+        strip_model_prefix=True,  # orcarouter/anthropic/claude-* → openai/anthropic/claude-*
+        model_overrides=(),
+        supports_prompt_caching=False,
+        default_model="orcarouter/anthropic/claude-sonnet-4.6",
+    ),
     # OpenRouter: global gateway, keys start with "sk-or-"
     ProviderSpec(
         name="openrouter",

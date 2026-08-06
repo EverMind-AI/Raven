@@ -477,6 +477,7 @@ class ProvidersConfig(Base):
     minimax_global: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_cn: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
+    orcarouter: ProviderConfig = Field(default_factory=ProviderConfig)  # OrcaRouter API gateway
     ollama_chat: ProviderConfig = Field(
         default_factory=ProviderConfig,
         validation_alias=AliasChoices("ollama_chat", "ollamaChat", "ollama"),
