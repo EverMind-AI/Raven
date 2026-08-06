@@ -991,9 +991,10 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     # id can carry it -- and has to: written bare, "gpt-5.6-sol" is claimed by
     # OpenAI's keywords and the request goes somewhere it does not exist.
     #
-    # Azure is deliberately absent even though it also bypasses LiteLLM: it uses
-    # the id verbatim as a deployment name in the URL path, so a prefix would
-    # become part of the path.
+    # Azure is not in the list and does not reach this function either: an endpoint
+    # provider is locked in as ``is_custom`` and its model is persisted directly,
+    # so nothing here decides its spelling. It would need the opposite treatment
+    # anyway -- the id is used verbatim as a deployment name in a URL path.
     if spec.name in {"minimax_global", "minimax_cn", "openai_codex"}:
         public_prefix = public_model_prefix(spec)
         if model_id.startswith(f"{public_prefix}/"):
