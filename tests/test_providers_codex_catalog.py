@@ -142,3 +142,51 @@ def test_not_being_signed_in_is_an_empty_catalogue(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "empty"))
 
     assert codex_catalog.account_models() == ()
+
+
+def test_a_different_credential_is_a_different_answer(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Signing in as somebody else happens in another process, so there is no call
+    to invalidate on -- and serving the previous account's models to the next one
+    is what the picker would then offer, right where the sign-in drops the user."""
+    auth = tmp_path / "chatgpt" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth.parent))
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    auth.write_text('{"access_token": "first"}', encoding="utf-8")
+    _serve(monkeypatch, {"models": [{"slug": "first-account-model", "visibility": "list"}]})
+    assert codex_catalog.account_models() == ("first-account-model",)
+
+    # A second sign-in rewrites the file the driver owns.
+    auth.write_text('{"access_token": "second", "account_id": "other"}', encoding="utf-8")
+    _serve(monkeypatch, {"models": [{"slug": "second-account-model", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("second-account-model",)
+
+
+def test_a_report_does_not_leave_its_failure_behind(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``provider test`` asks strictly because it reports on this moment. The
+    picker asking next must not inherit that verdict: it would answer "no models"
+    for the rest of the failure window over a credential that works."""
+    auth = tmp_path / "chatgpt" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text('{"access_token": "live"}', encoding="utf-8")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(auth.parent))
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    def boom(url, **kwargs):
+        raise httpx.ConnectError("no network")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    with pytest.raises(httpx.ConnectError):
+        codex_catalog.account_models(strict=True)
+
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_models() == ("gpt-5.6-sol",), "the picker inherited a report's failure"
