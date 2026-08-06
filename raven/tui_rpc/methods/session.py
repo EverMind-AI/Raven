@@ -108,7 +108,13 @@ def _baseline_usage(
     provider table when LiteLLM lags (e.g. OpenRouter), else config default.
     Usage starts at zero for a fresh session by design. Resume reuses the
     zero baseline; counters refresh on the next turn.
+
+    Cost is the exception: on a subscription there is no per-token figure, so the
+    banner says so rather than opening at $0.00. Zero here read as free until the
+    first turn replaced it, which is the answer this session will never have.
     """
+    from raven.token_wise.pricing import is_plan_billed
+
     context_max = config.agents.defaults.context_window_tokens
     model = getattr(agent_loop, "model", None)
     if model:
@@ -118,7 +124,7 @@ def _baseline_usage(
     return {
         "input": 0,
         "output": 0,
-        "cost_usd": 0.0,
+        "cost_usd": None if model and is_plan_billed(str(model)) else 0.0,
         "calls": 0,
         "context_max": context_max,
         "context_used": 0,

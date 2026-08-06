@@ -225,6 +225,15 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       return
     }
 
+    // A child killed by a signal reports no exit code, which is what Ctrl+C looks
+    // like from here -- and this screen promises that Ctrl+C cancels. Rendering it
+    // as `exited with code null` told the user their own key press was a fault.
+    if (result.code === null) {
+      setLoginPhase('idle')
+
+      return
+    }
+
     if (result.code !== 0) {
       setLoginError(`\`raven ${args.join(' ')}\` exited with code ${result.code}`)
       setLoginPhase('idle')

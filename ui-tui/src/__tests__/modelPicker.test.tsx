@@ -483,6 +483,27 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('treats a signal-killed login as the cancel it promises, not a fault', async () => {
+    // Ctrl+C during the flow kills the child, which reports no exit code. The
+    // screen says Ctrl+C cancels; reporting `exited with code null` made the
+    // user's own key press look like a failure.
+    const h = mount([anthropic, oauthProvider], undefined, { launch: { code: null } })
+    await delay(60)
+
+    await h.type(DOWN)
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await waitForFrame(h, 'Sign in to MiniMax Global?')
+
+    await h.type(ENTER)
+    await delay(60)
+
+    expect(h.frame()).not.toContain('exited with code')
+    expect(h.frame()).toContain('Sign in to MiniMax Global?')
+
+    h.unmount()
+  })
+
   it('returns from the sign-in screen to the list it was opened from', async () => {
     const h = mount([anthropic, oauthProvider])
     await delay(60)

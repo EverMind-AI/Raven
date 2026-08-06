@@ -126,8 +126,13 @@ def _numeric(entry: dict | None, *fields: str) -> float | None:
     return None
 
 
-def _is_plan_billed(model: str) -> bool:
-    """Is this model's provider billed by subscription rather than per token?"""
+def is_plan_billed(model: str) -> bool:
+    """Is this model's provider billed by subscription rather than per token?
+
+    Asked wherever a dollar figure is about to be reported, because on a
+    subscription there is no per-token figure to report -- not even zero, which
+    reads as free.
+    """
     from raven.providers.registry import find_by_model
 
     spec = find_by_model(model)
@@ -352,7 +357,7 @@ def estimate_cost_usd(
     pay-as-you-go rate the user is not paying -- $2.50 per million for a Copilot
     seat. Callers already degrade on None; the tokens are still counted.
     """
-    if _is_plan_billed(model):
+    if is_plan_billed(model):
         return None
 
     rates = _try_litellm_rates(model, input_tokens, output_tokens)
