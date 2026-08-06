@@ -437,7 +437,9 @@ def register(app: typer.Typer) -> None:
                     # third-party sub-agent config to this live agent loop.
                     from raven.web_rpc.methods_config import register_config_methods
 
-                    register_config_methods(web_dispatcher, agent=agent, cron=cron, config=config)
+                    register_config_methods(
+                        web_dispatcher, agent=agent, cron=cron, config=config, channel_manager=channels
+                    )
                     web_server.bind(web_dispatcher)
 
                     # Fan run_subagent_dag progress (dag_run_started / _node_updated

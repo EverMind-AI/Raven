@@ -246,12 +246,31 @@ export const ravenConfigApi = {
 
 	removeCron: (jobId: string) => client.delete<{ removed: boolean }>(`/raven/cron/${jobId}`),
 
-	listChannels: () => client.get<{ channels: RavenChannel[] }>('/raven/channels'),
+	// `silent` suppresses the error toast, for callers that poll this as a
+	// liveness probe (e.g. waiting out a gateway restart).
+	listChannels: (opts?: { silent?: boolean }) =>
+		client.get<{ channels: RavenChannel[] }>('/raven/channels', undefined, opts),
 
 	setChannel: (name: string, fields: Record<string, string>) =>
 		client.put<{ ok: boolean; restart_required?: boolean }>(`/raven/channels/${name}`, {
 			fields,
 		}),
+
+	// Re-exec the gateway to apply restart-required config (channels). The gateway
+	// drops every connection when it restarts, so callers should reconnect after.
+	restartGateway: () => client.post<{ ok: boolean }>('/raven/gateway/restart', {}),
+
+	// The pending login QR (PNG data URI) for a QR-login channel (weixin/whatsapp),
+	// or null when nothing is pending / already connected.
+	// `qr` is a PNG data URI; `qr_text` carries the raw payload instead when the
+	// gateway has no `qrcode` package to rasterise with.
+	channelQr: (name: string) =>
+		client.get<{
+			qr: string | null;
+			qr_text?: string | null;
+			connected: boolean;
+			running: boolean;
+		}>(`/raven/channels/${name}/qr`),
 
 	skills: {
 		get: () => client.get<{ skillforge: RavenSkillForge }>('/raven/skills'),

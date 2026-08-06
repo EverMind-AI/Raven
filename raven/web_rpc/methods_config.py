@@ -10,10 +10,43 @@ Registered on the web dispatcher via ``register_config_methods(dispatcher, agent
 
 from __future__ import annotations
 
+import asyncio
+import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
+
+
+_pending_tasks: set[asyncio.Task] = set()
+
+
+def _reexec_process() -> None:  # pragma: no cover - replaces the running process image
+    """Re-run the gateway's own argv in place, reloading config (and thus the IM
+    channels). Mirrors the ``/restart`` channel command in gateway_commands."""
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+def _render_qr_png(text: str) -> str | None:
+    """A scan payload as a PNG data URI, so the web UI shows the login QR with no
+    client-side QR library.
+
+    ``qrcode`` only ships with the QR-login channel extras, so an install that
+    enabled such a channel some other way still has to degrade rather than 500:
+    None tells the caller to fall back to handing the raw payload to the client.
+    """
+    import base64
+    import io
+
+    try:
+        import qrcode
+    except ImportError:
+        return None
+
+    buf = io.BytesIO()
+    qrcode.make(text).save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _serialize_cron_job(job: Any) -> dict:
@@ -32,7 +65,12 @@ def _serialize_cron_job(job: Any) -> dict:
 
 
 def register_config_methods(
-    dispatcher: "Dispatcher", *, agent: Any = None, cron: Any = None, config: Any = None
+    dispatcher: "Dispatcher",
+    *,
+    agent: Any = None,
+    cron: Any = None,
+    config: Any = None,
+    channel_manager: Any = None,
 ) -> None:
     """Register Raven config-admin methods on the dispatcher.
 
@@ -241,6 +279,53 @@ def register_config_methods(
 
     dispatcher.register("raven.channels.list", _channels_list)
     dispatcher.register("raven.channels.set", _channels_set)
+
+    async def _gateway_restart(params: dict) -> dict:
+        """Re-exec the gateway to apply restart-required config (channels/skills).
+
+        Replies before the exec so the caller learns the restart was accepted; the
+        short delay lets that reply flush over the web channel before the process
+        image is replaced (which drops every connection).
+        """
+
+        async def _do() -> None:
+            await asyncio.sleep(0.5)
+            _reexec_process()
+
+        # Held in a module-level set: the loop keeps only a weak reference, so a
+        # task that is merely local can be collected before it ever fires.
+        task = asyncio.create_task(_do())
+        _pending_tasks.add(task)
+        task.add_done_callback(_pending_tasks.discard)
+        return {"ok": True}
+
+    dispatcher.register("raven.gateway.restart", _gateway_restart)
+
+    async def _channels_qr(params: dict) -> dict:
+        """Login QR for a QR-login channel (weixin/whatsapp) as a PNG data URI,
+        plus whether the account is actually paired. Empty when there is no live
+        manager, no such channel, or nothing pending (e.g. already paired).
+
+        ``connected`` reads the adapter's own login state, never "the task is
+        running and no QR is pending yet" -- both adapters flip ``_running``
+        before the first QR is fetched, so inferring it would report an unpaired
+        channel as connected during that window and stop the UI from polling.
+        ``qr_text`` carries the raw payload for the client to render when the
+        gateway has no ``qrcode`` to rasterise with.
+        """
+        name = params.get("name", "")
+        ch = channel_manager.get_channel(name) if channel_manager is not None else None
+        qr = getattr(ch, "pending_qr", None) if ch is not None else None
+        running = ch is not None and bool(getattr(ch, "is_running", False))
+        png = _render_qr_png(qr) if qr else None
+        return {
+            "qr": png,
+            "qr_text": qr if qr and png is None else None,
+            "connected": running and bool(getattr(ch, "connected", False)),
+            "running": running,
+        }
+
+    dispatcher.register("raven.channels.qr", _channels_qr)
 
     # Skills (SkillForge). Reuses raven.config.update_skills. Config is applied at
     # gateway startup, so a change takes effect on the next gateway restart.
