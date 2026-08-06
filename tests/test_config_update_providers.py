@@ -772,6 +772,75 @@ def test_probing_copilot_reads_its_own_credential_not_another_providers(
     assert "github-copilot" in result["error"]
 
 
+def _seed_copilot_credential(monkeypatch: pytest.MonkeyPatch, *, api_base: str | None) -> None:
+    """A signed-in seat: a device token on disk, plus what the driver reads from
+    the API key it exchanges it for."""
+    from raven.config.update_providers import _copilot_token_dir
+
+    token_dir = _copilot_token_dir()
+    token_dir.mkdir(parents=True, exist_ok=True)
+    (token_dir / "access-token").write_text("gho_device_token", encoding="utf-8")
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        lambda self: "tid=copilot-api-key",
+    )
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_base",
+        lambda self: api_base,
+    )
+
+
+def test_probing_copilot_asks_the_endpoint_the_credential_names(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A signed-in seat has to be able to come back ok.
+
+    The endpoint is not in the registry -- it arrives with the credential -- and
+    the backend refuses a request carrying only an ``Authorization`` header, so
+    the generic probe could reach neither: it answered "api_base is empty" before
+    asking, and asking its way would have read a working seat as a bad key.
+    """
+    _seed_copilot_credential(monkeypatch, api_base="https://api.githubcopilot.com")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+
+        return httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet-4.5"}]})
+
+    result = probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True, result
+    assert result["models_count"] == 2
+    assert result["model_ids"] == ["gpt-4o", "claude-sonnet-4.5"]
+    assert str(seen[0].url) == "https://api.githubcopilot.com/models", "asked the generic /v1/models shape"
+    assert seen[0].headers["authorization"] == "Bearer tid=copilot-api-key"
+    # The headers that tell the backend an editor is asking. Without them a valid
+    # seat is refused, which the probe would report as a bad credential.
+    assert seen[0].headers["copilot-integration-id"] == "vscode-chat"
+    assert seen[0].headers["editor-version"].startswith("vscode/")
+
+
+def test_a_copilot_credential_without_an_endpoint_is_a_credential_problem(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint lives in the API key file, so its absence is that file being
+    unusable -- not a provider missing configuration the user could supply."""
+    _seed_copilot_credential(monkeypatch, api_base=None)
+
+    def never(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("a request went out with no endpoint")
+
+    result = probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(never))
+
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login github-copilot" in result["error"]
+
+
 @pytest.mark.parametrize(
     "slug",
     [p.name for p in __import__("raven.providers.registry", fromlist=["PROVIDERS"]).PROVIDERS if p.is_oauth],
