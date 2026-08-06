@@ -178,6 +178,16 @@ def build_raven_config_router() -> APIRouter:
         except Exception as exc:  # unknown field / validation / transport
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.post("/gateway/restart")
+    async def restart_gateway() -> dict:
+        client = await GatewayClient.shared()
+        return await client.call("raven.gateway.restart", {})
+
+    @router.get("/channels/{name}/qr")
+    async def channel_qr(name: str) -> dict:
+        client = await GatewayClient.shared()
+        return await client.call("raven.channels.qr", {"name": name})
+
     @router.get("/sessions/{session_key}/model")
     async def get_session_model(session_key: str) -> dict:
         client = await GatewayClient.shared()

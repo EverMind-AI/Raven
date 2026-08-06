@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -948,3 +950,184 @@ async def test_dag_reads_without_a_dag_tool_error_rather_than_returning_empty(me
     register_config_methods(d, agent=None)
     resp = await _dispatch(d, method, {"run_id": _ReadableDagTool.RUN_ID, "node": "node-a"})
     assert "error" in resp
+
+
+async def test_gateway_restart_replies_ok_then_schedules_reexec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """raven.gateway.restart acknowledges immediately, then re-execs behind a
+    short delay (so the reply flushes before the process image is replaced)."""
+    import raven.web_rpc.methods_config as mc
+
+    calls: list[bool] = []
+    monkeypatch.setattr(mc, "_reexec_process", lambda: calls.append(True))
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    resp = await _dispatch(d, "raven.gateway.restart", {})
+    assert resp["result"] == {"ok": True}
+    assert calls == []  # not yet -- it is deferred
+
+    await asyncio.sleep(0.6)
+    assert calls == [True]
+
+
+async def test_channels_qr_renders_pending_login_code() -> None:
+    """raven.channels.qr renders a channel's pending login QR to a PNG data URI,
+    and reports connected from the adapter's own login flag."""
+
+    class _Ch:
+        pending_qr: str | None = "https://example.com/login?token=abc"
+        is_running = True
+        connected = False
+
+    class _Mgr:
+        def get_channel(self, name: str):
+            return _Ch() if name == "weixin" else None
+
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_Mgr())
+
+    resp = await _dispatch(d, "raven.channels.qr", {"name": "weixin"})
+    r = resp["result"]
+    assert r["qr"].startswith("data:image/png;base64,")
+    assert r["qr_text"] is None  # rasterised, so no raw-payload fallback
+    assert r["connected"] is False  # a QR is pending -> not paired yet
+    assert r["running"] is True
+
+    _Ch.pending_qr = None
+    _Ch.connected = True  # paired
+    resp = await _dispatch(d, "raven.channels.qr", {"name": "weixin"})
+    assert resp["result"] == {"qr": None, "qr_text": None, "connected": True, "running": True}
+
+    resp = await _dispatch(d, "raven.channels.qr", {"name": "nope"})
+    assert resp["result"] == {"qr": None, "qr_text": None, "connected": False, "running": False}
+
+
+async def test_channels_qr_is_not_connected_before_the_first_qr_arrives() -> None:
+    """Both QR adapters flip _running before fetching the first QR. Reporting
+    connected off "running and no QR pending" would call that window paired and
+    stop the UI polling, so it has to come from the adapter's login flag."""
+
+    class _Ch:
+        pending_qr = None  # not fetched yet
+        is_running = True  # start() already set this
+        connected = False  # but nobody has scanned anything
+
+    class _Mgr:
+        def get_channel(self, name: str):
+            return _Ch()
+
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_Mgr())
+
+    resp = await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"})
+    assert resp["result"]["connected"] is False
+    assert resp["result"]["running"] is True
+
+
+async def test_channels_qr_falls_back_to_raw_payload_without_qrcode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qrcode ships only with the QR-login extras, so a gateway without it must
+    hand the client the raw payload instead of raising ModuleNotFoundError."""
+    from raven.web_rpc import methods_config as mc
+
+    monkeypatch.setattr(mc, "_render_qr_png", lambda text: None)
+
+    class _Ch:
+        pending_qr = "https://example.com/login?token=abc"
+        is_running = True
+        connected = False
+
+    class _Mgr:
+        def get_channel(self, name: str):
+            return _Ch()
+
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_Mgr())
+
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "weixin"}))["result"]
+    assert r["qr"] is None
+    assert r["qr_text"] == "https://example.com/login?token=abc"
+
+
+# ---------------------------------------------------------------------------
+# raven.channels.qr against the real adapters. The RPC reaches into the channel
+# by attribute name (pending_qr / is_running / connected), and a fake channel
+# would keep every assertion green through a rename on the adapter side. These
+# drive the adapters' own code paths so the contract fails loudly instead.
+# ---------------------------------------------------------------------------
+
+
+async def test_channels_qr_reads_a_real_whatsapp_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json as _json
+
+    from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
+    from raven.config.schema import WhatsAppConfig
+
+    monkeypatch.setattr("raven.config.paths.get_runtime_subdir", lambda name: tmp_path / name)
+    ch = WhatsAppChannel(WhatsAppConfig(enabled=True))
+    ch._running = True
+
+    class _Mgr:
+        def get_channel(self, name: str):
+            return ch
+
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_Mgr())
+
+    # Nothing pending yet, and the task being up is not being paired.
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
+    assert r == {"qr": None, "qr_text": None, "connected": False, "running": True}
+
+    await ch._handle_bridge_message(_json.dumps({"type": "qr", "qr": "2@abc"}))
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
+    assert r["qr"].startswith("data:image/png;base64,")
+    assert r["connected"] is False
+
+    await ch._handle_bridge_message(_json.dumps({"type": "status", "status": "connected"}))
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "whatsapp"}))["result"]
+    assert r == {"qr": None, "qr_text": None, "connected": True, "running": True}
+
+
+async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
+    from unittest.mock import AsyncMock
+
+    from raven.channels.adapters.weixin.channel import WeixinChannel
+    from raven.config.schema import WeixinConfig
+
+    ch = WeixinChannel(WeixinConfig())
+    ch._running = True
+    ch._save_state = lambda: None
+    ch._print_qr = lambda url: None
+
+    class _Mgr:
+        def get_channel(self, name: str):
+            return ch
+
+    d = Dispatcher()
+    register_config_methods(d, channel_manager=_Mgr())
+
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "weixin"}))["result"]
+    assert r == {"qr": None, "qr_text": None, "connected": False, "running": True}
+
+    # Park the login flow on "waiting to be scanned" and read the RPC mid-flight.
+    ch._fetch_qr = AsyncMock(return_value=("qid", "https://scan/1"))
+    ch._get = AsyncMock(return_value={"status": "waiting"})
+    login = asyncio.create_task(ch._qr_login())
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if ch.pending_qr:
+            break
+    r = (await _dispatch(d, "raven.channels.qr", {"name": "weixin"}))["result"]
+    assert r["qr"].startswith("data:image/png;base64,")
+    assert r["connected"] is False
+
+    ch._running = False  # unwind the poll loop
+    login.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await login

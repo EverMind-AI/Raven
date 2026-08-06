@@ -65,7 +65,9 @@ channel-slack = [
     "slackify-markdown>=0.2.0,<1.0.0",
 ]
 channel-discord = ["websockets>=16.0,<17.0"]
-channel-whatsapp = []
+channel-whatsapp = [
+    "qrcode[pil]>=8.0",
+]
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
     "mistune>=3.0.0,<4.0.0",
