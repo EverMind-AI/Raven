@@ -546,3 +546,62 @@ def test_resetting_an_unrelated_provider_stays_quiet(
 
     assert r.exit_code == 0
     assert "no longer works" not in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("slug", "expected"),
+    [
+        pytest.param("openai-codex", "raven provider login openai-codex", id="oauth-signs-in"),
+        pytest.param("openrouter", "raven provider set openrouter --api-key", id="key-takes-a-key"),
+        pytest.param("hosted-vllm", "raven provider set hosted-vllm --api-base", id="local-takes-an-address"),
+        pytest.param(
+            "azure-openai",
+            "raven provider set azure-openai --api-key <KEY> --api-base",
+            id="endpoint-takes-both",
+        ),
+    ],
+)
+def test_resetting_the_provider_behind_the_default_model_names_the_way_back(
+    slug: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model id survives the reset and still names this provider, so the next
+    command finds a default nothing can answer. The way back differs by credential
+    kind: `provider login` exits 1 for anyone who is not an OAuth family, and a
+    local deployment has no key to give -- so a single spelling sent four of them
+    to a flag that does nothing.
+    """
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: True,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", slug, "-y"])
+
+    assert r.exit_code == 0
+    flat = " ".join(r.stdout.split())
+    assert "no longer works" in flat, flat
+    assert expected in flat, flat
+
+
+def test_resetting_an_unrelated_provider_stays_quiet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: False,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {"api_key": "sk-x"},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
+
+    assert r.exit_code == 0
+    assert "no longer works" not in r.stdout

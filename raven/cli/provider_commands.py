@@ -504,6 +504,12 @@ def _register_config_commands(app: typer.Typer) -> None:
         non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
 
         from raven.config.update_providers import serves_default_model
+        from raven.providers.registry import (
+            CRED_ENDPOINT,
+            CRED_LOCAL,
+            CRED_OAUTH,
+            credential_kind,
+        )
 
         # Asked before the confirmation, because it is the part worth confirming:
         # the model id survives the reset and still names this provider, so the
@@ -526,8 +532,23 @@ def _register_config_commands(app: typer.Typer) -> None:
         reset_provider(name)
         console.print(f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)")
         if serves_default:
+            # By credential kind, because each kind is set up by a different
+            # command and a different field: `provider login` exits 1 for anyone
+            # who is not an OAuth family, and a local deployment has no key to
+            # give -- naming the wrong one sends the user to a command that
+            # refuses them or a flag that does nothing.
+            dashed = name.replace("_", "-")
+            kind = credential_kind(name)
+            if kind == CRED_OAUTH:
+                back = f"raven provider login {dashed}"
+            elif kind == CRED_LOCAL:
+                back = f"raven provider set {dashed} --api-base <URL>"
+            elif kind == CRED_ENDPOINT:
+                back = f"raven provider set {dashed} --api-key <KEY> --api-base <URL>"
+            else:
+                back = f"raven provider set {dashed} --api-key <KEY>"
             console.print("  [yellow]Your default model is served by this provider and no longer works.[/yellow]")
-            console.print("  [dim]Pick another with /model in the TUI, or run `raven provider login` for it.[/dim]")
+            console.print(f"  [dim]Pick another with /model in the TUI, or set it up again: {back}[/dim]")
 
     @app.command("show")
     def provider_show_cmd(

@@ -1591,6 +1591,11 @@ def _resolve_model_with_test(
                         if credential_kind(provider) == CRED_LOCAL
                         else (_t("Re-enter key", "重新填 Key"), "rekey")
                     ),
+                    # Also retry, because this branch takes the failures that
+                    # cannot be sorted: a credential the account refused and a
+                    # refresh that could not reach the network arrive as the same
+                    # thing, and only one of them is fixed by signing in again.
+                    (_t("Retry", "重试"), "retry"),
                     (_t("Switch provider", "更换服务商"), "switch"),
                     (_t("Continue anyway", "仍然继续"), "continue"),
                 ]
@@ -4973,16 +4978,20 @@ def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
         return
 
     model = (_load_raw_config().get("agents", {}) or {}).get("defaults", {}).get("model")
+    # Says what was found, not why: the provider it resolves to may have no
+    # credentials, or the id may resolve to a provider that never served it (a
+    # deployment name carrying another vendor's keyword does that). Naming a cause
+    # we have not established sends the user to fix the wrong thing.
     console.print(
         _t(
-            f"  [yellow]The default model ({model}) is served by a provider with no credentials.[/yellow]",
-            f"  [yellow]默认模型({model})的服务商没有凭据。[/yellow]",
+            f"  [yellow]No usable provider resolves the default model ({model}).[/yellow]",
+            f"  [yellow]默认模型({model})解析不到可用的服务商。[/yellow]",
         )
     )
     console.print(
         _t(
-            "  [dim]Pick another with /model in the TUI, or sign in to that provider again.[/dim]",
-            "  [dim]在 TUI 里用 /model 换一个,或重新登录那个服务商。[/dim]",
+            "  [dim]Choose one that works: `raven tui` then /model. Or `raven onboard` to set this up again.[/dim]",
+            "  [dim]换一个能用的:`raven tui` 后按 /model。或用 `raven onboard` 重新配置。[/dim]",
         )
     )
 
