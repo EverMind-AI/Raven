@@ -232,7 +232,26 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       return
     }
 
-    await loadOptions()
+    const fresh = await loadOptions()
+    const signedIn = fresh?.find(p => p.slug === target.slug)
+
+    // A sign-in that took moves its provider onto the configured list, so this
+    // goes where the provider now is -- the same landing the key screen gives a
+    // provider it just set up. Staying put instead left the user to press Esc
+    // into the list the provider had just left.
+    if (signedIn?.authenticated) {
+      setFromAddList(false)
+      setProviderIdx(Math.max(0, fresh!.filter(p => p.authenticated !== false).indexOf(signedIn)))
+      setLoginTarget(null)
+      setLoginPhase('idle')
+      setStage('model')
+      setModelIdx(0)
+
+      return
+    }
+
+    // Signed in and still no credentials, or the list could not be refetched:
+    // both are reported on this screen rather than navigated away from.
     setLoginPhase('done')
   }
 

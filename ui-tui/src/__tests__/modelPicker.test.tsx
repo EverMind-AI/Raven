@@ -417,7 +417,7 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
-  it('refetches after a successful sign-in and stays on the sign-in screen', async () => {
+  it('lands on the signed-in provider after a sign-in that took', async () => {
     const h = mount([anthropic, oauthProvider], undefined, {
       nextProviders: [anthropic, { ...oauthProvider, authenticated: true, models: ['MiniMax-M2'], total_models: 1 }]
     })
@@ -430,14 +430,17 @@ describe('ModelPicker', () => {
     expect(h.optionsCalls()).toBe(1)
 
     await h.type(ENTER)
-    await waitForFrame(h, 'signed in.')
+    await waitForFrame(h, 'step 2/2')
 
-    // The refetch happened; the stage did not move. Reading the fresh
-    // authenticated flag off the closure instead of the response is what used to
-    // report every provider as still missing its credentials.
+    // Where the provider now is, which is not where it was: staying on the
+    // sign-in screen left the user to press Esc into the list it had just left.
+    // The model is asserted rather than the title -- it belongs to that provider
+    // alone, so it cannot come from whoever took the vacated row.
     expect(h.optionsCalls()).toBe(2)
-    expect(h.frame()).not.toContain('step 2/2')
-    expect(h.frame()).not.toContain('still finds no credentials')
+    await h.type(ENTER)
+    await delay(30)
+
+    expect(h.onSelect).toHaveBeenCalledWith('MiniMax-M2', 'minimax_global')
 
     h.unmount()
   })
@@ -508,15 +511,14 @@ describe('ModelPicker', () => {
     await waitForFrame(h, 'Sign in to MiniMax Global?')
 
     await h.type(ENTER)
-    await waitForFrame(h, 'signed in.')
-
-    await h.type(ESCAPE)
-    await delay(30)
+    await waitForFrame(h, 'step 2/2')
 
     // Asserted through the launcher rather than the screen: `frame()` accumulates
     // and the fake terminal drops the odd character, so a title assertion matches
-    // nothing either way. Two Enters from the configured list pick a model; two
-    // from the add list start a login for whoever took the vacated index.
+    // nothing either way. Backing out of the model list reaches the configured
+    // list; a cursor left pointing into the list the provider vacated would start
+    // a login for whoever took its index instead.
+    await h.type(ESCAPE)
     await h.type(ENTER)
     await h.type(ENTER)
     await delay(60)
