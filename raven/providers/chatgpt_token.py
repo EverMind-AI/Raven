@@ -69,8 +69,7 @@ def clear_abandoned_device_code() -> bool:
     from the last five minutes as a flow already in progress: the next sign-in
     waits for that one to land instead of starting its own, printing nothing while
     it does. After an abandoned attempt -- the window closed, the code expired --
-    that turns ``provider login`` into five silent minutes, and the picker has
-    handed the terminal over for all of them.
+    that turns ``provider login`` into five silent minutes.
     """
     data = _read_auth_file()
     if not data or "device_code_requested_at" not in data:
@@ -97,7 +96,8 @@ def access_token_and_account() -> tuple[str, str | None]:
     having no credential at all: a stored refresh token the server has since
     revoked gets a logged warning from the driver and then the same device flow,
     underneath whatever request asked for the token. So the two entry points to it
-    are stubbed out for this call, leaving refresh as the only way it can succeed.
+    are stubbed out for this call, leaving the stored token and a refresh of it as
+    the only ways it can succeed.
     """
     from raven.providers.litellm_setup import import_litellm
 

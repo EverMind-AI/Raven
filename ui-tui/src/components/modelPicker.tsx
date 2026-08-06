@@ -149,6 +149,12 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
   const onAddRow = stage === 'provider' && providerIdx === configured.length
   const provider = onAddRow ? undefined : rowsForStage[providerIdx]
   const models = provider?.models ?? []
+  // The sign-in screen and the way back out both ask this, and both have to ask
+  // it of the target rather than of the row under the cursor: a login that landed
+  // moves its provider off the unconfigured list the cursor points into.
+  const targetStillUnauthenticated = loginTarget
+    ? providers.find(p => p.slug === loginTarget.slug)?.authenticated === false
+    : provider?.authenticated === false
   const names = useMemo(() => providerDisplayNames(rowsForStage), [rowsForStage])
 
   const back = () => {
@@ -171,13 +177,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
     if (stage === 'model' || stage === 'key' || stage === 'disconnect' || stage === 'oauthLogin') {
       // Backing out of a set-up that did not happen returns to the list it was
       // opened from, rather than one level further out than the user asked for.
-      // The sign-in screen asks about its own target: a successful login moves
-      // that provider off the unconfigured list, so reading the row under the
-      // cursor answers for whichever provider slid into its index.
-      const settled = loginTarget
-        ? providers.find(p => p.slug === loginTarget.slug)?.authenticated === false
-        : provider?.authenticated === false
-      const toAddList = (stage === 'key' || stage === 'oauthLogin') && fromAddList && settled
+      const toAddList = (stage === 'key' || stage === 'oauthLogin') && fromAddList && targetStillUnauthenticated
       setStage(toAddList ? 'addProvider' : 'provider')
       setFromAddList(toAddList)
 
@@ -772,8 +772,6 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
   // ── OAuth sign-in stage ──────────────────────────────────────────────
   if (stage === 'oauthLogin' && loginTarget) {
     const command = `raven provider login ${loginTarget.slug.replace(/_/g, '-')}`
-    const stillUnauthenticated = providers.find(p => p.slug === loginTarget.slug)?.authenticated === false
-
     return (
       <Box flexDirection="column" width={width}>
         <Text bold color={t.color.accent} wrap="truncate-end">
@@ -809,7 +807,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
           <Text color={t.color.muted} wrap="truncate-end">
             signing in…
           </Text>
-        ) : loginPhase === 'done' && stillUnauthenticated ? (
+        ) : loginPhase === 'done' && targetStillUnauthenticated ? (
           <Text color={t.color.label} wrap="truncate-end">
             sign-in ended, but Raven still finds no credentials for it.
           </Text>

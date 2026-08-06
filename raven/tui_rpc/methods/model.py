@@ -141,9 +141,8 @@ async def _entry_off_loop(slug: str, current_provider: str | None) -> dict[str, 
     Reading the candidate chain imports LiteLLM the first time, which takes
     seconds -- long enough to stall this session's token stream. Every handler
     that returns a row goes through here rather than warming the cache in one
-    and reading it inline in the others: the cache is cold whenever a first read
-    failed (failures are deliberately not cached), and handler order is up to
-    the client.
+    and reading it inline in the others: a first read that failed leaves nothing
+    to reuse, and handler order is up to the client.
     """
     return await asyncio.to_thread(_build_provider_entry, slug, current_provider=current_provider)
 

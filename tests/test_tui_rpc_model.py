@@ -32,10 +32,10 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
     monkeypatch.setattr("raven.config.loader._current_config_path", None)
     # OAuth credentials live under ``~/.raven`` too, so the patched home covers
-    # them -- but the two environment overrides jump out of it, and left set they
-    # decide whether a provider reports itself authenticated.
-    monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
-    monkeypatch.delenv("OAUTH_CLI_KIT_TOKEN_PATH", raising=False)
+    # them -- but each family prefers an environment override when one is set, and
+    # the suite-wide fixture sets all of them.
+    for name in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
     return tmp_path
 
 

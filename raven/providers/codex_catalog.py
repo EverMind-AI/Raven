@@ -24,8 +24,8 @@ CLIENT_VERSION = "0.0.0"
 
 _CACHE_TTL_SECONDS = 300
 
-#: Shorter for a failure than for an answer: being offline is a state that changes,
-#: while an account's entitlements are not going to.
+#: Shorter for a failure than for an answer: not being signed in yet, and being
+#: offline, are states that change -- an account's entitlements are not.
 _FAILURE_TTL_SECONDS = 30
 
 _cache: tuple[float, tuple[str, ...]] | None = None

@@ -51,22 +51,13 @@ class ProviderSpec:
     # A vendor LiteLLM merely spells differently is NOT this: adopt LiteLLM's
     # spelling as `name` and keep ours in `name_aliases` (see hosted_vllm).
     via_driver: str = ""
-    # Prefix LiteLLM's metadata table files this provider's models under, when
-    # that is not the routing prefix. Routing says where a request goes;
-    # metadata says what the model is, and the table is keyed by the vendor's own
-    # spelling -- so a provider we reach by region or by subscription
-    # ("minimax-global/MiniMax-M3") has to name the entry that holds its price
-    # and context window ("minimax/MiniMax-M3") or every lookup misses. None
-    # means the two coincide, which is the case wherever `name` is LiteLLM's own
-    # spelling.
+    # Prefix LiteLLM's metadata table files this provider's models under, when it
+    # differs from the routing prefix ("minimax-global/MiniMax-M3" is priced at
+    # "minimax/MiniMax-M3"). None: the two coincide.
     metadata_prefix: str | None = None
-    # What the user is billed on. A plan -- a ChatGPT subscription, a Copilot
-    # seat, a MiniMax coding plan -- is not billed per token, so no per-token
-    # figure describes what a call cost: LiteLLM files those models at zero,
-    # which read as "unknown" and sent the estimate on to a live catalogue that
-    # answered with the pay-as-you-go rate the user is not paying. Declared
-    # rather than inferred from ``is_oauth``: OAuth is how you authenticate, not
-    # how you are charged (Vertex is OAuth and metered).
+    # What the user is billed on. "plan" is a subscription (ChatGPT, a Copilot
+    # seat): no per-token figure describes a call. Declared rather than inferred
+    # from ``is_oauth`` -- Vertex is OAuth and metered.
     billing: str = "per_token"
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
     # Former names this provider answered to, so model ids saved under the old
@@ -116,9 +107,7 @@ class ProviderSpec:
     bypasses_litellm: bool = False
 
     # Which client constructs the provider, when it is not LiteLLM's. Stated here
-    # so that adding a family does not mean editing a chain of name comparisons
-    # in the factory -- which is how a model id spelled the old way ended up
-    # needing its own string check next to the resolved provider name.
+    # so adding a family does not mean editing the factory's dispatch.
     client: str = ""
 
     # The endpoint is the user's to supply and there is no default that works:

@@ -101,9 +101,6 @@ def make_provider(config: Config):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    # Which client serves a provider is the registry's answer, not a chain of
-    # name comparisons here: the model id spelled the old way used to need its own
-    # check beside the resolved name, and the two could disagree.
     from raven.providers.registry import find_by_name
 
     spec = find_by_name(provider_name) if provider_name else None
