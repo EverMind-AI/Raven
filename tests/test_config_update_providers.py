@@ -578,6 +578,8 @@ def test_provider_config_models_round_trips(cfg_path: Path) -> None:
     add_provider_model("openrouter", "anthropic/claude-sonnet-4-5", config_path=cfg_path)
 
     section = _read(cfg_path)["providers"]["openrouter"]
+    # Stored under the name that resolves back to openrouter: the bare vendor id
+    # resolves to Anthropic, so a gateway's list said the vendor served it.
     assert section["models"] == ["anthropic/claude-sonnet-4-5"]
     assert "anthropic/claude-sonnet-4-5" in get_provider_config("openrouter", config_path=cfg_path).get("models", [])
 
@@ -631,7 +633,8 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
 
 
 def _codex_credential(payload: str = '{"access_token": "live"}') -> None:
-    """probe 先要求盘上有凭据,再问账号 -- 两种失败要说不同的话。"""
+    """The probe checks the file before it asks the account: the two failures are
+    not fixed by the same thing, so they must not read the same."""
     from raven.config.paths import get_oauth_dir
 
     codex_dir = get_oauth_dir() / "chatgpt"

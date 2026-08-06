@@ -1066,12 +1066,15 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
         }
 
     # Strict, so a failure is reported rather than flattened into an empty list --
-    # and told apart by what raised it. The credential lookup raises for a token
-    # that cannot be produced (revoked, expired past refresh); the request itself
-    # raises for anything about reaching the endpoint. Only the first is fixed by
-    # signing in again, and the recovery menus offer that on one status and Retry
-    # on the other, so reporting the wrong one strands the user on a screen whose
-    # options cannot help.
+    # and sorted into the one thing the user can do about it. The recovery menus
+    # offer signing in again on one status and Retry on the other, so a credential
+    # problem reported as a network one strands the user on a screen that cannot
+    # fix it. Two ways to arrive at "sign in again": the token could not be
+    # produced at all, and the endpoint refused the one that was.
+    #
+    # The split is not clean and does not claim to be -- the driver wraps a network
+    # failure during refresh in the same error as a revoked token -- so it sorts by
+    # which action has a chance of helping, and both messages name both causes.
     try:
         models = account_models(timeout=timeout_s, strict=True)
     except RuntimeError as exc:
@@ -1083,6 +1086,22 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
             "models_count": None,
             "model_ids": None,
             "error": str(exc),
+        }
+    except httpx.HTTPStatusError as exc:
+        refused = exc.response.status_code in (401, 403)
+        return {
+            "ok": False,
+            "status": "oauth_token_missing" if refused else "network_error",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": exc.response.status_code,
+            "models_count": None,
+            "model_ids": None,
+            "error": (
+                f"the account refused this credential ({exc.response.status_code}) -- "
+                "run `raven provider login openai-codex`"
+                if refused
+                else str(exc)
+            ),
         }
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         return {
