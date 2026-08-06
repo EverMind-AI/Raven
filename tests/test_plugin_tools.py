@@ -532,9 +532,7 @@ class TestEverosParserContract:
         assert "not supported" in out[0]["error"]
         assert out[1]["text"] == "fine"
 
-    async def test_unconfigured_llm_fails_the_call_once(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_unconfigured_llm_fails_the_call_once(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # The reason understand_files probes the client up front: without it
         # the parser resolves its own client per file and the same failure
         # would come back once per attachment.
@@ -561,9 +559,7 @@ class TestEverosParserContract:
             await understand_files([str(self._png(tmp_path))])
         assert parsed == []
 
-    async def test_missing_parser_extra_fails_the_call(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_missing_parser_extra_fails_the_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import everos.component.parser as component_parser
 
         from raven.plugin.memory.everos.multimodal import (
@@ -575,9 +571,7 @@ class TestEverosParserContract:
         with pytest.raises(MultimodalUnavailableError, match="not installed"):
             await understand_files([str(self._png(tmp_path))])
 
-    async def test_llm_failure_reads_back_parse_error(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_llm_failure_reads_back_parse_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # everos degrades an LLMError in place (parse_error set, no
         # parsed_content); understand_files must surface that as the error.
         from everalgo.llm import LLMError
@@ -589,13 +583,9 @@ class TestEverosParserContract:
 
         self._stub_boundaries(monkeypatch, parse)
         f = self._png(tmp_path)
-        assert await understand_files([str(f)]) == [
-            {"path": str(f), "name": "shot.png", "error": "LLMError"}
-        ]
+        assert await understand_files([str(f)]) == [{"path": str(f), "name": "shot.png", "error": "LLMError"}]
 
-    async def test_missing_file_is_reported_not_fatal(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_missing_file_is_reported_not_fatal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.plugin.memory.everos.multimodal import understand_files
 
         async def parse(raw_file):
