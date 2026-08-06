@@ -511,3 +511,99 @@ class TestEverosParserContract:
         out = await understand_files([str(bad), str(good)])
         assert "cannot decode" in out[0]["error"]
         assert out[1]["text"] == "second one"
+
+    async def test_unsupported_modality_degrades_per_item(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from everos.core.errors import UnsupportedModalityError
+
+        from raven.plugin.memory.everos.multimodal import understand_files
+
+        async def parse(raw_file):
+            if raw_file.content == b"payload":
+                raise UnsupportedModalityError("video is not supported")
+            return types.SimpleNamespace(text="fine")
+
+        self._stub_boundaries(monkeypatch, parse)
+        video = self._png(tmp_path, "clip.png")
+        good = tmp_path / "good.png"
+        good.write_bytes(b"other")
+        out = await understand_files([str(video), str(good)])
+        assert "not supported" in out[0]["error"]
+        assert out[1]["text"] == "fine"
+
+    async def test_unconfigured_llm_fails_the_call_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The reason understand_files probes the client up front: without it
+        # the parser resolves its own client per file and the same failure
+        # would come back once per attachment.
+        import everos.component.llm.client as llm_client
+
+        from raven.plugin.memory.everos.multimodal import (
+            MultimodalUnavailableError,
+            understand_files,
+        )
+
+        parsed: list[object] = []
+
+        async def parse(raw_file):
+            parsed.append(raw_file)
+            return types.SimpleNamespace(text="never")
+
+        self._stub_boundaries(monkeypatch, parse)
+
+        def unconfigured():
+            raise llm_client.LLMNotConfiguredError("multimodal LLM not configured")
+
+        monkeypatch.setattr(llm_client, "get_multimodal_llm_client", unconfigured)
+        with pytest.raises(MultimodalUnavailableError, match="not configured"):
+            await understand_files([str(self._png(tmp_path))])
+        assert parsed == []
+
+    async def test_missing_parser_extra_fails_the_call(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import everos.component.parser as component_parser
+
+        from raven.plugin.memory.everos.multimodal import (
+            MultimodalUnavailableError,
+            understand_files,
+        )
+
+        monkeypatch.setattr(component_parser, "parser_available", lambda: False)
+        with pytest.raises(MultimodalUnavailableError, match="not installed"):
+            await understand_files([str(self._png(tmp_path))])
+
+    async def test_llm_failure_reads_back_parse_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # everos degrades an LLMError in place (parse_error set, no
+        # parsed_content); understand_files must surface that as the error.
+        from everalgo.llm import LLMError
+
+        from raven.plugin.memory.everos.multimodal import understand_files
+
+        async def parse(raw_file):
+            raise LLMError("upstream 500")
+
+        self._stub_boundaries(monkeypatch, parse)
+        f = self._png(tmp_path)
+        assert await understand_files([str(f)]) == [
+            {"path": str(f), "name": "shot.png", "error": "LLMError"}
+        ]
+
+    async def test_missing_file_is_reported_not_fatal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.plugin.memory.everos.multimodal import understand_files
+
+        async def parse(raw_file):
+            return types.SimpleNamespace(text="fine")
+
+        self._stub_boundaries(monkeypatch, parse)
+        good = self._png(tmp_path)
+        missing = tmp_path / "gone.png"
+        out = await understand_files([str(missing), str(good)])
+        assert out[0] == {"path": str(missing), "name": "gone.png", "error": "file not found"}
+        assert out[1]["text"] == "fine"
