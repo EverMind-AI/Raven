@@ -66,22 +66,30 @@ def _parse(model_cls: type, params: dict) -> Any:
         ) from exc
 
 
-def _provider_models(slug: str) -> list[str]:
+def _provider_models(slug: str, *, configured: bool) -> list[str]:
     try:
         cfg = get_provider_config(slug, redact_secrets=False)
     except KeyError:
         cfg = {}
-    configured = cfg.get("models", [])
-    configured = list(configured) if isinstance(configured, list) else []
+    from_config = cfg.get("models", [])
+    from_config = list(from_config) if isinstance(from_config, list) else []
     # Priority: what the user configured (manual entry via ``model.add_model``
-    # writes here), then the curated shortlist, then LiteLLM's own catalogue.
-    # Curated before catalogue because the shortlist is a few models worth
-    # recommending and the catalogue is everything, deprecated snapshots
-    # included; catalogue after it because eleven providers have no shortlist at
-    # all, which is why the picker used to offer them nothing.
+    # writes here), then the curated shortlist, then LiteLLM's own catalogue,
+    # then whatever the account itself reports. Curated before catalogue because
+    # the shortlist is a few models worth recommending and the catalogue is
+    # everything, deprecated snapshots included; catalogue after it because eleven
+    # providers have no shortlist at all, which is why the picker used to offer
+    # them nothing; the account last because only one provider can be asked and
+    # asking costs a request (see ``_account_models``).
     out: list[str] = []
     seen: set[str] = set()
-    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug), *_account_models(slug)):
+    chain = (
+        *from_config,
+        *common_models_for(slug),
+        *litellm_models_for(slug),
+        *_account_models(slug, configured=configured),
+    )
+    for candidate in chain:
         if candidate not in seen:
             seen.add(candidate)
             out.append(candidate)
@@ -89,14 +97,18 @@ def _provider_models(slug: str) -> list[str]:
     return out
 
 
-def _account_models(slug: str) -> tuple[str, ...]:
+def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
     """Models the account itself reports, for a provider only it can answer for.
 
     Codex has no static list worth offering: the registry default is refused by
     the backend, and the entries LiteLLM's table carries are not the slugs an
     account is entitled to. Everyone else is served by the tiers above.
+
+    Nobody signed in has nothing to report, so asking costs a request that can
+    only fail -- and the failure is cached, which is how opening the picker while
+    signed out left this provider empty for the half-minute after signing in.
     """
-    if slug != "openai_codex":
+    if slug != "openai_codex" or not configured:
         return ()
 
     from raven.providers.codex_catalog import account_models
@@ -120,7 +132,7 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     if is_oauth and not configured:
         warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
-    models = _provider_models(slug)
+    models = _provider_models(slug, configured=configured)
     return {
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),

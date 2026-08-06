@@ -630,16 +630,27 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     assert cfg_path.read_text(encoding="utf-8") == original  # untouched
 
 
+def _codex_credential(payload: str = '{"access_token": "live"}') -> None:
+    """probe 先要求盘上有凭据,再问账号 -- 两种失败要说不同的话。"""
+    from raven.config.paths import get_oauth_dir
+
+    codex_dir = get_oauth_dir() / "chatgpt"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    (codex_dir / "auth.json").write_text(payload, encoding="utf-8")
+
+
 def test_probing_codex_asks_the_endpoint_that_backend_serves(
     cfg_path: Path,
+    oauth_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The generic probe requests ``{api_base}/v1/models``, which this backend does
     not serve -- a valid OAuth credential came back refused, reading as a bad key.
     Its catalogue is both the credential check and the list of usable models."""
+    _codex_credential()
     monkeypatch.setattr(
         "raven.providers.codex_catalog.account_models",
-        lambda timeout=5.0: ("gpt-5.6-sol", "gpt-5.4"),
+        lambda timeout=5.0, strict=False: ("gpt-5.6-sol", "gpt-5.4"),
     )
 
     result = probe_provider("openai_codex", config_path=cfg_path)
@@ -667,26 +678,46 @@ def test_probing_codex_without_a_usable_credential_says_so(
     assert "provider login" in result["error"]
 
 
-def test_probing_codex_tells_a_missing_credential_from_an_unreachable_one(
+def test_probing_codex_reports_an_unreachable_catalogue_as_a_network_problem(
     cfg_path: Path,
     oauth_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The catalogue answers an empty list whether nobody is signed in or the
-    request never landed, and "sign in" is a different instruction from "you
-    appear to be offline". Told apart by what is on disk, which is free."""
-    from raven.config.paths import get_oauth_dir
+    """The forgiving reader answers an empty list for every failure, which reads as
+    "this account has nothing". Only one of those two is fixed by signing in, and
+    the recovery menus branch on this status to decide what to offer."""
+    _codex_credential()
 
-    codex_dir = get_oauth_dir() / "chatgpt"
-    codex_dir.mkdir(parents=True, exist_ok=True)
-    (codex_dir / "auth.json").write_text('{"refresh_token": "stored"}', encoding="utf-8")
-    monkeypatch.setattr("raven.providers.codex_catalog.account_models", lambda timeout=5.0: ())
+    def unreachable(timeout=5.0, strict=False):
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", unreachable)
 
     result = probe_provider("openai_codex", config_path=cfg_path)
 
     assert result["status"] == "network_error", result
-    assert "revoked" in result["error"]
-    assert "provider login" not in result["error"], "told to sign in while signed in"
+    assert "provider login" not in result["error"], "sent to sign in over a network fault"
+
+
+def test_probing_codex_keeps_a_revoked_credential_on_the_path_that_can_fix_it(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential the account no longer honours reaches the catalogue and comes
+    back empty. Reporting that as a network fault put it in the recovery branch
+    that offers only Retry -- signing in again, the one thing that fixes it, is
+    offered by the other branch."""
+    _codex_credential('{"refresh_token": "revoked"}')
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda timeout=5.0, strict=False: (),
+    )
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "provider login openai-codex" in result["error"]
 
 
 def test_probing_copilot_with_no_credential_does_not_start_a_device_flow(

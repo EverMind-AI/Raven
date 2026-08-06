@@ -32,7 +32,7 @@ _cache: tuple[float, tuple[str, ...]] | None = None
 _failed_at: float | None = None
 
 
-def account_models(*, timeout: float = 5.0) -> tuple[str, ...]:
+def account_models(*, timeout: float = 5.0, strict: bool = False) -> tuple[str, ...]:
     """Slugs this account offers, newest first, or empty when it cannot be asked.
 
     Cached briefly: the picker rebuilds its list on every refresh, and a sign-in
@@ -40,19 +40,25 @@ def account_models(*, timeout: float = 5.0) -> tuple[str, ...]:
     Failures are empty rather than raised -- a provider list that cannot reach the
     network is still worth showing -- and are cached too, or every refresh made
     offline pays the full timeout again.
+
+    ``strict`` raises instead, for the one caller whose whole job is to report why:
+    a report that cannot tell "offline" from "this account has nothing" sends the
+    user to fix the wrong thing.
     """
     global _cache, _failed_at
 
     now = time.monotonic()
     if _cache is not None and now - _cache[0] < _CACHE_TTL_SECONDS:
         return _cache[1]
-    if _failed_at is not None and now - _failed_at < _FAILURE_TTL_SECONDS:
+    if _failed_at is not None and now - _failed_at < _FAILURE_TTL_SECONDS and not strict:
         return ()
 
     try:
         slugs = _fetch(timeout=timeout)
     except Exception:
         _failed_at = now
+        if strict:
+            raise
         return ()
 
     _cache = (now, slugs)

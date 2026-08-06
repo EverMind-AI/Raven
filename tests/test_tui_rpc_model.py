@@ -528,21 +528,41 @@ async def test_options_lists_the_codex_models_the_account_reports(
         "raven.providers.codex_catalog.account_models",
         lambda: ("gpt-5.6-sol", "gpt-5.4"),
     )
+    # Asked only of an account there is one for, so the row has to be signed in
+    # before the catalogue is reached at all.
+    auth = fake_home / ".raven" / "oauth" / "chatgpt"
+    auth.mkdir(parents=True, exist_ok=True)
+    (auth / "auth.json").write_text('{"access_token": "live"}', encoding="utf-8")
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
 
     entry = _entry(await model_options({}), "openai_codex")
 
+    assert entry["authenticated"] is True, "the credential this test wrote was not seen"
     assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
 
 
-def test_only_codex_is_asked_of_the_account_catalogue(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every other provider is served by the static tiers, so none of them should
-    pay for a network round trip."""
+@pytest.mark.parametrize(
+    ("slug", "configured"),
+    [
+        pytest.param("deepseek", True, id="another-provider-the-static-tiers-serve"),
+        pytest.param("openai_codex", False, id="codex-with-nobody-signed-in"),
+    ],
+)
+def test_the_account_catalogue_is_asked_only_when_it_can_answer(
+    slug: str,
+    configured: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network round trip that can only fail is still cached as a failure, which
+    is what left codex empty for half a minute after signing in to it."""
     from raven.tui_rpc.methods.model import _provider_models
 
     monkeypatch.setattr(
         "raven.providers.codex_catalog.account_models",
-        lambda: pytest.fail("the catalogue was asked for a provider it cannot answer for"),
+        lambda: pytest.fail("the catalogue was asked when it had no account to answer for"),
     )
 
-    assert _provider_models("deepseek"), "other providers still list models"
+    models = _provider_models(slug, configured=configured)
+
+    if slug == "deepseek":
+        assert models, "other providers still list models"

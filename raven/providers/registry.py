@@ -196,9 +196,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="http://localhost:8000/v1",
     ),
     # === Azure OpenAI ======================================================
-    # Served by AzureOpenAIProvider, not LiteLLM (make_provider dispatches on
-    # the name): Azure needs an api-version and takes a deployment name where
-    # every other provider takes a model id.
+    # Served by AzureOpenAIProvider, not LiteLLM (hence ``client`` below): Azure
+    # needs an api-version and takes a deployment name where every other provider
+    # takes a model id.
     ProviderSpec(
         name="azure_openai",
         client="azure",

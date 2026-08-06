@@ -1034,26 +1034,44 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
     start = time.monotonic()
     reset_cache()  # a probe reports on now, not on what a picker asked minutes ago
 
-    # Asked first because the catalogue answers an empty list either way, and
-    # "sign in" is a different instruction from "you appear to be offline".
-    signed_in = stored_credentials() is not None
-    models = account_models(timeout=timeout_s)
+    if stored_credentials() is None:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no credentials found -- run `raven provider login openai-codex`",
+        }
+
+    # Strict, so an unreachable catalogue is not reported as an account with
+    # nothing in it: only one of those two is fixed by signing in again, and the
+    # recovery menus branch on this status to decide what to offer.
+    try:
+        models = account_models(timeout=timeout_s, strict=True)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     if not models:
         return {
             "ok": False,
-            "status": "oauth_token_missing" if not signed_in else "network_error",
+            "status": "oauth_token_missing",
             "elapsed_ms": elapsed_ms,
             "http_status": None,
             "models_count": 0,
             "model_ids": [],
-            "error": (
-                "no credentials found -- run `raven provider login openai-codex`"
-                if not signed_in
-                else "the stored credential returned no models: it may have been revoked, "
-                "or the catalogue could not be reached"
-            ),
+            "error": "the account offers no models -- the credential may have been revoked; "
+            "run `raven provider login openai-codex`",
         }
 
     return {
