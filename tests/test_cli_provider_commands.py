@@ -121,7 +121,15 @@ def test_provider_login_openai_codex_opens_nothing_without_a_display(
 
 @pytest.fixture
 def opened_urls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Capture browser hand-offs; without this the suite opens real tabs."""
+    """Capture browser hand-offs; without this the suite opens real tabs.
+
+    A display is declared too. Whether the login opens a page depends on having
+    somewhere to open it, and CI runs headless Linux -- so every assertion here
+    would otherwise be answered by the runner rather than by the code: the ones
+    expecting a page opened fail, and the ones expecting none pass for the wrong
+    reason. The two headless cases drop it again.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
     urls: list[str] = []
     monkeypatch.setattr("webbrowser.open", lambda url, *a, **k: urls.append(url) or True)
     return urls
