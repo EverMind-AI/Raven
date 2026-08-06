@@ -465,17 +465,12 @@ def _copilot_token_dir() -> Path:
 def _oauth_credentials_present(provider_name: str) -> bool:
     """Are this provider's credentials on disk and readable as credentials?
 
-    A file at the right path is not evidence: a truncated write, a hand-edited
-    token or an empty file all pass ``exists()`` and then fail on the first
-    request, having told the picker and the startup gate that the provider was
-    ready. What each family's own reader accepts is the answer.
+    A file at the right path is not evidence: a truncated write passes
+    ``exists()`` and fails on the first request. What each family's own reader
+    accepts is the answer.
 
-    Expiry is deliberately not part of it -- an expired token that still has a
-    refresh token is usable, and refreshing is the client's job.
-
-    Only presence is claimed. Whether the credential is *accepted* takes a
-    request: Copilot can hold a valid device token and still be refused the API
-    key exchange, which is what ``provider test`` is for.
+    Expiry is not part of it -- an expired token with a refresh token is usable.
+    Nor is acceptance, which takes a request: that is ``provider test``.
     """
     if provider_name in {"minimax_global", "minimax_cn"}:
         from raven.providers.minimax_oauth import load_token
@@ -906,10 +901,8 @@ def test_provider(
 
                 oauth_access = Authenticator().get_api_key()
             else:
-                # Named rather than defaulted: this used to fall through to the
-                # branch above, which reads a different provider's credential and
-                # can start its device flow. A family arriving without a check of
-                # its own says so instead.
+                # A new family must add its own branch: defaulting to another
+                # family's reads the wrong credential and can start its device flow.
                 raise RuntimeError(f"{spec.label} has no credential check here yet")
         except ImportError:
             return {
@@ -1035,33 +1028,32 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
     """
     import time
 
+    from raven.providers.chatgpt_token import stored_credentials
     from raven.providers.codex_catalog import account_models, reset_cache
 
     start = time.monotonic()
     reset_cache()  # a probe reports on now, not on what a picker asked minutes ago
-    try:
-        models = account_models(timeout=timeout_s)
-    except Exception as exc:  # noqa: BLE001 - reported, not raised
-        return {
-            "ok": False,
-            "status": "network_error",
-            "elapsed_ms": int((time.monotonic() - start) * 1000),
-            "http_status": None,
-            "models_count": None,
-            "model_ids": None,
-            "error": str(exc),
-        }
+
+    # Asked first because the catalogue answers an empty list either way, and
+    # "sign in" is a different instruction from "you appear to be offline".
+    signed_in = stored_credentials() is not None
+    models = account_models(timeout=timeout_s)
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     if not models:
         return {
             "ok": False,
-            "status": "oauth_token_missing",
+            "status": "oauth_token_missing" if not signed_in else "network_error",
             "elapsed_ms": elapsed_ms,
             "http_status": None,
             "models_count": 0,
             "model_ids": [],
-            "error": "the account returned no usable models -- run `raven provider login openai-codex`",
+            "error": (
+                "no credentials found -- run `raven provider login openai-codex`"
+                if not signed_in
+                else "the stored credential returned no models: it may have been revoked, "
+                "or the catalogue could not be reached"
+            ),
         }
 
     return {

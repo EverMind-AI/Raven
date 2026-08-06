@@ -119,12 +119,12 @@ def test_being_offline_is_asked_about_once_not_once_per_refresh(
     assert attempts == 1
 
 
-def test_a_sign_in_is_not_made_to_wait_out_a_failure(
+def test_a_cached_failure_does_not_outlive_a_reset(
     monkeypatch: pytest.MonkeyPatch,
     signed_in,
 ) -> None:
-    """``reset_cache`` is what ``provider test`` and a fresh sign-in call: a cached
-    failure must not outlive the reason it was cached."""
+    """``reset_cache`` is how the callers that know the answer has changed say so --
+    ``provider test``, and ``provider login`` once it has one."""
 
     def boom(url, **kwargs):
         raise httpx.ConnectError("no network")

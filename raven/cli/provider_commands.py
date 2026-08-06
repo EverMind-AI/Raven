@@ -118,12 +118,18 @@ def _login_openai_codex() -> None:
     from litellm.llms.chatgpt.authenticator import Authenticator
     from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL
 
-    from raven.providers.chatgpt_token import clear_abandoned_device_code, stored_credentials
+    from raven.providers.chatgpt_token import access_token_and_account, clear_abandoned_device_code
 
-    # Asking the driver for a token returns the stored one when it is still good,
-    # so without this the command announces a device flow, opens a browser tab and
-    # then reports success without having done anything.
-    if stored_credentials() is not None:
+    # Asked whether a credential is stored, this said yes for a revoked one -- and
+    # the error that sends the user here is raised by the same revocation, so the
+    # two answers pointed at each other. Ask whether one still works instead;
+    # that call refreshes but cannot start a login, so a dead credential falls
+    # through to the flow the user came for.
+    try:
+        access_token_and_account()
+    except Exception:
+        pass
+    else:
         console.print("[green]Already signed in to OpenAI Codex.[/green]")
         console.print("[dim]To sign in as someone else: raven provider remove openai-codex[/dim]")
         return
@@ -145,6 +151,13 @@ def _login_openai_codex() -> None:
     if not token:
         console.print("[red]✗ Authentication failed[/red]")
         raise typer.Exit(1)
+
+    # The catalogue could not be fetched while there was nobody to fetch it for,
+    # and that answer is cached: without this the picker offers this provider no
+    # models for the first half-minute after signing in to it.
+    from raven.providers.codex_catalog import reset_cache
+
+    reset_cache()
 
     console.print("[green]✓ Authenticated with OpenAI Codex[/green]")
 

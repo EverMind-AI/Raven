@@ -667,6 +667,28 @@ def test_probing_codex_without_a_usable_credential_says_so(
     assert "provider login" in result["error"]
 
 
+def test_probing_codex_tells_a_missing_credential_from_an_unreachable_one(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The catalogue answers an empty list whether nobody is signed in or the
+    request never landed, and "sign in" is a different instruction from "you
+    appear to be offline". Told apart by what is on disk, which is free."""
+    from raven.config.paths import get_oauth_dir
+
+    codex_dir = get_oauth_dir() / "chatgpt"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    (codex_dir / "auth.json").write_text('{"refresh_token": "stored"}', encoding="utf-8")
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", lambda timeout=5.0: ())
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "network_error", result
+    assert "revoked" in result["error"]
+    assert "provider login" not in result["error"], "told to sign in while signed in"
+
+
 def test_probing_copilot_with_no_credential_does_not_start_a_device_flow(
     cfg_path: Path,
     oauth_home: Path,
