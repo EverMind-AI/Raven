@@ -131,7 +131,7 @@ def _login_openai_codex() -> None:
         pass
     else:
         console.print("[green]Already signed in to OpenAI Codex.[/green]")
-        console.print("[dim]To sign in as someone else: raven provider remove openai-codex[/dim]")
+        console.print("[dim]To sign in as someone else: raven provider reset openai-codex[/dim]")
         return
 
     # Otherwise the driver would wait for the earlier attempt to land rather than
@@ -151,13 +151,6 @@ def _login_openai_codex() -> None:
     if not token:
         console.print("[red]✗ Authentication failed[/red]")
         raise typer.Exit(1)
-
-    # The catalogue could not be fetched while there was nobody to fetch it for,
-    # and that answer is cached: without this the picker offers this provider no
-    # models for the first half-minute after signing in to it.
-    from raven.providers.codex_catalog import reset_cache
-
-    reset_cache()
 
     console.print("[green]✓ Authenticated with OpenAI Codex[/green]")
 

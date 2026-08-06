@@ -58,7 +58,12 @@ def stored_credentials() -> dict[str, Any] | None:
     return data if data and (data.get("access_token") or data.get("refresh_token")) else None
 
 
-_EXPIRED = "ChatGPT credentials are no longer valid -- run `raven provider login openai-codex`"
+#: Both causes, because the driver reports them as one: its refresh wraps every
+#: failure, a revoked token and an unreachable network alike, in the same error.
+_EXPIRED = (
+    "could not renew the ChatGPT credential -- it may have been revoked, or the network "
+    "may be unreachable; if it was revoked, run `raven provider login openai-codex`"
+)
 _MISSING = "no ChatGPT credentials found -- run `raven provider login openai-codex`"
 
 

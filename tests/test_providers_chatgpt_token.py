@@ -54,7 +54,7 @@ def test_a_revoked_refresh_token_does_not_open_a_device_flow(
         lambda self: pytest.fail("a device flow was started underneath a request"),
     )
 
-    with pytest.raises(RuntimeError, match="no longer valid"):
+    with pytest.raises(RuntimeError, match="could not renew"):
         chatgpt_token.access_token_and_account()
 
 
@@ -81,8 +81,37 @@ def test_a_pending_device_code_is_not_waited_on(
         lambda self, remaining: pytest.fail("waited on a pending device code"),
     )
 
-    with pytest.raises(RuntimeError, match="no longer valid"):
+    with pytest.raises(RuntimeError, match="could not renew"):
         chatgpt_token.access_token_and_account()
+
+
+def test_a_network_failure_is_not_reported_as_a_revocation(
+    token_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The driver wraps every refresh failure in one error type, an unreachable
+    network included, so this side cannot tell them apart -- and must not claim to.
+    Telling a user offline that their credential is gone sends them to re-authorise
+    something that never expired."""
+    import httpx
+
+    _write(token_dir, {"refresh_token": "fine"})
+
+    # Stubbed at the transport, not at ``_refresh_tokens``: the wrapping under test
+    # is LiteLLM's own, and replacing the method that does it would prove nothing.
+    class _Offline:
+        def post(self, *_args, **_kwargs):
+            raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr(
+        "litellm.llms.chatgpt.authenticator._get_httpx_client",
+        lambda *_a, **_k: _Offline(),
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        chatgpt_token.access_token_and_account()
+
+    assert "network" in str(excinfo.value), "offline reported as a dead credential"
 
 
 def test_a_live_credential_comes_back_with_its_account(

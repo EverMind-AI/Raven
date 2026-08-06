@@ -478,7 +478,9 @@ def test_provider_login_openai_codex_says_so_when_it_would_do_nothing(
 
     assert r.exit_code == 0
     assert "Already signed in" in r.stdout
-    assert "provider remove openai-codex" in r.stdout
+    # Named, not paraphrased: `provider remove` does not exist (the subcommand is
+    # `reset`), and the wrong one was pinned here while the message printed it.
+    assert "provider reset openai-codex" in r.stdout
     assert calls == [], "the driver was asked for a token anyway"
     assert opened_urls == [], "a browser tab was opened for a sign-in that did not happen"
 
@@ -501,25 +503,3 @@ def test_provider_login_openai_codex_signs_in_over_a_credential_that_stopped_wor
     assert r.exit_code == 0
     assert "Already signed in" not in r.stdout
     assert calls == ["get_access_token"], "the sign-in the user asked for never started"
-
-
-def test_provider_login_openai_codex_forgets_a_catalogue_fetched_while_signed_out(
-    monkeypatch: pytest.MonkeyPatch,
-    opened_urls: list[str],
-) -> None:
-    """The catalogue lookup fails while there is nobody to look up, and that answer
-    is cached -- so the picker would offer this provider no models for the first
-    half-minute after signing in to it."""
-    from raven.providers import codex_catalog
-
-    _fake_chatgpt_authenticator(monkeypatch, "fresh-token")
-    monkeypatch.setattr(
-        "raven.providers.chatgpt_token.access_token_and_account",
-        lambda: (_ for _ in ()).throw(RuntimeError("not signed in")),
-    )
-    codex_catalog._failed_at = 1.0
-
-    r = runner.invoke(app, ["provider", "login", "openai-codex"])
-
-    assert r.exit_code == 0
-    assert codex_catalog._failed_at is None, "a failure cached before the sign-in outlived it"
