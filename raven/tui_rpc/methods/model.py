@@ -39,6 +39,8 @@ from raven.providers.registry import (
     credential_kind,
     find_by_model,
     find_by_name,
+    needs_public_model_prefix,
+    public_model_prefix,
 )
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -112,12 +114,8 @@ def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
         return ()
 
     from raven.providers.codex_catalog import account_models
-    from raven.providers.registry import find_by_name, public_model_prefix
 
-    spec = find_by_name(slug)
-    prefix = public_model_prefix(spec) if spec else slug.replace("_", "-")
-
-    return tuple(f"{prefix}/{model}" for model in account_models())
+    return tuple(_stored_spelling(slug, model) for model in account_models())
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
@@ -263,10 +261,27 @@ async def model_disconnect(params: dict) -> dict:
     return {"disconnected": True}
 
 
+def _stored_spelling(slug: str, model: str) -> str:
+    """The id to store for a model the user typed, for the provider they typed it under.
+
+    A bare id is claimed by keyword matching rather than by the provider it was
+    entered for: "gpt-5.6-sol" resolves to OpenAI, so the request leaves for a
+    provider that does not serve it. The listed models already carry the prefix,
+    and a typed one has to end up spelled the same way.
+    """
+    spec = find_by_name(slug)
+    if not needs_public_model_prefix(spec) or not model:
+        return model
+
+    prefix = public_model_prefix(spec)  # type: ignore[arg-type]
+
+    return model if model.startswith(f"{prefix}/") else f"{prefix}/{model.split('/')[-1]}"
+
+
 async def model_add_model(params: dict) -> dict:
     parsed = _parse(ModelAddModelParams, params)
     try:
-        await asyncio.to_thread(add_provider_model, parsed.slug, parsed.model)
+        await asyncio.to_thread(add_provider_model, parsed.slug, _stored_spelling(parsed.slug, parsed.model))
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()

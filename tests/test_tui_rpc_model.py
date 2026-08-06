@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from raven.providers.common_models import common_models_for
+from raven.providers.registry import PROVIDERS
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
 from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
@@ -207,6 +208,22 @@ async def test_add_model_reflected_in_options(fake_home: Path) -> None:
 
     options = await model_options({})
     assert "claude-opus-4-8" in _entry(options, "anthropic")["models"]
+
+
+async def test_a_bare_model_typed_for_codex_is_stored_so_it_finds_codex(fake_home: Path) -> None:
+    """Through the handler, not just the helper: the screen takes free text and the
+    catalogue offers bare slugs, so this is what a user actually types. Stored bare
+    it resolves to OpenAI and the request leaves for a provider that does not serve
+    it."""
+    from raven.providers.registry import find_by_model
+
+    result = await model_add_model({"slug": "openai_codex", "model": "gpt-5.6-sol"})
+
+    stored = result["provider"]["models"]
+    assert "openai-codex/gpt-5.6-sol" in stored, stored
+    assert "gpt-5.6-sol" not in stored, "the bare spelling was stored as well"
+    resolved = find_by_model("openai-codex/gpt-5.6-sol")
+    assert resolved is not None and resolved.name == "openai_codex"
 
 
 async def test_remove_model_reflected_in_options(fake_home: Path) -> None:
@@ -566,3 +583,42 @@ def test_the_account_catalogue_is_asked_only_when_it_can_answer(
 
     if slug == "deepseek":
         assert models, "other providers still list models"
+
+
+@pytest.mark.parametrize(
+    ("slug", "typed", "stored"),
+    [
+        pytest.param("openai_codex", "gpt-5.6-sol", "openai-codex/gpt-5.6-sol", id="codex-typed-bare"),
+        pytest.param("openai_codex", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4", id="codex-typed-prefixed"),
+        pytest.param("minimax_global", "MiniMax-M2", "minimax-global/MiniMax-M2", id="minimax-typed-bare"),
+        pytest.param("deepseek", "deepseek-chat", "deepseek-chat", id="a-provider-that-routes-on-it"),
+        pytest.param("azure_openai", "my-deployment", "my-deployment", id="azure-uses-it-verbatim-in-a-url"),
+    ],
+)
+def test_a_typed_model_is_stored_the_way_it_resolves_back(slug: str, typed: str, stored: str) -> None:
+    """The add-model screen takes free text, and a bare id is claimed by keyword
+    matching rather than by the provider it was entered under: "gpt-5.6-sol"
+    resolves to OpenAI. The listed models already carry the prefix; a typed one
+    has to end up spelled the same way."""
+    from raven.tui_rpc.methods.model import _stored_spelling
+
+    assert _stored_spelling(slug, typed) == stored
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
+def test_every_provider_stores_a_model_id_that_finds_it_again(spec) -> None:
+    """A sweep rather than a list of the cases we thought of: the id a provider
+    stores has to resolve back to that provider, or the request leaves for
+    whoever else claims the bare name. Providers that route on the prefix or use
+    the id verbatim are covered by resolving as themselves.
+    """
+    from raven.providers.registry import find_by_model, needs_public_model_prefix
+    from raven.tui_rpc.methods.model import _stored_spelling
+
+    if not needs_public_model_prefix(spec):
+        pytest.skip("no public prefix to add; the id is routed or used verbatim")
+
+    stored = _stored_spelling(spec.name, "some-model")
+    resolved = find_by_model(stored)
+
+    assert resolved is not None and resolved.name == spec.name, f"{stored} resolves to {resolved and resolved.name}"

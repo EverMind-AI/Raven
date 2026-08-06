@@ -629,6 +629,24 @@ def litellm_spelling(name: str | None) -> str:
     return wanted
 
 
+#: Providers whose own client strips the prefix back off before use, so a model id
+#: may -- and must -- carry the name that resolves to them. Everyone else either
+#: routes on it (LiteLLM does the stripping) or uses the id verbatim: Azure puts it
+#: in a URL path as a deployment name, where a prefix would become part of the path.
+_PREFIX_IS_PUBLIC_ONLY = frozenset({"minimax_global", "minimax_cn", "openai_codex"})
+
+
+def needs_public_model_prefix(spec: "ProviderSpec | None") -> bool:
+    """Must a model id for this provider be written with its own name in front?
+
+    Written bare it is claimed by keyword matching instead -- "gpt-5.6-sol"
+    resolves to OpenAI -- and the request goes to a provider that does not serve
+    it. Every surface that stores a model id asks this, so the answer is here
+    rather than in each of them.
+    """
+    return spec is not None and spec.name in _PREFIX_IS_PUBLIC_ONLY
+
+
 def public_model_prefix(spec: "ProviderSpec") -> str:
     """The prefix a user writes to reach THIS provider, which is not always the
     one that goes on the wire.

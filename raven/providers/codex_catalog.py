@@ -74,12 +74,7 @@ def account_models(*, timeout: float = 5.0, strict: bool = False) -> tuple[str, 
     fingerprint = _credential_fingerprint()
     if _cache is not None and _cache[0] == fingerprint and now - _cache[1] < _CACHE_TTL_SECONDS:
         return _cache[2]
-    if (
-        not strict
-        and _failure is not None
-        and _failure[0] == fingerprint
-        and now - _failure[1] < _FAILURE_TTL_SECONDS
-    ):
+    if not strict and _failure is not None and _failure[0] == fingerprint and now - _failure[1] < _FAILURE_TTL_SECONDS:
         return ()
 
     try:
