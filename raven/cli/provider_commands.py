@@ -503,18 +503,31 @@ def _register_config_commands(app: typer.Typer) -> None:
 
         non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
 
+        from raven.config.update_providers import serves_default_model
+
+        # Asked before the confirmation, because it is the part worth confirming:
+        # the model id survives the reset and still names this provider, so the
+        # next command finds a default nothing can answer.
+        serves_default = serves_default_model(name)
+
         if not yes:
             console.print(f"This will reset [cyan]{name}[/cyan] to schema defaults.")
             if non_default:
                 preview = ", ".join(non_default[:5])
                 more = f" (+{len(non_default) - 5} more)" if len(non_default) > 5 else ""
                 console.print(f"  Currently non-default: [yellow]{preview}{more}[/yellow]")
+            if serves_default:
+                console.print("  [yellow]This provider serves your current default model[/yellow] -- pick another")
+                console.print("  [dim]afterwards with /model in the TUI, or sign in to it again.[/dim]")
             if not typer.confirm("Continue?", default=False):
                 console.print("[yellow]Aborted.[/yellow]")
                 raise typer.Exit(0)
 
         reset_provider(name)
         console.print(f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)")
+        if serves_default:
+            console.print("  [yellow]Your default model is served by this provider and no longer works.[/yellow]")
+            console.print("  [dim]Pick another with /model in the TUI, or run `raven provider login` for it.[/dim]")
 
     @app.command("show")
     def provider_show_cmd(

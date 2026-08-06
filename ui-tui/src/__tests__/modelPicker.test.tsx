@@ -451,6 +451,19 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('says so when disconnecting the provider the session is using', async () => {
+    // The model id survives the disconnect and still names this provider, so the
+    // config is left pointing at one that cannot answer -- and the startup gate
+    // reads that as "not set up".
+    const h = mount([{ ...deepseek, is_current: true }, oauthProvider])
+    await delay(60)
+
+    await h.type('d')
+    await waitForFrame(h, 'serves your current model')
+
+    h.unmount()
+  })
+
   it('keeps the sign-in screen when the login command fails', async () => {
     const h = mount([anthropic, oauthProvider], undefined, { launch: { code: 1 } })
     await delay(60)

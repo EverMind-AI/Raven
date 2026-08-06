@@ -1015,13 +1015,9 @@ def tui(
     # config (a provider key + default model) is missing. Skipped for the
     # no-TTY diagnostic spawns (--check / --print-colors / --preview-colors).
     if not (check or print_colors or preview_colors) and _stdout_isatty():
-        from raven.cli.onboard_commands import (
-            _is_config_populated,
-            ensure_configured_or_onboard,
-        )
+        from raven.cli.onboard_commands import ensure_ready_to_start
 
-        if not _is_config_populated():
-            ensure_configured_or_onboard()
+        ensure_ready_to_start()
 
     node_path, version = find_node()
     if node_path is None:

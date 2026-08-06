@@ -218,12 +218,10 @@ def register(app: typer.Typer) -> None:
         # model) is missing, run the onboarding wizard first. Only on an
         # interactive TTY — scripted one-shots (`-m`) and non-TTY pipes must
         # fail loudly later rather than block on prompts.
-        from raven.cli.onboard_commands import _is_config_populated
+        if message is None and _stdout_isatty():
+            from raven.cli.onboard_commands import ensure_ready_to_start
 
-        if message is None and _stdout_isatty() and not _is_config_populated():
-            from raven.cli.onboard_commands import ensure_configured_or_onboard
-
-            ensure_configured_or_onboard()
+            ensure_ready_to_start()
 
         from loguru import logger
 

@@ -47,6 +47,7 @@ from raven.providers.registry import (
     CRED_LOCAL,
     CRED_OAUTH,
     credential_kind,
+    needs_public_model_prefix,
     public_model_prefix,
 )
 
@@ -995,7 +996,7 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     # provider is locked in as ``is_custom`` and its model is persisted directly,
     # so nothing here decides its spelling. It would need the opposite treatment
     # anyway -- the id is used verbatim as a deployment name in a URL path.
-    if spec.name in {"minimax_global", "minimax_cn", "openai_codex"}:
+    if needs_public_model_prefix(spec):
         public_prefix = public_model_prefix(spec)
         if model_id.startswith(f"{public_prefix}/"):
             return model_id
@@ -4949,6 +4950,41 @@ def _run_wizard_body(
 # ---------------------------------------------------------------------------
 # Startup gate — invoked by bare `raven` / `raven agent` / TUI entry points
 # ---------------------------------------------------------------------------
+
+
+def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
+    """Run the wizard for a config that cannot start, and only for that.
+
+    Two different things fail the startup check. A config with no usable provider
+    at all is a first run, and the wizard is the answer -- it configures five more
+    subsystems besides this one. A config whose default model happens to name a
+    provider that has gone unusable is not: the wizard restarts at the language
+    screen to fix one line, over a session that has other providers ready. Say
+    which line, and let the user fix it where models are chosen.
+
+    The distinction lives here rather than at each entry point, because both
+    entries were asking the same question and only one answer can be right.
+    """
+    if _is_config_populated():
+        return
+
+    if not _configured_providers():
+        run_wizard(non_interactive=non_interactive)
+        return
+
+    model = (_load_raw_config().get("agents", {}) or {}).get("defaults", {}).get("model")
+    console.print(
+        _t(
+            f"  [yellow]The default model ({model}) is served by a provider with no credentials.[/yellow]",
+            f"  [yellow]默认模型({model})的服务商没有凭据。[/yellow]",
+        )
+    )
+    console.print(
+        _t(
+            "  [dim]Pick another with /model in the TUI, or sign in to that provider again.[/dim]",
+            "  [dim]在 TUI 里用 /model 换一个,或重新登录那个服务商。[/dim]",
+        )
+    )
 
 
 def ensure_configured_or_onboard(*, non_interactive: bool = False) -> bool:

@@ -873,6 +873,14 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
           You can re-authenticate later by selecting it again.
         </Text>
 
+        {/* The model id survives the disconnect and still names this provider, so
+            the session is left pointing at one that cannot answer. */}
+        {provider.is_current ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            It serves your current model - pick another one after disconnecting.
+          </Text>
+        ) : null}
+
         <Text color={t.color.muted} wrap="truncate-end">
           {' '}
         </Text>

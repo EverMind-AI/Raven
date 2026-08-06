@@ -503,3 +503,46 @@ def test_provider_login_openai_codex_signs_in_over_a_credential_that_stopped_wor
     assert r.exit_code == 0
     assert "Already signed in" not in r.stdout
     assert calls == ["get_access_token"], "the sign-in the user asked for never started"
+
+
+def test_resetting_the_provider_behind_the_default_model_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The model id survives the reset and still names this provider, so the next
+    command finds a default nothing can answer. Said before it happens and again
+    after, because the second half is what the user acts on."""
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: True,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {"api_key": "sk-x"},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
+
+    assert r.exit_code == 0
+    assert "no longer works" in r.stdout, r.stdout
+    assert "/model" in r.stdout
+
+
+def test_resetting_an_unrelated_provider_stays_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: False,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {"api_key": "sk-x"},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
+
+    assert r.exit_code == 0
+    assert "no longer works" not in r.stdout

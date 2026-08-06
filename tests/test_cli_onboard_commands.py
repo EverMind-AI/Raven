@@ -1016,7 +1016,7 @@ def test_agent_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Mon
         gate_called.append(True)
         raise typer.Exit(0)  # stop before the heavy loop builds
 
-    monkeypatch.setattr(onboard_commands, "ensure_configured_or_onboard", _gate)
+    monkeypatch.setattr(onboard_commands, "run_wizard", _gate)
     # Config is empty (tmp_env fresh) → _is_config_populated() is False.
     r = runner.invoke(app, ["agent"])
     assert gate_called == [True]
@@ -1096,7 +1096,7 @@ def test_tui_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Monke
         gate_called.append(True)
         raise typer.Exit(0)  # stop before find_node / spawn
 
-    monkeypatch.setattr(onboard_commands, "ensure_configured_or_onboard", _gate)
+    monkeypatch.setattr(onboard_commands, "run_wizard", _gate)
     r = runner.invoke(app, ["tui"])
     assert gate_called == [True]
     assert r.exit_code == 0
@@ -4230,3 +4230,35 @@ def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
 
     assert chosen == "openai-codex/gpt-5.6-sol"
     assert "openai-codex/gpt-5.6-sol" in capsys.readouterr().out, "fell back without saying to what"
+
+
+@pytest.mark.parametrize("entry", ["tui", "agent"])
+def test_a_stale_default_model_does_not_restart_the_wizard(
+    entry: str,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider that works plus a default model naming one that does not is a
+    single wrong line, and the wizard restarts at the language screen to fix it.
+    Resetting the provider a session happened to be using put every user there.
+    """
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or-x"})
+    set_default_model("openai-codex/gpt-5.6-sol")  # nobody signed in to codex
+
+    assert onboard_commands._configured_providers() == ["openrouter"]
+    assert onboard_commands._is_config_populated() is False, "the gate should still say this cannot start"
+
+    def _never(**_):
+        raise AssertionError("the wizard ran over a config with a working provider")
+
+    monkeypatch.setattr(onboard_commands, "run_wizard", _never)
+
+    if entry == "agent":
+        from raven.cli import agent_commands
+
+        monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+
+    onboard_commands.ensure_ready_to_start()
