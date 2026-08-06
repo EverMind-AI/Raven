@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from raven.providers.common_models import common_models_for
+from raven.providers.registry import PROVIDERS
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
 from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
@@ -31,6 +32,11 @@ def fake_home(monkeypatch, tmp_path) -> Path:
     # Clear any process-wide config-path override a prior test left set, so
     # get_config_path() falls back to the patched Path.home (monkeypatch restores it).
     monkeypatch.setattr("raven.config.loader._current_config_path", None)
+    # OAuth credentials live under ``~/.raven`` too, so the patched home covers
+    # them -- but each family prefers an environment override when one is set, and
+    # the suite-wide fixture sets all of them.
+    for name in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
     return tmp_path
 
 
@@ -202,6 +208,22 @@ async def test_add_model_reflected_in_options(fake_home: Path) -> None:
 
     options = await model_options({})
     assert "claude-opus-4-8" in _entry(options, "anthropic")["models"]
+
+
+async def test_a_bare_model_typed_for_codex_is_stored_so_it_finds_codex(fake_home: Path) -> None:
+    """Through the handler, not just the helper: the screen takes free text and the
+    catalogue offers bare slugs, so this is what a user actually types. Stored bare
+    it resolves to OpenAI and the request leaves for a provider that does not serve
+    it."""
+    from raven.providers.registry import find_by_model
+
+    result = await model_add_model({"slug": "openai_codex", "model": "gpt-5.6-sol"})
+
+    stored = result["provider"]["models"]
+    assert "openai-codex/gpt-5.6-sol" in stored, stored
+    assert "gpt-5.6-sol" not in stored, "the bare spelling was stored as well"
+    resolved = find_by_model("openai-codex/gpt-5.6-sol")
+    assert resolved is not None and resolved.name == "openai_codex"
 
 
 async def test_remove_model_reflected_in_options(fake_home: Path) -> None:
@@ -510,3 +532,93 @@ async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Pa
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "ollama_chat"})
     assert "api_base" in str(excinfo.value)
+
+
+async def test_options_lists_the_codex_models_the_account_reports(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the account knows: the registry default is refused by the backend and
+    LiteLLM's table carries slugs an account is not entitled to, which is why this
+    row used to offer nothing at all."""
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda: ("gpt-5.6-sol", "gpt-5.4"),
+    )
+    # Asked only of an account there is one for, so the row has to be signed in
+    # before the catalogue is reached at all.
+    auth = fake_home / ".raven" / "oauth" / "chatgpt"
+    auth.mkdir(parents=True, exist_ok=True)
+    (auth / "auth.json").write_text('{"access_token": "live"}', encoding="utf-8")
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    entry = _entry(await model_options({}), "openai_codex")
+
+    assert entry["authenticated"] is True, "the credential this test wrote was not seen"
+    assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
+
+
+@pytest.mark.parametrize(
+    ("slug", "configured"),
+    [
+        pytest.param("deepseek", True, id="another-provider-the-static-tiers-serve"),
+        pytest.param("openai_codex", False, id="codex-with-nobody-signed-in"),
+    ],
+)
+def test_the_account_catalogue_is_asked_only_when_it_can_answer(
+    slug: str,
+    configured: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network round trip that can only fail is still cached as a failure, which
+    is what left codex empty for half a minute after signing in to it."""
+    from raven.tui_rpc.methods.model import _provider_models
+
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda: pytest.fail("the catalogue was asked when it had no account to answer for"),
+    )
+
+    models = _provider_models(slug, configured=configured)
+
+    if slug == "deepseek":
+        assert models, "other providers still list models"
+
+
+@pytest.mark.parametrize(
+    ("slug", "typed", "stored"),
+    [
+        pytest.param("openai_codex", "gpt-5.6-sol", "openai-codex/gpt-5.6-sol", id="codex-typed-bare"),
+        pytest.param("openai_codex", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4", id="codex-typed-prefixed"),
+        pytest.param("minimax_global", "MiniMax-M2", "minimax-global/MiniMax-M2", id="minimax-typed-bare"),
+        pytest.param("deepseek", "deepseek-chat", "deepseek-chat", id="a-provider-that-routes-on-it"),
+        pytest.param("azure_openai", "my-deployment", "my-deployment", id="azure-uses-it-verbatim-in-a-url"),
+    ],
+)
+def test_a_typed_model_is_stored_the_way_it_resolves_back(slug: str, typed: str, stored: str) -> None:
+    """The add-model screen takes free text, and a bare id is claimed by keyword
+    matching rather than by the provider it was entered under: "gpt-5.6-sol"
+    resolves to OpenAI. The listed models already carry the prefix; a typed one
+    has to end up spelled the same way."""
+    from raven.tui_rpc.methods.model import _stored_spelling
+
+    assert _stored_spelling(slug, typed) == stored
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
+def test_every_provider_stores_a_model_id_that_finds_it_again(spec) -> None:
+    """A sweep rather than a list of the cases we thought of: the id a provider
+    stores has to resolve back to that provider, or the request leaves for
+    whoever else claims the bare name. Providers that route on the prefix or use
+    the id verbatim are covered by resolving as themselves.
+    """
+    from raven.providers.registry import find_by_model, needs_public_model_prefix
+    from raven.tui_rpc.methods.model import _stored_spelling
+
+    if not needs_public_model_prefix(spec):
+        pytest.skip("no public prefix to add; the id is routed or used verbatim")
+
+    stored = _stored_spelling(spec.name, "some-model")
+    resolved = find_by_model(stored)
+
+    assert resolved is not None and resolved.name == spec.name, f"{stored} resolves to {resolved and resolved.name}"

@@ -126,6 +126,48 @@ def _numeric(entry: dict | None, *fields: str) -> float | None:
     return None
 
 
+def is_plan_billed(model: str) -> bool:
+    """Is this model's provider billed by subscription rather than per token?
+
+    Asked wherever a dollar figure is about to be reported, because on a
+    subscription there is no per-token figure to report -- not even zero, which
+    reads as free.
+    """
+    from raven.providers.registry import find_by_model
+
+    spec = find_by_model(model)
+    return bool(spec and spec.billing == "plan")
+
+
+def _candidates(model: str) -> list[str]:
+    """Which ids to ask LiteLLM's table about, best first.
+
+    A provider reached by region or by subscription is filed in that table under
+    the vendor's own spelling, and the registry says which
+    ("minimax-global/MiniMax-M3" -> "minimax/MiniMax-M3"). Asking with the
+    routing id instead missed every time, and each miss cost a second guess and
+    the live catalogue fetch behind it.
+
+    Everything else is asked about as it routes, and only then under an
+    ``openrouter/`` alias: OpenRouter fronts other vendors and prices them under
+    its own prefix, so the alias covers models LiteLLM lists nowhere else -- but
+    it answers with OpenRouter's numbers, which are not what a user routing
+    directly to the vendor pays. Asked alias-first, ``deepseek/deepseek-chat``
+    reported a 65,536-token window at $0.14/M where the vendor's own row says
+    131,072 at $0.28/M.
+    """
+    from raven.providers.registry import metadata_model_id
+
+    filed_as = metadata_model_id(model)
+    if filed_as:
+        return [filed_as]
+
+    if model.startswith("openrouter/"):
+        return [model]
+
+    return [model, f"openrouter/{model}"]
+
+
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
@@ -135,9 +177,7 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     except Exception:
         return None
 
-    candidates = [model]
-    if not model.startswith("openrouter/"):
-        candidates.insert(0, f"openrouter/{model}")
+    candidates = _candidates(model)
 
     # litellm.cost_per_token expects *at least* 1 non-zero token to compute.
     # We pass synthetic tokens to recover the per-token rate.
@@ -257,11 +297,7 @@ def _try_litellm_context_window(model: str) -> int | None:
     except Exception:
         return None
 
-    candidates = [model]
-    if not model.startswith("openrouter/"):
-        candidates.insert(0, f"openrouter/{model}")
-
-    for candidate in candidates:
+    for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
@@ -314,7 +350,16 @@ def estimate_cost_usd(
     ``input_tokens`` is fresh (non-cache) prompt tokens. Anthropic's
     ``usage.input_tokens`` already excludes cache tokens, so pass it
     through untouched.
+
+    A plan-billed provider returns None as well. The subscription is the price,
+    so no per-token figure describes this call: LiteLLM files those models at
+    zero, which the tiers below read as "unknown" and answered with the
+    pay-as-you-go rate the user is not paying -- $2.50 per million for a Copilot
+    seat. Callers already degrade on None; the tokens are still counted.
     """
+    if is_plan_billed(model):
+        return None
+
     rates = _try_litellm_rates(model, input_tokens, output_tokens)
     if rates is None:
         rates = _try_openrouter_rates(model)

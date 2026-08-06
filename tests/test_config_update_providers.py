@@ -11,6 +11,8 @@ import httpx
 import pytest
 
 from raven.config.update_providers import (
+    _copilot_token_dir,
+    _oauth_token_path,
     add_provider_model,
     get_provider_config,
     list_providers,
@@ -207,9 +209,10 @@ def test_reset_clears_oauth_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token_file = tmp_path / "codex.json"
-    token_file.write_text('{"access":"X","refresh":"R","expires":0}')
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    token_file = tmp_path / "chatgpt" / "auth.json"
+    token_file.parent.mkdir()
+    token_file.write_text('{"access_token":"X","refresh_token":"R"}')
 
     reset_provider("openai_codex", config_path=cfg_path)
 
@@ -221,8 +224,117 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
     reset_provider("openai_codex", config_path=cfg_path)
+
+
+@pytest.fixture
+def oauth_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point every OAuth credential lookup inside tmp_path.
+
+    Each family reads its directory from an environment variable when one is set,
+    which jumps out of the patched home -- and the suite-wide fixture sets all of
+    them. Dropping them here is what puts the patched home back in charge.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("GITHUB_COPILOT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("MINIMAX_OAUTH_TOKEN_DIR", raising=False)
+    return tmp_path
+
+
+def _configured(cfg_path: Path, slug: str) -> bool:
+    return bool({p["name"]: p for p in list_providers(config_path=cfg_path)}[slug]["configured"])
+
+
+def _write_credential(path: Path, slug: str) -> None:
+    """Write whatever shape this family's reader accepts at ``path``.
+
+    MiniMax parses and validates its token file (the resource URL has to be one
+    the region actually serves), so a placeholder JSON would read as no token at
+    all and the test would pass for the wrong reason.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if slug.startswith("minimax_"):
+        from raven.providers.minimax_oauth import oauth_config
+
+        config = oauth_config("global" if slug == "minimax_global" else "cn")
+        payload = {
+            "access": "X",
+            "refresh": "R",
+            "expires": 9_999_999_999_000,
+            "resource_url": config.default_resource_url,
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        return
+
+    if slug == "openai_codex":
+        # LiteLLM's driver names these fields, not the kit that used to.
+        path.write_text('{"access_token":"X","refresh_token":"R"}', encoding="utf-8")
+
+        return
+
+    path.write_text('{"access":"X","refresh":"R","expires":9999999999000}', encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["openai_codex", "github_copilot", "minimax_global", "minimax_cn"],
+)
+def test_oauth_credential_is_read_from_ravens_own_directory(
+    cfg_path: Path,
+    oauth_home: Path,
+    slug: str,
+) -> None:
+    """Whatever writes the credential, one directory answers for all four."""
+    assert _configured(cfg_path, slug) is False
+
+    _write_credential(_oauth_token_path(slug), slug)
+
+    assert _configured(cfg_path, slug) is True
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["openai_codex", "github_copilot", "minimax_global", "minimax_cn"],
+)
+def test_a_file_that_is_not_a_credential_is_not_reported_as_one(
+    cfg_path: Path,
+    oauth_home: Path,
+    slug: str,
+) -> None:
+    """A truncated write or a hand-edit passes ``exists()`` and then fails on the
+    first request, having told the picker and the startup gate it was ready."""
+    path = _oauth_token_path(slug)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("   ", encoding="utf-8")
+
+    assert _configured(cfg_path, slug) is False
+
+    _write_credential(path, slug)
+
+    assert _configured(cfg_path, slug) is True
+
+
+def test_reset_clears_copilots_api_key_too(cfg_path: Path, oauth_home: Path) -> None:
+    """The API key outlives the access token it came from, and LiteLLM keeps
+    using it -- a disconnect that leaves it behind does not disconnect."""
+    token_dir = _copilot_token_dir()
+    token_dir.mkdir(parents=True, exist_ok=True)
+    (token_dir / "access-token").write_text("ghu_abc")
+    (token_dir / "api-key.json").write_text('{"token":"k","expires_at":9999999999}')
+
+    reset_provider("github_copilot", config_path=cfg_path)
+
+    assert list(token_dir.glob("*")) == []
+
+
+def test_codex_detection_asks_the_module_that_speaks_for_the_driver(oauth_home: Path) -> None:
+    """Two derivations of one path is the bug this directory exists to prevent."""
+    from raven.providers.chatgpt_token import auth_file
+
+    assert _oauth_token_path("openai_codex") == auth_file()
 
 
 # ---------------------------------------------------------------------------
@@ -411,43 +523,48 @@ def test_test_provider_not_configured_when_api_key_empty(cfg_path: Path) -> None
     assert result["status"] == "not_configured"
 
 
-def test_test_provider_oauth_reads_token_from_oauth_cli_kit(
+def test_test_provider_oauth_sends_the_stored_token(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sys
-
-    fake_token = SimpleNamespace(access="oauth-token-xyz", account_id="me@x")
-    fake_module = SimpleNamespace(get_token=lambda: fake_token)
-    monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
+    """MiniMax's OAuth families go through the generic probe, with the token the
+    login stored as the bearer -- read, never re-acquired, so a report cannot open
+    a device flow behind the user."""
+    monkeypatch.setattr(
+        "raven.providers.minimax_oauth.get_token",
+        lambda region: SimpleNamespace(access="oauth-token-xyz", resource_url="https://api.minimax.io/anthropic/v1"),
+    )
 
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen["auth"] = request.headers.get("Authorization")
+        seen["x_api_key"] = request.headers.get("x-api-key")
+
         return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
-    # openai_codex has default_api_base set; github_copilot doesn't — pick
-    # the former so the request can resolve a URL without extra setup.
     result = probe_provider(
-        "openai_codex",
+        "minimax_global",
         config_path=cfg_path,
         transport=_mock_transport(handler),
     )
+
     assert result["ok"] is True
     assert seen["auth"] == "Bearer oauth-token-xyz"
+    assert seen["x_api_key"] == "oauth-token-xyz"
 
 
 def test_test_provider_oauth_missing_token_returns_oauth_token_missing(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import sys
+    def no_token(region: str):
+        raise RuntimeError("no token stored")
 
-    fake_module = SimpleNamespace(get_token=lambda: SimpleNamespace(access=None, account_id=None))
-    monkeypatch.setitem(sys.modules, "oauth_cli_kit", fake_module)
+    monkeypatch.setattr("raven.providers.minimax_oauth.get_token", no_token)
 
-    result = probe_provider("openai_codex", config_path=cfg_path)
+    result = probe_provider("minimax_global", config_path=cfg_path)
+
     assert result["status"] == "oauth_token_missing"
 
 
@@ -461,6 +578,8 @@ def test_provider_config_models_round_trips(cfg_path: Path) -> None:
     add_provider_model("openrouter", "anthropic/claude-sonnet-4-5", config_path=cfg_path)
 
     section = _read(cfg_path)["providers"]["openrouter"]
+    # Stored under the name that resolves back to openrouter: the bare vendor id
+    # resolves to Anthropic, so a gateway's list said the vendor served it.
     assert section["models"] == ["anthropic/claude-sonnet-4-5"]
     assert "anthropic/claude-sonnet-4-5" in get_provider_config("openrouter", config_path=cfg_path).get("models", [])
 
@@ -511,3 +630,255 @@ def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> No
     with pytest.raises(ConfigReadError):
         set_provider_fields("openai", {"api_key": "sk-x"}, config_path=cfg_path)
     assert cfg_path.read_text(encoding="utf-8") == original  # untouched
+
+
+def _codex_credential(payload: str = '{"access_token": "live"}') -> None:
+    """The probe checks the file before it asks the account: the two failures are
+    not fixed by the same thing, so they must not read the same."""
+    from raven.config.paths import get_oauth_dir
+
+    codex_dir = get_oauth_dir() / "chatgpt"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    (codex_dir / "auth.json").write_text(payload, encoding="utf-8")
+
+
+def test_probing_codex_asks_the_endpoint_that_backend_serves(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic probe requests ``{api_base}/v1/models``, which this backend does
+    not serve -- a valid OAuth credential came back refused, reading as a bad key.
+    Its catalogue is both the credential check and the list of usable models."""
+    _codex_credential()
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda timeout=5.0, strict=False: ("gpt-5.6-sol", "gpt-5.4"),
+    )
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert result["models_count"] == 2
+    assert result["model_ids"] == ["gpt-5.6-sol", "gpt-5.4"]
+
+
+def test_probing_codex_without_a_usable_credential_says_so(
+    cfg_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", lambda timeout=5.0: ())
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["ok"] is False
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login" in result["error"]
+
+
+def test_probing_codex_reports_an_unreachable_catalogue_as_a_network_problem(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The forgiving reader answers an empty list for every failure, which reads as
+    "this account has nothing". Only one of those two is fixed by signing in, and
+    the recovery menus branch on this status to decide what to offer."""
+    _codex_credential()
+
+    def unreachable(timeout=5.0, strict=False):
+        raise httpx.ConnectError("no route to host")
+
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", unreachable)
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "network_error", result
+    assert "provider login" not in result["error"], "sent to sign in over a network fault"
+
+
+def test_probing_codex_keeps_a_revoked_credential_on_the_path_that_can_fix_it(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential the account no longer honours reaches the catalogue and comes
+    back empty. Reporting that as a network fault put it in the recovery branch
+    that offers only Retry -- signing in again, the one thing that fixes it, is
+    offered by the other branch."""
+    _codex_credential('{"refresh_token": "revoked"}')
+    monkeypatch.setattr(
+        "raven.providers.codex_catalog.account_models",
+        lambda timeout=5.0, strict=False: (),
+    )
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "provider login openai-codex" in result["error"]
+
+
+def test_probing_copilot_with_no_credential_does_not_start_a_device_flow(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LiteLLM's copilot authenticator logs in when it finds no token -- a device
+    code printed underneath ``provider test`` and a wait for someone to paste it.
+    Nothing may reach it before the credential on disk has been seen."""
+
+    def never(self):  # pragma: no cover - reached only if the guard is gone
+        raise AssertionError("the authenticator was asked for a key with no credential")
+
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        never,
+    )
+
+    result = probe_provider("github_copilot", config_path=cfg_path)
+
+    assert result["ok"] is False
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login github-copilot" in result["error"]
+
+
+def test_probing_copilot_reads_its_own_credential_not_another_providers(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both providers store a credential under the same OAuth directory, and the
+    one the probe reports on has to be the one it was asked about."""
+    from raven.config.paths import get_oauth_dir
+
+    assert oauth_home in get_oauth_dir().parents
+    codex_dir = get_oauth_dir() / "chatgpt"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    (codex_dir / "auth.json").write_text('{"access_token": "codex-token"}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        lambda self: (_ for _ in ()).throw(AssertionError("asked without a copilot credential")),
+    )
+
+    result = probe_provider("github_copilot", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing"
+    assert "github-copilot" in result["error"]
+
+
+def _seed_copilot_credential(monkeypatch: pytest.MonkeyPatch, *, api_base: str | None) -> None:
+    """A signed-in seat: a device token on disk, plus what the driver reads from
+    the API key it exchanges it for."""
+    from raven.config.update_providers import _copilot_token_dir
+
+    token_dir = _copilot_token_dir()
+    token_dir.mkdir(parents=True, exist_ok=True)
+    (token_dir / "access-token").write_text("gho_device_token", encoding="utf-8")
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_key",
+        lambda self: "tid=copilot-api-key",
+    )
+    monkeypatch.setattr(
+        "litellm.llms.github_copilot.authenticator.Authenticator.get_api_base",
+        lambda self: api_base,
+    )
+
+
+def test_probing_copilot_asks_the_endpoint_the_credential_names(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A signed-in seat has to be able to come back ok.
+
+    The endpoint is not in the registry -- it arrives with the credential -- and
+    the backend refuses a request carrying only an ``Authorization`` header, so
+    the generic probe could reach neither: it answered "api_base is empty" before
+    asking, and asking its way would have read a working seat as a bad key.
+    """
+    _seed_copilot_credential(monkeypatch, api_base="https://api.githubcopilot.com")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+
+        return httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet-4.5"}]})
+
+    result = probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True, result
+    assert result["models_count"] == 2
+    assert result["model_ids"] == ["gpt-4o", "claude-sonnet-4.5"]
+    assert str(seen[0].url) == "https://api.githubcopilot.com/models", "asked the generic /v1/models shape"
+    assert seen[0].headers["authorization"] == "Bearer tid=copilot-api-key"
+    # The headers that tell the backend an editor is asking. Without them a valid
+    # seat is refused, which the probe would report as a bad credential.
+    assert seen[0].headers["copilot-integration-id"] == "vscode-chat"
+    assert seen[0].headers["editor-version"].startswith("vscode/")
+
+
+def test_a_copilot_credential_without_an_endpoint_is_a_credential_problem(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint lives in the API key file, so its absence is that file being
+    unusable -- not a provider missing configuration the user could supply."""
+    _seed_copilot_credential(monkeypatch, api_base=None)
+
+    def never(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("a request went out with no endpoint")
+
+    result = probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(never))
+
+    assert result["status"] == "oauth_token_missing"
+    assert "provider login github-copilot" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [p.name for p in __import__("raven.providers.registry", fromlist=["PROVIDERS"]).PROVIDERS if p.is_oauth],
+)
+def test_every_oauth_family_has_its_own_credential_check(
+    slug: str,
+    cfg_path: Path,
+    oauth_home: Path,
+) -> None:
+    """Each family stores its credential its own way, so each needs its own check.
+    Defaulting to another family's reads the wrong file and can start that
+    provider's device flow behind a probe -- which is what happened when copilot
+    shared codex's. A family added without a check of its own lands here."""
+    result = probe_provider(slug, config_path=cfg_path, timeout_s=3)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "has no credential check" not in (result["error"] or ""), (
+        f"{slug} falls through to another family's credential check"
+    )
+    assert "provider login" in (result["error"] or "").lower(), result["error"]
+
+
+def test_probing_codex_offers_a_sign_in_when_the_credential_is_the_problem(
+    cfg_path: Path,
+    oauth_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token that cannot be produced any more is fixed by signing in again, and
+    the recovery menu offers that on this status. Reported as a network fault it
+    landed on the branch that offers only Retry -- which cannot fix it."""
+    _codex_credential('{"refresh_token": "revoked"}')
+
+    def cannot_produce_a_token(timeout=5.0, strict=False):
+        raise RuntimeError("could not renew the ChatGPT credential")
+
+    monkeypatch.setattr("raven.providers.codex_catalog.account_models", cannot_produce_a_token)
+
+    result = probe_provider("openai_codex", config_path=cfg_path)
+
+    assert result["status"] == "oauth_token_missing", result
+    assert "could not renew" in result["error"]

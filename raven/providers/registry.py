@@ -51,6 +51,14 @@ class ProviderSpec:
     # A vendor LiteLLM merely spells differently is NOT this: adopt LiteLLM's
     # spelling as `name` and keep ours in `name_aliases` (see hosted_vllm).
     via_driver: str = ""
+    # Prefix LiteLLM's metadata table files this provider's models under, when it
+    # differs from the routing prefix ("minimax-global/MiniMax-M3" is priced at
+    # "minimax/MiniMax-M3"). None: the two coincide.
+    metadata_prefix: str | None = None
+    # What the user is billed on. "plan" is a subscription (ChatGPT, a Copilot
+    # seat): no per-token figure describes a call. Declared rather than inferred
+    # from ``is_oauth`` -- Vertex is OAuth and metered.
+    billing: str = "per_token"
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
     # Former names this provider answered to, so model ids saved under the old
     # one ("zhipu/glm-4.6") still resolve after a rename.
@@ -97,6 +105,10 @@ class ProviderSpec:
     # needs an api-version and a deployment name; Codex speaks the Responses API
     # over OAuth). They take no LiteLLM route prefix.
     bypasses_litellm: bool = False
+
+    # Which client constructs the provider, when it is not LiteLLM's. Stated here
+    # so adding a family does not mean editing the factory's dispatch.
+    client: str = ""
 
     # The endpoint is the user's to supply and there is no default that works:
     # Azure gives every tenant its own resource URL, a self-hosted endpoint is
@@ -184,11 +196,12 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="http://localhost:8000/v1",
     ),
     # === Azure OpenAI ======================================================
-    # Served by AzureOpenAIProvider, not LiteLLM (make_provider dispatches on
-    # the name): Azure needs an api-version and takes a deployment name where
-    # every other provider takes a model id.
+    # Served by AzureOpenAIProvider, not LiteLLM (hence ``client`` below): Azure
+    # needs an api-version and takes a deployment name where every other provider
+    # takes a model id.
     ProviderSpec(
         name="azure_openai",
+        client="azure",
         keywords=("azure", "azure-openai"),
         env_key="",
         display_name="Azure OpenAI",
@@ -307,6 +320,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(
         name="openai_codex",
+        client="codex",
         keywords=("openai-codex",),
         env_key="",  # OAuth-based, no API key
         display_name="OpenAI Codex",
@@ -318,10 +332,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_key_prefix="",
         detect_by_base_keyword="codex",
         default_api_base="https://chatgpt.com/backend-api",
+        metadata_prefix="chatgpt",
+        billing="plan",
         strip_model_prefix=False,
         model_overrides=(),
         is_oauth=True,  # OAuth-based authentication
-        default_model="openai-codex/gpt-5-codex",
+        # No static default: every id we shipped here came back "not supported
+        # when using Codex with a ChatGPT account", and the slugs an account does
+        # offer are only knowable by asking it (see ``codex_catalog``). Empty
+        # makes the wizard ask for one rather than write a rejected id.
     ),
     # Github Copilot: uses OAuth, not API key.
     ProviderSpec(
@@ -329,6 +348,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("github_copilot", "copilot"),
         env_key="",  # OAuth-based, no API key
         display_name="Github Copilot",
+        billing="plan",
         skip_prefixes=("github_copilot/",),
         env_extras=(),
         is_gateway=False,
@@ -450,23 +470,29 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="minimax_global",
+        client="minimax_oauth",
         keywords=("minimax-global",),
         env_key="",
         display_name="MiniMax Global (OAuth)",
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimax.io/anthropic/v1",
+        metadata_prefix="minimax",
+        billing="plan",
         is_oauth=True,
         default_model="minimax-global/MiniMax-M3",
     ),
     ProviderSpec(
         name="minimax_cn",
+        client="minimax_oauth",
         keywords=("minimax-cn",),
         env_key="",
         display_name="MiniMax CN (OAuth)",
         via_driver="anthropic",
         skip_prefixes=("anthropic/",),
         default_api_base="https://api.minimaxi.com/anthropic/v1",
+        metadata_prefix="minimax",
+        billing="plan",
         is_oauth=True,
         default_model="minimax-cn/MiniMax-M3",
     ),
@@ -603,6 +629,41 @@ def litellm_spelling(name: str | None) -> str:
     return wanted
 
 
+#: Providers whose own client strips the prefix back off before use, so a model id
+#: may -- and must -- carry the name that resolves to them. Everyone else either
+#: routes on it (LiteLLM does the stripping) or uses the id verbatim: Azure puts it
+#: in a URL path as a deployment name, where a prefix would become part of the path.
+_PREFIX_IS_PUBLIC_ONLY = frozenset({"minimax_global", "minimax_cn", "openai_codex"})
+
+
+def needs_public_model_prefix(spec: "ProviderSpec | None") -> bool:
+    """Must a model id for this provider be written with its own name in front?
+
+    Written bare it is claimed by keyword matching instead -- "gpt-5.6-sol"
+    resolves to OpenAI -- and the request goes to a provider that does not serve
+    it. Every surface that stores a model id asks this, so the answer is here
+    rather than in each of them.
+    """
+    return spec is not None and spec.name in _PREFIX_IS_PUBLIC_ONLY
+
+
+def public_model_prefix(spec: "ProviderSpec") -> str:
+    """The prefix a user writes to reach THIS provider, which is not always the
+    one that goes on the wire.
+
+    ``model_prefix`` answers "what does LiteLLM route on", and for a provider
+    LiteLLM does not carry it is empty by design. But a model id still has to say
+    who serves it: written bare, it is claimed by keyword and fallback instead --
+    "gpt-5.6-sol" resolves to OpenAI, so a Codex model configured that way is sent
+    somewhere it does not exist. A provider reached through another vendor's
+    driver has the same split: the wire prefix names that vendor.
+
+    Both cases resolve back here through ``route_names``, which is built from this
+    same spelling.
+    """
+    return spec.name.replace("_", "-")
+
+
 def names_same_provider(key: str, name: str) -> bool:
     """Do these two strings name the same provider?
 
@@ -627,6 +688,22 @@ def names_same_provider(key: str, name: str) -> bool:
     if key.lower() == to_camel(name).lower():
         return True
     return normalize_provider_name(key) == normalize_provider_name(name)
+
+
+def metadata_model_id(model: str) -> str | None:
+    """The id LiteLLM's metadata table files this model under, when it differs.
+
+    Returns None when the routing id is already the metadata id -- the caller
+    then keeps whatever candidates it had. One answer here rather than a mapping
+    beside every consumer: price, context window and capability lookups all ask
+    the same question.
+    """
+    spec = find_by_name(split_model_id(model)[0]) if "/" in (model or "") else None
+    if spec is None or spec.metadata_prefix is None:
+        return None
+
+    _, rest = split_model_id(model)
+    return f"{spec.metadata_prefix}/{rest}" if spec.metadata_prefix else rest
 
 
 def split_model_id(model: str) -> tuple[str, str]:

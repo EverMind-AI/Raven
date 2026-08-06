@@ -159,6 +159,33 @@ def test_default_session_info_contains_real_usage_baseline(fake_agent_loop, conf
     assert usage["context_percent"] == 0
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("openai-codex/gpt-5.6-sol", None),
+        ("github_copilot/gpt-4o", None),
+        ("anthropic/claude-sonnet-4-5", 0.0),
+    ],
+)
+def test_the_boot_banner_does_not_open_a_subscription_at_zero(
+    model: str,
+    expected: float | None,
+    fake_agent_loop,
+    config,
+) -> None:
+    """Zero is a price, and on a plan there is no price to report.
+
+    Every other counter here is genuinely zero before the first turn. This one was
+    reporting $0.00 for a session whose every turn will answer "no per-token
+    price" -- the same "a subscription reads as free" removed from the estimate.
+    """
+    fake_agent_loop.model = model
+
+    usage = _default_session_info(fake_agent_loop, config)["usage"]
+
+    assert usage["cost_usd"] == expected
+
+
 def test_default_session_info_contains_real_version(fake_agent_loop, config) -> None:
     """T1.1.d (AC-4): ``info.version`` reads importlib.metadata, not hardcoded '0.1'."""
     info = _default_session_info(fake_agent_loop, config)

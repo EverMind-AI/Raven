@@ -2,7 +2,7 @@
 
 Five methods drive the picker:
 
-* ``model.options`` — current model/provider + one row per provider (no network).
+* ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated
@@ -39,6 +39,8 @@ from raven.providers.registry import (
     credential_kind,
     find_by_model,
     find_by_name,
+    needs_public_model_prefix,
+    public_model_prefix,
 )
 from raven.tui_rpc.errors import (
     ConfigValidationError,
@@ -66,26 +68,54 @@ def _parse(model_cls: type, params: dict) -> Any:
         ) from exc
 
 
-def _provider_models(slug: str) -> list[str]:
+def _provider_models(slug: str, *, configured: bool) -> list[str]:
     try:
         cfg = get_provider_config(slug, redact_secrets=False)
     except KeyError:
         cfg = {}
-    configured = cfg.get("models", [])
-    configured = list(configured) if isinstance(configured, list) else []
+    from_config = cfg.get("models", [])
+    from_config = list(from_config) if isinstance(from_config, list) else []
     # Priority: what the user configured (manual entry via ``model.add_model``
-    # writes here), then the curated shortlist, then LiteLLM's own catalogue.
-    # Curated before catalogue because the shortlist is a few models worth
-    # recommending and the catalogue is everything, deprecated snapshots
-    # included; catalogue after it because eleven providers have no shortlist at
-    # all, which is why the picker used to offer them nothing.
+    # writes here), then the curated shortlist, then LiteLLM's own catalogue,
+    # then whatever the account itself reports. Curated before catalogue because
+    # the shortlist is a few models worth recommending and the catalogue is
+    # everything, deprecated snapshots included; catalogue after it because eleven
+    # providers have no shortlist at all, which is why the picker used to offer
+    # them nothing; the account last because only one provider can be asked and
+    # asking costs a request (see ``_account_models``).
     out: list[str] = []
     seen: set[str] = set()
-    for candidate in (*configured, *common_models_for(slug), *litellm_models_for(slug)):
+    chain = (
+        *from_config,
+        *common_models_for(slug),
+        *litellm_models_for(slug),
+        *_account_models(slug, configured=configured),
+    )
+    for candidate in chain:
         if candidate not in seen:
             seen.add(candidate)
             out.append(candidate)
+
     return out
+
+
+def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
+    """Models the account itself reports, for a provider only it can answer for.
+
+    Codex has no static list worth offering: the registry default is refused by
+    the backend, and the entries LiteLLM's table carries are not the slugs an
+    account is entitled to. Everyone else is served by the tiers above.
+
+    Nobody signed in has nothing to report, so asking costs a request that can
+    only fail -- and the failure is cached, which is how opening the picker while
+    signed out left this provider empty for the half-minute after signing in.
+    """
+    if slug != "openai_codex" or not configured:
+        return ()
+
+    from raven.providers.codex_catalog import account_models
+
+    return tuple(_stored_spelling(slug, model) for model in account_models())
 
 
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
@@ -100,7 +130,7 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
     if is_oauth and not configured:
         warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
-    models = _provider_models(slug)
+    models = _provider_models(slug, configured=configured)
     return {
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),
@@ -121,9 +151,8 @@ async def _entry_off_loop(slug: str, current_provider: str | None) -> dict[str, 
     Reading the candidate chain imports LiteLLM the first time, which takes
     seconds -- long enough to stall this session's token stream. Every handler
     that returns a row goes through here rather than warming the cache in one
-    and reading it inline in the others: the cache is cold whenever a first read
-    failed (failures are deliberately not cached), and handler order is up to
-    the client.
+    and reading it inline in the others: a first read that failed leaves nothing
+    to reuse, and handler order is up to the client.
     """
     return await asyncio.to_thread(_build_provider_entry, slug, current_provider=current_provider)
 
@@ -232,10 +261,27 @@ async def model_disconnect(params: dict) -> dict:
     return {"disconnected": True}
 
 
+def _stored_spelling(slug: str, model: str) -> str:
+    """The id to store for a model the user typed, for the provider they typed it under.
+
+    A bare id is claimed by keyword matching rather than by the provider it was
+    entered for: "gpt-5.6-sol" resolves to OpenAI, so the request leaves for a
+    provider that does not serve it. The listed models already carry the prefix,
+    and a typed one has to end up spelled the same way.
+    """
+    spec = find_by_name(slug)
+    if not needs_public_model_prefix(spec) or not model:
+        return model
+
+    prefix = public_model_prefix(spec)  # type: ignore[arg-type]
+
+    return model if model.startswith(f"{prefix}/") else f"{prefix}/{model.split('/')[-1]}"
+
+
 async def model_add_model(params: dict) -> dict:
     parsed = _parse(ModelAddModelParams, params)
     try:
-        await asyncio.to_thread(add_provider_model, parsed.slug, parsed.model)
+        await asyncio.to_thread(add_provider_model, parsed.slug, _stored_spelling(parsed.slug, parsed.model))
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     _, current_provider = _current_selection()

@@ -1,4 +1,16 @@
-"""OpenAI Codex Responses Provider."""
+"""OpenAI Codex Responses Provider.
+
+LiteLLM owns the credential raven signs in with, but not the request. On the
+pinned 1.85.0 its bridge to this backend raises: the account streams a
+``response.completed`` whose ``output`` is empty, which 1.95.0 rebuilds from the
+``output_item.done`` events and 1.85.0 reports as an unknown response.
+
+Routing through it also needs the model spelled ``responses/<slug>`` (nothing an
+account offers is in LiteLLM's table, and without a table entry there is no
+bridge), and costs ``prompt_cache_key``, which its allow-list filters out. That
+last one is what ``test_openai_codex_provider`` guards; the rest is a version
+bump away.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +31,7 @@ DEFAULT_ORIGINATOR = "raven"
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
 
@@ -36,16 +48,11 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
-        try:
-            from oauth_cli_kit import get_token as get_codex_token
-        except ImportError as e:
-            raise RuntimeError(
-                "OpenAICodexProvider requires the 'tools' extra. "
-                "Install with: pip install -e '.[tools]'  (or uv pip install -e '.[tools]')"
-            ) from e
+        from raven.providers.chatgpt_token import access_token_and_account
 
-        token = await asyncio.to_thread(get_codex_token)
-        headers = _build_headers(token.account_id, token.access)
+        # Refreshing can block, and the credential belongs to LiteLLM's driver.
+        access, account_id = await asyncio.to_thread(access_token_and_account)
+        headers = _build_headers(account_id, access)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -55,10 +62,14 @@ class OpenAICodexProvider(LLMProvider):
             "input": input_items,
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": _prompt_cache_key(messages),
             "tool_choice": tool_choice or "auto",
             "parallel_tool_calls": True,
         }
+
+        # Nothing to group without instructions: every such request would share
+        # one key while sharing no prefix.
+        if system_prompt:
+            body["prompt_cache_key"] = _prompt_cache_key(system_prompt)
 
         if reasoning_effort:
             body["reasoning"] = {"effort": reasoning_effort}
@@ -287,9 +298,14 @@ def _split_tool_call_id(tool_call_id: Any) -> tuple[str, str | None]:
     return "call_0", None
 
 
-def _prompt_cache_key(messages: list[dict[str, Any]]) -> str:
-    raw = json.dumps(messages, ensure_ascii=True, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _prompt_cache_key(system_prompt: str) -> str:
+    """Group requests that share a cached prefix -- which is the instructions.
+
+    Keyed on the whole transcript before, which grows every turn: the key was
+    different on every request, so the one thing it exists for -- landing
+    requests with a common prefix on the same cache -- never happened.
+    """
+    return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
 
 
 async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[dict[str, Any], None]:

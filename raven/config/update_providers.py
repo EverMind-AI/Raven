@@ -5,13 +5,13 @@ points (CLI commands, future wizard, future REPL slash) must call
 functions defined here. Direct ``load_config`` / ``save_config`` on the
 providers section is forbidden -- see plan rule.
 
-OAuth providers have a separate
-auth path via ``provider_commands._LOGIN_HANDLERS`` and store tokens via
-``oauth_cli_kit``, not in ``config.json``. ``set_provider_fields`` refuses
-to write ``api_key`` for those providers; callers must invoke
-``provider login`` for that. ``reset_provider`` handles both cases:
-schema-default rewrite for config fields, plus unlinking the
-``oauth_cli_kit`` token file when the provider has ``is_oauth=True``.
+OAuth providers have a separate auth path via
+``provider_commands._LOGIN_HANDLERS`` and keep their credentials in files under
+``~/.raven/oauth``, not in ``config.json``. ``set_provider_fields`` refuses to
+write ``api_key`` for those providers; callers must invoke ``provider login`` for
+that. ``reset_provider`` handles both cases: schema-default rewrite for config
+fields, plus deleting the credential files when the provider has
+``is_oauth=True``.
 """
 
 from __future__ import annotations
@@ -422,21 +422,95 @@ def _redact(value: Any) -> Any:
     return "****set****"
 
 
-def _oauth_token_path(provider_name: str) -> Path:
-    """Resolve the on-disk token file path written by ``oauth_cli_kit``.
+#: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
+#: access token and the short-lived API key it is exchanged for.
+_COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
 
-    Honors the ``OAUTH_CLI_KIT_TOKEN_PATH`` override the kit itself respects,
-    so tests can point at ``tmp_path`` without touching real user data.
+
+def _oauth_token_path(provider_name: str) -> Path:
+    """Resolve where this provider's credential lives under Raven's own directory.
+
+    Every family is asked of the module that writes it, so this cannot drift from
+    what a login leaves behind. Deriving it a second time here is what wrote
+    ``openai_codex`` under one name and read it under another -- and each family
+    has a way to override its directory, so a second derivation is wrong exactly
+    when a user has taken one.
     """
-    override = os.environ.get("OAUTH_CLI_KIT_TOKEN_PATH")
-    if override:
-        return Path(override)
-    try:
-        from platformdirs import user_data_dir
-    except ImportError:
-        return Path.home() / ".local" / "share" / "oauth-cli-kit" / "auth" / f"{provider_name}.json"
-    base_dir = Path(user_data_dir("oauth-cli-kit", appauthor=False))
-    return base_dir / "auth" / f"{provider_name}.json"
+    from raven.config.paths import get_oauth_dir
+
+    if provider_name == "github_copilot":
+        return _copilot_token_dir() / _COPILOT_TOKEN_FILES[0]
+
+    if provider_name == "openai_codex":
+        from raven.providers.chatgpt_token import auth_file
+
+        return auth_file()
+
+    if provider_name in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import token_path
+
+        return token_path("global" if provider_name == "minimax_global" else "cn")
+
+    return get_oauth_dir() / f"{provider_name}.json"
+
+
+def _copilot_token_dir() -> Path:
+    """The directory LiteLLM's Copilot authenticator reads and writes.
+
+    ``import_litellm`` points ``GITHUB_COPILOT_TOKEN_DIR`` at Raven's own
+    directory before LiteLLM is imported; reading the same variable here keeps
+    one answer even when a user has set it themselves.
+    """
+    from raven.config.paths import get_oauth_dir
+
+    token_dir = os.environ.get("GITHUB_COPILOT_TOKEN_DIR")
+    return Path(token_dir).expanduser() if token_dir else get_oauth_dir() / "github_copilot"
+
+
+def _oauth_credentials_present(provider_name: str) -> bool:
+    """Are this provider's credentials on disk and readable as credentials?
+
+    A file at the right path is not evidence: a truncated write passes
+    ``exists()`` and fails on the first request. What each family's own reader
+    accepts is the answer.
+
+    Expiry is not part of it -- an expired token with a refresh token is usable.
+    Nor is acceptance, which takes a request: that is ``provider test``.
+    """
+    if provider_name in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import load_token
+
+        return load_token("global" if provider_name == "minimax_global" else "cn") is not None
+
+    if provider_name == "openai_codex":
+        from raven.providers.chatgpt_token import stored_credentials
+
+        return stored_credentials() is not None
+
+    if provider_name == "github_copilot":
+        # LiteLLM stores the device token as bare text, so "parses" is only
+        # "holds something".
+        try:
+            return bool(_oauth_token_path(provider_name).read_text(encoding="utf-8").strip())
+        except OSError:
+            return False
+
+    return _oauth_token_path(provider_name).exists()
+
+
+def oauth_credential_files(provider_name: str) -> list[Path]:
+    """Every file a sign-in for this provider can leave behind.
+
+    Two callers, one list. Disconnect has to clear all of them -- Copilot's API key
+    outlives the access token it came from, so deleting the token alone leaves a
+    working credential -- and a sign-in has to restrict all of them, for the same
+    reason in the other direction.
+    """
+    if provider_name == "github_copilot":
+        token_dir = _copilot_token_dir()
+        return [token_dir / filename for filename in _COPILOT_TOKEN_FILES]
+
+    return [_oauth_token_path(provider_name)]
 
 
 # ---------------------------------------------------------------------------
@@ -510,12 +584,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
 
         if is_oauth:
-            if fname in {"minimax_global", "minimax_cn"}:
-                from raven.providers.minimax_oauth import load_token
-
-                configured = load_token("global" if fname == "minimax_global" else "cn") is not None
-            else:
-                configured = _oauth_token_path(fname).exists()
+            configured = _oauth_credentials_present(fname)
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             configured = bool(api_base) or bool(api_key)
@@ -641,6 +710,26 @@ def set_provider_fields(
     return prev
 
 
+def serves_default_model(name: str, *, config_path: Path | None = None) -> bool:
+    """Is this provider the one that answers the configured default model?
+
+    Resetting it clears the credential and leaves the model id behind, so the
+    config still names a provider that can no longer answer -- and the startup
+    gate reads that as "not set up" and runs the wizard. Both doors that reset a
+    provider ask this so they can say so before it happens.
+    """
+    from raven.config.loader import load_config
+
+    try:
+        config = load_config(config_path) if config_path else load_config()
+        model = config.agents.defaults.model
+        return bool(model) and config.get_provider_name(str(model)) == canonical_provider_name(name)
+    except Exception:
+        # A config that cannot be resolved has no default worth protecting, and
+        # this is a warning path: it must never be the reason a reset fails.
+        return False
+
+
 def reset_provider(
     name: str,
     *,
@@ -655,11 +744,10 @@ def reset_provider(
        for Gemini, ``api_key_list=[]`` etc.). For OAuth providers those are
        already at defaults, so the write is a no-op for them but harmless.
 
-    2. **OAuth token file** (``is_oauth=True``) — unlinked from disk so the
-       user is effectively logged out. Path resolution follows
-       ``oauth_cli_kit``'s own convention (honoring the
-       ``OAUTH_CLI_KIT_TOKEN_PATH`` env override). Idempotent: ``missing_ok``
-       so reset can run multiple times without raising.
+    2. **OAuth credential files** (``is_oauth=True``) — unlinked from disk so the
+       user is effectively logged out. Every file a sign-in can leave behind
+       goes, Copilot's API key included. Idempotent: ``missing_ok`` so reset can
+       run multiple times without raising.
 
     Callers don't need to know which case applies — one mental model covers
     both API-key and OAuth providers.
@@ -679,8 +767,9 @@ def reset_provider(
                 from raven.providers.minimax_oauth import delete_token
 
                 delete_token("global" if name == "minimax_global" else "cn")
-            else:
-                _oauth_token_path(name).unlink(missing_ok=True)
+
+            for stale in oauth_credential_files(name):
+                stale.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning(
                 "update_providers: failed to unlink OAuth token for {}: {}",
@@ -795,7 +884,6 @@ def test_provider(
     can mount an ``httpx.MockTransport`` without touching real network.
     """
     name = canonical_provider_name(name)
-    import time
 
     try:
         spec = _provider_spec(name)
@@ -814,17 +902,26 @@ def test_provider(
     api_key = cfg.get("api_key") or ""
     api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
 
+    # Before the token fetch below, which asks a question this backend does not
+    # answer: its catalogue is the credential check.
+    if spec and spec.name == "openai_codex":
+        return _probe_codex_catalog(timeout_s=timeout_s)
+
+    if spec and spec.name == "github_copilot":
+        return _probe_copilot_seat(timeout_s=timeout_s, transport=transport)
+
     if spec and spec.is_oauth:
         try:
             if spec.name in {"minimax_global", "minimax_cn"}:
                 from raven.providers.minimax_oauth import get_token
 
                 token = get_token("global" if spec.name == "minimax_global" else "cn")
+                oauth_access = token.access
                 api_base = token.resource_url
             else:
-                from oauth_cli_kit import get_token
-
-                token = get_token()
+                # A new family must add its own branch: defaulting to another
+                # family's reads the wrong credential and can start its device flow.
+                raise RuntimeError(f"{spec.label} has no credential check here yet")
         except ImportError:
             return {
                 "ok": False,
@@ -845,7 +942,7 @@ def test_provider(
                 "model_ids": None,
                 "error": str(exc),
             }
-        if not (token and getattr(token, "access", None)):
+        if not oauth_access:
             return {
                 "ok": False,
                 "status": "oauth_token_missing",
@@ -855,7 +952,7 @@ def test_provider(
                 "model_ids": None,
                 "error": "no OAuth token stored",
             }
-        api_key = token.access
+        api_key = oauth_access
 
     if not api_key and not (spec and spec.is_local):
         return {
@@ -886,6 +983,24 @@ def test_provider(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
+
+    return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
+
+
+def _probe_models_endpoint(
+    url: str,
+    headers: dict[str, str],
+    *,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+) -> dict[str, Any]:
+    """GET a models endpoint and report the result in the probe's vocabulary.
+
+    What to ask and what to send is the caller's answer. A vendor that refuses the
+    request every other one accepts is the reason there is more than one caller;
+    how the answer is reported is the same for all of them.
+    """
+    import time
 
     start = time.monotonic()
     client_kwargs: dict[str, Any] = {"timeout": timeout_s}
@@ -936,6 +1051,181 @@ def test_provider(
         "models_count": models_count,
         "model_ids": model_ids,
         "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}",
+    }
+
+
+def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | None) -> dict[str, Any]:
+    """Verify a Copilot seat the way its backend accepts being asked.
+
+    Nothing about this one fits the generic probe. The endpoint arrives with the
+    credential rather than from the registry, so the generic path answered
+    "api_base is empty and provider has no default" without ever asking. And the
+    endpoint refuses a request carrying only an ``Authorization`` header: the
+    driver sends a set of editor headers on every call, which is what tells the
+    backend an editor is asking, so one header would report a working seat as a
+    bad credential. Both come from the driver rather than from a guess here.
+    """
+    if not _oauth_credentials_present("github_copilot"):
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no credentials found -- run `raven provider login github-copilot`",
+        }
+
+    from raven.providers.litellm_setup import import_litellm
+
+    import_litellm()  # points the authenticator at raven's OAuth directory
+    from litellm.llms.github_copilot.authenticator import Authenticator
+    from litellm.llms.github_copilot.common_utils import get_copilot_default_headers
+
+    try:
+        authenticator = Authenticator()
+        # Exchanges the stored device token for an API key when the cached one has
+        # expired, so this is where a revoked seat surfaces.
+        api_key = authenticator.get_api_key()
+        api_base = authenticator.get_api_base()
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
+
+    if not api_key:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no OAuth token stored",
+        }
+
+    if not api_base:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "the credential names no API endpoint -- run `raven provider login github-copilot`",
+        }
+
+    return _probe_models_endpoint(
+        api_base.rstrip("/") + "/models",
+        get_copilot_default_headers(api_key),
+        timeout_s=timeout_s,
+        transport=transport,
+    )
+
+
+def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
+    """Verify a Codex credential the way the backend will accept being asked.
+
+    The generic probe requests ``{api_base}/v1/models``, which this backend does
+    not serve: a valid OAuth credential came back refused, reading as a bad key.
+    Its catalogue endpoint is both the credential check and the answer to what the
+    account may use.
+    """
+    import time
+
+    from raven.providers.chatgpt_token import stored_credentials
+    from raven.providers.codex_catalog import account_models, reset_cache
+
+    start = time.monotonic()
+    reset_cache()  # a probe reports on now, not on what a picker asked minutes ago
+
+    if stored_credentials() is None:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no credentials found -- run `raven provider login openai-codex`",
+        }
+
+    # Strict, so a failure is reported rather than flattened into an empty list --
+    # and sorted into the one thing the user can do about it. The recovery menus
+    # offer signing in again on one status and Retry on the other, so a credential
+    # problem reported as a network one strands the user on a screen that cannot
+    # fix it. Two ways to arrive at "sign in again": the token could not be
+    # produced at all, and the endpoint refused the one that was.
+    #
+    # The split is not clean and does not claim to be -- the driver wraps a network
+    # failure during refresh in the same error as a revoked token -- so it sorts by
+    # which action has a chance of helping, and both messages name both causes.
+    try:
+        models = account_models(timeout=timeout_s, strict=True)
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
+    except httpx.HTTPStatusError as exc:
+        refused = exc.response.status_code in (401, 403)
+        return {
+            "ok": False,
+            "status": "oauth_token_missing" if refused else "network_error",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": exc.response.status_code,
+            "models_count": None,
+            "model_ids": None,
+            "error": (
+                f"the account refused this credential ({exc.response.status_code}) -- "
+                "run `raven provider login openai-codex`"
+                if refused
+                else str(exc)
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": int((time.monotonic() - start) * 1000),
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": str(exc),
+        }
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    if not models:
+        return {
+            "ok": False,
+            "status": "oauth_token_missing",
+            "elapsed_ms": elapsed_ms,
+            "http_status": None,
+            "models_count": 0,
+            "model_ids": [],
+            "error": "the account offers no models -- the credential may have been revoked; "
+            "run `raven provider login openai-codex`",
+        }
+
+    return {
+        "ok": True,
+        "status": "valid",
+        "elapsed_ms": elapsed_ms,
+        "http_status": 200,
+        "models_count": len(models),
+        "model_ids": list(models),
+        "error": None,
     }
 
 

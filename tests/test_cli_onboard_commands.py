@@ -125,6 +125,12 @@ def tmp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
     set_config_path(cfg)
+    # Credentials live under ``~/.raven``, which ``set_config_path`` above does
+    # not cover. Left un-isolated, the wizard reports "LLM provider already
+    # configured" on a machine whose developer has signed in to one of them.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for name in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(
         "raven.config.paths.get_workspace_path",
         lambda: workspace,
@@ -835,7 +841,13 @@ def test_model_routes_to_provider_heuristic() -> None:
 
 
 def test_registry_default_models_present() -> None:
-    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``."""
+    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``.
+
+    ``openai_codex`` is deliberately absent: every id shipped for it came back
+    "not supported when using Codex with a ChatGPT account", so carrying one means
+    the wizard writes a model that cannot answer. The account catalogue is the
+    only source, and ``test_codex_carries_no_static_default_model`` pins that.
+    """
     from raven.providers.registry import find_by_name
 
     for name in (
@@ -845,7 +857,6 @@ def test_registry_default_models_present() -> None:
         "gemini",
         "deepseek",
         "github_copilot",
-        "openai_codex",
         "minimax_global",
         "minimax_cn",
     ):
@@ -931,20 +942,77 @@ def test_is_config_populated_accepts_minimax_oauth_token(
     assert onboard_commands._is_config_populated() is True
 
 
-def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate returns True (no wizard) when config is already complete."""
+def test_is_config_populated_asks_who_serves_the_configured_model(
+    tmp_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Credentials for some other provider do not make the model reachable.
+
+    The gate used to accept any configured non-MiniMax provider regardless of
+    which one the model names, so a key for one vendor let the session start on a
+    model only another vendor could answer.
+    """
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openai", {"api_key": "sk-x"})
+    set_default_model("anthropic/claude-sonnet-4-5")
+
+    assert onboard_commands._configured_providers() == ["openai"]
+    assert onboard_commands._is_config_populated() is False
+
+    set_provider_fields("anthropic", {"api_key": "sk-ant"})
+
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_is_config_populated_honours_an_explicit_provider(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``agents.defaults.provider`` decides, so a gateway serving another
+    vendor's model id is not read as that vendor being unconfigured."""
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or-x"})
+    set_default_model("anthropic/claude-sonnet-4-5")
+    data = json.loads(tmp_env.read_text())
+    data.setdefault("agents", {}).setdefault("defaults", {})["provider"] = "openrouter"
+    tmp_env.write_text(json.dumps(data), encoding="utf-8")
+
+    assert onboard_commands._is_config_populated() is True
+
+
+def test_a_config_that_can_start_is_left_alone(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The gate runs nothing and says nothing when the config already works.
+
+    Silence is half the behaviour: telling a working session that its default
+    model resolves to nothing would be as wrong as restarting the wizard.
+    """
     _seed_provider()
     ran: list[bool] = []
     monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
-    assert onboard_commands.ensure_configured_or_onboard() is True
-    assert ran == []  # wizard never invoked
+
+    onboard_commands.ensure_ready_to_start()
+
+    assert ran == []
+    assert capsys.readouterr().out == ""
 
 
-def test_ensure_configured_runs_wizard_when_missing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate runs the wizard when the required config is missing."""
+def test_a_first_run_gets_the_wizard(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing configured at all is the case the wizard exists for -- it sets up
+    five more subsystems than this one."""
     ran: list[bool] = []
     monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
-    assert onboard_commands.ensure_configured_or_onboard() is False
+
+    onboard_commands.ensure_ready_to_start()
+
     assert ran == [True]
 
 
@@ -962,7 +1030,7 @@ def test_agent_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Mon
         gate_called.append(True)
         raise typer.Exit(0)  # stop before the heavy loop builds
 
-    monkeypatch.setattr(onboard_commands, "ensure_configured_or_onboard", _gate)
+    monkeypatch.setattr(onboard_commands, "run_wizard", _gate)
     # Config is empty (tmp_env fresh) → _is_config_populated() is False.
     r = runner.invoke(app, ["agent"])
     assert gate_called == [True]
@@ -970,17 +1038,18 @@ def test_agent_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Mon
 
 
 def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`raven agent` with complete config does NOT enter the wizard."""
+    """`raven agent` with complete config does NOT enter the wizard.
+
+    The gate itself is reached on every interactive start -- deciding whether this
+    config can start is its job, and asserting it was not called would only pin
+    the caller's copy of that decision.
+    """
     from raven.cli import agent_commands
 
     _seed_provider()
     monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
-    gate_called: list[bool] = []
-    monkeypatch.setattr(
-        onboard_commands,
-        "ensure_configured_or_onboard",
-        lambda **_: gate_called.append(True),
-    )
+    ran: list[bool] = []
+    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
 
     # Stub the heavy loop so the command returns quickly after the gate check.
     def _boom(*a, **kw):
@@ -988,8 +1057,8 @@ def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("raven.cli._helpers.load_runtime_config", _boom)
     runner.invoke(app, ["agent"])
-    # Populated → _is_config_populated() True → gate body never runs.
-    assert gate_called == []
+
+    assert ran == []
 
 
 def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1001,7 +1070,7 @@ def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.Mon
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     monkeypatch.setattr(
@@ -1020,7 +1089,7 @@ def test_agent_gate_skips_non_tty(tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     monkeypatch.setattr(
@@ -1042,7 +1111,7 @@ def test_tui_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Monke
         gate_called.append(True)
         raise typer.Exit(0)  # stop before find_node / spawn
 
-    monkeypatch.setattr(onboard_commands, "ensure_configured_or_onboard", _gate)
+    monkeypatch.setattr(onboard_commands, "run_wizard", _gate)
     r = runner.invoke(app, ["tui"])
     assert gate_called == [True]
     assert r.exit_code == 0
@@ -1056,7 +1125,7 @@ def test_tui_gate_skips_check_flag(tmp_env: Path, monkeypatch: pytest.MonkeyPatc
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     # Stub find_node so --check exits fast without a real Node child.
@@ -2233,8 +2302,23 @@ def _run_import_step(
         "raven.importer.scanners.scan_all",
         AsyncMock(return_value=_import_results() if results is None else results),
     )
+    # A foreground run reads the real config for a memory backend and imports
+    # into it -- the same machine-dependence as `_memory_enabled` above, and here
+    # it would write to whatever workspace the developer has configured. These
+    # tests are about the choices the step makes, not about running an import.
+    monkeypatch.setattr(
+        "raven.cli.import_commands._build_and_run",
+        AsyncMock(return_value=_no_op_import_result()),
+    )
     onboard_commands._step5_import(skip=False, non_interactive=False)
     return scripted
+
+
+def _no_op_import_result() -> Any:
+    from raven.cli.import_commands import ImportRunResult
+    from raven.importer.orchestrator import ImportSummary
+
+    return ImportRunResult(summary=ImportSummary(total=0, submitted=0, skipped=0, failed=0, errors=[]))
 
 
 def _patch_skills_only_install(monkeypatch: pytest.MonkeyPatch, workspace: Path, *, confirm: bool = True) -> AsyncMock:
@@ -4069,3 +4153,138 @@ def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
 
     assert checked, "no function calls the prompt; this test would prove nothing"
     assert not offenders, "the prompt raises now; its callers must not test for None:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    ("slug", "raw"),
+    [
+        pytest.param("openai_codex", "gpt-5.6-sol", id="codex-from-the-account-catalogue"),
+        pytest.param("minimax_global", "MiniMax-M2", id="minimax-through-anthropics-driver"),
+    ],
+)
+def test_a_model_the_wizard_writes_resolves_back_to_the_provider_it_configured(slug: str, raw: str) -> None:
+    """The wizard's list comes back bare, and a bare id is claimed by keyword:
+    "gpt-5.6-sol" resolves to OpenAI, so a Codex model written that way is sent to
+    a provider that does not serve it -- which is what the test message hit.
+    """
+    from raven.providers.registry import find_by_model, find_by_name
+
+    spec = find_by_name(slug)
+    written = onboard_commands._format_model_for_provider(slug, spec, raw)
+
+    assert "/" in written, f"{slug} model written bare: {written}"
+    resolved = find_by_model(written)
+    assert resolved is not None and resolved.name == slug, f"{written} resolves to {resolved and resolved.name}"
+
+
+def test_pressing_enter_on_the_model_prompt_takes_the_first_one_offered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider with no static default still has to have one at the prompt: the
+    empty submit falls back to it, and with nothing to fall back to Enter exited
+    the wizard instead of choosing. The account's list is newest-first, so its
+    head is the answer a hard-coded id could not be.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict = {}
+
+    class _EmptySubmit:
+        def ask(self):
+            return ""
+
+    def fake_autocomplete(label, **kwargs):
+        captured.update(kwargs)
+
+        return _EmptySubmit()
+
+    monkeypatch.setattr(questionary, "autocomplete", fake_autocomplete)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model=None,
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert captured["default"] == "openai-codex/gpt-5.6-sol", "the prompt offered no default to accept"
+    assert chosen == "openai-codex/gpt-5.6-sol"
+
+
+def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """Clearing the prefill and pressing Enter echoes an empty answer, and the next
+    thing on screen is a test message being sent. Substituting silently left the
+    model it was sent with appearing nowhere."""
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    class _Cleared:
+        def ask(self):
+            return "   "
+
+    monkeypatch.setattr(questionary, "autocomplete", lambda label, **kw: _Cleared())
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model=None,
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert chosen == "openai-codex/gpt-5.6-sol"
+    assert "openai-codex/gpt-5.6-sol" in capsys.readouterr().out, "fell back without saying to what"
+
+
+@pytest.mark.parametrize("entry", ["tui", "agent"])
+def test_a_stale_default_model_does_not_restart_the_wizard(
+    entry: str,
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider that works plus a default model naming one that does not is a
+    single wrong line, and the wizard restarts at the language screen to fix it.
+    Resetting the provider a session happened to be using put every user there.
+    """
+    from raven.config.update import set_default_model
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("openrouter", {"api_key": "sk-or-x"})
+    set_default_model("openai-codex/gpt-5.6-sol")  # nobody signed in to codex
+
+    assert onboard_commands._configured_providers() == ["openrouter"]
+    assert onboard_commands._is_config_populated() is False, "the gate should still say this cannot start"
+
+    def _never(**_):
+        raise AssertionError("the wizard ran over a config with a working provider")
+
+    monkeypatch.setattr(onboard_commands, "run_wizard", _never)
+
+    if entry == "agent":
+        from raven.cli import agent_commands
+
+        monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+        monkeypatch.setattr(
+            "raven.cli._helpers.load_runtime_config",
+            lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
+        )
+        result = runner.invoke(app, ["agent"])
+    else:
+        from raven.cli import tui_commands
+
+        monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: True)
+        monkeypatch.setattr(tui_commands, "find_node", lambda: (None, None))
+        result = runner.invoke(app, ["tui"])
+
+    assert "openai-codex/gpt-5.6-sol" in result.output, "the notice did not name the model to fix"

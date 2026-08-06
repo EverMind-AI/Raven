@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from raven.cli import provider_commands
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
@@ -51,65 +52,142 @@ def test_provider_login_unknown_provider_exits_1() -> None:
     assert "openai-codex" in r.stdout or "github-copilot" in r.stdout
 
 
-def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Login starts an interactive flow even when a cached token exists."""
-    from types import SimpleNamespace
+def _fake_chatgpt_authenticator(
+    monkeypatch: pytest.MonkeyPatch,
+    token: str | None,
+    *,
+    on_login=None,
+) -> list[str]:
+    """Stand in for LiteLLM's ChatGPT driver, which owns this flow.
 
-    fake_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
-    login_calls = 0
+    Patched on the module the command imports from, so the command's own wiring --
+    import litellm first, then ask its authenticator -- is what runs. ``on_login``
+    stands in for the credential the real driver writes on its way to a token.
+    """
+    calls: list[str] = []
 
-    def fake_login(**_):
-        nonlocal login_calls
-        login_calls += 1
-        return fake_token
+    class _Authenticator:
+        def get_access_token(self) -> str | None:
+            calls.append("get_access_token")
+            if on_login is not None:
+                on_login()
 
-    fake_module = SimpleNamespace(
-        get_token=lambda: fake_token,
-        login_oauth_interactive=fake_login,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+            return token
+
+    import sys
+    from types import ModuleType
+
+    module = ModuleType("litellm.llms.chatgpt.authenticator")
+    module.Authenticator = _Authenticator  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm.llms.chatgpt.authenticator", module)
+
+    common = ModuleType("litellm.llms.chatgpt.common_utils")
+    common.CHATGPT_DEVICE_VERIFY_URL = "https://auth.openai.com/codex/device"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "litellm.llms.chatgpt.common_utils", common)
+
+    return calls
+
+
+def test_provider_login_openai_codex_success(monkeypatch: pytest.MonkeyPatch, opened_urls: list[str]) -> None:
+    """The login is one call into the driver that owns the device flow."""
+    calls = _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
     assert r.exit_code == 0
-    assert login_calls == 1
+    assert calls == ["get_access_token"]
     assert "Authenticated with OpenAI Codex" in r.stdout
+    assert opened_urls == ["https://auth.openai.com/codex/device"]
 
 
-def test_provider_login_openai_codex_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If oauth_cli_kit returns no access token, the command exits 1."""
-    from types import SimpleNamespace
-
-    empty_token = SimpleNamespace(access=None, account_id=None)
-
-    fake_module = SimpleNamespace(
-        get_token=lambda: empty_token,
-        login_oauth_interactive=lambda **_: empty_token,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+def test_provider_login_openai_codex_failure_exits_1(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """No token back means the flow did not complete."""
+    _fake_chatgpt_authenticator(monkeypatch, None)
 
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
     assert r.exit_code == 1
     assert "Authentication failed" in r.stdout
 
 
-def test_provider_login_openai_codex_disables_browser_without_linux_display(
+@pytest.mark.parametrize(
+    ("slug", "written"),
+    [
+        ("openai-codex", ("chatgpt/auth.json",)),
+        ("github-copilot", ("github_copilot/access-token", "github_copilot/api-key.json")),
+    ],
+)
+def test_a_sign_in_leaves_its_credential_readable_only_by_its_owner(
+    slug: str,
+    written: tuple[str, ...],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """The drivers that write these are LiteLLM's, and they use a plain ``open()``:
+    under a normal umask the credential lands world-readable. The mode is set here
+    explicitly rather than left to the runner's umask, so this asks about the
+    command and not about the machine.
+    """
+    import stat
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for env in ("CHATGPT_TOKEN_DIR", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(env, raising=False)
+
+    paths = [tmp_path / ".raven" / "oauth" / name for name in written]
+
+    def _write_them_wide_open() -> None:
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("credential", encoding="utf-8")
+            path.chmod(0o644)
+
+    if slug == "openai-codex":
+        _fake_chatgpt_authenticator(monkeypatch, "fake-access-token", on_login=_write_them_wide_open)
+    else:
+        # The dispatch reads this dict, so replacing the entry is what stands in for
+        # the whole copilot flow.
+        monkeypatch.setitem(
+            provider_commands._LOGIN_HANDLERS,
+            "github_copilot",
+            _write_them_wide_open,
+        )
+
+    r = runner.invoke(app, ["provider", "login", slug])
+
+    assert r.exit_code == 0, r.stdout
+    for path in paths:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600, f"{path.name} is readable by anyone"
+
+
+def test_the_oauth_directory_is_owner_only_even_if_it_already_existed(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
+    """Not every writer in here is ours to fix -- LiteLLM's create their files
+    under the umask, and a family added later will too. The directory is what
+    holds for them, so an existing loose one is tightened rather than trusted."""
+    import stat
 
-    empty_token = SimpleNamespace(access=None, account_id=None)
-    authenticated_token = SimpleNamespace(access="fake-access-token", account_id="user@example.com")
-    login_kwargs: dict[str, object] = {}
+    from raven.config.paths import get_oauth_dir
 
-    def fake_login(**kwargs):
-        login_kwargs.update(kwargs)
-        return authenticated_token
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    loose = tmp_path / ".raven" / "oauth"
+    loose.mkdir(parents=True)
+    loose.chmod(0o755)
 
-    fake_module = SimpleNamespace(
-        get_token=lambda: empty_token,
-        login_oauth_interactive=fake_login,
-    )
-    monkeypatch.setitem(__import__("sys").modules, "oauth_cli_kit", fake_module)
+    assert stat.S_IMODE(get_oauth_dir().stat().st_mode) == 0o700
+
+
+def test_provider_login_openai_codex_opens_nothing_without_a_display(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
     monkeypatch.setattr("sys.platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -117,10 +195,29 @@ def test_provider_login_openai_codex_disables_browser_without_linux_display(
     r = runner.invoke(app, ["provider", "login", "openai-codex"])
 
     assert r.exit_code == 0
-    assert login_kwargs["open_browser"] is False
+    assert opened_urls == []
 
 
-def test_provider_login_github_copilot_success(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def opened_urls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture browser hand-offs; without this the suite opens real tabs.
+
+    A display is declared too. Whether the login opens a page depends on having
+    somewhere to open it, and CI runs headless Linux -- so every assertion here
+    would otherwise be answered by the runner rather than by the code: the ones
+    expecting a page opened fail, and the ones expecting none pass for the wrong
+    reason. The two headless cases drop it again.
+    """
+    monkeypatch.setenv("DISPLAY", ":0")
+    urls: list[str] = []
+    monkeypatch.setattr("webbrowser.open", lambda url, *a, **k: urls.append(url) or True)
+    return urls
+
+
+def test_provider_login_github_copilot_success(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
     """github-copilot login triggers an acompletion → mock it returning OK."""
 
     async def fake_acompletion(**_):
@@ -133,9 +230,34 @@ def test_provider_login_github_copilot_success(monkeypatch: pytest.MonkeyPatch) 
     r = runner.invoke(app, ["provider", "login", "github-copilot"])
     assert r.exit_code == 0
     assert "Authenticated with GitHub Copilot" in r.stdout
+    # LiteLLM prints the code but opens nothing, so the command opens the page
+    # the code goes into -- the other two families already hand off a browser.
+    assert opened_urls == ["https://github.com/login/device"]
 
 
-def test_provider_login_github_copilot_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_login_github_copilot_headless_opens_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    async def fake_acompletion(**_):
+        return None
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    r = runner.invoke(app, ["provider", "login", "github-copilot"])
+    assert r.exit_code == 0
+    assert opened_urls == []
+
+
+def test_provider_login_github_copilot_error_exits_1(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
     """If litellm.acompletion raises, the command exits 1."""
 
     async def boom(**_):
@@ -272,9 +394,10 @@ def test_reset_clears_oauth_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token_file = tmp_path / "codex.json"
-    token_file.write_text('{"access":"X","refresh":"R","expires":0}')
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_file))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
+    token_file = tmp_path / "chatgpt" / "auth.json"
+    token_file.parent.mkdir()
+    token_file.write_text('{"access_token":"X","refresh_token":"R"}')
 
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
@@ -286,7 +409,7 @@ def test_reset_oauth_idempotent_when_no_token_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "chatgpt"))
     r = runner.invoke(app, ["provider", "reset", "openai_codex", "--yes"])
     assert r.exit_code == 0, r.stdout
 
@@ -423,3 +546,132 @@ def test_provider_set_refuses_malformed_config_and_preserves_file(tmp_config: Pa
     result = runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-x"])
     assert result.exit_code != 0
     assert tmp_config.read_text(encoding="utf-8") == original  # NOT clobbered
+
+
+def test_provider_login_openai_codex_says_so_when_it_would_do_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """Asking the driver for a token returns the stored one when it is still good.
+    Announcing a device flow and opening a browser tab first made a no-op look
+    like a sign-in, and left no way to tell that switching accounts had failed."""
+    calls = _fake_chatgpt_authenticator(monkeypatch, "fake-access-token")
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("live", "acct"),
+    )
+
+    r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
+    assert r.exit_code == 0
+    assert "Already signed in" in r.stdout
+    # Named, not paraphrased: `provider remove` does not exist (the subcommand is
+    # `reset`), and the wrong one was pinned here while the message printed it.
+    assert "provider reset openai-codex" in r.stdout
+    assert calls == [], "the driver was asked for a token anyway"
+    assert opened_urls == [], "a browser tab was opened for a sign-in that did not happen"
+
+
+def test_provider_login_openai_codex_signs_in_over_a_credential_that_stopped_working(
+    monkeypatch: pytest.MonkeyPatch,
+    opened_urls: list[str],
+) -> None:
+    """A revoked refresh token is still a stored credential, and the request path
+    answers a revocation by sending the user to this command. Reporting "already
+    signed in" for it made the two answers point at each other with no way out."""
+    calls = _fake_chatgpt_authenticator(monkeypatch, "fresh-token")
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: (_ for _ in ()).throw(RuntimeError("no longer valid")),
+    )
+
+    r = runner.invoke(app, ["provider", "login", "openai-codex"])
+
+    assert r.exit_code == 0
+    assert "Already signed in" not in r.stdout
+    assert calls == ["get_access_token"], "the sign-in the user asked for never started"
+
+
+def test_resetting_the_provider_behind_the_default_model_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The model id survives the reset and still names this provider, so the next
+    command finds a default nothing can answer. Said before it happens and again
+    after, because the second half is what the user acts on."""
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: True,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {"api_key": "sk-x"},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
+
+    assert r.exit_code == 0
+    assert "no longer works" in r.stdout, r.stdout
+    assert "/model" in r.stdout
+
+
+def test_resetting_an_unrelated_provider_stays_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: False,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {"api_key": "sk-x"},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", "openrouter", "-y"])
+
+    assert r.exit_code == 0
+    assert "no longer works" not in r.stdout
+
+
+@pytest.mark.parametrize(
+    ("slug", "expected"),
+    [
+        pytest.param("openai-codex", "raven provider login openai-codex", id="oauth-signs-in"),
+        pytest.param("openrouter", "raven provider set openrouter --api-key", id="key-takes-a-key"),
+        pytest.param("hosted-vllm", "raven provider set hosted-vllm --api-base", id="local-takes-an-address"),
+        pytest.param(
+            "azure-openai",
+            "raven provider set azure-openai --api-key <KEY> --api-base",
+            id="endpoint-takes-both",
+        ),
+    ],
+)
+def test_resetting_the_provider_behind_the_default_model_names_the_way_back(
+    slug: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model id survives the reset and still names this provider, so the next
+    command finds a default nothing can answer. The way back differs by credential
+    kind: `provider login` exits 1 for anyone who is not an OAuth family, and a
+    local deployment has no key to give -- so a single spelling sent four of them
+    to a flag that does nothing.
+    """
+    monkeypatch.setattr(
+        "raven.config.update_providers.serves_default_model",
+        lambda name, **_: True,
+    )
+    monkeypatch.setattr("raven.config.update_providers.reset_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "raven.config.update_providers.get_provider_config",
+        lambda *_a, **_k: {},
+    )
+
+    r = runner.invoke(app, ["provider", "reset", slug, "-y"])
+
+    assert r.exit_code == 0
+    flat = " ".join(r.stdout.split())
+    assert "no longer works" in flat, flat
+    assert expected in flat, flat

@@ -37,6 +37,10 @@ from raven import __logo__
 
 console = Console()
 
+# Where GitHub's device-code response sends the user; LiteLLM prints it but does
+# not open it.
+_GITHUB_DEVICE_URL = "https://github.com/login/device"
+
 
 provider_app = typer.Typer(help="Manage providers")
 
@@ -74,29 +78,90 @@ def provider_login(
     console.print(f"{__logo__} OAuth Login - {spec.label}\n")
     handler()
 
+    # Here rather than in each handler: two of the three drivers that write these
+    # files are LiteLLM's and create them under the process umask, and a family
+    # added later would be the third place to forget. What a sign-in can leave
+    # behind is already answered once, for disconnect.
+    from raven.config.paths import restrict_to_owner
+    from raven.config.update_providers import oauth_credential_files
+
+    restrict_to_owner(*oauth_credential_files(spec.name))
+
+
+def _open_device_page(url: str) -> None:
+    """Hand the user a browser on the page their device code goes into.
+
+    The drivers that own these flows print the URL and stop there, so this is the
+    only reason the login commands differ from just calling them.
+    """
+    if not _can_open_browser():
+        return
+
+    import webbrowser
+
+    if webbrowser.open(url):
+        console.print(f"[dim]opened {url}[/dim]")
+    else:
+        console.print(f"visit {url} and enter the code below")
+
+
+def _can_open_browser() -> bool:
+    """Whether this session has a browser to hand the user off to.
+
+    A headless Linux box has no display to open one on; every other platform is
+    assumed to have one.
+    """
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
 
 @_register_login("openai_codex")
 def _login_openai_codex() -> None:
-    try:
-        from oauth_cli_kit import login_oauth_interactive
+    # LiteLLM's driver owns this flow: it requests the device code, prints the
+    # page and the code, polls, and writes the credential where the request path
+    # will look for it. Asking it for a token is the whole login.
+    from raven.providers.litellm_setup import import_litellm
 
-        console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-        token = login_oauth_interactive(
-            print_fn=lambda s: console.print(s),
-            prompt_fn=lambda s: typer.prompt(s),
-            open_browser=(
-                bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-                if sys.platform.startswith("linux")
-                else None
-            ),
-        )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
-        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
-    except ImportError:
-        console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
+    import_litellm()
+    from litellm.llms.chatgpt.authenticator import Authenticator
+    from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL
+
+    from raven.providers.chatgpt_token import access_token_and_account, clear_abandoned_device_code
+
+    # Asked whether a credential is stored, this said yes for a revoked one -- and
+    # the error that sends the user here is raised by the same revocation, so the
+    # two answers pointed at each other. Ask whether one still works instead;
+    # that call refreshes but cannot start a login, so a dead credential falls
+    # through to the flow the user came for.
+    try:
+        access_token_and_account()
+    except Exception:
+        pass
+    else:
+        console.print("[green]Already signed in to OpenAI Codex.[/green]")
+        console.print("[dim]To sign in as someone else: raven provider reset openai-codex[/dim]")
+        return
+
+    # Otherwise the driver would wait for the earlier attempt to land rather than
+    # start this one, silently, for as long as five minutes.
+    if clear_abandoned_device_code():
+        console.print("[dim]Discarded an unfinished sign-in from an earlier attempt.[/dim]")
+
+    console.print("[cyan]Starting ChatGPT device flow...[/cyan]\n")
+    _open_device_page(CHATGPT_DEVICE_VERIFY_URL)
+
+    try:
+        token = Authenticator().get_access_token()
+    except Exception as exc:
+        console.print(f"[red]Authentication error: {exc}[/red]")
         raise typer.Exit(1)
+
+    if not token:
+        console.print("[red]✗ Authentication failed[/red]")
+        raise typer.Exit(1)
+
+    console.print("[green]✓ Authenticated with OpenAI Codex[/green]")
 
 
 @_register_login("github_copilot")
@@ -104,6 +169,11 @@ def _login_github_copilot() -> None:
     import asyncio
 
     console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
+
+    # The page is the same URL GitHub's device-code response returns, and the code
+    # has to be typed into it either way -- opening it before the code appears
+    # costs the user nothing.
+    _open_device_page(_GITHUB_DEVICE_URL)
 
     async def _trigger():
         from raven.providers.litellm_setup import import_litellm
@@ -131,11 +201,7 @@ def _login_minimax(region: str, label: str) -> None:
         token = login(
             region,
             print_fn=lambda message: console.print(message),
-            open_browser=(
-                bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-                if sys.platform.startswith("linux")
-                else True
-            ),
+            open_browser=_can_open_browser(),
         )
     except Exception as exc:
         console.print(f"[red]Authentication error: {exc}[/red]")
@@ -429,9 +495,9 @@ def _register_config_commands(app: typer.Typer) -> None:
     ):
         """Restore a provider to schema defaults. Key preserved, values reset.
 
-        For OAuth providers the on-disk token
-        file written by ``oauth_cli_kit`` is also deleted, so the user is
-        effectively logged out and must re-run ``provider login`` to use it.
+        For OAuth providers the credential files under ``~/.raven/oauth`` are
+        deleted too, so the user is effectively logged out and must re-run
+        ``provider login`` to use it.
         """
         from raven.config.update_providers import (
             get_provider_config,
@@ -446,18 +512,52 @@ def _register_config_commands(app: typer.Typer) -> None:
 
         non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
 
+        from raven.config.update_providers import serves_default_model
+        from raven.providers.registry import (
+            CRED_ENDPOINT,
+            CRED_LOCAL,
+            CRED_OAUTH,
+            credential_kind,
+        )
+
+        # Asked before the confirmation, because it is the part worth confirming:
+        # the model id survives the reset and still names this provider, so the
+        # next command finds a default nothing can answer.
+        serves_default = serves_default_model(name)
+
         if not yes:
             console.print(f"This will reset [cyan]{name}[/cyan] to schema defaults.")
             if non_default:
                 preview = ", ".join(non_default[:5])
                 more = f" (+{len(non_default) - 5} more)" if len(non_default) > 5 else ""
                 console.print(f"  Currently non-default: [yellow]{preview}{more}[/yellow]")
+            if serves_default:
+                console.print("  [yellow]This provider serves your current default model[/yellow] -- pick another")
+                console.print("  [dim]afterwards with /model in the TUI, or sign in to it again.[/dim]")
             if not typer.confirm("Continue?", default=False):
                 console.print("[yellow]Aborted.[/yellow]")
                 raise typer.Exit(0)
 
         reset_provider(name)
         console.print(f"[green]✓[/green] {name} reset to defaults (key preserved, values cleared)")
+        if serves_default:
+            # By credential kind, because each kind is set up by a different
+            # command and a different field: `provider login` exits 1 for anyone
+            # who is not an OAuth family, and a local deployment has no key to
+            # give -- naming the wrong one sends the user to a command that
+            # refuses them or a flag that does nothing.
+            dashed = name.replace("_", "-")
+            kind = credential_kind(name)
+            if kind == CRED_OAUTH:
+                back = f"raven provider login {dashed}"
+            elif kind == CRED_LOCAL:
+                back = f"raven provider set {dashed} --api-base <URL>"
+            elif kind == CRED_ENDPOINT:
+                back = f"raven provider set {dashed} --api-key <KEY> --api-base <URL>"
+            else:
+                back = f"raven provider set {dashed} --api-key <KEY>"
+            console.print("  [yellow]Your default model is served by this provider and no longer works.[/yellow]")
+            console.print(f"  [dim]Pick another with /model in the TUI, or set it up again: {back}[/dim]")
 
     @app.command("show")
     def provider_show_cmd(

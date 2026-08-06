@@ -34,9 +34,14 @@ def test_headers_declare_experimental_responses_beta():
     assert headers["accept"] == "text/event-stream"
 
 
-def test_provider_default_model_is_codex():
-    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.1-codex")
-    assert provider.get_default_model() == "openai-codex/gpt-5.1-codex"
+def test_the_model_is_the_callers_to_supply():
+    """No built-in default: every id shipped here was refused by the backend, and
+    only the account knows which slugs it offers. Omitting it has to fail here
+    rather than at the first request, where the id would come back rejected."""
+    with pytest.raises(TypeError):
+        OpenAICodexProvider()  # type: ignore[call-arg]
+
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
     # OAuth-based: constructed without an API key.
     assert provider.api_key is None
 
@@ -122,3 +127,80 @@ def test_convert_messages_wires_tool_output_into_function_call_output():
     assert items[0]["type"] == "function_call_output"
     assert items[0]["call_id"] == "call_7"
     assert items[0]["output"][1]["type"] == "input_image"
+
+
+def _capture_body(monkeypatch) -> list[dict]:
+    """Run ``chat`` without a network call or a credential, keeping the body."""
+    bodies: list[dict] = []
+
+    async def fake_request(url, headers, body, verify, timeout):
+        bodies.append(body)
+
+        return "", [], "stop"
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider._request_codex", fake_request)
+    monkeypatch.setattr(
+        "raven.providers.chatgpt_token.access_token_and_account",
+        lambda: ("token", "acct"),
+    )
+
+    return bodies
+
+
+async def test_the_cache_key_is_stable_while_the_conversation_grows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keyed on the transcript, it changed every turn -- so requests sharing a
+    cached prefix never landed on the same cache, which is the only thing the key
+    is for."""
+    bodies = _capture_body(monkeypatch)
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
+
+    await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "one"}])
+    await provider.chat(
+        [
+            {"role": "system", "content": "you are raven"},
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "two"},
+        ]
+    )
+
+    assert bodies[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"]
+
+
+async def test_a_different_system_prompt_is_a_different_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    bodies = _capture_body(monkeypatch)
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
+
+    await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "x"}])
+    await provider.chat([{"role": "system", "content": "you are something else"}, {"role": "user", "content": "x"}])
+
+    assert bodies[0]["prompt_cache_key"] != bodies[1]["prompt_cache_key"]
+
+
+async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One key shared by requests that share no prefix is worse than none."""
+    bodies = _capture_body(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "x"}])
+
+    assert "prompt_cache_key" not in bodies[0]
+
+
+def test_litellm_still_filters_out_the_cache_key() -> None:
+    """The one cost of migrating that a test can see.
+
+    LiteLLM's Responses transformation filters the body through an allow-list,
+    and ``prompt_cache_key`` is not on it -- so a migration would keep every test
+    green while dropping the field that groups requests for a cache hit.
+    """
+    import inspect
+
+    from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
+
+    source = inspect.getsource(ChatGPTResponsesAPIConfig.transform_responses_api_request)
+
+    assert '"prompt_cache_key"' not in source, (
+        "LiteLLM now preserves prompt_cache_key: the measured cost of routing codex "
+        "through LiteLLMProvider is gone, so re-read this provider's docstring and decide "
+        "whether it still has a reason to exist."
+    )

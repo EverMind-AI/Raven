@@ -533,3 +533,69 @@ def test_tui_announces_log_path_only_on_abnormal_exit(
         assert f"(exit {exit_code})" in result.stderr
     else:
         assert "TUI logs" not in result.stderr
+
+
+def test_the_tui_is_told_which_raven_to_call_back_into(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The picker signs a user in by running ``raven provider login``, and that
+    writes a credential. Resolved through PATH it can be a different install --
+    one that writes it where this process does not look, so the login reports
+    success and the provider stays unauthenticated."""
+    from raven.cli import tui_commands
+
+    entry = tmp_path / "raven"
+    entry.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(entry), "tui"])
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == str(entry)
+
+
+def test_an_explicitly_pointed_raven_bin_is_left_alone(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from raven.cli import tui_commands
+
+    entry = tmp_path / "raven"
+    entry.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(entry), "tui"])
+    monkeypatch.setenv("RAVEN_BIN", "/somewhere/else/raven")
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == "/somewhere/else/raven"
+
+
+def test_an_unnameable_entry_point_leaves_the_variable_unset(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Unset, not empty: the TUI reads ``RAVEN_BIN?.trim() || 'raven'``, so an
+    empty value falls back to PATH while looking like it had been answered."""
+    from raven.cli import tui_commands
+
+    monkeypatch.setattr("sys.argv", ["/nowhere/pytest", "tui"])
+    monkeypatch.setattr("sys.executable", str(tmp_path / "bin" / "python"))
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert "RAVEN_BIN" not in tui_commands.child_env()
+
+
+def test_python_dash_m_finds_the_script_beside_the_interpreter(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``python -m raven`` puts a module path in argv[0]; the console script sits
+    in the same directory as the interpreter that is running."""
+    from raven.cli import tui_commands
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "raven").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr("sys.argv", [str(tmp_path / "raven" / "__main__.py"), "tui"])
+    monkeypatch.setattr("sys.executable", str(bin_dir / "python"))
+    monkeypatch.delenv("RAVEN_BIN", raising=False)
+
+    assert tui_commands.child_env()["RAVEN_BIN"] == str(bin_dir / "raven")
+
+
+def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both RPC transports build the child environment, and a third spawn site
+    added later must not be the one that forgets."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    for fn in (tui_commands._spawn_with_rpc_pipes, tui_commands._spawn_with_rpc_socket):
+        source = inspect.getsource(fn)
+        assert "child_env()" in source, f"{fn.__name__} builds its own env"
+        assert "os.environ.copy()" not in source, f"{fn.__name__} bypasses child_env()"
