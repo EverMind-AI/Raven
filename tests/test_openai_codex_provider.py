@@ -34,9 +34,11 @@ def test_headers_declare_experimental_responses_beta():
     assert headers["accept"] == "text/event-stream"
 
 
-def test_provider_default_model_is_codex():
-    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.1-codex")
-    assert provider.get_default_model() == "openai-codex/gpt-5.1-codex"
+def test_the_model_is_the_callers_to_supply():
+    """No built-in default: every id shipped here was refused by the backend, and
+    only the account knows which slugs it offers."""
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
+    assert provider.get_default_model() == "openai-codex/gpt-5.6-sol"
     # OAuth-based: constructed without an API key.
     assert provider.api_key is None
 
@@ -147,7 +149,7 @@ async def test_the_cache_key_is_stable_while_the_conversation_grows(monkeypatch:
     cached prefix never landed on the same cache, which is the only thing the key
     is for."""
     bodies = _capture_body(monkeypatch)
-    provider = OpenAICodexProvider()
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
 
     await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "one"}])
     await provider.chat(
@@ -164,7 +166,7 @@ async def test_the_cache_key_is_stable_while_the_conversation_grows(monkeypatch:
 
 async def test_a_different_system_prompt_is_a_different_cache_key(monkeypatch: pytest.MonkeyPatch) -> None:
     bodies = _capture_body(monkeypatch)
-    provider = OpenAICodexProvider()
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
 
     await provider.chat([{"role": "system", "content": "you are raven"}, {"role": "user", "content": "x"}])
     await provider.chat([{"role": "system", "content": "you are something else"}, {"role": "user", "content": "x"}])
@@ -176,7 +178,7 @@ async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatc
     """One key shared by requests that share no prefix is worse than none."""
     bodies = _capture_body(monkeypatch)
 
-    await OpenAICodexProvider().chat([{"role": "user", "content": "x"}])
+    await OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "x"}])
 
     assert "prompt_cache_key" not in bodies[0]
 

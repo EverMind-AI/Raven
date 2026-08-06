@@ -337,7 +337,10 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         is_oauth=True,  # OAuth-based authentication
-        default_model="openai-codex/gpt-5-codex",
+        # No static default: every id we shipped here came back "not supported
+        # when using Codex with a ChatGPT account", and the slugs an account does
+        # offer are only knowable by asking it (see ``codex_catalog``). Empty
+        # makes the wizard ask for one rather than write a rejected id.
     ),
     # Github Copilot: uses OAuth, not API key.
     ProviderSpec(
@@ -624,6 +627,23 @@ def litellm_spelling(name: str | None) -> str:
         if normalize_provider_name(candidate) == wanted:
             return candidate
     return wanted
+
+
+def public_model_prefix(spec: "ProviderSpec") -> str:
+    """The prefix a user writes to reach THIS provider, which is not always the
+    one that goes on the wire.
+
+    ``model_prefix`` answers "what does LiteLLM route on", and for a provider
+    LiteLLM does not carry it is empty by design. But a model id still has to say
+    who serves it: written bare, it is claimed by keyword and fallback instead --
+    "gpt-5.6-sol" resolves to OpenAI, so a Codex model configured that way is sent
+    somewhere it does not exist. A provider reached through another vendor's
+    driver has the same split: the wire prefix names that vendor.
+
+    Both cases resolve back here through ``route_names``, which is built from this
+    same spelling.
+    """
+    return spec.name.replace("_", "-")
 
 
 def names_same_provider(key: str, name: str) -> bool:

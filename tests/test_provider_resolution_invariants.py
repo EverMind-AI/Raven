@@ -524,3 +524,27 @@ def test_a_metadata_prefix_is_declared_only_where_it_differs_from_routing() -> N
     assert metadata_model_id("minimax-cn/MiniMax-M3") == "minimax/MiniMax-M3"
     assert metadata_model_id("deepseek/deepseek-chat") is None, "routing id is already the metadata id"
     assert metadata_model_id("gpt-4o") is None, "a bare id claims no provider"
+
+
+def test_codex_carries_no_static_default_model() -> None:
+    """Every id shipped here came back "not supported when using Codex with a
+    ChatGPT account" -- and the slugs an account does offer are only knowable by
+    asking it. A static default means the wizard writes a model id that cannot
+    answer, and the CLI hands one to a provider that will be refused.
+    """
+    import inspect
+
+    from raven.providers.openai_codex_provider import OpenAICodexProvider
+
+    spec = next((p for p in PROVIDERS if p.name == "openai_codex"), None)
+    assert spec is not None
+    assert spec.default_model == "", (
+        f"openai_codex declares default_model={spec.default_model!r}: the account "
+        "catalogue is the only source for this provider (see raven/providers/codex_catalog.py)"
+    )
+
+    model_param = inspect.signature(OpenAICodexProvider.__init__).parameters["default_model"]
+    assert model_param.default is inspect.Parameter.empty, (
+        "OpenAICodexProvider takes a default model rather than requiring one, so a "
+        "caller that omits it gets an id the backend refuses"
+    )
