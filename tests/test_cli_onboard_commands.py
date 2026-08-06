@@ -985,20 +985,34 @@ def test_is_config_populated_honours_an_explicit_provider(
     assert onboard_commands._is_config_populated() is True
 
 
-def test_ensure_configured_short_circuits_when_complete(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate returns True (no wizard) when config is already complete."""
+def test_a_config_that_can_start_is_left_alone(
+    tmp_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The gate runs nothing and says nothing when the config already works.
+
+    Silence is half the behaviour: telling a working session that its default
+    model resolves to nothing would be as wrong as restarting the wizard.
+    """
     _seed_provider()
     ran: list[bool] = []
     monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
-    assert onboard_commands.ensure_configured_or_onboard() is True
-    assert ran == []  # wizard never invoked
+
+    onboard_commands.ensure_ready_to_start()
+
+    assert ran == []
+    assert capsys.readouterr().out == ""
 
 
-def test_ensure_configured_runs_wizard_when_missing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate runs the wizard when the required config is missing."""
+def test_a_first_run_gets_the_wizard(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing configured at all is the case the wizard exists for -- it sets up
+    five more subsystems than this one."""
     ran: list[bool] = []
     monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
-    assert onboard_commands.ensure_configured_or_onboard() is False
+
+    onboard_commands.ensure_ready_to_start()
+
     assert ran == [True]
 
 
@@ -1024,17 +1038,18 @@ def test_agent_gate_triggers_when_missing(tmp_env: Path, monkeypatch: pytest.Mon
 
 
 def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`raven agent` with complete config does NOT enter the wizard."""
+    """`raven agent` with complete config does NOT enter the wizard.
+
+    The gate itself is reached on every interactive start -- deciding whether this
+    config can start is its job, and asserting it was not called would only pin
+    the caller's copy of that decision.
+    """
     from raven.cli import agent_commands
 
     _seed_provider()
     monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
-    gate_called: list[bool] = []
-    monkeypatch.setattr(
-        onboard_commands,
-        "ensure_configured_or_onboard",
-        lambda **_: gate_called.append(True),
-    )
+    ran: list[bool] = []
+    monkeypatch.setattr(onboard_commands, "run_wizard", lambda **_: ran.append(True))
 
     # Stub the heavy loop so the command returns quickly after the gate check.
     def _boom(*a, **kw):
@@ -1042,8 +1057,8 @@ def test_agent_gate_skips_when_populated(tmp_env: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("raven.cli._helpers.load_runtime_config", _boom)
     runner.invoke(app, ["agent"])
-    # Populated → _is_config_populated() True → gate body never runs.
-    assert gate_called == []
+
+    assert ran == []
 
 
 def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1055,7 +1070,7 @@ def test_agent_gate_skips_oneshot_message(tmp_env: Path, monkeypatch: pytest.Mon
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     monkeypatch.setattr(
@@ -1074,7 +1089,7 @@ def test_agent_gate_skips_non_tty(tmp_env: Path, monkeypatch: pytest.MonkeyPatch
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     monkeypatch.setattr(
@@ -1110,7 +1125,7 @@ def test_tui_gate_skips_check_flag(tmp_env: Path, monkeypatch: pytest.MonkeyPatc
     gate_called: list[bool] = []
     monkeypatch.setattr(
         onboard_commands,
-        "ensure_configured_or_onboard",
+        "ensure_ready_to_start",
         lambda **_: gate_called.append(True),
     )
     # Stub find_node so --check exits fast without a real Node child.
@@ -4260,5 +4275,16 @@ def test_a_stale_default_model_does_not_restart_the_wizard(
         from raven.cli import agent_commands
 
         monkeypatch.setattr(agent_commands, "_stdout_isatty", lambda: True)
+        monkeypatch.setattr(
+            "raven.cli._helpers.load_runtime_config",
+            lambda *a, **kw: (_ for _ in ()).throw(typer.Exit(0)),
+        )
+        result = runner.invoke(app, ["agent"])
+    else:
+        from raven.cli import tui_commands
 
-    onboard_commands.ensure_ready_to_start()
+        monkeypatch.setattr(tui_commands, "_stdout_isatty", lambda: True)
+        monkeypatch.setattr(tui_commands, "find_node", lambda: (None, None))
+        result = runner.invoke(app, ["tui"])
+
+    assert "openai-codex/gpt-5.6-sol" in result.output, "the notice did not name the model to fix"

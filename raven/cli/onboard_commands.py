@@ -4996,20 +4996,6 @@ def ensure_ready_to_start(*, non_interactive: bool = False) -> None:
     )
 
 
-def ensure_configured_or_onboard(*, non_interactive: bool = False) -> bool:
-    """Run the wizard when the required config (provider + model) is missing.
-
-    Returns ``True`` if config was already complete (caller proceeds straight
-    to the session), ``False`` if the wizard ran (config is now populated). In
-    a non-interactive context with missing config, the wizard's TTY check
-    will raise — callers on non-TTY paths must guard before invoking.
-    """
-    if _is_config_populated():
-        return True
-    run_wizard(non_interactive=non_interactive)
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Typer entry point
 # ---------------------------------------------------------------------------
@@ -5070,4 +5056,4 @@ def register(app: typer.Typer) -> None:
         )
 
 
-__all__ = ["register", "run_wizard", "ensure_configured_or_onboard"]
+__all__ = ["register", "run_wizard", "ensure_ready_to_start"]

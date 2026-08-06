@@ -1011,9 +1011,9 @@ def tui(
     if ctx.invoked_subcommand is not None:
         return
 
-    # Startup gate: launch the onboarding wizard first when the required
-    # config (a provider key + default model) is missing. Skipped for the
-    # no-TTY diagnostic spawns (--check / --print-colors / --preview-colors).
+    # Startup gate: a config that cannot reach a model is settled before the TUI
+    # owns the terminal. Skipped for the no-TTY diagnostic spawns
+    # (--check / --print-colors / --preview-colors).
     if not (check or print_colors or preview_colors) and _stdout_isatty():
         from raven.cli.onboard_commands import ensure_ready_to_start
 
