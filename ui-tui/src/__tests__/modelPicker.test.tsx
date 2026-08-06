@@ -418,13 +418,21 @@ describe('ModelPicker', () => {
   })
 
   it('lands on the signed-in provider after a sign-in that took', async () => {
-    const h = mount([anthropic, oauthProvider], undefined, {
-      nextProviders: [anthropic, { ...oauthProvider, authenticated: true, models: ['MiniMax-M2'], total_models: 1 }]
+    // An unconfigured provider sits BEFORE the target, so the index into the
+    // configured list differs from the index into the whole response. Reading the
+    // wrong one lands on a provider the user did not sign in to -- and every
+    // fixture where the target comes first hides that, because the two agree.
+    const signedIn = { ...oauthProvider, authenticated: true, models: ['MiniMax-M2'], total_models: 1 }
+    const h = mount([custom, oauthProvider, anthropic], undefined, {
+      nextProviders: [custom, signedIn, anthropic]
     })
     await delay(60)
 
+    // Level one is the configured list (anthropic) plus the add row after it;
+    // inside the add list the target is the second unconfigured provider.
     await h.type(DOWN)
     await h.type(ENTER)
+    await h.type(DOWN)
     await h.type(ENTER)
     await waitForFrame(h, 'Sign in to MiniMax Global?')
     expect(h.optionsCalls()).toBe(1)
@@ -432,14 +440,12 @@ describe('ModelPicker', () => {
     await h.type(ENTER)
     await waitForFrame(h, 'step 2/2')
 
-    // Where the provider now is, which is not where it was: staying on the
-    // sign-in screen left the user to press Esc into the list it had just left.
-    // The model is asserted rather than the title -- it belongs to that provider
-    // alone, so it cannot come from whoever took the vacated row.
     expect(h.optionsCalls()).toBe(2)
     await h.type(ENTER)
     await delay(30)
 
+    // The model belongs to that provider alone, so it cannot have come from
+    // whoever else the cursor might have landed on.
     expect(h.onSelect).toHaveBeenCalledWith('MiniMax-M2', 'minimax_global')
 
     h.unmount()
