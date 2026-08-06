@@ -47,6 +47,7 @@ from raven.providers.registry import (
     CRED_LOCAL,
     CRED_OAUTH,
     credential_kind,
+    public_model_prefix,
 )
 
 
@@ -985,8 +986,16 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
 
         prefix = litellm_spelling(provider)
         return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
-    if spec.name in {"minimax_global", "minimax_cn"}:
-        public_prefix = spec.name.replace("_", "-")
+    # These providers are named by a prefix their own client strips back off
+    # (``minimax_oauth`` before signing, ``_strip_model_prefix`` for codex), so the
+    # id can carry it -- and has to: written bare, "gpt-5.6-sol" is claimed by
+    # OpenAI's keywords and the request goes somewhere it does not exist.
+    #
+    # Azure is deliberately absent even though it also bypasses LiteLLM: it uses
+    # the id verbatim as a deployment name in the URL path, so a prefix would
+    # become part of the path.
+    if spec.name in {"minimax_global", "minimax_cn", "openai_codex"}:
+        public_prefix = public_model_prefix(spec)
         if model_id.startswith(f"{public_prefix}/"):
             return model_id
         return f"{public_prefix}/{model_id.split('/')[-1]}"
@@ -1070,6 +1079,13 @@ def _pick_model(
         choices = list(dict.fromkeys(choices))
         if default_value and default_value not in choices:
             choices.insert(0, default_value)
+        # A provider with no static default (codex: every id we shipped was
+        # refused, so only the account knows) still needs one here -- the empty
+        # submit below falls back to it, and without one Enter tore the wizard
+        # down. The list is newest-first, so its head is the better default a
+        # hard-coded id could not be.
+        if not default_value:
+            default_value = choices[0]
         prompt_label = _t(
             f"Default model ({len(choices)} available — type to filter, Tab to complete):",
             f"默认模型(共 {len(choices)} 个 — 输入可筛选,Tab 补全):",
@@ -1116,6 +1132,15 @@ def _pick_model(
         # default rather than tearing down the wizard. The no-default branch
         # validates non-empty, so an empty value only reaches here with a default.
         if default_value:
+            # Said out loud: the prompt has already echoed an empty answer, and the
+            # next thing on screen is a test message being sent. Without this the
+            # model it was sent with appears nowhere.
+            console.print(
+                _t(
+                    f"  [dim]No model entered - using {default_value}.[/dim]",
+                    f"  [dim]未输入模型,使用 {default_value}。[/dim]",
+                )
+            )
             return _format_model_for_provider(provider, spec, default_value)
         raise typer.Exit(1)
     return _format_model_for_provider(provider, spec, chosen)

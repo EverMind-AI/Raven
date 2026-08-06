@@ -841,7 +841,13 @@ def test_model_routes_to_provider_heuristic() -> None:
 
 
 def test_registry_default_models_present() -> None:
-    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``."""
+    """Each curated provider must carry a ``default_model`` in its ``ProviderSpec``.
+
+    ``openai_codex`` is deliberately absent: every id shipped for it came back
+    "not supported when using Codex with a ChatGPT account", so carrying one means
+    the wizard writes a model that cannot answer. The account catalogue is the
+    only source, and ``test_codex_carries_no_static_default_model`` pins that.
+    """
     from raven.providers.registry import find_by_name
 
     for name in (
@@ -851,7 +857,6 @@ def test_registry_default_models_present() -> None:
         "gemini",
         "deepseek",
         "github_copilot",
-        "openai_codex",
         "minimax_global",
         "minimax_cn",
     ):
@@ -4133,3 +4138,95 @@ def test_no_call_site_translates_a_cancelled_address_prompt() -> None:
 
     assert checked, "no function calls the prompt; this test would prove nothing"
     assert not offenders, "the prompt raises now; its callers must not test for None:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize(
+    ("slug", "raw"),
+    [
+        pytest.param("openai_codex", "gpt-5.6-sol", id="codex-from-the-account-catalogue"),
+        pytest.param("minimax_global", "MiniMax-M2", id="minimax-through-anthropics-driver"),
+    ],
+)
+def test_a_model_the_wizard_writes_resolves_back_to_the_provider_it_configured(slug: str, raw: str) -> None:
+    """The wizard's list comes back bare, and a bare id is claimed by keyword:
+    "gpt-5.6-sol" resolves to OpenAI, so a Codex model written that way is sent to
+    a provider that does not serve it -- which is what the test message hit.
+    """
+    from raven.providers.registry import find_by_model, find_by_name
+
+    spec = find_by_name(slug)
+    written = onboard_commands._format_model_for_provider(slug, spec, raw)
+
+    assert "/" in written, f"{slug} model written bare: {written}"
+    resolved = find_by_model(written)
+    assert resolved is not None and resolved.name == slug, f"{written} resolves to {resolved and resolved.name}"
+
+
+def test_pressing_enter_on_the_model_prompt_takes_the_first_one_offered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider with no static default still has to have one at the prompt: the
+    empty submit falls back to it, and with nothing to fall back to Enter exited
+    the wizard instead of choosing. The account's list is newest-first, so its
+    head is the answer a hard-coded id could not be.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict = {}
+
+    class _EmptySubmit:
+        def ask(self):
+            return ""
+
+    def fake_autocomplete(label, **kwargs):
+        captured.update(kwargs)
+
+        return _EmptySubmit()
+
+    monkeypatch.setattr(questionary, "autocomplete", fake_autocomplete)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model=None,
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert captured["default"] == "openai-codex/gpt-5.6-sol", "the prompt offered no default to accept"
+    assert chosen == "openai-codex/gpt-5.6-sol"
+
+
+def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """Clearing the prefill and pressing Enter echoes an empty answer, and the next
+    thing on screen is a test message being sent. Substituting silently left the
+    model it was sent with appearing nowhere."""
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    class _Cleared:
+        def ask(self):
+            return "   "
+
+    monkeypatch.setattr(questionary, "autocomplete", lambda label, **kw: _Cleared())
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model=None,
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert chosen == "openai-codex/gpt-5.6-sol"
+    assert "openai-codex/gpt-5.6-sol" in capsys.readouterr().out, "fell back without saying to what"

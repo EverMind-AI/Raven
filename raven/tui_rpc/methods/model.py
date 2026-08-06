@@ -112,10 +112,10 @@ def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
         return ()
 
     from raven.providers.codex_catalog import account_models
+    from raven.providers.registry import find_by_name, public_model_prefix
 
-    # Same spelling the row's own hint tells the user to type, and it normalizes
-    # back to this provider on the way in.
-    prefix = slug.replace("_", "-")
+    spec = find_by_name(slug)
+    prefix = public_model_prefix(spec) if spec else slug.replace("_", "-")
 
     return tuple(f"{prefix}/{model}" for model in account_models())
 
