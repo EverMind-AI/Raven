@@ -30,16 +30,33 @@ describe('deferSignalExit', () => {
     exit.mockRestore()
   })
 
-  it('releases once, so nested handoffs cannot leave signals deferred', () => {
-    const restore = deferSignalExit()
+  it('releases once, so nested handoffs cannot leave signals deferred', async () => {
+    // A fresh module: the deferral count and the signal wiring are module state,
+    // and the test above has already wired this file's copy.
+    vi.resetModules()
+    const fresh = await import('../lib/gracefulExit.js')
 
-    restore()
-    restore()
+    const cleanup = vi.fn()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    fresh.setupGracefulExit({ cleanups: [cleanup], failsafeMs: 5 })
 
-    // A second release must not cancel a deferral it does not own; the next one
-    // still has to hold.
-    const other = deferSignalExit()
-    expect(typeof other).toBe('function')
-    other()
+    const outer = fresh.deferSignalExit()
+    const inner = fresh.deferSignalExit()
+
+    // Released twice by the handoff that owns it. The second call must not
+    // decrement the count a still-running handoff is holding.
+    inner()
+    inner()
+
+    process.emit('SIGINT')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).not.toHaveBeenCalled()
+
+    outer()
+    process.emit('SIGINT')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).toHaveBeenCalled()
+
+    exit.mockRestore()
   })
 })

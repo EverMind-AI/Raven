@@ -6,6 +6,21 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { LaunchResult } from '../lib/externalCli.js'
 
+const { spawned } = vi.hoisted(() => ({ spawned: [] as string[][] }))
+
+// `run` reaches for these directly rather than taking them from ctx, so the argv
+// it hands a shell can only be observed at the module boundary.
+vi.mock('../lib/externalCli.js', () => ({
+  launchRavenCommand: (args: string[]) => {
+    spawned.push(args)
+
+    return Promise.resolve({ code: 0 })
+  }
+}))
+vi.mock('../lib/handoff.js', () => ({
+  suspendForHandoff: (run: () => Promise<void>) => run()
+}))
+
 import { runExternalSetup } from '../app/setupHandoff.js'
 import { setupCommands } from '../app/slash/commands/setup.js'
 
@@ -86,9 +101,17 @@ describe('runExternalSetup', () => {
 })
 
 describe('/setup', () => {
-  it('launches the wizard command the CLI actually registers', () => {
+  it('launches the wizard command the CLI actually registers', async () => {
     // `raven setup` is not a registered command, so the previous target could
-    // only ever reach the non-zero exit path.
-    expect(setupCommands[0]!.help).toContain('raven onboard')
+    // only ever reach the non-zero exit path. Asserted on the argv that runs,
+    // not on the help text beside it: the help was already right while the argv
+    // was wrong, and only one of the two reaches a shell.
+    const command = setupCommands[0]!
+
+    command.run('', ctx() as never)
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(spawned).toEqual([['onboard']])
+    expect(command.help).toContain('raven onboard')
   })
 })

@@ -138,10 +138,15 @@ export const applyDisplay = (
     detailsModeCommandOverride: false,
     indicatorStyle: normalizeIndicatorStyle(d.tui_status_indicator),
     inlineDiffs: d.inline_diffs !== false,
-    // Only when the config says something. Every other field here falls back to
-    // the same value the store already holds, but mouse tracking does not: its
-    // default comes from RAVEN_TUI_DISABLE_MOUSE, and normalizing a silent
-    // config to `true` turned the environment's opt-out back on at startup.
+    // Only when the config says something. Every other field here would fall back
+    // to the value the store already holds, but mouse tracking does not: its
+    // default comes from RAVEN_TUI_DISABLE_MOUSE, and normalizing a silent config
+    // to `true` turned the environment's opt-out back on at startup.
+    //
+    // Note the conditional is what makes that safe rather than the fetch: the
+    // request below asks `config.get {key:'full'}` and the handler reads `keys`
+    // (plural), so no display block is served at all today and this whole block
+    // runs on `{}`. The mismatch predates this file's changes -- see the PR.
     ...(hasOwn(d, 'mouse_tracking') || hasOwn(d, 'tui_mouse') ? { mouseTracking: normalizeMouseTracking(d) } : {}),
     sections: resolveSections(d.sections),
     showCost: !!d.show_cost,

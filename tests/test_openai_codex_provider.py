@@ -36,9 +36,12 @@ def test_headers_declare_experimental_responses_beta():
 
 def test_the_model_is_the_callers_to_supply():
     """No built-in default: every id shipped here was refused by the backend, and
-    only the account knows which slugs it offers."""
+    only the account knows which slugs it offers. Omitting it has to fail here
+    rather than at the first request, where the id would come back rejected."""
+    with pytest.raises(TypeError):
+        OpenAICodexProvider()  # type: ignore[call-arg]
+
     provider = OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol")
-    assert provider.get_default_model() == "openai-codex/gpt-5.6-sol"
     # OAuth-based: constructed without an API key.
     assert provider.api_key is None
 
