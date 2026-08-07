@@ -242,7 +242,7 @@ Filling rules:
 - `Type` — one box, mirroring the commit type (`feat`→Feature, `fix`→Fix, `docs`→Docs, `refactor`→Refactor, `ci`/`build`→CI / tooling, else Other). The checkbox is not a fresh judgement call;
 - `Verification` — the exact commands you ran and their result, not a claim that you ran them;
 - `Risk` — user-visible behaviour changes, and how to roll back;
-- `Related Issues` — `Fixes #NNN` for what this closes, a bare `#NNN` to reference without closing, `N/A` when there is none. **Repeat the keyword for every issue** (`Fixes #NNN, fixes #MMM`, or one per line): GitHub pairs one keyword with one reference, so `Fixes #NNN, #MMM` closes the first and merely mentions the second;
+- `Related Issues` — `Fixes #NNN` for what this closes (repeat the keyword per issue: `Fixes #NNN, fixes #MMM`), a bare `#NNN` to reference without closing, `N/A` when there is none;
 - check only the boxes you actually satisfied — leave the rest blank and explain in the description; never blanket-check;
 - anything the template has no section for but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Summary`.
 
@@ -264,13 +264,7 @@ Filling rules:
    ```
 2. show the full text for preview;
 3. only after the user edits/confirms, run `gh pr create --title "..." --body "$(cat /tmp/pr_description.md)"`;
-4. if the description closes any issue, **ask GitHub what it actually parsed** — a missing keyword is invisible in the rendered body and silently leaves the issue open after merge:
-   ```bash
-   gh pr view <n> --json closingIssuesReferences \
-     --template '{{range .closingIssuesReferences}}#{{.number}}{{"\n"}}{{end}}'
-   # one line per issue that will close. Fewer lines than you intended = a keyword is missing.
-   ```
-5. report the PR URL.
+4. report the PR URL.
 
 **Not allowed:**
 - pushing and walking away, leaving PR creation to the user;

@@ -27,5 +27,4 @@
 
 ## Related Issues
 
-<!-- Repeat the keyword for every issue: "Fixes #NNN, fixes #MMM". A comma list
-     closes only the first one. A bare "#NNN" references without closing. N/A if none. -->
+<!-- Fixes #NNN, fixes #MMM (repeat the keyword per issue), a bare #NNN to reference, or N/A -->
