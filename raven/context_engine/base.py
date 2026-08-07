@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     # for ``ContextEngine``, so referencing ``TurnContext`` only in type
     # hints keeps the loop unbroken.
     from raven.context_engine.curator import TurnContext
+    from raven.providers.base import LLMProvider
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,15 @@ class ContextEngine(ABC):
         """If True, AgentLoop skips ``MemoryEngine.maybe_consolidate`` and
         lets the engine manage history compaction itself (Curator archives
         messages out-of-band)."""
+
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Segments that call an LLM hold the provider handed to them at
+        construction; without this they keep calling the old one for the
+        rest of the process. Concrete rather than abstract so an engine
+        with no LLM-backed segment needs no override.
+        """
 
     @abstractmethod
     async def assemble(

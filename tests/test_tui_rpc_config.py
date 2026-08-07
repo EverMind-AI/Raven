@@ -137,10 +137,30 @@ async def test_config_set_missing_key_param_raises_validation(fake_home: Path) -
 # ----------------------------------------------------------------------------
 
 
+class _FakeLoop:
+    """Stand-in for AgentLoop's half of the switch contract.
+
+    Records the ``set_provider`` calls: assigning ``provider``/``model``
+    directly would leave the subagent manager, the context engine and the
+    consolidator on the old provider, so the handler must go through the
+    method, not the attributes.
+    """
+
+    def __init__(self, provider: object, model: str) -> None:
+        self.provider = provider
+        self.model = model
+        self.switches: list[tuple[object, str]] = []
+
+    def set_provider(self, provider: object, model: str) -> None:
+        self.provider = provider
+        self.model = model
+        self.switches.append((provider, model))
+
+
 async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
-    loop = SimpleNamespace(provider="old-prov", model="old-model")
+    loop = _FakeLoop("old-prov", "old-model")
     new_provider = SimpleNamespace(name="new-prov")
 
     monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
@@ -165,6 +185,9 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     assert result["value"] == "anthropic/claude-opus-4-8"
     assert loop.model == "anthropic/claude-opus-4-8"
     assert loop.provider is new_provider
+    # Routed through set_provider, so everything holding the old provider
+    # (subagents, context-engine segments, consolidator) gets told too.
+    assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
 
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
@@ -219,7 +242,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
         lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
     )
 
-    loop = SimpleNamespace(provider="keep-prov", model="anthropic/claude-sonnet-4-5")
+    loop = _FakeLoop("keep-prov", "anthropic/claude-sonnet-4-5")
     with pytest.raises(ModelNotAvailableError):
         await config_set(
             {
@@ -233,6 +256,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
     # Loop untouched and on-disk model preserved.
     assert loop.model == "anthropic/claude-sonnet-4-5"
     assert loop.provider == "keep-prov"
+    assert loop.switches == []
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
 

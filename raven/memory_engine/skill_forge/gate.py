@@ -61,6 +61,16 @@ class LLMGateFilter:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        ``_model`` is left alone either way: unset means the gate already
+        follows whatever the new provider defaults to, and set means a
+        deliberate pin that a switch elsewhere must not undo.
+        """
+        del model
+        self._provider = provider
+
     @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
         self,

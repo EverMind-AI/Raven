@@ -553,6 +553,10 @@ class AgentLoop:
 
         self._consolidation_tasks: set[asyncio.Task] = set()
 
+        # Every subsystem below was handed ``provider`` above and holds its
+        # own reference; ``set_provider`` is what keeps them from outliving
+        # a live model switch. Add the call there when adding another.
+
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
         # the underlying subsystems directly:
@@ -606,6 +610,28 @@ class AgentLoop:
         for name in list(self._disabled_tools):
             if self.tools.has(name):
                 self.tools.unregister(name)
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Point the loop and everything it built at a new provider/model.
+
+        ``config.set model`` builds a provider from the prospective config
+        and hands it here. Assigning ``self.provider`` alone is not enough:
+        the subagent manager, the context engine's LLM-backed segments and
+        the consolidator each captured the provider handed to them in
+        ``__init__``. Left behind, they keep calling the old endpoint for
+        the rest of the process -- which is how switching away from a dead
+        credential fixed the main loop while subagents and the skill
+        rewriter/gate went on failing to authenticate.
+
+        In-flight work is not migrated: a turn or subagent already running
+        finishes on the provider it started with, so one conversation never
+        spans two endpoints.
+        """
+        self.provider = provider
+        self.model = model
+        self.subagents.set_provider(provider, model)
+        self.context_engine.set_provider(provider, model)
+        self.memory_consolidator.set_provider(provider, model)
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).

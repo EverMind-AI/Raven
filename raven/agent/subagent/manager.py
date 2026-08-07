@@ -75,6 +75,18 @@ class SubagentManager:
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Subagents run on the parent's provider, so a switch that is not
+        propagated here leaves every spawn calling the credential the loop
+        has already abandoned. Tasks already in flight keep the provider
+        they started with -- swapping mid-turn would split one subagent's
+        conversation across two endpoints.
+        """
+        self.provider = provider
+        self.model = model
+
     async def spawn(
         self,
         task: str,
