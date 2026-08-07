@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/5a99d736-49ee-49c9-8b51-890f14078e78)
+![Raven banner](https://github.com/user-attachments/assets/f2882578-ff8e-4817-a5d2-6ada414acf1a)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
