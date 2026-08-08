@@ -638,9 +638,12 @@ class AgentLoop:
         applied: the loop reads ``self.provider`` at call time (eight sites
         in this module, plus the context engine and consolidator
         underneath), so adopting mid-turn would relay one conversation
-        across two vendors. That split does not raise -- the provider turns
-        a rejected request into ``finish_reason="error"`` content, so the
-        turn reports a failure with no indication that its endpoint moved.
+        across two vendors. How that surfaces depends on the path: the
+        ``chat_with_retry`` sites turn a rejected request into
+        ``finish_reason="error"`` content, so the turn reports a failure
+        with no sign that its endpoint moved, while ``_llm_call_stream``
+        (which a TUI turn takes) catches only ``TimeoutError`` and lets the
+        rejection propagate. Neither is a diagnosis the user can act on.
 
         The park is the second line of defence, not the first: the RPC
         rejects a switch outright when the caller's own session has a turn
