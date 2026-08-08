@@ -80,10 +80,10 @@ class SubagentManager:
 
         Subagents run on the parent's provider, so a switch that is not
         propagated here leaves every spawn calling the credential the loop
-        has already abandoned. Only spawns started after this call are
+        has already abandoned. Only spawns requested after this call are
         affected: a subagent is a detached task that outlives the turn that
-        spawned it, so the loop's park cannot cover it and
-        ``_run_subagent_inner`` snapshots what it starts with.
+        spawned it, so the loop's park cannot cover it and ``spawn``
+        snapshots the pair it was asked for.
         """
         self.provider = provider
         self.model = model
@@ -120,7 +120,13 @@ class SubagentManager:
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
 
-        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
+        # Snapshot here rather than where the task starts running: it queues
+        # behind the concurrency gate and a sandbox boot first, and a switch
+        # landing in that window would hand this task an endpoint the user
+        # chose after asking for it.
+        bg_task = asyncio.create_task(
+            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
+        )
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
@@ -144,6 +150,8 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
@@ -154,7 +162,7 @@ class SubagentManager:
             async with self._gate:
                 executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
                 async with executor:
-                    await self._run_subagent_inner(task_id, task, label, origin, executor)
+                    await self._run_subagent_inner(task_id, task, label, origin, executor, provider, model)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
@@ -167,6 +175,8 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
         executor: Any,
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         try:
             # Build subagent tools (no message tool, no spawn tool)
@@ -200,14 +210,6 @@ class SubagentManager:
             iteration = 0
             final_result: str | None = None
             final_status = "ok"
-
-            # Read once, not per iteration: a ``/model`` switch can land
-            # between two iterations of a task that runs for minutes, and
-            # picking it up here would send the second half of one
-            # conversation to a different vendor carrying the first half's
-            # message shapes.
-            provider = self.provider
-            model = self.model
 
             while iteration < max_iterations:
                 iteration += 1

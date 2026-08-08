@@ -10,9 +10,11 @@ the main loop worked fine.
 
 Work already in flight is the other half: every call site reads the
 provider from ``self`` at call time, so an unconditional swap would relay
-one conversation across two vendors. The loop parks a mid-turn switch
-until the next ``run_turn``; a detached subagent outlives that window and
-snapshots instead.
+one conversation across two vendors. The loop parks a switch until no
+turn is running -- a count, not a flag, because a user turn and a
+proactive turn hold slots in separate pools and overlap. A detached
+subagent outlives that window entirely, so ``spawn`` snapshots the pair
+it was asked for.
 """
 
 from __future__ import annotations
@@ -109,7 +111,7 @@ def test_set_provider_reaches_every_holder() -> None:
     loop.subagents = _Recorder()
     loop.context_engine = _Recorder()
     loop.memory_consolidator = _Recorder()
-    loop._turn_in_flight = False
+    loop._turns_in_flight = 0
     loop._pending_provider = None
 
     new_provider = SimpleNamespace(name="new-provider")
@@ -208,9 +210,9 @@ def test_pinned_gate_model_survives_the_switch() -> None:
     assert gate._model == "openai/gpt-5-mini"
 
 
-def test_curator_model_is_always_a_pin(tmp_path) -> None:
-    """``ContextConfig.curator_model`` is ``str`` with a non-empty default, so
-    it never follows the agent model -- at construction or across a switch.
+def test_the_default_curator_model_is_a_pin(tmp_path) -> None:
+    """``ContextConfig.curator_model`` has a non-empty default, so in practice
+    it does not follow the agent model -- at construction or across a switch.
     """
     loop = _loop(tmp_path)
     curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
@@ -221,12 +223,32 @@ def test_curator_model_is_always_a_pin(tmp_path) -> None:
     assert curator.curator_model == pinned
 
 
+def test_an_empty_curator_model_follows_the_agent_model_both_times(tmp_path) -> None:
+    """The field has no ``min_length``, so ``curator_model: ""`` validates and
+    the constructor's ``or model`` follows the agent model. A switch has to
+    follow it too, or the same config means one thing at build time and
+    another after.
+    """
+    loop = AgentLoop(
+        provider=_Provider(),
+        workspace=tmp_path,
+        model="fake/model",
+        context_config=ContextConfig(curator_model=""),
+        skill_forge_config=SkillForgeConfig(),
+    )
+    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
+    assert curator.curator_model == "fake/model"
+
+    loop.set_provider(_Provider("new"), NEW_MODEL)
+    assert curator.curator_model == NEW_MODEL
+
+
 # ---------------------------------------------------------------------------
 # In-flight work
 # ---------------------------------------------------------------------------
 
 
-def test_a_switch_during_a_turn_is_parked_until_the_next_one(tmp_path) -> None:
+def test_a_switch_during_a_turn_is_parked(tmp_path) -> None:
     """Every call site reads ``self.provider`` at call time, so adopting
     mid-turn would send the rest of one turn to a different vendor.
     """
@@ -234,7 +256,7 @@ def test_a_switch_during_a_turn_is_parked_until_the_next_one(tmp_path) -> None:
     started = _Provider("started-with")
     loop.set_provider(started, "started/model")
 
-    loop._turn_in_flight = True
+    loop._turns_in_flight = 1
     switched = _Provider("switched-to")
     loop.set_provider(switched, NEW_MODEL)
 
@@ -242,7 +264,7 @@ def test_a_switch_during_a_turn_is_parked_until_the_next_one(tmp_path) -> None:
     assert loop.subagents.provider is started
     assert loop._pending_provider == (switched, NEW_MODEL)
 
-    loop._turn_in_flight = False
+    loop._turns_in_flight = 0
     loop._adopt_pending_provider()
 
     assert loop.provider is switched
@@ -262,10 +284,9 @@ def test_a_switch_between_turns_applies_immediately(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_a_running_subagent_keeps_the_provider_it_started_with(tmp_path) -> None:
     """A subagent is a detached task that outlives the turn that spawned it,
-    so the loop's park cannot cover it -- it snapshots at entry instead. Without
+    so the loop's park cannot cover it -- ``spawn`` snapshots instead. Without
     that, iteration k+1 calls the new vendor carrying k iterations of the old
-    vendor's message shapes, and LiteLLM drops what the new one rejects rather
-    than failing, so the split conversation is silent.
+    vendor's message shapes.
     """
     seen: list[tuple[str, str]] = []
     release = asyncio.Event()
@@ -298,6 +319,8 @@ async def test_a_running_subagent_keeps_the_provider_it_started_with(tmp_path) -
             "thing",
             {"channel": "cli", "chat_id": "direct", "session_key": "s"},
             _StubExecutor(),
+            manager.provider,
+            manager.model,
         )
     )
     await asyncio.sleep(0)
@@ -310,3 +333,125 @@ async def test_a_running_subagent_keeps_the_provider_it_started_with(tmp_path) -
     # The next spawn does get the new one -- the snapshot is per task, not a freeze.
     assert manager.provider.name == "switched-to"
     assert manager.model == NEW_MODEL
+
+
+@pytest.mark.asyncio
+async def test_run_turn_adopts_on_entry_and_releases_on_exit(tmp_path) -> None:
+    """The wrapper is the whole mechanism, so drive the real one. Asserting on
+    ``_turns_in_flight`` alone would pass with the wrapper deleted.
+    """
+    loop = _loop(tmp_path)
+    started = _Provider("started-with")
+    loop.set_provider(started, "started/model")
+
+    switched = _Provider("switched-to")
+    loop._pending_provider = (switched, NEW_MODEL)
+
+    seen: dict[str, object] = {}
+
+    async def _fake_run_turn(*args, **kwargs):
+        seen["provider"] = loop.provider
+        seen["depth"] = loop._turns_in_flight
+        return "outcome"
+
+    loop._run_turn = _fake_run_turn
+    assert await loop.run_turn(None, None, None) == "outcome"
+
+    assert seen["provider"] is switched, "a parked switch must land before the turn reads it"
+    assert seen["depth"] == 1
+    assert loop._turns_in_flight == 0
+
+
+@pytest.mark.asyncio
+async def test_run_turn_releases_its_slot_when_the_turn_raises(tmp_path) -> None:
+    """A turn that fails must not leave the loop looking busy forever -- every
+    later switch would be parked and never adopted.
+    """
+    loop = _loop(tmp_path)
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("turn failed")
+
+    loop._run_turn = _boom
+    with pytest.raises(RuntimeError):
+        await loop.run_turn(None, None, None)
+
+    assert loop._turns_in_flight == 0
+
+    switched = _Provider("switched-to")
+    loop.set_provider(switched, NEW_MODEL)
+    assert loop.provider is switched
+
+
+@pytest.mark.asyncio
+async def test_a_second_turn_does_not_unpark_a_switch_under_the_first(tmp_path) -> None:
+    """OriginPools gates USER and system origins on independent semaphores with
+    no global cap, so a user turn and a cron turn overlap on one loop. A count
+    is what makes the park survive the shorter of the two.
+    """
+    loop = _loop(tmp_path)
+    started = _Provider("started-with")
+    loop.set_provider(started, "started/model")
+
+    long_turn_running = asyncio.Event()
+    release_long = asyncio.Event()
+    switched = _Provider("switched-to")
+    during_short: dict[str, object] = {}
+
+    async def _long(*args, **kwargs):
+        long_turn_running.set()
+        await release_long.wait()
+        during_short["provider_at_end_of_long"] = loop.provider
+        return "long"
+
+    async def _short(*args, **kwargs):
+        during_short["provider_during_short"] = loop.provider
+        return "short"
+
+    loop._run_turn = _long
+    long_task = asyncio.create_task(loop.run_turn(None, None, None))
+    await long_turn_running.wait()
+
+    # The switch lands while only the long turn is running.
+    loop.set_provider(switched, NEW_MODEL)
+    assert loop.provider is started
+    assert loop._pending_provider is not None
+
+    # A second, shorter turn starts and finishes underneath it.
+    loop._run_turn = _short
+    await loop.run_turn(None, None, None)
+
+    assert during_short["provider_during_short"] is started, "the short turn must not adopt the park"
+    assert loop.provider is started, "the long turn is still running"
+    assert loop._turns_in_flight == 1
+
+    release_long.set()
+    await long_task
+
+    assert loop.provider is switched, "the last turn out adopts it"
+    assert loop._pending_provider is None
+
+
+@pytest.mark.asyncio
+async def test_spawn_snapshots_before_the_task_queues(tmp_path) -> None:
+    """The snapshot is taken in ``spawn``, not where the task starts running:
+    a spawn waits on the concurrency gate and a sandbox boot first, and a
+    switch landing in that window would move an endpoint the user asked for
+    before switching.
+    """
+    manager = SubagentManager(provider=_Provider("started-with"), workspace=tmp_path, model="started/model")
+    manager._gate = asyncio.Semaphore(0)  # nothing gets past this
+
+    captured: dict[str, object] = {}
+
+    async def _capture(task_id, task, label, origin, provider, model):
+        captured["provider"] = provider
+        captured["model"] = model
+
+    manager._run_subagent = _capture
+    await manager.spawn("do the thing", label="thing", session_key="s")
+    manager.set_provider(_Provider("switched-to"), NEW_MODEL)
+    await asyncio.sleep(0)
+
+    assert captured["provider"].name == "started-with"
+    assert captured["model"] == "started/model"

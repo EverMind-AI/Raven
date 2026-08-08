@@ -553,11 +553,14 @@ class AgentLoop:
 
         self._consolidation_tasks: set[asyncio.Task] = set()
 
-        # A switch that arrives mid-turn is parked here and adopted at the
-        # next ``run_turn`` entry, so the turn in flight finishes on the
-        # provider it started with.
+        # A switch that arrives mid-turn is parked here until no turn is
+        # running, so a turn in flight finishes on the provider it started
+        # with. A depth counter, not a flag: OriginPools gates USER and
+        # system origins on independent semaphores with no global cap
+        # (spine/scheduler.py), so a user turn and a cron turn overlap on
+        # this loop under the TUI defaults.
         self._pending_provider: tuple[LLMProvider, str] | None = None
-        self._turn_in_flight = False
+        self._turns_in_flight = 0
 
         # ``self.subagents``, ``self.context_engine`` and
         # ``self.memory_consolidator`` were each handed ``provider`` earlier in
@@ -631,17 +634,27 @@ class AgentLoop:
         credential fixed the main loop while subagents and the skill
         rewriter/gate went on failing to authenticate.
 
-        A switch that lands while a turn is running is parked rather than
-        applied: every call site reads ``self.provider`` at call time, so
-        adopting mid-turn would relay one conversation across two vendors
-        (LiteLLM drops the shapes the new vendor rejects instead of
-        failing, so the split is silent). ``run_turn`` adopts it on the way
-        in, which makes the switch effective from the next turn.
+        A switch that lands while any turn is running is parked rather than
+        applied: the loop reads ``self.provider`` at call time (eight sites
+        in this module, plus the context engine and consolidator
+        underneath), so adopting mid-turn would relay one conversation
+        across two vendors. That split does not raise -- the provider turns
+        a rejected request into ``finish_reason="error"`` content, so the
+        turn reports a failure with no indication that its endpoint moved.
+
+        The park is the second line of defence, not the first: the RPC
+        rejects a switch outright when the caller's own session has a turn
+        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
+        covers what that guard cannot see -- a caller that passes no
+        ``session_id``, and the proactive turns that run in their own lanes.
+        Note the RPC still answers ``applied: True`` and the config file is
+        already written, so a parked switch is applied on disk while the
+        loop reports the old model until the last turn drains.
 
         Detached subagents are not covered by that park -- they outlive the
         turn that spawned them -- so ``SubagentManager`` snapshots instead.
         """
-        if self._turn_in_flight:
+        if self._turns_in_flight:
             self._pending_provider = (provider, model)
             return
         self._adopt_provider(provider, model)
@@ -655,7 +668,7 @@ class AgentLoop:
         self.memory_consolidator.set_provider(provider, model)
 
     def _adopt_pending_provider(self) -> None:
-        """Apply a switch parked by ``set_provider`` during the previous turn."""
+        """Apply a parked switch. Callers must check that no turn is running."""
         pending = self._pending_provider
         if pending is None:
             return
@@ -2616,15 +2629,24 @@ class AgentLoop:
     ) -> TurnOutcome:
         """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
 
-        A switch parked by ``set_provider`` is adopted here, before the turn
-        reads ``self.provider`` for the first time, and the flag set for the
-        duration is what parks the next one. Wrapping rather than snapshotting
-        because the provider is read from ``self`` at a dozen call sites and by
-        the context engine and consolidator underneath them -- one boundary
-        covers all of them, a snapshot would have to be threaded through each.
+        A parked switch is adopted here, before the turn reads
+        ``self.provider`` for the first time, and the count kept for the
+        duration is what parks the next one. Wrapping rather than
+        snapshotting because the provider is read from ``self`` at eight
+        sites in this module and by the context engine and consolidator
+        underneath them -- one boundary covers all of them, a snapshot
+        would have to be threaded through each.
+
+        Both ends gate on zero, because turns overlap: a user turn and a
+        proactive turn hold slots in separate pools. Adopting on the way in
+        would otherwise land a switch parked for a turn that is still
+        running, and clearing a flag on the way out would unpark it just as
+        wrongly. Adopting again on the last exit is what keeps a park from
+        outliving the turns it was waiting on.
         """
-        self._adopt_pending_provider()
-        self._turn_in_flight = True
+        if self._turns_in_flight == 0:
+            self._adopt_pending_provider()
+        self._turns_in_flight += 1
         try:
             return await self._run_turn(
                 req,
@@ -2636,7 +2658,9 @@ class AgentLoop:
                 text_sink=text_sink,
             )
         finally:
-            self._turn_in_flight = False
+            self._turns_in_flight -= 1
+            if self._turns_in_flight == 0:
+                self._adopt_pending_provider()
 
     async def _run_turn(
         self,
