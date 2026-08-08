@@ -64,9 +64,14 @@ class LLMGateFilter:
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
-        ``_model`` is left alone either way: unset means the gate already
-        follows whatever the new provider defaults to, and set means a
-        deliberate pin that a switch elsewhere must not undo.
+        Unset, ``_model`` follows whatever the new provider defaults to.
+
+        Set, it is a pin, and this leaves it pinned -- which is what a
+        restart on the new model would produce, since the gate is built
+        with the agent's provider and the pin regardless of which vendor
+        the pin names. Note that a pin is only a model id: the credential
+        comes from the provider, so a pin naming a vendor the provider does
+        not serve was already broken at boot, and stays broken here.
         """
         del model
         self._provider = provider

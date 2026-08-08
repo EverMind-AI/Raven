@@ -80,9 +80,10 @@ class SubagentManager:
 
         Subagents run on the parent's provider, so a switch that is not
         propagated here leaves every spawn calling the credential the loop
-        has already abandoned. Tasks already in flight keep the provider
-        they started with -- swapping mid-turn would split one subagent's
-        conversation across two endpoints.
+        has already abandoned. Only spawns started after this call are
+        affected: a subagent is a detached task that outlives the turn that
+        spawned it, so the loop's park cannot cover it and
+        ``_run_subagent_inner`` snapshots what it starts with.
         """
         self.provider = provider
         self.model = model
@@ -200,13 +201,21 @@ class SubagentManager:
             final_result: str | None = None
             final_status = "ok"
 
+            # Read once, not per iteration: a ``/model`` switch can land
+            # between two iterations of a task that runs for minutes, and
+            # picking it up here would send the second half of one
+            # conversation to a different vendor carrying the first half's
+            # message shapes.
+            provider = self.provider
+            model = self.model
+
             while iteration < max_iterations:
                 iteration += 1
 
-                response = await self.provider.chat_with_retry(
+                response = await provider.chat_with_retry(
                     messages=messages,
                     tools=tools.get_definitions(),
-                    model=self.model,
+                    model=model,
                 )
 
                 if response.has_tool_calls:

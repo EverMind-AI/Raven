@@ -553,9 +553,17 @@ class AgentLoop:
 
         self._consolidation_tasks: set[asyncio.Task] = set()
 
-        # Every subsystem below was handed ``provider`` above and holds its
-        # own reference; ``set_provider`` is what keeps them from outliving
-        # a live model switch. Add the call there when adding another.
+        # A switch that arrives mid-turn is parked here and adopted at the
+        # next ``run_turn`` entry, so the turn in flight finishes on the
+        # provider it started with.
+        self._pending_provider: tuple[LLMProvider, str] | None = None
+        self._turn_in_flight = False
+
+        # ``self.subagents``, ``self.context_engine`` and
+        # ``self.memory_consolidator`` were each handed ``provider`` earlier in
+        # this constructor and hold their own reference; ``_adopt_provider`` is
+        # what keeps them from outliving a live model switch. Add the call
+        # there when adding another holder.
 
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
@@ -623,15 +631,36 @@ class AgentLoop:
         credential fixed the main loop while subagents and the skill
         rewriter/gate went on failing to authenticate.
 
-        In-flight work is not migrated: a turn or subagent already running
-        finishes on the provider it started with, so one conversation never
-        spans two endpoints.
+        A switch that lands while a turn is running is parked rather than
+        applied: every call site reads ``self.provider`` at call time, so
+        adopting mid-turn would relay one conversation across two vendors
+        (LiteLLM drops the shapes the new vendor rejects instead of
+        failing, so the split is silent). ``run_turn`` adopts it on the way
+        in, which makes the switch effective from the next turn.
+
+        Detached subagents are not covered by that park -- they outlive the
+        turn that spawned them -- so ``SubagentManager`` snapshots instead.
         """
+        if self._turn_in_flight:
+            self._pending_provider = (provider, model)
+            return
+        self._adopt_provider(provider, model)
+
+    def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
+        """Hand a provider to the loop and every subsystem holding the old one."""
         self.provider = provider
         self.model = model
         self.subagents.set_provider(provider, model)
         self.context_engine.set_provider(provider, model)
         self.memory_consolidator.set_provider(provider, model)
+
+    def _adopt_pending_provider(self) -> None:
+        """Apply a switch parked by ``set_provider`` during the previous turn."""
+        pending = self._pending_provider
+        if pending is None:
+            return
+        self._pending_provider = None
+        self._adopt_provider(*pending)
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
@@ -2585,13 +2614,48 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
+        """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
+
+        A switch parked by ``set_provider`` is adopted here, before the turn
+        reads ``self.provider`` for the first time, and the flag set for the
+        duration is what parks the next one. Wrapping rather than snapshotting
+        because the provider is read from ``self`` at a dozen call sites and by
+        the context engine and consolidator underneath them -- one boundary
+        covers all of them, a snapshot would have to be threaded through each.
+        """
+        self._adopt_pending_provider()
+        self._turn_in_flight = True
+        try:
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
+        finally:
+            self._turn_in_flight = False
+
+    async def _run_turn(
+        self,
+        req: TurnRequest,
+        emit: Emit,
+        drain: Drain,
+        *,
+        stream: bool = True,
+        inline_tool_stream: bool = False,
+        usage_sink: dict[str, Any] | None = None,
+        text_sink: dict[str, Any] | None = None,
+    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
-        (executor / debug server / MCP up, then idle). A spine runner wraps this
-        method to satisfy the TurnRunner protocol.
+        (executor / debug server / MCP up, then idle). A spine runner calls the
+        public ``run_turn`` to satisfy the TurnRunner protocol.
 
         ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
         wires it True so the reply goes out as StreamDelta and dissolves (b2 — no

@@ -148,8 +148,9 @@ class ContextEngine(ABC):
 
         Segments that call an LLM hold the provider handed to them at
         construction; without this they keep calling the old one for the
-        rest of the process. Concrete rather than abstract so an engine
-        with no LLM-backed segment needs no override.
+        rest of the process. Concrete rather than abstract because
+        ``AgentLoop.context_engine`` is typed to this ABC and the loop calls
+        this unconditionally -- a no-op default keeps that call total.
         """
 
     @abstractmethod

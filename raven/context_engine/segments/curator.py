@@ -85,13 +85,12 @@ class CuratorSegmentBuilder:
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
-        ``curator_model`` only follows when it was following the agent's
-        model already -- an explicit ``config.curator_model`` is a pin.
+        ``curator_model`` is left alone: it is declared ``str`` with a
+        non-empty default (``ContextConfig.curator_model``), so it is always
+        a pin and never follows the agent's model -- at construction either.
         """
         self.provider = provider
         self.model = model
-        if not self.config.curator_model:
-            self.curator_model = model
         self.assembler.set_provider(provider, model)
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
