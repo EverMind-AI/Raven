@@ -70,6 +70,7 @@ class CuratorSegmentBuilder:
         self.provider = provider
         self.model = model
         self.curator_model = config.curator_model or model
+        self._pin_warned = False
         self.context_window_tokens = context_window_tokens
         self.get_tool_definitions = get_tool_definitions
         self.max_steps = max_steps
@@ -94,7 +95,29 @@ class CuratorSegmentBuilder:
         self.provider = provider
         self.model = model
         self.curator_model = self.config.curator_model or model
+        self._pin_warned = False
         self.assembler.set_provider(provider, model)
+
+    def _effective_curator_model(self) -> str:
+        """The pin when the provider can serve it, otherwise the agent model.
+
+        ``context.curator_model`` defaults to a Gemini id for everyone while
+        the credential comes from whichever provider the agent is on, so on a
+        direct-vendor setup the pair has never lined up -- the slow path 401s
+        and drops to the deterministic fallback. A gateway serves the pin as
+        given, so this changes nothing there.
+        """
+        if self.provider.serves_model(self.curator_model):
+            return self.curator_model
+        if not self._pin_warned:
+            self._pin_warned = True
+            logger.warning(
+                "context.curator_model={!r} names a vendor the current provider does not serve; "
+                "running the curator on {!r} instead",
+                self.curator_model,
+                self.model,
+            )
+        return self.model
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if ctx.prefix is None:
@@ -210,7 +233,7 @@ class CuratorSegmentBuilder:
             response = await self.provider.chat_with_retry(
                 messages=messages,
                 tools=registry.get_definitions(),
-                model=self.curator_model,
+                model=self._effective_curator_model(),
                 max_tokens=2048,
                 temperature=0.1,
             )

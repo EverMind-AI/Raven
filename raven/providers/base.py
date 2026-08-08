@@ -609,3 +609,20 @@ class LLMProvider(ABC):
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
         pass
+
+    def serves_model(self, model: str) -> bool:
+        """Can this provider's credential actually serve this model id?
+
+        A model id and a credential are one pair, but the subsystem pins
+        (``skill_forge.llm_gate_model``, ``context.curator_model``) are a
+        model id alone -- the credential comes from whichever provider the
+        holder happens to have. Callers ask this before honouring a pin, so
+        a pin naming another vendor falls back instead of sending one
+        vendor's key to another's endpoint.
+
+        Default True: a provider that cannot tell keeps today's behaviour
+        rather than dropping a pin on a guess. Override where the model id
+        and the credential are chosen separately.
+        """
+        del model
+        return True

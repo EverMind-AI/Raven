@@ -15,7 +15,13 @@ from loguru import logger
 
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_keywords, find_by_model, find_gateway, split_model_id
+from raven.providers.registry import (
+    find_by_keywords,
+    find_by_model,
+    find_by_name,
+    find_gateway,
+    split_model_id,
+)
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -102,6 +108,7 @@ class LiteLLMProvider(LLMProvider):
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
         # api_key / api_base are fallback for auto-detection.
+        self._provider_name = provider_name
         self._gateway = find_gateway(provider_name, api_key, api_base)
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
@@ -145,6 +152,31 @@ class LiteLLMProvider(LLMProvider):
             return model
         prefix = f"{self._gateway.model_prefix}/"
         return model[len(prefix) :] if model.startswith(prefix) else model
+
+    def serves_model(self, model: str) -> bool:
+        """Would this instance's key reach the vendor named by ``model``?
+
+        ``_resolve_model`` takes the vendor prefix from the model string while
+        the request carries this instance's ``api_key``, so the two only line
+        up when they name the same vendor. Answers False exactly when they do
+        not; anything unclassifiable answers True, which leaves today's
+        behaviour in place rather than dropping a pin on a guess.
+        """
+        if not model:
+            return True
+        # A gateway (and a local deployment) serves whatever it is handed
+        # under its own credential -- the vendor in the id is upstream of it.
+        if self._gateway:
+            return True
+        own = find_by_name(self._provider_name) if self._provider_name else None
+        if own is None:
+            own = find_by_model(self.default_model)
+        if own is None:
+            return True
+        spec = find_by_model(model)
+        if spec is None:
+            return True
+        return spec.name == own.name
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider/gateway prefixes."""

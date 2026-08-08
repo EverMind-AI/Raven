@@ -60,21 +60,44 @@ class LLMGateFilter:
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._pin_warned = False
+
+    def _effective_model(self) -> str | None:
+        """The pin when the provider can serve it, otherwise no pin at all.
+
+        ``skill_forge.llm_gate_model`` names a model but carries no
+        credential, and the provider it is paired with is whichever one the
+        agent is on -- at boot as much as after a ``/model`` switch. Sending
+        the pin anyway puts one vendor's id on another vendor's key, which
+        401s every call and is swallowed by the top-N fallback below.
+        Dropping the pin runs the gate on the provider's own default model,
+        which is what an unpinned gate does.
+        """
+        if not self._model:
+            return None
+        if self._provider.serves_model(self._model):
+            return self._model
+        if not self._pin_warned:
+            self._pin_warned = True
+            log.warning(
+                "skill_forge.llm_gate_model=%r names a vendor the current provider does not serve; "
+                "running the gate on the provider's default model instead",
+                self._model,
+            )
+        return None
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
 
         Unset, ``_model`` follows whatever the new provider defaults to.
 
-        Set, it is a pin, and this leaves it pinned -- which is what a
-        restart on the new model would produce, since the gate is built
-        with the agent's provider and the pin regardless of which vendor
-        the pin names. Note that a pin is only a model id: the credential
-        comes from the provider, so a pin naming a vendor the provider does
-        not serve was already broken at boot, and stays broken here.
+        Set, it is a pin, and this leaves it pinned. A pin is only a model
+        id -- the credential comes from the provider -- so whether it is
+        usable is re-decided per call by ``_effective_model``.
         """
         del model
         self._provider = provider
+        self._pin_warned = False
 
     @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
@@ -92,7 +115,7 @@ class LLMGateFilter:
             resp = await asyncio.wait_for(
                 self._provider.chat_with_retry(
                     messages=[{"role": "user", "content": prompt}],
-                    model=self._model or None,
+                    model=self._effective_model(),
                     max_tokens=self._max_tokens,
                     temperature=self._temperature,
                 ),

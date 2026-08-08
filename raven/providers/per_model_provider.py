@@ -64,6 +64,12 @@ class PerModelProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self._default
 
+    def serves_model(self, model: str) -> bool:
+        # A model with its own endpoint is served by that endpoint's own
+        # credential; everything else rides the fallback, so ask whichever
+        # one this id would actually route to.
+        return self._pick(model).serves_model(model)
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
