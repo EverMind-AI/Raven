@@ -140,8 +140,9 @@ self.logger = logger.bind(channel=self.name)
 **subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 
 **footer** (optional):
-- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public;
-- `Closes #123` — auto-closes the issue on merge.
+- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public.
+
+A closing keyword does not belong here: squash-merge drops individual commit bodies, so only the PR description can close an issue (§3.3, §3.7).
 
 ### §3.1.1 Top rule: the whole message is English (subject + body + footer)
 
