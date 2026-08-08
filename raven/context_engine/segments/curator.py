@@ -98,26 +98,34 @@ class CuratorSegmentBuilder:
         self._pin_warned = False
         self.assembler.set_provider(provider, model)
 
-    def _effective_curator_model(self) -> str:
-        """The pin when the provider can serve it, otherwise the agent model.
+    def _curator_model_is_servable(self) -> bool:
+        """Can the current provider's credential reach ``curator_model``?
 
         ``context.curator_model`` defaults to a Gemini id for everyone while
         the credential comes from whichever provider the agent is on, so on a
-        direct-vendor setup the pair has never lined up -- the slow path 401s
-        and drops to the deterministic fallback. A gateway serves the pin as
-        given, so this changes nothing there.
+        direct-vendor setup the pair has never lined up: the slow path's first
+        call fails and the deterministic fallback takes over. A gateway serves
+        the pin as given, so this answers True there and nothing changes.
+
+        False skips the slow path rather than substituting ``self.model``.
+        The slow path is a bounded agent loop of up to ``max_steps`` tool
+        calls, so redirecting it to the agent's model would silently turn a
+        knob documented as "small and fast" into a dozen requests on an
+        Opus-class model for every user this fires for. Skipping keeps what
+        those users already get -- the deterministic plan -- without the
+        failed call in front of it.
         """
         if self.provider.serves_model(self.curator_model):
-            return self.curator_model
+            return True
         if not self._pin_warned:
             self._pin_warned = True
             logger.warning(
                 "context.curator_model={!r} names a vendor the current provider does not serve; "
-                "running the curator on {!r} instead",
+                "using the deterministic plan. Set context.curator_model to a model this "
+                "provider serves to re-enable the curator.",
                 self.curator_model,
-                self.model,
             )
-        return self.model
+        return False
 
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if ctx.prefix is None:
@@ -160,13 +168,21 @@ class CuratorSegmentBuilder:
             self.archive.append_trace(session_key, turn_id, "fast_path", meta)
             return Segment(text="", history=history, meta=meta)
 
-        try:
-            seg = await self._slow_path(state, turn_id)
-            if seg is not None:
-                return seg
-        except Exception:
-            logger.exception("Curator slow path failed; using deterministic fallback")
-            self.archive.append_trace(session_key, turn_id, "slow_path_exception", {})
+        if not self._curator_model_is_servable():
+            self.archive.append_trace(
+                session_key,
+                turn_id,
+                "curator_model_unservable",
+                {"curator_model": self.curator_model},
+            )
+        else:
+            try:
+                seg = await self._slow_path(state, turn_id)
+                if seg is not None:
+                    return seg
+            except Exception:
+                logger.exception("Curator slow path failed; using deterministic fallback")
+                self.archive.append_trace(session_key, turn_id, "slow_path_exception", {})
 
         plan = self.assembler.fallback_plan(state)
         assembled, validation = self.assembler.build(state, plan)
@@ -233,7 +249,7 @@ class CuratorSegmentBuilder:
             response = await self.provider.chat_with_retry(
                 messages=messages,
                 tools=registry.get_definitions(),
-                model=self._effective_curator_model(),
+                model=self.curator_model,
                 max_tokens=2048,
                 temperature=0.1,
             )

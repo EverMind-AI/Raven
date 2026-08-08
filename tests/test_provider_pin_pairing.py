@@ -5,9 +5,10 @@ and nothing else. The provider they are used with is whichever one the
 agent is on -- at construction as much as after a live ``/model`` switch.
 ``LiteLLMProvider._resolve_model`` takes the vendor prefix from the model
 string while the request carries the instance's own ``api_key``, so a pin
-naming another vendor sends one vendor's key to another's endpoint: the
-gate 401s into its top-N fallback and the curator 401s into its
-deterministic fallback, both behind a single warning line.
+naming another vendor sends one vendor's key to another's endpoint. The
+gate logs one warning and returns its top-N fallback; the curator's slow
+path turns the failure into ``finish_reason="error"`` content and drops
+to the deterministic plan without logging anything at all.
 
 ``serves_model`` is the question those holders now ask before honouring a
 pin. It cannot conjure the other vendor's credential -- honouring a
@@ -17,6 +18,8 @@ answer is to fall back rather than to mis-pair.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from raven.config.raven import ContextConfig
@@ -25,10 +28,21 @@ from raven.memory_engine.skill_forge.gate import LLMGateFilter
 from raven.providers.litellm_provider import LiteLLMProvider
 
 
+@pytest.fixture(autouse=True)
+def _restore_env():
+    """Constructing a keyed provider writes the vendor's env var
+    (``_setup_env``); keep that inside this module.
+    """
+    before = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(before)
+
+
 def _provider(name: str, model: str) -> LiteLLMProvider:
-    # No api_key: constructing with one writes the vendor's env var, which
-    # would leak into whatever test runs next in the same process.
-    return LiteLLMProvider(default_model=model, provider_name=name)
+    # A key is part of the premise: with none, LiteLLM resolves one per vendor
+    # from the environment and there is no single credential to mis-pair.
+    return LiteLLMProvider(api_key="test-key", default_model=model, provider_name=name)
 
 
 # ---------------------------------------------------------------------------
@@ -59,9 +73,14 @@ def test_a_gateway_serves_whatever_it_is_handed() -> None:
 
 
 def test_an_unclassifiable_id_is_left_alone() -> None:
-    """No spec for the vendor means we cannot prove a mismatch. Answering True
-    keeps today's behaviour instead of dropping a pin on a guess -- the same
-    caution ``config.set model`` applies when it hands routing back to auto.
+    """No spec for the vendor means we cannot prove a mismatch, and dropping a
+    pin the user set on a guess is the worse error.
+
+    Note this is the opposite call from ``config.set model``, which sends an
+    unclassifiable id to ``provider="auto"`` rather than keep the current
+    provider's key on it (tui_rpc/methods/config.py). It can: it is choosing
+    the agent's own provider and has the whole config to choose from. Here
+    there is only one provider and the choice is keep-or-drop.
     """
     p = _provider("anthropic", "claude-opus-4-5")
     assert p.serves_model("mistral/mistral-large")
@@ -133,26 +152,29 @@ def _curator(workspace, provider: LiteLLMProvider, model: str) -> CuratorSegment
     )
 
 
-def test_curator_falls_back_to_the_agent_model_off_its_vendor(tmp_path) -> None:
+def test_curator_skips_the_slow_path_off_its_vendor(tmp_path) -> None:
     """``curator_model`` defaults to a Gemini id for everyone, so this is the
     default path on any direct-vendor setup -- not an exotic configuration.
+    False means the deterministic plan, not the agent's model: the slow path
+    is up to ``max_steps`` tool-calling requests, and redirecting it would
+    turn a knob documented "small and fast" into a dozen Opus-class calls.
     """
     builder = _curator(tmp_path, _provider("anthropic", "claude-opus-4-5"), "anthropic/claude-opus-4-5")
     assert builder.curator_model == ContextConfig().curator_model
-    assert builder._effective_curator_model() == "anthropic/claude-opus-4-5"
+    assert builder._curator_model_is_servable() is False
 
 
 def test_curator_keeps_the_pin_behind_a_gateway(tmp_path) -> None:
     builder = _curator(tmp_path, _provider("openrouter", "anthropic/claude-opus-4-5"), "anthropic/claude-opus-4-5")
-    assert builder._effective_curator_model() == ContextConfig().curator_model
+    assert builder._curator_model_is_servable() is True
 
 
 def test_curator_re_decides_after_a_switch(tmp_path) -> None:
     builder = _curator(tmp_path, _provider("openrouter", "anthropic/claude-opus-4-5"), "anthropic/claude-opus-4-5")
-    assert builder._effective_curator_model() == ContextConfig().curator_model
+    assert builder._curator_model_is_servable() is True
 
     builder.set_provider(_provider("anthropic", "claude-opus-4-5"), "anthropic/claude-opus-4-5")
-    assert builder._effective_curator_model() == "anthropic/claude-opus-4-5"
+    assert builder._curator_model_is_servable() is False
     assert builder.curator_model == ContextConfig().curator_model, "the pin itself never moves"
 
 
@@ -160,3 +182,71 @@ def test_curator_re_decides_after_a_switch(tmp_path) -> None:
 def test_a_gemini_pin_is_recognised_with_or_without_its_prefix(pinned: str) -> None:
     p = _provider("anthropic", "claude-opus-4-5")
     assert not p.serves_model(pinned)
+
+
+def test_a_keyless_provider_never_drops_a_pin() -> None:
+    """github_copilot runs with no api_key: LiteLLM then resolves one per
+    vendor from the environment, so a cross-vendor pin was working and must
+    not be dropped.
+    """
+    p = LiteLLMProvider(default_model="claude-opus-4-5", provider_name="anthropic")
+    assert not p.api_key
+    assert p.serves_model("gemini-2.5-flash")
+
+
+def test_a_custom_endpoint_is_unclassifiable_not_mismatched() -> None:
+    """An OpenAI-compatible host with no provider_name: guessing its vendor
+    from the default model's keywords would classify the host as whoever that
+    model belongs to.
+    """
+    p = LiteLLMProvider(api_key="test-key", api_base="https://example.invalid/v1", default_model="qwen3-30b")
+    assert p.serves_model("gemini-2.5-flash")
+
+
+def test_lazy_provider_answers_from_the_provider_it_builds() -> None:
+    """The TUI's agent provider is a LazyProvider, so answering from the proxy
+    would answer for no credential at all and leave the whole check inert on
+    the primary surface.
+    """
+    from raven.providers.base import GenerationSettings
+    from raven.providers.lazy import LazyProvider
+
+    real = _provider("anthropic", "claude-opus-4-5")
+    lazy = LazyProvider(lambda: real, "claude-opus-4-5", GenerationSettings())
+
+    assert lazy.serves_model("gemini-2.5-flash") is False
+    assert lazy.serves_model("claude-sonnet-4-5") is True
+
+
+def test_per_model_provider_asks_whichever_endpoint_the_id_routes_to() -> None:
+    from raven.providers.per_model_provider import PerModelProvider
+
+    fallback = _provider("anthropic", "claude-opus-4-5")
+    routed = PerModelProvider([], fallback)
+
+    # No routed endpoints, so everything rides the fallback and gets its answer.
+    assert routed.serves_model("openai/gpt-5-mini") is False
+    assert routed.serves_model("claude-sonnet-4-5") is True
+
+
+def test_the_gate_sends_the_effective_model_not_the_raw_pin() -> None:
+    """Guards the call site, not just the helper: passing self._model here
+    would leave every helper test green.
+    """
+    import asyncio
+
+    from raven.memory_engine.skill_forge.types import RouterHit
+
+    sent: dict[str, object] = {}
+
+    class _Recording(LiteLLMProvider):
+        async def chat_with_retry(self, **kwargs):
+            sent["model"] = kwargs.get("model")
+            raise RuntimeError("stop here; the model is what matters")
+
+    provider = _Recording(api_key="test-key", default_model="claude-opus-4-5", provider_name="anthropic")
+    gate = LLMGateFilter(provider, model="openai/gpt-5-mini")
+    hit = RouterHit(qualified_id="local/s1", name="s1", content="body", score=0.9)
+
+    asyncio.run(gate.filter("task", [hit]))
+    assert sent["model"] is None, "the unservable pin must not reach the provider"

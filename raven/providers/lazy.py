@@ -56,6 +56,12 @@ class LazyProvider(LLMProvider):
     def get_default_model(self) -> str:
         return self._default_model
 
+    def serves_model(self, model: str) -> bool:
+        # Answering from the proxy would answer for no credential at all.
+        # Both callers ask immediately before a chat call that builds the
+        # provider anyway, so this costs no startup latency.
+        return self._built().serves_model(model)
+
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)
 

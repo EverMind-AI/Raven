@@ -158,11 +158,20 @@ class LiteLLMProvider(LLMProvider):
 
         ``_resolve_model`` takes the vendor prefix from the model string while
         the request carries this instance's ``api_key``, so the two only line
-        up when they name the same vendor. Answers False exactly when they do
-        not; anything unclassifiable answers True, which leaves today's
-        behaviour in place rather than dropping a pin on a guess.
+        up when they name the same vendor. False means they demonstrably do
+        not; anything this cannot classify answers True, so the answer is
+        "no known mismatch" rather than "verified match".
+
+        Safe to act on because both sides ask ``find_by_model``: a False here
+        is exactly an id ``_resolve_model`` would have prefixed for another
+        vendor.
         """
         if not model:
+            return True
+        # No explicit key means LiteLLM resolves one per vendor from the
+        # environment (see the api_key kwarg below), so there is no single
+        # credential to mis-pair -- github_copilot runs this way.
+        if not self.api_key:
             return True
         # A gateway (and a local deployment) serves whatever it is handed
         # under its own credential -- the vendor in the id is upstream of it.
@@ -170,6 +179,11 @@ class LiteLLMProvider(LLMProvider):
             return True
         own = find_by_name(self._provider_name) if self._provider_name else None
         if own is None:
+            if self.api_base:
+                # A custom endpoint with no provider_name: guessing its vendor
+                # from the default model's keywords would classify an
+                # OpenAI-compatible host as whoever that model belongs to.
+                return True
             own = find_by_model(self.default_model)
         if own is None:
             return True

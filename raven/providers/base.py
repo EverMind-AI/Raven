@@ -623,6 +623,13 @@ class LLMProvider(ABC):
         Default True: a provider that cannot tell keeps today's behaviour
         rather than dropping a pin on a guess. Override where the model id
         and the credential are chosen separately.
+
+        Not overridden by ``AzureOpenAIProvider`` or ``OpenAICodexProvider``,
+        so a cross-vendor pin still reaches them and still fails -- Azure in
+        particular reads the model id as a deployment name. Left alone
+        deliberately: Azure's honest answer is "the deployments I have",
+        which this class cannot enumerate, and guessing would drop a pin
+        naming a second valid deployment.
         """
         del model
         return True
