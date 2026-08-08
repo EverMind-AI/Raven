@@ -250,3 +250,44 @@ def test_the_gate_sends_the_effective_model_not_the_raw_pin() -> None:
 
     asyncio.run(gate.filter("task", [hit]))
     assert sent["model"] is None, "the unservable pin must not reach the provider"
+
+
+@pytest.mark.asyncio
+async def test_the_curator_really_skips_the_slow_path(tmp_path) -> None:
+    """Guards the call site: asserting only on ``_curator_model_is_servable``
+    would stay green with the guard removed from ``build``.
+    """
+    from raven.context_engine.base import AssembledPrefix, AssemblyContext
+    from raven.memory_engine import TokenBudget
+
+    builder = _curator(tmp_path, _provider("anthropic", "claude-opus-4-5"), "anthropic/claude-opus-4-5")
+    assert builder._curator_model_is_servable() is False
+
+    entered = False
+
+    async def _slow_path(state, turn_id):
+        nonlocal entered
+        entered = True
+        return None
+
+    builder._slow_path = _slow_path
+
+    # A history far past fast_path_threshold, so the fast path cannot be what
+    # keeps the slow path out.
+    messages = [{"role": "user", "content": "x" * 4000} for _ in range(40)]
+    ctx = AssemblyContext(
+        session_key="s",
+        current_message="hi",
+        media=None,
+        channel=None,
+        chat_id=None,
+        session_messages=messages,
+        budget=TokenBudget(100_000, 4_000, 2_000, 1_000, 4_000),
+        prefix=AssembledPrefix(system_prefix="sys", user_message={"role": "user", "content": "hi"}, tool_defs=[]),
+    )
+
+    seg = await builder.build(ctx)
+
+    assert entered is False, "an unservable pin must not reach the slow path"
+    assert seg is not None
+    assert seg.meta["path"] == "fallback"
