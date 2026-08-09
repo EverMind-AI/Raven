@@ -137,6 +137,7 @@ def _concrete_provider_subclasses() -> set[type]:
     import raven.providers.azure_openai_provider  # noqa: F401
     import raven.providers.litellm_provider  # noqa: F401
     import raven.providers.minimax_oauth_provider  # noqa: F401
+    import raven.providers.endpoint_rotor  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
     import raven.providers.per_model_provider  # noqa: F401
 
@@ -157,9 +158,10 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_five_concrete_backend_classes() -> None:
+def test_exactly_six_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
     from raven.providers.litellm_provider import LiteLLMProvider
     from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
     from raven.providers.openai_codex_provider import OpenAICodexProvider
@@ -171,6 +173,10 @@ def test_exactly_five_concrete_backend_classes() -> None:
         OpenAICodexProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
+        # Multi-endpoint rotation/failover wrapper (#143/#144): a real backend
+        # in dispatch terms -- make_provider returns it for a section that
+        # resolves to more than one endpoint.
+        EndpointRotorProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
