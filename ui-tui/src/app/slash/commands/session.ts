@@ -98,14 +98,20 @@ export const sessionCommands: SlashCommand[] = [
             if (!r.value) {
               return ctx.transcript.sys('error: invalid response: model switch')
             }
+            if (!r.applied) {
+              // Nothing was built, so nothing was validated -- reporting a
+              // switch here would leave the bar on a model no turn will use.
+              return ctx.transcript.sys(`error: model switch was not applied: ${r.value}`)
+            }
 
             ctx.transcript.sys(asDefault ? `default model → ${r.value}` : `model → ${r.value}`)
             ctx.local.maybeWarn(r)
 
-            // A default-scoped switch does not move a session that already has
-            // its own model, so painting it into the status bar would show a
-            // model this conversation is not on.
-            if (!asDefault) {
+            // Whether this conversation now runs the model is the server's
+            // answer, not something the scope implies: a default-scoped switch
+            // does move a session that never chose its own model, and that is
+            // the common case for `--default`.
+            if (r.applies_to_session !== false) {
               patchUiState(state => ({
                 ...state,
                 info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }

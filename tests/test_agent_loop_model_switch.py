@@ -53,22 +53,6 @@ class _Recorder:
         self.model = model
 
 
-class _StubExecutor:
-    """``_run_subagent_inner`` only passes this to ExecTool; no command runs."""
-
-    @property
-    def is_sandboxed(self) -> bool:
-        return False
-
-    async def exec(self, command: str, **kwargs):  # pragma: no cover - unused
-        raise NotImplementedError
-
-
-def _noop_submit(*args, **kwargs) -> None:
-    """``_announce_result`` calls the spine submit without awaiting it."""
-    return None
-
-
 class _TextOnlyBuilder:
     """A segment that never calls an LLM, so it has no set_provider."""
 
@@ -158,7 +142,7 @@ def test_fan_out_targets_still_exist_on_a_real_loop(tmp_path) -> None:
     loop = _loop(tmp_path)
     for attr in ("subagents", "context_engine", "memory_consolidator"):
         holder = getattr(loop, attr, None)
-        assert holder is not None, f"AgentLoop.{attr} is gone; _adopt_provider still calls it"
+        assert holder is not None, f"AgentLoop.{attr} is gone; set_provider still fans out to it"
         assert callable(getattr(holder, "set_provider", None)), f"AgentLoop.{attr} lost set_provider"
 
 

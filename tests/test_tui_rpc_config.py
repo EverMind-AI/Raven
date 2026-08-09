@@ -156,6 +156,9 @@ class _FakeLoop:
         binding = self.session_bindings.get(session_key)
         return binding.model if binding is not None else self.model
 
+    def has_session_binding(self, session_key: str) -> bool:
+        return session_key in self.session_bindings
+
     def set_session_binding(self, session_key: str, binding: object) -> None:
         self.session_bindings[session_key] = binding
 
@@ -611,3 +614,138 @@ async def test_a_switch_goes_through_the_pool_when_the_loop_has_one(fake_home: P
 
     assert asked == [("anthropic/claude-opus-4-8", "anthropic")]
     assert loop.session_bindings["tui:a"] is pooled
+
+
+# ----------------------------------------------------------------------------
+# Scope is never widened
+# ----------------------------------------------------------------------------
+
+
+async def test_a_session_scope_without_a_session_id_is_refused_not_widened(fake_home: Path, monkeypatch) -> None:
+    """An explicit ``scope="session"`` with no session must not fall through to
+    the default branch.
+
+    The TUI sends ``session_id: ctx.sid``, which is null until the first
+    ``session.create`` resolves and after a failed one. Widening the scope
+    there rewrites ``agents.defaults.model`` on disk and moves every session
+    that never chose its own model -- from a request that asked for the
+    opposite.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    for absent in (None, ""):
+        with pytest.raises(ConfigValidationError):
+            await config_set(
+                {
+                    "key": "model",
+                    "value": "anthropic/claude-opus-4-8",
+                    "scope": "session",
+                    "session_id": absent,
+                },
+                agent_loop_factory=lambda: loop,
+            )
+
+    assert loop.switches == [], "a refused switch must not move the default binding"
+    assert loop.session_bindings == {}
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
+
+
+async def test_a_default_scope_with_a_session_id_still_writes_the_default(fake_home: Path, monkeypatch) -> None:
+    """``/model X --default`` sends both ``scope="default"`` and the caller's
+    session id, and the scope has to win.
+
+    Without the scope conjunct the session id alone decides, and the switch
+    silently becomes an override on the asking session -- the file is never
+    written, so nothing a new session starts on ever changes.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    new_provider = SimpleNamespace(name="new-prov")
+    loop = _FakeLoop("old-prov", "anthropic/claude-sonnet-4-5")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: new_provider)
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {
+            "key": "model",
+            "value": "anthropic/claude-opus-4-8",
+            "provider": "anthropic",
+            "scope": "default",
+            "session_id": "tui:a",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["scope"] == "default"
+    assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
+    assert "tui:a" not in loop.session_bindings, "a default switch is not a session override"
+    on_disk = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert on_disk["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+
+
+async def test_a_default_switch_reports_whether_it_moved_the_asking_session(fake_home: Path, monkeypatch) -> None:
+    """The scope alone cannot tell a client whether to repaint the status bar.
+
+    A session that never chose a model reads the default, so a default-scoped
+    switch moves it; a session with its own binding stays where it is. The
+    client cannot see the difference, so the server answers it.
+    """
+    import raven.tui_rpc.methods.config as config_mod
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    loop = _FakeLoop("old-prov", "old-model")
+    loop.session_bindings["tui:chose"] = SimpleNamespace(provider="own-prov", model="own/model")
+
+    params = {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "scope": "default"}
+
+    followed = await config_set({**params, "session_id": "tui:followed"}, agent_loop_factory=lambda: loop)
+    assert followed["applies_to_session"] is True
+
+    chose = await config_set({**params, "session_id": "tui:chose"}, agent_loop_factory=lambda: loop)
+    assert chose["applies_to_session"] is False
+
+
+async def test_a_session_switch_always_applies_to_its_own_session(fake_home: Path, monkeypatch) -> None:
+    import raven.tui_rpc.methods.config as config_mod
+
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    result = await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "session_id": "tui:a"},
+        agent_loop_factory=lambda: _FakeLoop("old-prov", "old-model"),
+    )
+    assert result["applies_to_session"] is True

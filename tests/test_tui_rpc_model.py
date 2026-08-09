@@ -816,3 +816,50 @@ async def test_options_leaves_an_unswitched_session_on_the_configured_answer() -
 
     assert result["model"] == configured_model
     assert result["provider"] == (configured_provider or "")
+
+
+async def test_the_production_registration_makes_model_options_session_aware(fake_home: Path) -> None:
+    """The picker asks ``model.options`` which model to show as current, and the
+    answer is per session.
+
+    Registered through the umbrella the production path uses, not by calling
+    the handler with a factory by hand: without the factory threaded here the
+    picker reports the configured default to every session, and calling
+    ``model_options`` directly would never notice.
+    """
+    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods import register_aligned_methods_except_system
+
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    class _Loop:
+        def has_session_binding(self, session_id: str) -> bool:
+            return session_id == "tui:switched"
+
+        def session_model(self, session_id: str) -> str:
+            return "anthropic/claude-opus-4-8"
+
+    d = Dispatcher()
+    register_aligned_methods_except_system(d, agent_loop_factory=lambda: _Loop())
+
+    switched = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "model.options",
+            "params": {"session_id": "tui:switched"},
+        }
+    )
+    assert switched["result"]["model"] == "anthropic/claude-opus-4-8"
+
+    untouched = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "model.options",
+            "params": {"session_id": "tui:never-switched"},
+        }
+    )
+    assert untouched["result"]["model"] == "anthropic/claude-sonnet-4-5", (
+        "a session that never switched still reports the configured default"
+    )

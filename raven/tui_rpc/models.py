@@ -702,6 +702,10 @@ class ConfigSetResult(_Strict):
     value: str | None = None
     scope: Literal["session", "default"] | None = None
     session_id: str | None = None
+    # Does the asking conversation now run this model? A default-scoped switch
+    # moves the sessions that never chose one, so scope alone cannot answer it
+    # and a client that guesses shows a model the conversation is not on.
+    applies_to_session: bool | None = None
 
 
 # ---------------------------------------------------------------------------

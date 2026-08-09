@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1218,3 +1219,75 @@ async def test_session_resume_without_a_stored_model_restores_nothing(tmp_path) 
     await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
 
     assert restored == []
+
+
+async def test_session_branch_carries_the_parents_model_to_the_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fork continues its parent's conversation on its parent's model, and
+    keeps it across a restart.
+
+    Both halves matter and fail independently: dropping the binding hand-off
+    leaves the child running on the default in this process, and dropping the
+    record leaves it running on the default in the next one.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    src_key = "tui:20260610_143052_bb0001"
+    _write_session(tmp_path, src_key, [{"role": "user", "content": "hi"}])
+
+    sessions = SessionManager(tmp_path)
+    parent = sessions.get_or_create(src_key)
+    parent.metadata["model"] = "vendor-a/model"
+    parent.metadata["provider"] = "anthropic"
+    sessions.save(parent)
+
+    parent_binding = SimpleNamespace(provider="prov-a", model="vendor-a/model")
+
+    class _Loop:
+        def __init__(self) -> None:
+            self.sessions = sessions
+            self.bindings: dict[str, object] = {src_key: parent_binding}
+
+        def has_session_binding(self, key: str) -> bool:
+            return key in self.bindings
+
+        def binding_for_session(self, key: str) -> object:
+            return self.bindings.get(key, SimpleNamespace(provider="boot", model="boot/model"))
+
+        def set_session_binding(self, key: str, binding: object) -> None:
+            self.bindings[key] = binding
+
+    loop = _Loop()
+    result = await session_branch({"session_id": src_key}, agent_loop_factory=lambda: loop)
+
+    child_key = result["session_id"]
+    assert loop.bindings[child_key] is parent_binding, "the fork must run on its parent's model now"
+
+    reloaded = SessionManager(tmp_path).get_or_create(child_key)
+    assert reloaded.metadata["model"] == "vendor-a/model", "and after a restart"
+    assert reloaded.metadata["provider"] == "anthropic"
+
+
+async def test_session_delete_releases_the_sessions_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deleted session must not leave its override -- and the live provider
+    behind it -- held for the life of the process.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    key = "tui:20260610_100000_bb0002"
+    _write_session(tmp_path, key, [{"role": "user", "content": "hi"}])
+
+    cleared: list[str] = []
+
+    class _Loop:
+        sessions = None
+
+        def clear_session_binding(self, session_key: str) -> None:
+            cleared.append(session_key)
+
+    await session_delete({"session_id": key}, agent_loop_factory=lambda: _Loop())
+
+    assert cleared == [key]

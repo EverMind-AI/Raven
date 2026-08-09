@@ -988,6 +988,7 @@ export interface ConfigSetResult {
   value?: string;
   scope?: 'session' | 'default';
   session_id?: string;
+  applies_to_session?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

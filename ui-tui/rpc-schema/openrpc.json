@@ -1037,7 +1037,8 @@
             },
             "value": { "type": "string" },
             "scope": { "type": "string", "enum": ["session", "default"] },
-            "session_id": { "type": "string" }
+            "session_id": { "type": "string" },
+            "applies_to_session": { "type": "boolean" }
           }
         }
       },

@@ -70,13 +70,21 @@ describe('createSlashHandler', () => {
     })
   })
 
-  it('sends scope default and leaves the status bar alone for /model --default', async () => {
+  it('sends scope default and leaves the status bar alone when the session kept its own model', async () => {
     patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
 
     const ctx = buildCtx({
       gateway: {
         ...buildGateway(),
-        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'new-default' }))
+        rpc: vi.fn(() =>
+          Promise.resolve({
+            applied: true,
+            previous: null,
+            value: 'new-default',
+            scope: 'default',
+            applies_to_session: false
+          })
+        )
       }
     })
 
@@ -89,8 +97,53 @@ describe('createSlashHandler', () => {
     })
     await Promise.resolve()
     await Promise.resolve()
-    // The session keeps its own model, so painting the new default into the
-    // status bar would show a model this conversation is not on.
+    // This conversation chose its own model, so painting the new default into
+    // the status bar would show a model it is not on.
+    expect(getUiState().info?.model).toBe('session-model')
+  })
+
+  it('updates the status bar for /model --default when the session was following the default', async () => {
+    // The common case: a fresh conversation that never switched reads the
+    // default, so a default-scoped switch moves it immediately. Leaving the bar
+    // alone here showed the old model for the life of the session, because the
+    // bar is only refreshed on session.create / session.resume.
+    patchUiState({ sid: 'sid-abc', info: { model: 'old-default', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() =>
+          Promise.resolve({
+            applied: true,
+            previous: null,
+            value: 'new-default',
+            scope: 'default',
+            applies_to_session: true
+          })
+        )
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model new-default --default')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(getUiState().info?.model).toBe('new-default')
+  })
+
+  it('reports an unapplied switch as an error and leaves the status bar alone', async () => {
+    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() => Promise.resolve({ applied: false, previous: null, value: 'x-model' }))
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model x-model')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith('error: model switch was not applied: x-model')
     expect(getUiState().info?.model).toBe('session-model')
   })
 

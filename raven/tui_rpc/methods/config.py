@@ -335,7 +335,17 @@ def _set_model(
             "config.set model scope must be 'session' or 'default'",
             data={"field": "scope", "got": repr(scope)},
         )
-    session_scoped = scope != "default" and isinstance(session_id, str) and bool(session_id)
+    has_session = isinstance(session_id, str) and bool(session_id)
+    if scope == "session" and not has_session:
+        # Never widen a scope the caller narrowed: falling through to the
+        # default branch here would write agents.defaults and move every
+        # session that never switched. The TUI sends a session_id that is null
+        # until the first session.create resolves, so this is reachable.
+        raise ConfigValidationError(
+            "config.set model scope 'session' needs a session_id",
+            data={"field": "session_id", "got": repr(session_id)},
+        )
+    session_scoped = scope != "default" and has_session
 
     loop = agent_loop_factory() if agent_loop_factory is not None else None
     binding = None
@@ -375,7 +385,18 @@ def _set_model(
             "value": raw_value,
             "scope": "session",
             "session_id": session_id,
+            "applies_to_session": True,
         }
+
+    # A default-scoped switch still moves the asking conversation when that
+    # conversation never chose a model of its own, because it reads the
+    # default. Answered here rather than inferred from the scope: the client
+    # cannot see which sessions have their own binding.
+    follows_default = None
+    if loop is not None and has_session:
+        has_own = getattr(loop, "has_session_binding", None)
+        if callable(has_own):
+            follows_default = not has_own(session_id)
 
     payload = _load_config()
     previous = _get_nested(payload, "agents.defaults.model")
@@ -390,7 +411,13 @@ def _set_model(
         # outside a turn, and this is what re-points them.
         loop.set_default_binding(binding)
 
-    return {"applied": True, "previous": previous, "value": raw_value, "scope": "default"}
+    return {
+        "applied": True,
+        "previous": previous,
+        "value": raw_value,
+        "scope": "default",
+        "applies_to_session": follows_default,
+    }
 
 
 def _remember_session_model(loop: Any, session_key: str, model: str, provider_name: str | None) -> None:
