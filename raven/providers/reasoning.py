@@ -43,10 +43,16 @@ def split_orphan_think(text: str) -> tuple[str | None, str]:
 
     An orphan is a ``</think>`` or ``</thinking>`` with no matching opening tag
     before it -- the shape produced when the server swallowed the opener into
-    its prompt template. A paired block (opener present earlier in the text)
-    is left alone and returned as ``(None, text)`` unchanged, for the existing
-    complete-block handlers (``_strip_think`` et al.) to take care of; so is
-    text with no closing tag at all.
+    its prompt template. A paired block (an opener present earlier in the
+    text) is left alone and returned as ``(None, text)`` unchanged, for the
+    existing complete-block handlers (``_strip_think`` et al.) to take care
+    of; so is text with no closing tag at all.
+
+    The pairing check looks for the ``<think`` prefix shared by both opening
+    variants, not the one matching the closing tag's own spelling -- a model
+    that opens ``<think>`` and closes ``</thinking>`` (or vice versa) is still
+    a paired block, and treating the mismatched opener as absent would leak it
+    into the reasoning text this function returns.
 
     Everything before the tag becomes ``reasoning`` once stripped, unless that
     strips to nothing, in which case ``reasoning`` is ``None`` and only the
@@ -58,9 +64,8 @@ def split_orphan_think(text: str) -> tuple[str | None, str]:
     if match is None:
         return None, text
 
-    open_tag = "<think>" if match.group(0).lower() == "</think>" else "<thinking>"
     prefix = text[: match.start()]
-    if open_tag in prefix.lower():
+    if "<think" in prefix.lower():
         return None, text
 
     rest = text[match.end() :]

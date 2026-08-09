@@ -64,3 +64,15 @@ def test_content_without_a_leading_newline_is_unchanged():
 
     assert reasoning == "reasoning"
     assert content == "immediate answer"
+
+
+def test_mismatched_think_open_thinking_close_is_left_untouched():
+    text = "<think>raw reasoning</thinking>\nfinal answer"
+
+    assert split_orphan_think(text) == (None, text)
+
+
+def test_mismatched_thinking_open_think_close_is_left_untouched():
+    text = "<thinking>raw reasoning</think>\nfinal answer"
+
+    assert split_orphan_think(text) == (None, text)

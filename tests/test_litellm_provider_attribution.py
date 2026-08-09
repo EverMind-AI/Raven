@@ -66,9 +66,13 @@ def test_extra_msg_keys_non_anthropic_preserves_nothing():
 
 # --- orphan <think> recovery in _parse_response (issue #152, keyless, no live call) ---
 # A backend run without a reasoning parser swallows the opening tag into its
-# prompt template and returns bare reasoning text + a lone `</think>`. Covers
-# both directions: the split fires when there is no structured
-# reasoning_content, and stays out of the way when there is one.
+# prompt template and returns bare reasoning text + a lone `</think>`. That
+# shape only comes from a self-hosted inference server (hosted_vllm / custom /
+# no spec at all) -- see `LiteLLMProvider.emits_unparsed_reasoning` -- so the
+# split-fires cases below are built under one of those identities. A direct
+# connection to a known hosted vendor (anthropic) or a real network gateway
+# (openrouter) never gets normalized: a bare `</think>` in their content is
+# just content, not a leaked prompt template.
 
 
 def _fake_response(content: str, reasoning_content: str | None = None) -> MagicMock:
@@ -78,7 +82,17 @@ def _fake_response(content: str, reasoning_content: str | None = None) -> MagicM
 
 
 def test_parse_response_splits_orphan_think_into_reasoning():
-    provider = _make_provider("openai")
+    provider = _make_provider("hosted_vllm")
+    response = _fake_response("raw reasoning text</think>\nfinal answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content == "raw reasoning text"
+    assert result.content == "final answer"
+
+
+def test_parse_response_splits_orphan_think_for_custom_endpoint():
+    provider = _make_provider("custom")
     response = _fake_response("raw reasoning text</think>\nfinal answer")
 
     result = provider._parse_response(response)
@@ -88,10 +102,30 @@ def test_parse_response_splits_orphan_think_into_reasoning():
 
 
 def test_parse_response_leaves_structured_reasoning_content_alone():
-    provider = _make_provider("openai")
+    provider = _make_provider("hosted_vllm")
     response = _fake_response("visible</think>\nanswer", reasoning_content="already structured")
 
     result = provider._parse_response(response)
 
     assert result.reasoning_content == "already structured"
     assert result.content == "visible</think>\nanswer"
+
+
+def test_parse_response_leaves_bare_close_tag_alone_for_direct_anthropic():
+    provider = _make_provider("anthropic")
+    response = _fake_response("discussing the </think> tag in my answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content is None
+    assert result.content == "discussing the </think> tag in my answer"
+
+
+def test_parse_response_leaves_bare_close_tag_alone_behind_a_gateway():
+    provider = _make_provider("openrouter")
+    response = _fake_response("discussing the </think> tag in my answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content is None
+    assert result.content == "discussing the </think> tag in my answer"

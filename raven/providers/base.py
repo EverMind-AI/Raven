@@ -601,6 +601,15 @@ class LLMProvider(ABC):
         """
         return True
 
+    def emits_unparsed_reasoning(self) -> bool:
+        """Whether this provider's backend may leak bare think tags into content.
+
+        Only an inference server run without its reasoning parser produces the
+        orphan-closing-tag shape; everyone else's `</think>` in content is just
+        text. Default False: normalization is opt-in per provider shape.
+        """
+        return False
+
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
         self,

@@ -16,16 +16,25 @@ from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, 
 
 
 class _FakeProvider:
-    """Provider stand-in exposing only ``chat_stream`` (and ``chat_with_retry`` unused)."""
+    """Provider stand-in exposing only ``chat_stream`` (and ``chat_with_retry`` unused).
 
-    def __init__(self, chunks: list[StreamDelta]) -> None:
+    ``emits_unparsed_reasoning`` defaults to False, mirroring
+    ``LLMProvider``'s own default: only a provider shaped like a parser-less
+    self-hosted backend opts into the orphan-``</think>`` split.
+    """
+
+    def __init__(self, chunks: list[StreamDelta], emits_unparsed_reasoning: bool = False) -> None:
         self._chunks = chunks
         self.chat_stream_calls: list[dict[str, Any]] = []
+        self._emits_unparsed_reasoning = emits_unparsed_reasoning
 
     async def chat_stream(self, **kwargs: Any):
         self.chat_stream_calls.append(kwargs)
         for chunk in self._chunks:
             yield chunk
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return self._emits_unparsed_reasoning
 
 
 def _bind_helper(provider: _FakeProvider):
@@ -299,7 +308,10 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
 # ---------------------------------------------------------------------------
 # Orphan <think> recovery (issue #152) -- backend never emitted a structured
 # reasoning delta, and the accumulated content carries a closing tag with no
-# opener (the server's prompt template swallowed it).
+# opener (the server's prompt template swallowed it). Only fires for a
+# provider shaped like a parser-less self-hosted backend
+# (``emits_unparsed_reasoning() == True``); a normal direct/gateway provider
+# leaves a bare closing tag in its content alone (F12).
 # ---------------------------------------------------------------------------
 
 
@@ -309,7 +321,7 @@ async def test_llm_call_stream_splits_orphan_think_from_content() -> None:
         StreamDelta(content="</think>\n"),
         StreamDelta(content="final answer"),
     ]
-    provider = _FakeProvider(chunks)
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
     call = _bind_helper(provider)
 
     async def on_delta(_text: str) -> None:
@@ -321,6 +333,26 @@ async def test_llm_call_stream_splits_orphan_think_from_content() -> None:
     assert response.content == "final answer"
 
 
+async def test_llm_call_stream_leaves_orphan_think_alone_for_non_leaking_provider() -> None:
+    """A provider not shaped like a parser-less self-hosted backend keeps a
+    bare closing tag as ordinary content (F12 regression guard)."""
+    chunks = [
+        StreamDelta(content="discussing the "),
+        StreamDelta(content="</think>"),
+        StreamDelta(content=" tag in my answer"),
+    ]
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=False)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content is None
+    assert response.content == "discussing the </think> tag in my answer"
+
+
 async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
     """A non-empty structured reasoning_content stream wins outright; an
     orphan tag inside content (if any) is left untouched."""
@@ -328,7 +360,7 @@ async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
         StreamDelta(content=None, reasoning_content="thinking"),
         StreamDelta(content="visible</think> more text"),
     ]
-    provider = _FakeProvider(chunks)
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
     call = _bind_helper(provider)
 
     async def on_delta(_text: str) -> None:

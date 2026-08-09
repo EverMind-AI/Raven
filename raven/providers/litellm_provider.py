@@ -220,6 +220,26 @@ class LiteLLMProvider(LLMProvider):
             return True
         return theirs.name == mine.name
 
+    def emits_unparsed_reasoning(self) -> bool:
+        """See ``LLMProvider.emits_unparsed_reasoning``.
+
+        ``self._gateway``, when set, already answers this for both shapes it
+        can hold: a real network gateway (OpenRouter, AiHubMix) fronts one of
+        the large hosted vendors below it, so a bare ``</think>`` in content
+        is just content; the generic ``custom`` endpoint and a local spec
+        (hosted_vllm, ollama_chat) *are* the self-hosted inference server this
+        normalization exists for. When nothing was auto-detected, fall back to
+        whatever spec ``provider_name`` resolves to -- no spec at all (a bare
+        passthrough LiteLLM has no entry for) is the same self-hosted shape as
+        an explicit ``custom`` endpoint. Only a resolved spec that is neither
+        local nor ``custom`` -- a known direct big-vendor connection
+        (anthropic, openai, deepseek, ...) -- answers False: the
+        parser-less sglang/vLLM shape only comes from a self-hosted backend,
+        never from a vendor serving its own model behind its own API.
+        """
+        spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
+        return spec is None or spec.is_local or spec.name == "custom"
+
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
 
@@ -707,7 +727,7 @@ class LiteLLMProvider(LLMProvider):
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
 
-        if not reasoning_content and isinstance(content, str):
+        if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning or reasoning_content
 

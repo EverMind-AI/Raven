@@ -1629,7 +1629,7 @@ class AgentLoop:
 
         content = "".join(content_buf)
         reasoning_content = "".join(reasoning_buf) or None
-        if reasoning_content is None:
+        if reasoning_content is None and self.provider.emits_unparsed_reasoning():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning
 
