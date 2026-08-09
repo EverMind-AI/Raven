@@ -43,7 +43,7 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
@@ -1560,6 +1560,9 @@ class AgentLoop:
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
+        had_error = False
+        error_content: str | None = None
+        error_classification: ErrorClassification | None = None
 
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when a TimeoutError from the per-chunk idle cap unwinds the
@@ -1569,6 +1572,18 @@ class AgentLoop:
         try:
             async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
                 async for delta in stream:
+                    if delta.finish_reason == "error":
+                        # A non-streaming provider's chat() error, replayed
+                        # through the fallback as its single terminal delta.
+                        # Its content is the error text, not a token to render
+                        # or accumulate -- surface it via error_classification
+                        # instead of the normal success collation below.
+                        had_error = True
+                        error_content = delta.content
+                        error_classification = delta.error_classification
+                        if delta.usage is not None:
+                            final_usage = delta.usage
+                        continue
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -1590,6 +1605,14 @@ class AgentLoop:
                 content="".join(content_buf),
                 finish_reason="error",
                 error_classification=self.provider.classify_error(TimeoutError()),
+            )
+
+        if had_error:
+            return LLMResponse(
+                content=error_content,
+                finish_reason="error",
+                error_classification=error_classification,
+                usage=final_usage or {},
             )
 
         tool_calls = _finalize_tool_calls(tool_call_slots)

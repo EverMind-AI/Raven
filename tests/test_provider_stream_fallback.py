@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import ErrorClassification, GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
 
 
 class _ChatOnlyProvider(LLMProvider):
@@ -47,6 +47,26 @@ async def test_fallback_yields_single_terminal_delta() -> None:
     assert deltas[0].usage == {"total_tokens": 5}
     assert deltas[0].reasoning_content == "why"
     assert deltas[0].tool_call_delta is None
+
+
+async def test_fallback_propagates_error_finish_reason_and_classification() -> None:
+    """A chat() error response (e.g. Azure non-200) must not be silently
+    stripped down to plain content when replayed through the terminal delta --
+    the caller needs finish_reason + error_classification to detect it."""
+    classification = ErrorClassification(category="http_4xx", should_fallback=True)
+    provider = _ChatOnlyProvider(
+        LLMResponse(
+            content="Azure OpenAI API Error 404: deployment not found",
+            finish_reason="error",
+            error_classification=classification,
+        )
+    )
+    deltas = [d async for d in provider.chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert len(deltas) == 1
+    assert deltas[0].content == "Azure OpenAI API Error 404: deployment not found"
+    assert deltas[0].finish_reason == "error"
+    assert deltas[0].error_classification is classification
 
 
 async def test_fallback_encodes_tool_calls_for_reconstruction() -> None:

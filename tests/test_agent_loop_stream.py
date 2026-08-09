@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
 
 
 class _FakeProvider:
@@ -243,6 +243,41 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
     assert response.error_classification.retryable is True
     assert response.content == "partial"
     assert seen == ["partial"]
+
+
+async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
+    """A non-streaming provider's chat() error, replayed through the base
+    fallback as a single terminal delta with finish_reason='error', must not
+    be treated as ordinary streamed content: on_token_delta must not fire for
+    it, and the final response must surface finish_reason + classification
+    instead of a fabricated 'stop'/'tool_calls'."""
+    classification = ErrorClassification(category="http_4xx", should_fallback=True)
+    chunks = [
+        StreamDelta(
+            content="Azure OpenAI API Error 404: deployment not found",
+            finish_reason="error",
+            error_classification=classification,
+        ),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await call(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        model="m",
+        on_token_delta=on_delta,
+    )
+
+    assert seen == []
+    assert response.content == "Azure OpenAI API Error 404: deployment not found"
+    assert response.finish_reason == "error"
+    assert response.error_classification is classification
 
 
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:

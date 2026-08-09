@@ -124,12 +124,18 @@ class StreamDelta:
     Consumers (AgentLoop on_token_delta path, TUI SubscriptionEmitter) read
     `.content` for incremental token text; `tool_call_delta` / `usage` are
     optional carriers for in-stream tool deltas and final usage snapshots.
+
+    `finish_reason` / `error_classification` are only ever set on the
+    terminal delta of a stream (mirroring `LLMResponse`); mid-stream deltas
+    leave both as ``None``.
     """
 
     content: str | None
     tool_call_delta: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1, qwen, o-series thinking stream
+    finish_reason: str | None = None
+    error_classification: ErrorClassification | None = None
 
 
 @dataclass(frozen=True)
@@ -300,6 +306,8 @@ class LLMProvider(ABC):
             tool_call_delta=tool_call_delta,
             usage=response.usage or None,
             reasoning_content=response.reasoning_content,
+            finish_reason=response.finish_reason,
+            error_classification=response.error_classification,
         )
 
     @staticmethod
