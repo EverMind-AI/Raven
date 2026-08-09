@@ -402,6 +402,36 @@ def test_onboard_oauth_non_interactive_errors(tmp_env: Path) -> None:
     assert "OAuth providers require an interactive browser flow" in r.stdout
 
 
+@pytest.mark.parametrize("vendor", ["chatgpt", "bedrock", "sagemaker", "vertex_ai", "azure", "cloudflare"])
+def test_onboard_non_interactive_bare_key_refused_vendor_errors(tmp_env: Path, vendor: str) -> None:
+    """A vendor issue #254 identified as unconfigurable by a bare key is
+    refused before any credentials are written, instead of being sent through
+    the generic single-key branch that would 401 (or, for chatgpt, be
+    silently ignored) at the first call."""
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            vendor,
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--yes",
+        ],
+    )
+    assert r.exit_code != 0
+    from raven.providers.auth import key_refusal
+
+    reason = key_refusal(vendor)
+    assert reason is not None
+    out = " ".join(r.stdout.split())
+    assert " ".join(reason.split()) in out
+    data = json.loads(tmp_env.read_text())
+    assert vendor not in data.get("providers", {})
+
+
 def test_onboard_non_tty_no_flag_fails(tmp_env: Path) -> None:
     """Without a TTY and without ``--non-interactive`` we give a clear hint.
 
@@ -1865,6 +1895,73 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     # Switched to openai; its key written, default model is openai's.
     assert data["providers"]["openai"]["apiKey"] == "sk-openai"
     assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
+
+
+def test_step1_bare_key_refused_vendor_rewinds_to_picker(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3, capsys: pytest.CaptureFixture
+) -> None:
+    """Picking a vendor issue #254 identified as unconfigurable by a bare key
+    (chatgpt: it authenticates through Raven's own OAuth path instead) prints
+    the reason and rewinds to the picker via the wizard's existing back
+    mechanism, the same one 'Switch provider' uses -- instead of prompting for
+    a key that would never authenticate.
+    """
+    picks = iter(["chatgpt", "openai"])
+    key_prompts: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_check_tty_or_die", lambda non_interactive: None)
+    monkeypatch.setattr(onboard_commands, "_pick_language", lambda: None)
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+
+    def _fake_prompt_api_key(provider, **kw):
+        key_prompts.append(provider)
+        return f"sk-{provider}"
+
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", _fake_prompt_api_key)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+
+    onboard_commands.run_wizard(non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    from raven.providers.auth import key_refusal
+
+    assert " ".join(key_refusal("chatgpt").split()) in out
+    # The refused vendor never reached the key prompt at all.
+    assert key_prompts == ["openai"]
+    data = json.loads(tmp_env.read_text())
+    assert "chatgpt" not in data.get("providers", {})
+    assert data["providers"]["openai"]["apiKey"] == "sk-openai"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
+
+
+def test_collect_credentials_gigachat_hints_key_shape_before_prompting(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """GigaChat *can* be configured by a bare key -- it's just an unusual one
+    (base64(client_id:client_secret)) -- so the wizard hints at its shape
+    instead of refusing it."""
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "Z2lnYWNoYXQ6c2VjcmV0")
+
+    result = onboard_commands._collect_credentials(
+        "gigachat",
+        is_oauth=False,
+        is_custom=False,
+        is_local=False,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+    )
+
+    assert result is None
+    out = " ".join(capsys.readouterr().out.split())
+    assert "base64(client_id:client_secret)" in out
+    data = json.loads(tmp_env.read_text())
+    assert data["providers"]["gigachat"]["apiKey"] == "Z2lnYWNoYXQ6c2VjcmV0"
 
 
 def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3) -> None:

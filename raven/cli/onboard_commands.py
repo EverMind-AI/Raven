@@ -1426,7 +1426,17 @@ def _collect_credentials(
     """Auth setup: OAuth browser flow or api_key write. Returns the custom
     model id when the provider is ``custom`` (locked in here), ``None`` for a
     non-custom provider, or ``_BACK`` if the user backed out of the first
-    interactive credential field (caller should rewind to the picker)."""
+    interactive credential field, or if the vendor cannot be configured by a
+    bare key at all (caller should rewind to the picker either way)."""
+    from raven.providers.auth import key_refusal
+
+    refusal = key_refusal(provider)
+    if refusal is not None:
+        console.print(f"  [red]x[/red] {refusal}")
+        if non_interactive:
+            raise typer.Exit(2)
+        return _BACK
+
     if is_oauth:
         if non_interactive:
             console.print(
@@ -1482,6 +1492,19 @@ def _collect_credentials(
                 return _BACK
         _write_provider_fields(provider, {"api_base": base_url})
         return None
+
+    if not api_key:
+        from raven.providers.registry import normalize_provider_name
+
+        # GigaChat's key is not a typical API key -- it is base64(client_id:
+        # client_secret) -- and the generic prompt below gives no room to say
+        # so, so the wizard would otherwise send someone looking for a plain
+        # key straight into a 401.
+        if normalize_provider_name(provider) == "gigachat":
+            console.print(
+                "  [dim]GigaChat's key is base64(client_id:client_secret) from the "
+                "GigaChat API console, not a typical API key.[/dim]"
+            )
 
     # Pure interactive path (no creds came from flags): prompt field-by-field
     # with empty-submit = back; backing out of the first field rewinds to the

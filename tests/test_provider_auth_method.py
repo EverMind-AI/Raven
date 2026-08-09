@@ -32,6 +32,7 @@ from typing import Any
 import pytest
 
 from raven.config.schema import Config
+from raven.providers.auth import key_refusal
 
 #: Provider sections paired with the model id that selects them. Each case is a
 #: shape of credential material, not a vendor: "the key is in the plural field",
@@ -299,3 +300,35 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         for line in key_reads(ast.parse(path.read_text()))
     )
     assert not offenders, "decide configuredness through providers.auth.credential_status: " + ", ".join(offenders)
+
+
+#: The six vendors issue #254 identified as unconfigurable by a bare key --
+#: each needs credential material the onboarding wizard's generic single-key
+#: prompt has no field for.
+_KEY_REFUSED_VENDORS = ("chatgpt", "bedrock", "sagemaker", "vertex_ai", "azure", "cloudflare")
+
+
+@pytest.mark.parametrize("vendor", _KEY_REFUSED_VENDORS)
+def test_key_refusal_names_a_reason_for_vendors_a_key_cannot_configure(vendor: str) -> None:
+    reason = key_refusal(vendor)
+    assert reason is not None
+    assert reason.strip()
+
+
+def test_key_refusal_chatgpt_points_at_ravens_own_oauth_path() -> None:
+    """chatgpt is the one vendor where a *different* Raven path already exists."""
+    reason = key_refusal("chatgpt")
+    assert reason is not None
+    assert "openai-codex" in reason or "openai_codex" in reason
+
+
+@pytest.mark.parametrize("vendor", ["gigachat", "openai", "anthropic", "custom", "deepseek"])
+def test_key_refusal_is_none_for_vendors_a_key_configures(vendor: str) -> None:
+    """Everyone else -- including gigachat, whose key merely has an odd shape."""
+    assert key_refusal(vendor) is None
+
+
+def test_key_refusal_normalizes_hyphen_and_case() -> None:
+    """Matched the same way every other provider-name comparison is made."""
+    assert key_refusal("Vertex-AI") == key_refusal("vertex_ai")
+    assert key_refusal("BEDROCK") == key_refusal("bedrock")

@@ -263,6 +263,73 @@ def credential_status(
     return CredentialStatus(name, False, method.kind, gap, method)
 
 
+#: Vendors LiteLLM reaches by API key, that Raven carries no spec for, where a
+#: bare key still cannot configure them -- the credential shape needs more than
+#: the wizard's generic "paste a key" branch offers. Every other unspecced
+#: vendor is in fact reached by a single key; this only lists the ones that
+#: are not, so ``key_refusal`` can say what actually gets each one working
+#: instead of the wizard writing down a key that 401s (or, for chatgpt, is
+#: silently ignored) at the first call.
+#:
+#: Deliberately not registry entries: a spec exists to drive routing (default
+#: model, client selection, the connectivity probe), and none of these six get
+#: any of that from Raven -- adding a spec just to hold a rejection message
+#: would build the scaffolding this module exists to avoid.
+_KEY_CANNOT_CONFIGURE: dict[str, str] = {
+    "chatgpt": (
+        "ChatGPT is reached through its own OAuth device flow -- LiteLLM's "
+        "chatgpt transformation ignores any api_key and authenticates through a "
+        "stored browser session instead. Raven already has this path: run "
+        "`raven provider login openai-codex` (or pick \"OpenAI Codex (OAuth)\" "
+        "from this menu)."
+    ),
+    "bedrock": (
+        "Bedrock is reached through the AWS credential chain -- an access key "
+        "and secret plus a region, an AWS profile, or ambient credentials from "
+        "the environment or instance role -- not a single api_key field. Set "
+        "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION (or an AWS "
+        "profile) in the environment instead."
+    ),
+    "sagemaker": (
+        "SageMaker is reached through the same AWS credential chain as "
+        "Bedrock -- an access key and secret plus a region, an AWS profile, or "
+        "ambient credentials -- not a single api_key field. Set "
+        "AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION (or an AWS "
+        "profile) in the environment instead."
+    ),
+    "vertex_ai": (
+        "Vertex AI needs a project and a location, plus either a service "
+        "account credentials JSON or ambient Application Default Credentials -- "
+        "not a single api_key field. Set VERTEXAI_PROJECT / VERTEXAI_LOCATION "
+        "and either GOOGLE_APPLICATION_CREDENTIALS or run `gcloud auth "
+        "application-default login`."
+    ),
+    "azure": (
+        "This is LiteLLM's native Azure vendor, which needs an api_base and an "
+        "api_version plus either an api_key or Entra ID auth -- a bare key is "
+        "not enough. Raven's own Azure path (`azure_openai`) already asks for "
+        "the base URL and version; pick that instead."
+    ),
+    "cloudflare": (
+        "Cloudflare Workers AI needs an api_key plus either an api_base or an "
+        "account_id -- a bare key alone is not enough. Configure --base-url "
+        "(or an account id) alongside the key."
+    ),
+}
+
+
+def key_refusal(vendor: str) -> str | None:
+    """Why a bare API key cannot configure this vendor, or ``None`` if a key works.
+
+    Checked before the onboarding wizard's generic key-only branch writes a
+    config section for a vendor Raven carries no spec for, so it can refuse
+    with the reason rather than persist a key that will never authenticate.
+    """
+    from raven.providers.registry import normalize_provider_name
+
+    return _KEY_CANNOT_CONFIGURE.get(normalize_provider_name(vendor))
+
+
 def _localize(req: Requirement, name: str) -> Requirement:
     """Put the provider's own name into the hint, so it can be pasted.
 
