@@ -177,6 +177,17 @@ def make_provider(config: Config):
                 default_model=model,
                 strategy=p.endpoint_strategy if p else "sticky",
             )
+        elif eps:
+            extra_body = wire_overrides(provider_name, model) or None
+            provider = LiteLLMProvider(
+                api_key=eps[0].api_key,
+                api_base=eps[0].api_base or config.get_api_base(model),
+                default_model=model,
+                extra_headers=eps[0].extra_headers or (p.extra_headers if p else None),
+                provider_name=provider_name,
+                extra_body=extra_body,
+                model_overrides=config.agents.defaults.model_overrides,
+            )
         else:
             extra_body = wire_overrides(provider_name, model) or None
             provider = LiteLLMProvider(
@@ -204,10 +215,16 @@ def make_lazy_provider(config: Config):
     call, so AgentLoop construction stays fast. Credentials are checked now
     (fail-fast preserved) and the real provider is pre-warmed in the background."""
     from raven.providers.base import GenerationSettings
+    from raven.providers.endpoints import provider_endpoints
     from raven.providers.lazy import LazyProvider
 
     check_provider_credentials(config)
     defaults = config.agents.defaults
+
+    p = config.get_provider(defaults.model)
+    eps = provider_endpoints(p) if p else []
+    initial_endpoint_label = eps[0].label if len(eps) > 1 else None
+
     provider = LazyProvider(
         factory=lambda: make_provider(config),
         default_model=defaults.model,
@@ -217,6 +234,7 @@ def make_lazy_provider(config: Config):
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
         ),
+        initial_endpoint_label=initial_endpoint_label,
     )
     provider.prewarm()
     return provider

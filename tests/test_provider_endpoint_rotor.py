@@ -309,6 +309,40 @@ async def test_chat_attempt_with_retry_composes_with_base_model_chain_fallback(c
     assert (e0.chat_calls, e1.chat_calls) == (2, 1)
 
 
+async def test_generation_assigned_after_construction_propagates_to_every_inner(clock):
+    """``make_provider`` builds the rotor, then assigns ``provider.generation =
+    GenerationSettings(...)`` from config -- see ``raven/cli/_helpers.py``.
+    Without push-down each inner keeps the base class's untouched default
+    (600s timeout, temperature 0.7, ...), so a configured timeout is silently
+    ignored on every actual request."""
+    from raven.providers.base import GenerationSettings
+
+    e0 = _StubInner("e0")
+    e1 = _StubInner("e1")
+    rotor = _make_rotor([e0, e1], strategy="sticky")
+
+    settings = GenerationSettings(temperature=0.1, max_tokens=99, timeout=12.5)
+    rotor.generation = settings
+
+    assert e0.generation is settings
+    assert e1.generation is settings
+    assert e0.generation.timeout == 12.5
+    assert e1.generation.timeout == 12.5
+
+
+def test_emits_unparsed_reasoning_delegates_to_the_first_inner(clock):
+    """Same reasoning as ``can_serve``: every endpoint under one rotor is the
+    same vendor/section, so the shape of its wire is one answer, not one per
+    endpoint."""
+    e0 = _StubInner("e0")
+    e0.emits_unparsed_reasoning = lambda: True
+    e1 = _StubInner("e1")
+    e1.emits_unparsed_reasoning = lambda: False
+    rotor = _make_rotor([e0, e1], strategy="sticky")
+
+    assert rotor.emits_unparsed_reasoning() is True
+
+
 async def test_cooldown_doubles_per_failure_capped_and_clears_on_success(clock):
     state = RotorState()
 

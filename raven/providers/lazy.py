@@ -24,11 +24,14 @@ class LazyProvider(LLMProvider):
         factory: Callable[[], LLMProvider],
         default_model: str,
         generation: GenerationSettings,
+        *,
+        initial_endpoint_label: str | None = None,
     ):
         super().__init__()
         self._factory = factory
         self._default_model = default_model
         self.generation = generation
+        self._initial_endpoint_label = initial_endpoint_label
         self._provider: LLMProvider | None = None
         self._lock = threading.Lock()
 
@@ -55,6 +58,26 @@ class LazyProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self._default_model
+
+    def emits_unparsed_reasoning(self) -> bool:
+        """Forwarded post-materialization: the stream collation that asks this
+        only runs after a call, and the first call is what builds the inner
+        provider -- before that there is nothing to normalize anyway."""
+        return False if self._provider is None else self._provider.emits_unparsed_reasoning()
+
+    @property
+    def active_endpoint_label(self) -> str | None:
+        """Which endpoint is answering, for the session footer.
+
+        Before materialization, the rotor behind the real provider has not
+        rotated yet, so the first endpoint it would pick (``initial_endpoint_label``)
+        is exactly what a sticky rotor would answer -- no build needed just to
+        display a label. Once built, defer to the inner provider so the footer
+        reflects any rotation that happened since.
+        """
+        if self._provider is None:
+            return self._initial_endpoint_label
+        return getattr(self._provider, "active_endpoint_label", None)
 
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)

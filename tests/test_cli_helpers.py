@@ -158,6 +158,58 @@ def test_make_lazy_provider_returns_lazy_without_building(monkeypatch: pytest.Mo
     assert provider.get_default_model() == "my-model"
 
 
+def test_make_lazy_provider_carries_the_first_endpoint_label_for_a_multi_endpoint_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session footer reads ``active_endpoint_label`` before the first call, when
+    the real (rotor-wrapping) provider has not been built yet. For a section
+    with several endpoints, ``make_lazy_provider`` must hand the lazy wrapper
+    the first entry's label so that read answers something instead of
+    always ``None``."""
+    from raven.config.schema import Config
+    from raven.providers.lazy import LazyProvider
+
+    monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="real"))
+    # Real prewarm races a background thread against this assertion -- disable
+    # it so the test observes the pre-materialization state deterministically.
+    monkeypatch.setattr(LazyProvider, "prewarm", lambda self: None)
+    config = Config.model_validate(
+        {
+            "providers": {
+                "custom": {
+                    "endpoints": [
+                        {"label": "first", "apiKey": "k1", "apiBase": "https://first.example"},
+                        {"label": "second", "apiKey": "k2", "apiBase": "https://second.example"},
+                    ]
+                }
+            },
+            "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+        }
+    )
+
+    provider = _helpers.make_lazy_provider(config)
+
+    assert isinstance(provider, LazyProvider)
+    assert provider.active_endpoint_label == "first"
+
+
+def test_make_lazy_provider_has_no_endpoint_label_for_a_single_endpoint_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A section with only one endpoint (flat or explicit) never rotates, so
+    there is nothing for the footer to name -- ``active_endpoint_label`` is
+    ``None`` rather than a label nobody will ever see it change from."""
+    from raven.providers.lazy import LazyProvider
+
+    monkeypatch.setattr(_helpers, "make_provider", lambda _c: SimpleNamespace(name="real"))
+    from raven.config.loader import load_config
+
+    provider = _helpers.make_lazy_provider(load_config(_write_config(tmp_path, api_key="sk-x")))
+
+    assert isinstance(provider, LazyProvider)
+    assert provider.active_endpoint_label is None
+
+
 @pytest.mark.parametrize(
     ("provider", "model", "expected"),
     [
@@ -307,6 +359,76 @@ def test_make_provider_a_single_endpoint_entry_still_returns_a_plain_provider(
     provider = _helpers.make_provider(config)
 
     assert type(provider) is LiteLLMProvider
+
+
+def test_make_provider_single_endpoint_entry_credentials_are_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A section declaring exactly one entry under ``endpoints`` has nothing in
+    the flat ``apiKey``/``apiBase``/``extraHeaders`` fields -- reading those
+    instead of the endpoint (the shape this section actually used) silently
+    sent an empty key. The single-endpoint path must read the endpoint."""
+    from raven.config.schema import Config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    config = Config.model_validate(
+        {
+            "providers": {
+                "custom": {
+                    "endpoints": [
+                        {
+                            "label": "only",
+                            "apiKey": "k-only",
+                            "apiBase": "https://only.example",
+                            "extraHeaders": {"X-Only": "1"},
+                        }
+                    ]
+                }
+            },
+            "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    provider = _helpers.make_provider(config)
+
+    assert type(provider) is LiteLLMProvider
+    # The reverse-case shape a prior review caught live: this must not be empty.
+    assert provider.api_key == "k-only"
+    assert provider.api_base == "https://only.example"
+    assert provider.extra_headers == {"X-Only": "1"}
+
+
+def test_make_provider_flat_config_is_equivalent_through_the_endpoint_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain flat ``apiKey``/``apiBase`` section (no ``endpoints`` field) is
+    synthesized by ``provider_endpoints`` into a single endpoint and now goes
+    through the same single-endpoint-material path as an explicit one. The
+    result must match what the flat fields alone produced before this change."""
+    from raven.config.schema import Config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    config = Config.model_validate(
+        {
+            "providers": {
+                "custom": {
+                    "apiKey": "k-flat",
+                    "apiBase": "https://flat.example",
+                    "extraHeaders": {"X-Flat": "1"},
+                }
+            },
+            "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    provider = _helpers.make_provider(config)
+
+    assert type(provider) is LiteLLMProvider
+    assert provider.api_key == "k-flat"
+    assert provider.api_base == "https://flat.example"
+    assert provider.extra_headers == {"X-Flat": "1"}
 
 
 @pytest.mark.parametrize(

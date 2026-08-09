@@ -29,7 +29,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any
 
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ErrorClassification, GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.endpoints import ResolvedEndpoint
 
 #: Seconds a failed endpoint sits out before it is tried again, doubling per
@@ -127,6 +127,31 @@ class EndpointRotorProvider(LLMProvider):
         self._default_model = default_model
         self.strategy = strategy
         self._state = RotorState()
+        self.generation = self.generation  # push the base class's default down now that inners exist
+
+    @property
+    def generation(self) -> GenerationSettings:
+        return self._generation
+
+    @generation.setter
+    def generation(self, value: GenerationSettings) -> None:
+        """Push generation settings down to every inner.
+
+        ``make_provider`` builds this instance and only then assigns
+        ``provider.generation = GenerationSettings(...)`` from config (see
+        ``per_model_provider.py``'s ``PerModelProvider.__init__`` for the same
+        push-down at construction time) -- without this setter that assignment
+        would land on the rotor alone and every inner would keep answering
+        temperature/max_tokens/timeout from its own untouched default.
+
+        ``getattr(self, "_inners", [])`` covers the one call that happens
+        before ``self._inners`` exists: the base class's own ``__init__``
+        assigns a default ``self.generation`` before this subclass's
+        constructor has built the endpoint list.
+        """
+        self._generation = value
+        for inner in getattr(self, "_inners", []):
+            inner.generation = value
 
     def _mark_failure(self, i: int) -> None:
         self._state.mark_failure(i, time.monotonic())
@@ -306,6 +331,12 @@ class EndpointRotorProvider(LLMProvider):
         rotor is the same vendor/section, so their identity for routing
         purposes is one answer, not one per endpoint."""
         return self._inners[0].can_serve(model)
+
+    def emits_unparsed_reasoning(self) -> bool:
+        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+        every endpoint under one rotor is the same vendor/section, so the shape
+        of its wire is one answer, not one per endpoint."""
+        return self._inners[0].emits_unparsed_reasoning()
 
     def get_default_model(self) -> str:
         return self._default_model
