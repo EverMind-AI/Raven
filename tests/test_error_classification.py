@@ -97,6 +97,9 @@ def test_classify_follows_cause_chain():
         ("connection reset by peer", "network"),
         ("insufficient credit / billing", "billing"),
         ("model not found", "model_unavailable"),
+        # A rendered azure non-200 body: no exception, no status attribute,
+        # and a route-level 404 text that names none of the wordier markers.
+        ("Azure OpenAI API Error 404: Resource not found", "model_unavailable"),
         ("This model's maximum context length is 8192 tokens", "context_overflow"),
         ("401 unauthorized: invalid api key", "auth"),
         ("400 invalid request: bad schema", "invalid_request"),

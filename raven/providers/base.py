@@ -455,6 +455,11 @@ class LLMProvider(ABC):
             return ErrorClassification("billing", should_fallback=True)
 
         # Model unavailable / not found → no point retrying it; try another model.
+        # "404" as a substring mirrors the 429/5xx buckets above: a provider
+        # that embeds the status into a rendered string (azure's non-200 path)
+        # reaches here with no exception to read a status code from, and a
+        # route-level body like "Resource not found" names none of the wordier
+        # markers.
         if (
             status == 404
             or "notfounderror" in names
@@ -464,6 +469,7 @@ class LLMProvider(ABC):
                 "no endpoints",
                 "not available",
                 "unavailable",
+                "404",
             )
         ):
             return ErrorClassification("model_unavailable", should_fallback=True)
