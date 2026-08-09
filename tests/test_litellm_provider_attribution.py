@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from raven.providers.litellm_provider import _ANTHROPIC_EXTRA_KEYS, LiteLLMProvider
 
@@ -62,3 +62,36 @@ def test_extra_msg_keys_matches_on_resolved_anthropic_prefix():
 
 def test_extra_msg_keys_non_anthropic_preserves_nothing():
     assert LiteLLMProvider._extra_msg_keys("gpt-4o", "gpt-4o") == frozenset()
+
+
+# --- orphan <think> recovery in _parse_response (issue #152, keyless, no live call) ---
+# A backend run without a reasoning parser swallows the opening tag into its
+# prompt template and returns bare reasoning text + a lone `</think>`. Covers
+# both directions: the split fires when there is no structured
+# reasoning_content, and stays out of the way when there is one.
+
+
+def _fake_response(content: str, reasoning_content: str | None = None) -> MagicMock:
+    message = MagicMock(content=content, tool_calls=None, reasoning_content=reasoning_content, thinking_blocks=None)
+    choice = MagicMock(message=message, finish_reason="stop")
+    return MagicMock(choices=[choice], usage=None)
+
+
+def test_parse_response_splits_orphan_think_into_reasoning():
+    provider = _make_provider("openai")
+    response = _fake_response("raw reasoning text</think>\nfinal answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content == "raw reasoning text"
+    assert result.content == "final answer"
+
+
+def test_parse_response_leaves_structured_reasoning_content_alone():
+    provider = _make_provider("openai")
+    response = _fake_response("visible</think>\nanswer", reasoning_content="already structured")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content == "already structured"
+    assert result.content == "visible</think>\nanswer"

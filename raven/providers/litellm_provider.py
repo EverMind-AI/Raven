@@ -17,6 +17,7 @@ from raven.providers import prompt_cache
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
+from raven.providers.reasoning import split_orphan_think
 from raven.providers.registry import find_by_keywords, find_by_model, find_gateway
 from raven.providers.wire import wire_model
 
@@ -643,6 +644,10 @@ class LiteLLMProvider(LLMProvider):
 
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
+
+        if not reasoning_content and isinstance(content, str):
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning or reasoning_content
 
         return LLMResponse(
             content=content,

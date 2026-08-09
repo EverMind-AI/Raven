@@ -46,6 +46,7 @@ from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, Mem
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.reasoning import split_orphan_think
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -1594,12 +1595,18 @@ class AgentLoop:
         tool_calls = _finalize_tool_calls(tool_call_slots)
         finish_reason = "tool_calls" if tool_calls else "stop"
 
+        content = "".join(content_buf)
+        reasoning_content = "".join(reasoning_buf) or None
+        if reasoning_content is None:
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning
+
         return LLMResponse(
-            content="".join(content_buf),
+            content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
-            reasoning_content="".join(reasoning_buf) or None,
+            reasoning_content=reasoning_content,
         )
 
     @classmethod

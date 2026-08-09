@@ -259,3 +259,47 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     assert response.content == ""
     assert response.tool_calls == []
     assert response.finish_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Orphan <think> recovery (issue #152) -- backend never emitted a structured
+# reasoning delta, and the accumulated content carries a closing tag with no
+# opener (the server's prompt template swallowed it).
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_call_stream_splits_orphan_think_from_content() -> None:
+    chunks = [
+        StreamDelta(content="raw reasoning"),
+        StreamDelta(content="</think>\n"),
+        StreamDelta(content="final answer"),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content == "raw reasoning"
+    assert response.content == "final answer"
+
+
+async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
+    """A non-empty structured reasoning_content stream wins outright; an
+    orphan tag inside content (if any) is left untouched."""
+    chunks = [
+        StreamDelta(content=None, reasoning_content="thinking"),
+        StreamDelta(content="visible</think> more text"),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content == "thinking"
+    assert response.content == "visible</think> more text"
