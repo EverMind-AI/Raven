@@ -4,7 +4,7 @@ Covers:
 - sticky: first endpoint stays "the" endpoint until it fails, cooldown
   transfers to the next, and expiry restores it
 - round_robin: the cursor advances by one on every call
-- a non-fallback error (auth) never rotates
+- an endpoint-agnostic error (invalid_request) never rotates; auth does
 - every endpoint cooling still dispatches (no deadlock)
 - chat_stream: transfer before the first delta, no transfer after it,
   no token replay
@@ -178,7 +178,39 @@ async def test_active_endpoint_label_skips_a_cooling_endpoint(clock):
     assert rotor.active_endpoint_label == "e0"
 
 
-async def test_non_fallback_error_returns_immediately_without_rotating(clock):
+async def test_endpoint_agnostic_error_returns_immediately_without_rotating(clock):
+    e0 = _StubInner(
+        "e0",
+        chat_script=[
+            LLMResponse(
+                content="400 invalid request",
+                finish_reason="error",
+                error_classification=ErrorClassification(category="invalid_request"),
+            )
+        ],
+    )
+    e1 = _StubInner("e1")
+    rotor = _make_rotor([e0, e1], strategy="sticky")
+
+    resp = await rotor.chat_with_retry(messages=[], model="m")
+
+    assert resp.finish_reason == "error"
+    assert resp.content == "400 invalid request"
+    assert (e0.chat_calls, e1.chat_calls) == (1, 0)
+    # A fatal-but-endpoint-agnostic error must not cool the endpoint either --
+    # there was nothing wrong with the endpoint, the request was malformed.
+    assert rotor._state.is_cooling(0, clock.now) is False
+
+
+async def test_an_auth_failure_rotates_to_the_next_account(clock):
+    """A dead key is exactly the failure a second account exists for.
+
+    auth never falls back across models -- the same key fails for every
+    model -- but each endpoint is its own account with its own key, so the
+    rotor judges it by its own predicate. Measured on a live OpenRouter
+    wire before this test existed: judging by should_fallback alone
+    returned the 401 with a healthy endpoint sitting right behind it.
+    """
     e0 = _StubInner(
         "e0",
         chat_script=[
@@ -190,12 +222,9 @@ async def test_non_fallback_error_returns_immediately_without_rotating(clock):
 
     resp = await rotor.chat_with_retry(messages=[], model="m")
 
-    assert resp.finish_reason == "error"
-    assert resp.content == "401 unauthorized"
-    assert (e0.chat_calls, e1.chat_calls) == (1, 0)
-    # A fatal-but-not-fallback-worthy error must not cool the endpoint either --
-    # there was nothing wrong with the endpoint, the request was invalid.
-    assert rotor._state.is_cooling(0, clock.now) is False
+    assert resp.finish_reason != "error"
+    assert (e0.chat_calls, e1.chat_calls) == (1, 1)
+    assert rotor._state.is_cooling(0, clock.now) is True
 
 
 async def test_all_endpoints_cooling_still_dispatches_in_order(clock):

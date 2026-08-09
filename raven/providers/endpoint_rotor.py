@@ -29,7 +29,7 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any
 
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.endpoints import ResolvedEndpoint
 
 #: Seconds a failed endpoint sits out before it is tried again, doubling per
@@ -39,6 +39,21 @@ from raven.providers.endpoints import ResolvedEndpoint
 #: single request forever.
 _COOLDOWN_INITIAL_SECONDS = 30.0
 _COOLDOWN_CAP_SECONDS = 300.0
+
+
+def _rotates(classification: ErrorClassification) -> bool:
+    """Whether this failure is worth trying the next endpoint for.
+
+    Broader than ``should_fallback`` in exactly one place: an ``auth`` failure
+    never falls back across *models* -- the same key fails for every model --
+    but each endpoint here is its own account with its own key, and a revoked
+    or exhausted key on one account says nothing about the next. Measured on
+    a live wire: a dead OpenRouter key classifies ``auth``, and judging it by
+    ``should_fallback`` alone left the rotor returning the 401 with a healthy
+    endpoint sitting right behind it. Everything genuinely endpoint-agnostic
+    (invalid_request, context overflow, unknown) still returns immediately.
+    """
+    return classification.should_fallback or classification.category == "auth"
 
 
 @dataclass
@@ -183,10 +198,10 @@ class EndpointRotorProvider(LLMProvider):
         next attempt. A fallback-worthy exhaustion moves to the next endpoint
         from ``_healthy_order()``; a non-fallback error (auth,
         invalid_request, context overflow, ...) returns immediately, since a
-        different endpoint on the same account/vendor will not fix a rejected
-        key or a malformed request. Exhausting every endpoint returns the
-        last response, letting the caller's own model-chain fallback
-        (``LLMProvider.chat_with_retry``) take over from there.
+        different endpoint on the same vendor will not fix a malformed
+        request. Exhausting every endpoint returns the last response, letting
+        the caller's own model-chain fallback (``LLMProvider.chat_with_retry``)
+        take over from there.
         """
         order = self._healthy_order()
         last_response: LLMResponse | None = None
@@ -207,7 +222,7 @@ class EndpointRotorProvider(LLMProvider):
             classification = response.error_classification or self.classify_error(content=response.content)
             response.error_classification = classification
             last_response = response
-            if not classification.should_fallback:
+            if not _rotates(classification):
                 return response
             self._mark_failure(i)
 
@@ -257,7 +272,7 @@ class EndpointRotorProvider(LLMProvider):
                     return
                 except Exception as exc:
                     classification = self.classify_error(exc)
-                    if not classification.should_fallback:
+                    if not _rotates(classification):
                         raise
                     self._mark_failure(i)
                     last_failure = exc
@@ -268,7 +283,7 @@ class EndpointRotorProvider(LLMProvider):
                     # a terminal error delta rather than an exception; judged
                     # the same way as one.
                     classification = first.error_classification or self.classify_error(content=first.content)
-                    if classification.should_fallback:
+                    if _rotates(classification):
                         self._mark_failure(i)
                         last_failure = first
                         continue
