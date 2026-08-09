@@ -280,7 +280,7 @@ _KEY_CANNOT_CONFIGURE: dict[str, str] = {
         "ChatGPT is reached through its own OAuth device flow -- LiteLLM's "
         "chatgpt transformation ignores any api_key and authenticates through a "
         "stored browser session instead. Raven already has this path: run "
-        "`raven provider login openai-codex` (or pick \"OpenAI Codex (OAuth)\" "
+        '`raven provider login openai-codex` (or pick "OpenAI Codex (OAuth)" '
         "from this menu)."
     ),
     "bedrock": (
