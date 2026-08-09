@@ -184,14 +184,35 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     return None
 
 
-def _fetch_openrouter_models() -> dict[str, dict]:
+def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
     """Return OpenRouter's model table, fetched live and cached 1h in-process.
 
     Each entry is ``{"pricing": ..., "context_length": ...}``, keyed by the full
     id. On any network failure, returns the stale cache (or an empty dict) --
     pricing must never raise into the cost path.
+
+    ``allow_fetch=False`` is for a caller inside object construction or an
+    asyncio event loop -- ``AgentLoop.__init__`` and a ``/model`` switch, both of
+    which resolve a context window before there is a request to size. Those
+    callers want whatever is already on hand: an in-process cache of any age
+    answers, then an on-disk cache of any age, then an empty table -- the
+    network is never touched, because a synchronous ``httpx.Client`` there would
+    block startup or freeze the running event loop for up to 10s. A stale
+    answer only costs a stale window; a blocked event loop costs the whole
+    turn. The per-call usage path is the place that still refreshes normally --
+    it already runs inside an ``await``, and is where a stale price or window
+    is supposed to catch up.
     """
     global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
+
+    if not allow_fetch:
+        if _OPENROUTER_CACHE:
+            return _OPENROUTER_CACHE
+        disk = model_catalog_cache.load()
+        if disk is not None:
+            _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME = disk
+            return _OPENROUTER_CACHE
+        return {}
 
     now = time.time()
     if _OPENROUTER_CACHE and (now - _OPENROUTER_CACHE_TIME) < _OPENROUTER_CACHE_TTL:
@@ -354,7 +375,7 @@ def openrouter_input_modalities(model: str) -> tuple[str, ...] | None:
     return tuple(mods) if isinstance(mods, list) and mods else None
 
 
-def _lookup_openrouter_entry(model: str) -> dict | None:
+def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | None:
     """This model's row in OpenRouter's catalogue, or None.
 
     Only for ids that name OpenRouter. The table was once consulted for every id,
@@ -364,11 +385,16 @@ def _lookup_openrouter_entry(model: str) -> dict | None:
     this table about a request that does not go to OpenRouter -- not the bare
     alias, which stays because within OpenRouter's own namespace a bare id names
     the same model the full one does.
+
+    ``allow_fetch`` passes straight through to ``_fetch_openrouter_models``; see
+    there for what it changes. Called with the default omitted rather than
+    ``allow_fetch=True`` explicitly, so a test double standing in for the fetch
+    with the old zero-argument signature still works unchanged.
     """
     if not model.startswith("openrouter/"):
         return None
     key = model.removeprefix("openrouter/")
-    table = _fetch_openrouter_models()
+    table = _fetch_openrouter_models() if allow_fetch else _fetch_openrouter_models(allow_fetch=False)
     entry = table.get(key)
     if entry is None and "/" in key:
         entry = table.get(key.split("/", 1)[1])
@@ -474,7 +500,7 @@ def _try_litellm_context_window(model: str) -> int | None:
     return None
 
 
-def resolve_context_window(model: str) -> int | None:
+def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | None:
     """Return a model's real context window in tokens, or None.
 
     LiteLLM's static metadata first, then OpenRouter's catalogue for ids that
@@ -482,12 +508,15 @@ def resolve_context_window(model: str) -> int | None:
     trimming, so a community-maintained file that goes stale or wrong would
     shape the next request rather than cost a label. Unknown models return None
     so the caller keeps its configured default.
+
+    ``allow_fetch=False`` passes straight through to the OpenRouter tier; see
+    ``_fetch_openrouter_models`` for what it changes.
     """
     window = _try_litellm_context_window(model)
     if window:
         return window
 
-    entry = _lookup_openrouter_entry(model)
+    entry = _lookup_openrouter_entry(model, allow_fetch=allow_fetch)
     if entry:
         try:
             length = int(entry.get("context_length") or 0)
@@ -498,7 +527,7 @@ def resolve_context_window(model: str) -> int | None:
     return None
 
 
-def effective_context_window(model: str, configured: int | None) -> int:
+def effective_context_window(model: str, configured: int | None, *, allow_fetch: bool = True) -> int:
     """The context window to size trimming with -- the decision ladder's front door.
 
     Explicit configuration wins outright: a user or caller who pinned a number
@@ -511,10 +540,13 @@ def effective_context_window(model: str, configured: int | None) -> int:
     ``resolve_context_window`` already folds every LiteLLM and network failure
     into ``None`` rather than raising (see its tiers), so there is no
     exception left here to catch.
+
+    ``allow_fetch=False`` passes straight through to ``resolve_context_window``;
+    see ``_fetch_openrouter_models`` for what it changes.
     """
     if configured:
         return configured
-    return resolve_context_window(model) or DEFAULT_CONTEXT_WINDOW_TOKENS
+    return resolve_context_window(model, allow_fetch=allow_fetch) or DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
 def reset_openrouter_cache() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
@@ -219,13 +220,85 @@ def test_refresh_context_window_is_a_noop_once_pinned(workspace, monkeypatch):
 
 
 def test_refresh_context_window_follows_the_new_model_when_unpinned(workspace, monkeypatch):
-    """Unpinned, a ``/model`` switch re-walks the ladder for the new model."""
+    """Unpinned, a ``/model`` switch re-walks the ladder for the new model.
+
+    The switch runs inside the running event loop, so the ladder is walked with
+    ``allow_fetch=False`` -- an in-process cache entry of any age answers rather
+    than a live fetch. Populated directly rather than through a mocked network
+    call, which ``allow_fetch=False`` never reaches.
+    """
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=None)
     assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
 
-    _patch_live_openrouter_window(monkeypatch, 163840)
+    # conftest's autouse guard stubs the fetch to a zero-argument lambda; restore
+    # the real one so allow_fetch=False's in-process-cache branch actually runs.
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _REAL_FETCH)
+    rates._OPENROUTER_CACHE["deepseek/deepseek-v4-pro"] = {
+        "pricing": {"prompt": "0.0000005", "completion": "0.0000015"},
+        "context_length": 163840,
+    }
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", time.time() - rates._OPENROUTER_CACHE_TTL - 1000)
     agent.model = "openrouter/deepseek/deepseek-v4-pro"
     agent.refresh_context_window()
 
     assert agent.context_window_tokens == 163840
+
+
+# --------------------------------------------------------------------------- #
+# allow_fetch=False: construction and refresh never touch the network        #
+# --------------------------------------------------------------------------- #
+
+
+def _forbid_network_client(monkeypatch):
+    """Restore the real fetch, then count real ``httpx.Client`` builds.
+
+    Not a raise: ``_fetch_openrouter_models`` wraps the fetch in
+    ``except Exception`` to degrade on a network failure, so a raise from here
+    would be swallowed as "the network failed" and the test would pass for the
+    wrong reason. A counter the caller asserts is 0 actually distinguishes
+    "never touched the network" from "touched it and degraded".
+    """
+    counter = {"calls": 0}
+    real_client = rates.httpx.Client
+
+    def _counting_client(*args, **kwargs):
+        counter["calls"] += 1
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _REAL_FETCH)
+    monkeypatch.setattr(rates.httpx, "Client", _counting_client)
+    return counter
+
+
+def test_construction_on_an_openrouter_model_never_touches_the_network(workspace, monkeypatch, tmp_path):
+    """The regression this fixes: constructing on an unmapped OpenRouter model
+    used to fetch synchronously, blocking startup for up to 10s."""
+    from raven.providers import model_catalog_cache
+
+    monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", tmp_path / "model-catalog.json", raising=False)
+    counter = _forbid_network_client(monkeypatch)
+
+    provider = UsageProvider("openrouter/deepseek/deepseek-v4-pro", 0, 0)
+    agent = _make_agent(workspace, provider, model="openrouter/deepseek/deepseek-v4-pro", window=None)
+
+    assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    assert counter["calls"] == 0
+
+
+def test_refresh_context_window_on_an_openrouter_model_never_touches_the_network(workspace, monkeypatch, tmp_path):
+    """The other half: a ``/model`` switch inside the running event loop must not
+    freeze it on a synchronous fetch either."""
+    from raven.providers import model_catalog_cache
+
+    monkeypatch.setattr(model_catalog_cache, "_CACHE_PATH", tmp_path / "model-catalog.json", raising=False)
+
+    provider = UsageProvider("stub", 0, 0)
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+
+    counter = _forbid_network_client(monkeypatch)
+    agent.model = "openrouter/deepseek/deepseek-v4-pro"
+    agent.refresh_context_window()
+
+    assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    assert counter["calls"] == 0

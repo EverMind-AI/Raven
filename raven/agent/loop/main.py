@@ -381,7 +381,13 @@ class AgentLoop:
         # A caller that passed a positive value pinned the window; None/0 means
         # "figure it out", resolved once here against the model's real window.
         self._context_window_pinned = bool(context_window_tokens)
-        self.context_window_tokens = context_window_tokens or effective_context_window(self.model, None)
+        # allow_fetch=False: construction must not block on a synchronous
+        # network call for an OpenRouter model's window -- whatever is already
+        # cached (in-process or on disk, any age) answers instead. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = context_window_tokens or effective_context_window(
+            self.model, None, allow_fetch=False
+        )
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -707,7 +713,10 @@ class AgentLoop:
         """
         if self._context_window_pinned:
             return
-        self.context_window_tokens = effective_context_window(self.model, None)
+        # allow_fetch=False: a /model switch runs inside the running event
+        # loop, so this must not block it on a synchronous network call. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""

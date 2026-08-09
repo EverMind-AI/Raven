@@ -306,22 +306,36 @@ def test_a_window_unknown_to_every_source_is_none(monkeypatch):
 
 def test_a_configured_window_wins_even_when_the_real_one_disagrees(monkeypatch):
     """A pin is an override, so it answers even when the model has a real window."""
-    monkeypatch.setattr(rates, "resolve_context_window", lambda model: 200_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model, **kw: 200_000)
 
     assert rates.effective_context_window("anthropic/claude-sonnet-4-5", 40_000) == 40_000
 
 
 def test_no_configured_window_falls_back_to_the_real_one(monkeypatch):
-    monkeypatch.setattr(rates, "resolve_context_window", lambda model: 200_000)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model, **kw: 200_000)
 
     assert rates.effective_context_window("anthropic/claude-sonnet-4-5", None) == 200_000
     assert rates.effective_context_window("anthropic/claude-sonnet-4-5", 0) == 200_000
 
 
 def test_neither_configured_nor_resolvable_uses_the_documented_default(monkeypatch):
-    monkeypatch.setattr(rates, "resolve_context_window", lambda model: None)
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model, **kw: None)
 
     assert rates.effective_context_window("some/unknown-model", None) == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
+def test_effective_context_window_passes_allow_fetch_through(monkeypatch):
+    """The construction-time caller's ``allow_fetch=False`` must reach the ladder."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        rates,
+        "resolve_context_window",
+        lambda model, **kw: seen.update(kw) or 200_000,
+    )
+
+    rates.effective_context_window("anthropic/claude-sonnet-4-5", None, allow_fetch=False)
+
+    assert seen == {"allow_fetch": False}
 
 
 # --- Models whose driver would start an interactive login ---
@@ -650,3 +664,76 @@ def test_disk_write_is_atomic(monkeypatch, disk_cache):
 
     assert list(disk_cache.parent.glob("*.tmp")) == []
     json.loads(disk_cache.read_text(encoding="utf-8"))
+
+
+# --- allow_fetch=False: construction / event-loop callers never touch the network ---
+#
+# ``AgentLoop.__init__`` and ``refresh_context_window`` resolve a window before
+# there is a request to size, one of them inside the running event loop -- a
+# synchronous ``httpx.Client`` there is a stall, not a slow answer. Both pass
+# ``allow_fetch=False`` down to the fetch, which is asserted here to never build
+# a client: whatever is cached, of any age, answers instead.
+
+
+def _forbid_network_client(monkeypatch):
+    """Restore the real fetch, then count real ``httpx.Client`` builds.
+
+    Not a raise: ``_fetch_openrouter_models`` wraps the fetch in
+    ``except Exception`` to degrade on a network failure, so a raise from here
+    would be swallowed as "the network failed" and the test would pass for the
+    wrong reason. A counter the caller asserts is 0 actually distinguishes
+    "never touched the network" from "touched it and degraded".
+    """
+    counter = {"calls": 0}
+    real_client = rates.httpx.Client
+
+    def _counting_client(*args, **kwargs):
+        counter["calls"] += 1
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", _REAL_FETCH)
+    monkeypatch.setattr(rates.httpx, "Client", _counting_client)
+    return counter
+
+
+def test_allow_fetch_false_serves_an_expired_in_memory_cache(monkeypatch):
+    """In-process cache of any age answers -- expired is still better than a stall."""
+    counter = _forbid_network_client(monkeypatch)
+    rates._OPENROUTER_CACHE.update(
+        {
+            "deepseek/deepseek-v4-pro": {
+                "pricing": {"prompt": "0.0000005", "completion": "0.0000015"},
+                "context_length": 163840,
+            }
+        }
+    )
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", time.time() - rates._OPENROUTER_CACHE_TTL - 1000)
+
+    assert rates._fetch_openrouter_models(allow_fetch=False) is rates._OPENROUTER_CACHE
+    assert resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False) == 163840
+    assert counter["calls"] == 0
+
+
+def test_allow_fetch_false_falls_back_to_an_expired_disk_cache(monkeypatch, disk_cache):
+    """Empty in-memory, a stale disk file answers and refills memory -- never network."""
+    counter = _forbid_network_client(monkeypatch)
+    stale_at = time.time() - (rates._OPENROUTER_CACHE_TTL + 100)
+    disk_cache.write_text(json.dumps(_disk_payload(stale_at)), encoding="utf-8")
+
+    assert resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False) == 163840
+    assert rates._OPENROUTER_CACHE, "the disk hit should have refilled the in-process cache"
+    assert counter["calls"] == 0
+
+
+def test_allow_fetch_false_with_nothing_cached_is_none_and_never_hits_the_network(monkeypatch, disk_cache):
+    """Cold everywhere: {} / None, never a synchronous request that could stall
+    construction or the event loop for up to 10s."""
+    counter = _forbid_network_client(monkeypatch)
+
+    assert rates._fetch_openrouter_models(allow_fetch=False) == {}
+    assert resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False) is None
+    assert (
+        rates.effective_context_window("openrouter/deepseek/deepseek-v4-pro", None, allow_fetch=False)
+        == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    )
+    assert counter["calls"] == 0
