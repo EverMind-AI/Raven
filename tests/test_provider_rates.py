@@ -301,6 +301,29 @@ def test_a_window_unknown_to_every_source_is_none(monkeypatch):
     assert resolve_context_window("openrouter/some/model-not-listed") is None
 
 
+# --- effective_context_window: explicit config > real window > fallback ---
+
+
+def test_a_configured_window_wins_even_when_the_real_one_disagrees(monkeypatch):
+    """A pin is an override, so it answers even when the model has a real window."""
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model: 200_000)
+
+    assert rates.effective_context_window("anthropic/claude-sonnet-4-5", 40_000) == 40_000
+
+
+def test_no_configured_window_falls_back_to_the_real_one(monkeypatch):
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model: 200_000)
+
+    assert rates.effective_context_window("anthropic/claude-sonnet-4-5", None) == 200_000
+    assert rates.effective_context_window("anthropic/claude-sonnet-4-5", 0) == 200_000
+
+
+def test_neither_configured_nor_resolvable_uses_the_documented_default(monkeypatch):
+    monkeypatch.setattr(rates, "resolve_context_window", lambda model: None)
+
+    assert rates.effective_context_window("some/unknown-model", None) == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+
+
 # --- Models whose driver would start an interactive login ---
 
 _COPILOT_MODELS = [

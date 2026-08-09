@@ -106,8 +106,9 @@ def fake_agent_loop_no_tracker() -> _FakeAgentLoop:
 
 
 @pytest.fixture()
-def config():
-    return load_config()
+def config(tmp_path):
+    """Defaults only -- a real ``~/.raven/config.json`` must never leak in here."""
+    return load_config(tmp_path / "does_not_exist.json")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +145,7 @@ def test_default_session_info_contains_real_skills(fake_agent_loop, config) -> N
 
 
 def test_default_session_info_contains_real_usage_baseline(fake_agent_loop, config) -> None:
-    """T1.1.c (AC-3): ``info.usage`` carries boot baseline (zeros + context_max from config)."""
+    """T1.1.c (AC-3): ``info.usage`` carries boot baseline (zeros + context_max)."""
     info = _default_session_info(fake_agent_loop, config)
     usage = info["usage"]
     assert isinstance(usage, dict)
@@ -153,8 +154,8 @@ def test_default_session_info_contains_real_usage_baseline(fake_agent_loop, conf
     assert usage["output"] == 0
     assert usage["cost_usd"] == 0.0
     assert usage["calls"] == 0
-    # context_max from config (NOT a hardcoded 200000)
-    assert usage["context_max"] == config.agents.defaults.context_window_tokens
+    # no configured pin and fake_agent_loop carries no .model -- the UI empty state
+    assert usage["context_max"] == 0
     assert usage["context_used"] == 0
     assert usage["context_percent"] == 0
 
@@ -197,15 +198,13 @@ def test_default_session_info_contains_real_version(fake_agent_loop, config) -> 
 
 
 def test_context_window_reads_config_not_hardcoded_200k(fake_agent_loop, config) -> None:
-    """``info.context_window`` reads config, not a stub 200000."""
+    """``info.context_window`` mirrors ``info.usage.context_max``, not a stub 200000."""
     info = _default_session_info(fake_agent_loop, config)
-    assert info["context_window"] == config.agents.defaults.context_window_tokens, (
-        "context_window must equal config.agents.defaults.context_window_tokens "
-        "(default 65536; the old stub 200000 must be gone)"
-    )
-    # Sanity check the default is what we expect
-    assert config.agents.defaults.context_window_tokens == 65_536, (
-        "schema default for context_window_tokens should be 65536 (schema.py:258)"
+    assert info["context_window"] == info["usage"]["context_max"]
+    assert info["context_window"] != 200_000, "the old stub 200000 must be gone"
+    # Sanity check the default is what we expect: None means "figure it out".
+    assert config.agents.defaults.context_window_tokens is None, (
+        "schema default for context_window_tokens should be None (schema.py:context_window_tokens)"
     )
 
 
@@ -219,7 +218,7 @@ def test_default_session_info_falls_back_when_agent_loop_none(config) -> None:
     assert info["usage"]["input"] == 0
     assert info["usage"]["output"] == 0
     assert info["usage"]["calls"] == 0
-    assert info["usage"]["context_max"] == config.agents.defaults.context_window_tokens
+    assert info["usage"]["context_max"] == 0
     # version still real (importlib doesn't need agent_loop)
     assert info["version"] == importlib.metadata.version("raven")
     # lazy=True signals UI that tools/skills are placeholder (not "0 reality")
@@ -239,7 +238,7 @@ def test_default_session_info_falls_back_when_no_usage_tracker(fake_agent_loop_n
     # usage baseline all-zero (tracker absent)
     assert info["usage"]["input"] == 0
     assert info["usage"]["calls"] == 0
-    assert info["usage"]["context_max"] == config.agents.defaults.context_window_tokens
+    assert info["usage"]["context_max"] == 0
     # lazy=False (tools/skills are real, only usage degraded)
     assert info["lazy"] is False
 
@@ -341,6 +340,19 @@ def test_boot_context_max_uses_live_window_for_openrouter(config, monkeypatch) -
     info = _default_session_info(loop, config)
 
     assert info["usage"]["context_max"] == 163840
+
+
+def test_boot_context_max_pinned_config_wins_over_live_window(config, monkeypatch) -> None:
+    """A pinned ``context_window_tokens`` answers even when the live window disagrees."""
+    config.agents.defaults.context_window_tokens = 8192
+    monkeypatch.setattr(session_module, "resolve_context_window", lambda model: 163840)
+
+    loop = _FakeAgentLoop(with_usage_tracker=True)
+    loop.model = "openrouter/deepseek/deepseek-v4-pro"
+
+    info = _default_session_info(loop, config)
+
+    assert info["usage"]["context_max"] == 8192
 
 
 # ---------------------------------------------------------------------------

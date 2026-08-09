@@ -360,6 +360,7 @@ def _set_model(
         # subagent manager, the context engine and the consolidator at build
         # time, and each keeps it. set_provider is what reaches them.
         loop.set_provider(built_provider, raw_value)
+        loop.refresh_context_window()
 
     return {"applied": True, "previous": previous, "value": raw_value}
 

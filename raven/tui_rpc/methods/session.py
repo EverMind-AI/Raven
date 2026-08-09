@@ -104,8 +104,10 @@ def _baseline_usage(
 
     All counters are zero at session.create: a fresh session_key carries no
     prior LLM calls. Each turn's ``message.complete`` event updates them
-    post-turn. ``context_max`` is the model's real window — live from the
-    provider table when LiteLLM lags (e.g. OpenRouter), else config default.
+    post-turn. ``context_max`` follows the same ladder ``AgentLoop`` uses: a
+    pinned ``context_window_tokens`` wins outright; otherwise the model's real
+    window (live from the provider table when LiteLLM lags, e.g. OpenRouter),
+    or 0 when neither is known — the UI's empty state, not a borrowed number.
     Usage starts at zero for a fresh session by design. Resume reuses the
     zero baseline; counters refresh on the next turn.
 
@@ -115,12 +117,12 @@ def _baseline_usage(
     """
     from raven.providers.rates import is_plan_billed
 
-    context_max = config.agents.defaults.context_window_tokens
     model = getattr(agent_loop, "model", None)
-    if model:
-        live_window = resolve_context_window(model)
-        if live_window:
-            context_max = live_window
+    configured = config.agents.defaults.context_window_tokens
+    if configured:
+        context_max = configured
+    else:
+        context_max = (resolve_context_window(model) if model else None) or 0
     return {
         "input": 0,
         "output": 0,
@@ -142,15 +144,16 @@ def _default_session_info(
     zero usage, ``lazy=True``); version is always real (cached at module load).
     """
     model_id = config.agents.defaults.model
+    usage = _baseline_usage(agent_loop, config)
     info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
         "provider": config.agents.defaults.provider,
-        "context_window": config.agents.defaults.context_window_tokens,
+        "context_window": usage["context_max"],
         "lazy": agent_loop is None,
         "skills": _enumerate_skills(agent_loop),
         "tools": _enumerate_tools(agent_loop),
-        "usage": _baseline_usage(agent_loop, config),
+        "usage": usage,
         "version": _RAVEN_VERSION,
         "cwd": os.getcwd(),
         "mcp_servers": [],

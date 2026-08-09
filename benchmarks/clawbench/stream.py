@@ -101,6 +101,7 @@ class RavenSession:
         from raven.cli.commands import _make_provider
         from raven.config.loader import load_config, set_config_path
         from raven.config.raven import ContextConfig
+        from raven.providers.rates import effective_context_window
         from raven.session.manager import SessionManager
 
         workspace.mkdir(parents=True, exist_ok=True)
@@ -126,7 +127,9 @@ class RavenSession:
         self.config.agents.defaults.workspace = str(workspace.resolve())
         self.provider = UsageTrackingProvider(_make_provider(self.config))
         self.model = self.config.agents.defaults.model
-        self.context_window = int(context_window or self.config.agents.defaults.context_window_tokens)
+        self.context_window = effective_context_window(
+            self.model, context_window or self.config.agents.defaults.context_window_tokens
+        )
         self.curator_model = curator_model or self.model
         self.session_id = session_id
         self.previous_totals = dict(self.provider.accumulated)

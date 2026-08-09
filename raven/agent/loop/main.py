@@ -45,7 +45,7 @@ from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
-from raven.providers.rates import resolve_context_window
+from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -290,7 +290,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int = 65_536,
+        context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -377,7 +377,10 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.context_window_tokens = context_window_tokens
+        # A caller that passed a positive value pinned the window; None/0 means
+        # "figure it out", resolved once here against the model's real window.
+        self._context_window_pinned = bool(context_window_tokens)
+        self.context_window_tokens = context_window_tokens or effective_context_window(self.model, None)
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -464,7 +467,7 @@ class AgentLoop:
             builder=self.context,
             provider=provider,
             model=self.model,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -546,7 +549,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
@@ -692,6 +695,18 @@ class AgentLoop:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
+
+    def refresh_context_window(self) -> None:
+        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
+
+        A no-op once the window was pinned at construction -- a pin is a
+        deliberate override, and a model switch afterwards must not quietly
+        discard it. Unpinned loops re-walk the ladder so a ``/model`` switch
+        picks up the new model's real window instead of keeping the old one's.
+        """
+        if self._context_window_pinned:
+            return
+        self.context_window_tokens = effective_context_window(self.model, None)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -1886,9 +1901,15 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # Real window from the model's provider table when LiteLLM lags
-                # (e.g. OpenRouter); otherwise the configured default.
-                context_max = resolve_context_window(call_model) or self.context_window_tokens
+                # A pin always wins over the live table -- that is what pinning
+                # means. Unpinned, the live window from the model's provider
+                # table (e.g. OpenRouter, when LiteLLM lags) answers instead;
+                # unknown to that table too, 0 tells the UI to show its empty
+                # state rather than a number that isn't this model's.
+                if self._context_window_pinned:
+                    context_max = self.context_window_tokens
+                else:
+                    context_max = resolve_context_window(call_model) or 0
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens

@@ -29,6 +29,10 @@ from loguru import logger
 
 from raven.providers import model_catalog_cache
 
+#: One home for the window ladder's documented fallback: an unknown model gets
+#: this many tokens of headroom rather than a number invented at the call site.
+DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
+
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
@@ -492,6 +496,25 @@ def resolve_context_window(model: str) -> int | None:
         if length:
             return length
     return None
+
+
+def effective_context_window(model: str, configured: int | None) -> int:
+    """The context window to size trimming with -- the decision ladder's front door.
+
+    Explicit configuration wins outright: a user or caller who pinned a number
+    meant it as an override, not a hint. Absent that, the model's real window
+    from ``resolve_context_window`` answers; absent *that* too (an unmapped
+    model, or every source down), this module's documented default does --
+    never ``None``, since the caller is about to size a request with the
+    result.
+
+    ``resolve_context_window`` already folds every LiteLLM and network failure
+    into ``None`` rather than raising (see its tiers), so there is no
+    exception left here to catch.
+    """
+    if configured:
+        return configured
+    return resolve_context_window(model) or DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
 def reset_openrouter_cache() -> None:

@@ -249,7 +249,10 @@ class AgentDefaults(Base):
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    # None (or 0) means "figure it out" -- resolved against the model's real
+    # window at construction time. A positive value pins the window, taking
+    # priority over whatever the model's own catalogue reports.
+    context_window_tokens: int | None = None
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever

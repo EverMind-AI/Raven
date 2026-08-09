@@ -161,6 +161,8 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     import raven.tui_rpc.methods.config as config_mod
 
     loop = _FakeLoop("old-prov", "old-model")
+    refreshed = []
+    loop.refresh_context_window = lambda: refreshed.append(True)
     new_provider = SimpleNamespace(name="new-prov")
 
     monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
@@ -188,6 +190,7 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     # Routed through set_provider, so everything holding the old provider
     # (subagents, context-engine segments, consolidator) gets told too.
     assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
+    assert refreshed == [True], "loop.refresh_context_window() must run after the model switch"
 
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
