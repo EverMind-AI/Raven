@@ -78,9 +78,42 @@ class PerModelProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
+        fallback_models: list[str] | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        return await self._pick(model).chat_with_retry(messages, tools, model=model, **kwargs)
+        """Dispatch each hop of the fallback chain to its own routed endpoint.
+
+        The base ``chat_with_retry`` (see ``LLMProvider``) runs the whole
+        ``[model, *fallback_models]`` chain through a single provider
+        instance, which is right when one instance can reach every hop --
+        but here each hop may be a different ``knn``-routed endpoint (see
+        ``_endpoint_provider``). Picking a sub-provider once, up front, and
+        handing it the full chain would send every fallback model to the
+        *primary* model's endpoint. Instead, ``_pick`` runs per hop, and each
+        hop's own ``chat_with_retry`` is called with ``fallback_models=[]``
+        so it keeps its own retry ladder without also retrying other hops'
+        endpoints.
+
+        Continuation between hops mirrors ``LLMProvider.chat_with_retry``:
+        move to the next hop only on an error classified ``should_fallback``
+        with a hop remaining; otherwise the response is returned as-is.
+        """
+        model_chain = [model, *(fallback_models or [])]
+        response: LLMResponse | None = None
+        for idx, current_model in enumerate(model_chain):
+            response = await self._pick(current_model).chat_with_retry(
+                messages, tools, model=current_model, fallback_models=[], **kwargs
+            )
+            if response.finish_reason != "error":
+                return response
+
+            classification = response.error_classification or self.classify_error(content=response.content)
+            has_next = idx + 1 < len(model_chain)
+            if has_next and classification.should_fallback:
+                continue
+            return response
+
+        return response  # type: ignore[return-value]  # chain always non-empty
 
     async def chat_stream(
         self,

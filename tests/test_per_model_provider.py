@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.schema import ModelEndpoint
-from raven.providers.base import GenerationSettings
+from raven.providers.base import GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.per_model_provider import PerModelProvider
 
@@ -65,27 +65,68 @@ def test_generation_propagates_to_sub_providers():
 @pytest.mark.asyncio
 async def test_chat_with_retry_dispatches_by_model():
     p = _provider()
-    p._by_model["large"].chat_with_retry = AsyncMock(return_value="LARGE_RESP")
-    p._by_model["small"].chat_with_retry = AsyncMock(return_value="SMALL_RESP")
+    large_resp = LLMResponse(content="LARGE_RESP", finish_reason="stop")
+    small_resp = LLMResponse(content="SMALL_RESP", finish_reason="stop")
+    p._by_model["large"].chat_with_retry = AsyncMock(return_value=large_resp)
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=small_resp)
 
     out = await p.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="large")
 
-    assert out == "LARGE_RESP"
+    assert out.content == "LARGE_RESP"
     p._by_model["large"].chat_with_retry.assert_awaited_once()
     assert p._by_model["large"].chat_with_retry.call_args.kwargs["model"] == "large"
+    # fallback_models=[] so the sub-provider's own chain never re-tries a
+    # *different* hop's endpoint on top of its own retry ladder.
+    assert p._by_model["large"].chat_with_retry.call_args.kwargs["fallback_models"] == []
     p._by_model["small"].chat_with_retry.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_chat_with_retry_unknown_model_uses_fallback():
     fb = _fallback()
-    fb.chat_with_retry = AsyncMock(return_value="FB_RESP")
+    fb.chat_with_retry = AsyncMock(return_value=LLMResponse(content="FB_RESP", finish_reason="stop"))
     p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=fb)
 
     out = await p.chat_with_retry(messages=[], model="other")
 
-    assert out == "FB_RESP"
+    assert out.content == "FB_RESP"
     fb.chat_with_retry.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_dispatches_each_hop_to_its_own_endpoint(monkeypatch):
+    # The whole point of per-model routing: a fallback hop has its own
+    # endpoint (see _endpoint_provider), not the primary model's. Sending the
+    # entire chain to one sub-provider (the old behavior) would mean every
+    # fallback silently reused the primary's endpoint instead of its own.
+    seen: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        if kwargs["model"] == "openai/small":
+            raise RuntimeError("503 service unavailable")
+        message = MagicMock(content="ok-from-large", tool_calls=None)
+        return MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    # Zero the primary hop's own retry ladder so its exhaustion (a retryable
+    # classification) stays fast, while still exercising that it retries on
+    # its own endpoint before the chain moves to the next hop's.
+    p._by_model["small"]._CHAT_RETRY_DELAYS = (0, 0, 0)
+
+    resp = await p.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="small",
+        fallback_models=["large"],
+    )
+
+    assert resp.content == "ok-from-large"
+    # The primary hop exhausts its own retry ladder (3 sleeping + 1 final)
+    # entirely against its own endpoint before the chain moves on.
+    calls = [(c["model"], c["api_base"], c["api_key"]) for c in seen]
+    assert calls == [("openai/small", "http://a/v1", "KA")] * 4 + [("openai/large", "http://b/v1", "KB")]
 
 
 def test_sub_providers_inherit_configured_model_overrides():

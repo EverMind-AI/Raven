@@ -579,6 +579,14 @@ class LLMProvider(ABC):
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
 
+    def can_serve(self, model: str) -> bool:
+        """Whether this provider instance's credentials and wire can serve this model.
+
+        Default True: the base class knows nothing about routing, and a wrong
+        guess must fail loudly at the wire rather than silently skip a hop.
+        """
+        return True
+
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
         self,
@@ -616,6 +624,19 @@ class LLMProvider(ABC):
         model_chain = [model, *(fallback_models or [])]
         response: LLMResponse | None = None
         for idx, current_model in enumerate(model_chain):
+            # A fallback hop that this instance's credentials/wire cannot serve
+            # (e.g. a direct provider whose fallback model resolves to another
+            # vendor) is skipped rather than sent -- the wrong key on the wrong
+            # wire either 400s outright or, worse, silently answers under a
+            # same-named model from the wrong vendor. Never skips the primary
+            # model: idx 0 is what the caller asked for.
+            if idx and not self.can_serve(current_model or ""):
+                logger.warning(
+                    "Skipping fallback model={} - this provider instance cannot serve it (wrong vendor)",
+                    current_model,
+                )
+                continue
+
             # The breakpoints in this payload were placed for whoever was asked
             # first. A fallback is a different model, often a different vendor,
             # and the field it does not read is billed rather than refused --

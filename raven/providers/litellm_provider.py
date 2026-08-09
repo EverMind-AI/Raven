@@ -18,7 +18,7 @@ from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCall
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
-from raven.providers.registry import find_by_keywords, find_by_model, find_gateway
+from raven.providers.registry import canonical_provider_name, find_by_keywords, find_by_model, find_gateway
 from raven.providers.wire import wire_model
 
 litellm = import_litellm()
@@ -174,6 +174,27 @@ class LiteLLMProvider(LLMProvider):
     def _resolve_model(self, model: str) -> str:
         """The id this request is sent under. See ``providers.wire``."""
         return wire_model(model, gateway=self._gateway)
+
+    def can_serve(self, model: str) -> bool:
+        """See ``LLMProvider.can_serve``.
+
+        A gateway instance answers for any model -- it is the one deciding
+        which upstream vendor actually serves it, and its credentials are the
+        gateway's own, not tied to one vendor. A direct instance carries one
+        vendor's key on one wire: a model that resolves to a *different*
+        vendor's spec cannot be served here, since that would mean this
+        vendor's key answering for another vendor's model -- rejected outright,
+        or worse, silently answered wrong when two vendors happen to share a
+        model name. A model no spec resolves (custom endpoints, bare ids only
+        LiteLLM itself recognizes) is let through: it is not known to be wrong,
+        so it fails loudly at the wire instead of being guessed away here.
+        """
+        if self._gateway is not None:
+            return True
+        spec = find_by_model(model)
+        if spec is None:
+            return True
+        return spec.name == canonical_provider_name(self._provider_name)
 
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.
