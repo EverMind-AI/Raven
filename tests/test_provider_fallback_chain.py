@@ -320,6 +320,37 @@ async def test_chain_of_unserviceable_hops_returns_primary_error(monkeypatch):
     assert calls == ["anthropic/claude-opus-4-5"]
 
 
+def test_empty_provider_name_does_not_skip_resolvable_fallback():
+    # provider_name="" (the real construction site default: neither
+    # _proactive_stack.py nor evolver/launch/models.py passes provider_name)
+    # resolves to no spec at all, so this instance's own identity is unknown
+    # -- can_serve must let every resolvable model through rather than
+    # comparing an unknown identity against a known one and rejecting.
+    provider = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-4-5", provider_name="")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
+    assert provider.can_serve("openai/gpt-4o") is True
+
+
+def test_oauth_identity_does_not_skip_cross_vendor_model():
+    # github_copilot is a single OAuth grant that can serve several upstream
+    # vendors (OpenAI, Anthropic, Google), so a spec mismatch says nothing
+    # about whether this instance can serve the model.
+    provider = LiteLLMProvider(default_model="github_copilot/gpt-4o", provider_name="github_copilot")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
+
+
+def test_custom_passthrough_identity_does_not_skip_resolvable_fallback():
+    # "fireworks" has no ProviderSpec -- it is a direct-connect vendor LiteLLM
+    # supports natively under its own routing prefix. This instance's own
+    # identity does not resolve to a spec, so it cannot be compared against
+    # the fallback model's resolved spec.
+    provider = LiteLLMProvider(api_key="test-key", default_model="fireworks/some-model", provider_name="fireworks")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
+
+
 @pytest.mark.asyncio
 async def test_should_fallback_classification():
     # Structured classifier (string path): transient + capacity/availability
