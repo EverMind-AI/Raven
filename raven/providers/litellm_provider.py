@@ -229,16 +229,21 @@ class LiteLLMProvider(LLMProvider):
         is just content; the generic ``custom`` endpoint and a local spec
         (hosted_vllm, ollama_chat) *are* the self-hosted inference server this
         normalization exists for. When nothing was auto-detected, fall back to
-        whatever spec ``provider_name`` resolves to -- no spec at all (a bare
-        passthrough LiteLLM has no entry for) is the same self-hosted shape as
-        an explicit ``custom`` endpoint. Only a resolved spec that is neither
-        local nor ``custom`` -- a known direct big-vendor connection
-        (anthropic, openai, deepseek, ...) -- answers False: the
-        parser-less sglang/vLLM shape only comes from a self-hosted backend,
-        never from a vendor serving its own model behind its own API.
+        whatever spec ``provider_name`` resolves to.
+
+        An identity that resolves to nothing answers False, the same reading
+        ``can_serve`` settled on: an unresolved name says nothing about the
+        backend, and several production constructors (the proactive planner,
+        the evolver) build direct big-vendor connections with no
+        ``provider_name`` at all -- guessing "self-hosted" there re-opens the
+        false-positive cut on ordinary content this gate exists to close. A
+        genuinely self-hosted backend is reached through ``custom`` or a
+        local spec, which is where the parser-less sglang/vLLM shape comes
+        from; a resolved direct big vendor (anthropic, openai, ...) never
+        produces it behind its own API.
         """
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
-        return spec is None or spec.is_local or spec.name == "custom"
+        return spec is not None and (spec.is_local or spec.name == "custom")
 
     def _supports_cache_control(self, model: str) -> bool:
         """Return True when this request may carry cache_control blocks.

@@ -111,6 +111,24 @@ def test_parse_response_leaves_structured_reasoning_content_alone():
     assert result.content == "visible</think>\nanswer"
 
 
+def test_parse_response_leaves_bare_close_tag_alone_for_an_unresolved_identity():
+    """An identity that resolves to no spec says nothing about the backend.
+
+    The proactive planner and the evolver both build direct big-vendor
+    connections with no provider_name at all; reading "no spec" as
+    "self-hosted" re-opened the ordinary-content cut on exactly those
+    constructors, so the gate answers False there -- same reading as
+    can_serve's.
+    """
+    provider = _make_provider("fireworks")
+    response = _fake_response("discussing the </think> tag in my answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content is None
+    assert result.content == "discussing the </think> tag in my answer"
+
+
 def test_parse_response_leaves_bare_close_tag_alone_for_direct_anthropic():
     provider = _make_provider("anthropic")
     response = _fake_response("discussing the </think> tag in my answer")
