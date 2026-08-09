@@ -130,7 +130,7 @@ def _patch_live_openrouter_window(monkeypatch, window: int) -> None:
 
 @pytest.mark.asyncio
 async def test_usage_sink_context_max_from_live_openrouter(workspace, monkeypatch):
-    """Unpinned, an OpenRouter model LiteLLM lags on gets its real window from /models."""
+    """Without an explicit window, an OpenRouter model LiteLLM lags on gets its real window from /models."""
     _patch_live_openrouter_window(monkeypatch, 163840)
 
     provider = UsageProvider("openrouter/deepseek/deepseek-v4-pro", 1000, 500)
@@ -157,8 +157,8 @@ async def test_usage_sink_context_max_from_live_openrouter(workspace, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_usage_sink_context_max_stays_pinned_over_live_openrouter(workspace, monkeypatch):
-    """A pinned window wins even when the model's live window disagrees."""
+async def test_usage_sink_context_max_stays_explicit_over_live_openrouter(workspace, monkeypatch):
+    """An explicitly configured window wins even when the model's live window disagrees."""
     _patch_live_openrouter_window(monkeypatch, 163840)
 
     provider = UsageProvider("openrouter/deepseek/deepseek-v4-pro", 1000, 500)
@@ -185,28 +185,28 @@ async def test_usage_sink_context_max_stays_pinned_over_live_openrouter(workspac
 
 
 # --------------------------------------------------------------------------- #
-# construction-time ladder: _context_window_pinned + refresh_context_window   #
+# construction-time ladder: _context_window_explicit + refresh_context_window   #
 # --------------------------------------------------------------------------- #
 
 
-def test_no_configured_window_resolves_via_the_ladder_and_is_unpinned(workspace):
-    """An unresolvable model falls back to the documented default, unpinned."""
+def test_no_configured_window_resolves_via_the_ladder_and_is_not_explicit(workspace):
+    """An unresolvable model falls back to the documented default, not explicit."""
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=None)
 
-    assert agent._context_window_pinned is False
+    assert agent._context_window_explicit is False
     assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
-def test_a_configured_window_is_pinned_at_construction(workspace):
+def test_a_configured_window_is_explicit_at_construction(workspace):
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=8192)
 
-    assert agent._context_window_pinned is True
+    assert agent._context_window_explicit is True
     assert agent.context_window_tokens == 8192
 
 
-def test_refresh_context_window_is_a_noop_once_pinned(workspace, monkeypatch):
+def test_refresh_context_window_is_a_noop_once_explicit(workspace, monkeypatch):
     """A pin is a deliberate override; a later model switch must not discard it."""
     _patch_live_openrouter_window(monkeypatch, 163840)
 
@@ -219,8 +219,8 @@ def test_refresh_context_window_is_a_noop_once_pinned(workspace, monkeypatch):
     assert agent.context_window_tokens == 8192
 
 
-def test_refresh_context_window_follows_the_new_model_when_unpinned(workspace, monkeypatch):
-    """Unpinned, a ``/model`` switch re-walks the ladder for the new model.
+def test_refresh_context_window_follows_the_new_model_when_not_explicit(workspace, monkeypatch):
+    """Without an explicit window, a ``/model`` switch re-walks the ladder for the new model.
 
     The switch runs inside the running event loop, so the ladder is walked with
     ``allow_fetch=False`` -- an in-process cache entry of any age answers rather

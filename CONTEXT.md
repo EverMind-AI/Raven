@@ -271,8 +271,11 @@ about a Provider's catalogue, so both are resolved in `providers/rates.py` rathe
 whoever is about to report a number. The two are deliberately sourced differently: rates
 price a call after it happened, so the ladder may reach a community-maintained catalogue;
 a context window sizes trimming and therefore shapes the *next* request, so only the
-tables that also route may answer it, and unknown is answered with the caller's own
-configured default.
+tables that also route may answer it. The window walks its own ladder
+(`effective_context_window`): an explicitly configured value wins outright, then the
+model's real window, then the module's documented fallback -- and a gauge that cannot
+resolve the real window reports 0 so the UI shows its empty state rather than a number
+that is nobody's.
 _Avoid_: "pricing" for the resolution -- that names the arithmetic on top
 (`token_wise/pricing.py`), which is a different module for a reason.
 

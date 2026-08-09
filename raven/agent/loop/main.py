@@ -378,9 +378,11 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        # A caller that passed a positive value pinned the window; None/0 means
-        # "figure it out", resolved once here against the model's real window.
-        self._context_window_pinned = bool(context_window_tokens)
+        # A caller that passed a positive value set the window explicitly;
+        # None/0 means "figure it out", resolved once here against the model's
+        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
+        # registered term, see CONTEXT.md.)
+        self._context_window_explicit = bool(context_window_tokens)
         # allow_fetch=False: construction must not block on a synchronous
         # network call for an OpenRouter model's window -- whatever is already
         # cached (in-process or on disk, any age) answers instead. See
@@ -706,12 +708,13 @@ class AgentLoop:
     def refresh_context_window(self) -> None:
         """Re-resolve ``context_window_tokens`` against the current ``self.model``.
 
-        A no-op once the window was pinned at construction -- a pin is a
-        deliberate override, and a model switch afterwards must not quietly
-        discard it. Unpinned loops re-walk the ladder so a ``/model`` switch
-        picks up the new model's real window instead of keeping the old one's.
+        A no-op once the window was set explicitly at construction -- an
+        explicit value is a deliberate override, and a model switch afterwards
+        must not quietly discard it. Otherwise the ladder is re-walked so a
+        ``/model`` switch picks up the new model's real window instead of
+        keeping the old one's.
         """
-        if self._context_window_pinned:
+        if self._context_window_explicit:
             return
         # allow_fetch=False: a /model switch runs inside the running event
         # loop, so this must not block it on a synchronous network call. See
@@ -1940,12 +1943,13 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # A pin always wins over the live table -- that is what pinning
-                # means. Unpinned, the live window from the model's provider
-                # table (e.g. OpenRouter, when LiteLLM lags) answers instead;
-                # unknown to that table too, 0 tells the UI to show its empty
-                # state rather than a number that isn't this model's.
-                if self._context_window_pinned:
+                # An explicitly configured window always wins over the live
+                # table -- that is what setting it means. Otherwise the live
+                # window from the model's provider table (e.g. OpenRouter,
+                # when LiteLLM lags) answers instead; unknown to that table
+                # too, 0 tells the UI to show its empty state rather than a
+                # number that isn't this model's.
+                if self._context_window_explicit:
                     context_max = self.context_window_tokens
                 else:
                     context_max = resolve_context_window(call_model) or 0
