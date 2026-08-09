@@ -25,6 +25,7 @@ from raven.config.raven import (
     ContextConfig,
     HubSourceConfig,
     MemoryConfig,
+    SkillForgeConfig,
     SkillForgeRouterConfig,
 )
 from raven.context_engine import ContextAssembler
@@ -81,6 +82,8 @@ def _build_engine(
     backend=None,
     hub_endpoint: str | None = None,
     memory_config: MemoryConfig | None = None,
+    model: str = "stub",
+    skill_forge_config: SkillForgeConfig | None = None,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
@@ -88,7 +91,7 @@ def _build_engine(
         config=ContextConfig(),
         builder=builder,
         provider=_StubProvider(),
-        model="stub",
+        model=model,
         context_window_tokens=8192,
         get_tool_definitions=_stub_get_defs,
         backend=backend,
@@ -96,6 +99,7 @@ def _build_engine(
         skill_forge_router_config=SkillForgeRouterConfig(
             hub=HubSourceConfig(endpoint=hub_endpoint),
         ),
+        skill_forge_config=skill_forge_config,
     )
     assert isinstance(engine, ContextAssembler)
     return engine
@@ -164,6 +168,45 @@ class TestSkillForgeRouterAssembly:
         _, sources = _router_sources(engine)
         everos = next(s for s in sources if isinstance(s, EverosSkillSource))
         assert everos._agent_id == "robo"
+
+
+# ---------------------------------------------------------------------------
+# Rewriter / gate model wiring — both must follow the agent's main model
+# unless the gate has its own dedicated override.
+# ---------------------------------------------------------------------------
+
+
+class TestRewriterGateModelWiring:
+    def test_rewriter_receives_build_context_engine_model(self, tmp_path: Path) -> None:
+        engine = _build_engine(
+            tmp_path,
+            model="main-model",
+            skill_forge_config=SkillForgeConfig(rewrite_enabled=True, llm_gate_enabled=False),
+        )
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._rewriter._model == "main-model"
+
+    def test_gate_falls_back_to_main_model_when_llm_gate_model_unset(self, tmp_path: Path) -> None:
+        engine = _build_engine(
+            tmp_path,
+            model="main-model",
+            skill_forge_config=SkillForgeConfig(rewrite_enabled=False, llm_gate_enabled=True, llm_gate_model=None),
+        )
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._gate._model == "main-model"
+
+    def test_gate_prefers_dedicated_llm_gate_model(self, tmp_path: Path) -> None:
+        engine = _build_engine(
+            tmp_path,
+            model="main-model",
+            skill_forge_config=SkillForgeConfig(
+                rewrite_enabled=False,
+                llm_gate_enabled=True,
+                llm_gate_model="gate-only-model",
+            ),
+        )
+        skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
+        assert skills._gate._model == "gate-only-model"
 
 
 # ---------------------------------------------------------------------------
