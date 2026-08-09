@@ -2,8 +2,8 @@
 
 ``provider_endpoints`` (see ``raven.providers.endpoints``) resolves a section
 into one or more ``ResolvedEndpoint``s -- several accounts on the same
-vendor, several regions, several keys. This module is what #143/#144 asked
-for on top of that list: spread requests across them (round-robin) or stick
+vendor, several regions, several keys. This module is the behavior asked
+of that list: spread requests across them (round-robin) or stick
 to one until it misbehaves (sticky), and route around an endpoint that just
 failed instead of sending the next request into the same wall.
 

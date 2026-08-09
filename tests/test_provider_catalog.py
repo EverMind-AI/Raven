@@ -135,9 +135,9 @@ def _concrete_provider_subclasses() -> set[type]:
     """All non-abstract LLMProvider subclasses defined in raven.providers."""
     # Import each backend module so its subclass is registered on LLMProvider.
     import raven.providers.azure_openai_provider  # noqa: F401
+    import raven.providers.endpoint_rotor  # noqa: F401
     import raven.providers.litellm_provider  # noqa: F401
     import raven.providers.minimax_oauth_provider  # noqa: F401
-    import raven.providers.endpoint_rotor  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
     import raven.providers.per_model_provider  # noqa: F401
 
@@ -173,9 +173,9 @@ def test_exactly_six_concrete_backend_classes() -> None:
         OpenAICodexProvider,
         MiniMaxOAuthProvider,
         PerModelProvider,
-        # Multi-endpoint rotation/failover wrapper (#143/#144): a real backend
-        # in dispatch terms -- make_provider returns it for a section that
-        # resolves to more than one endpoint.
+        # Multi-endpoint rotation/failover wrapper: a real backend in dispatch
+        # terms -- make_provider returns it for a section that resolves to
+        # more than one endpoint.
         EndpointRotorProvider,
     }
     assert _concrete_provider_subclasses() == expected
