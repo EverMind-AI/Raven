@@ -72,6 +72,12 @@ class _StubExecutor:
     async def exec(self, command: str, **kwargs):  # pragma: no cover - unused
         raise NotImplementedError
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
 
 def _noop_submit(*args, **kwargs) -> None:
     """``_announce_result`` calls the spine submit without awaiting it."""
@@ -434,24 +440,44 @@ async def test_a_second_turn_does_not_unpark_a_switch_under_the_first(tmp_path) 
 
 @pytest.mark.asyncio
 async def test_spawn_snapshots_before_the_task_queues(tmp_path) -> None:
-    """The snapshot is taken in ``spawn``, not where the task starts running:
-    a spawn waits on the concurrency gate and a sandbox boot first, and a
-    switch landing in that window would move an endpoint the user asked for
-    before switching.
+    """The snapshot must be taken in ``spawn``, not where the task starts
+    running: a spawn waits on the concurrency gate and a sandbox boot first,
+    and a switch landing in that window would hand the task an endpoint the
+    user chose after asking for it.
+
+    Driven through the real ``_run_subagent`` so the window is genuinely
+    open -- stubbing it would prove only that ``spawn`` passes *a* pair, which
+    a snapshot taken later would also satisfy.
     """
-    manager = SubagentManager(provider=_Provider("started-with"), workspace=tmp_path, model="started/model")
-    manager._gate = asyncio.Semaphore(0)  # nothing gets past this
+    import raven.agent.subagent.manager as manager_mod
 
-    captured: dict[str, object] = {}
+    served: list[str] = []
 
-    async def _capture(task_id, task, label, origin, provider, model):
-        captured["provider"] = provider
-        captured["model"] = model
+    class _RecordingProvider(_Provider):
+        async def chat_with_retry(self, **kwargs) -> LLMResponse:
+            served.append(self.name)
+            return LLMResponse(content="done", finish_reason="stop")
 
-    manager._run_subagent = _capture
-    await manager.spawn("do the thing", label="thing", session_key="s")
-    manager.set_provider(_Provider("switched-to"), NEW_MODEL)
-    await asyncio.sleep(0)
+    manager = SubagentManager(
+        provider=_RecordingProvider("started-with"),
+        workspace=tmp_path,
+        model="started/model",
+    )
+    manager._submit = _noop_submit
+    # Hold every spawn in exactly the window the snapshot exists for.
+    manager._gate = asyncio.Semaphore(0)
 
-    assert captured["provider"].name == "started-with"
-    assert captured["model"] == "started/model"
+    original_build = manager_mod.build_executor
+    manager_mod.build_executor = lambda cfg, workspace, owned_ids=None: _StubExecutor()
+    try:
+        await manager.spawn("do the thing", label="thing", session_key="s")
+        manager.set_provider(_RecordingProvider("switched-to"), NEW_MODEL)
+        manager._gate.release()
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if served:
+                break
+    finally:
+        manager_mod.build_executor = original_build
+
+    assert served == ["started-with"], "the spawn ran on the provider it was asked for"
