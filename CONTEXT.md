@@ -287,6 +287,17 @@ vendor with the old vendor's key.
 _Avoid_: reading it as a provider *signal* -- a pinned name says which section to ask
 about, never that the section holds credentials.
 
+**Provider Endpoint**:
+One url/key/headers group a provider section offers, of possibly several
+(`ProviderConfig.endpoints`, resolved through `providers/endpoints.py::provider_endpoints`
+whichever spelling the section used -- explicit list, Gemini's `api_key_list`, or the
+flat fields). Several endpoints on one section mean several accounts on the same vendor;
+`EndpointRotorProvider` spreads and fails over across them.
+_Avoid_: two same-sounding neighbors. Routing's `ModelEndpoint` (`RoutingConfig.models`)
+keys by *model* and picks a backend per request; a Provider Endpoint keys by *account*
+under one provider. And a bare `api_base` is one endpoint's address, not the endpoint --
+an endpoint is the whole credential group under a label.
+
 ### TUI-RPC
 
 **TUI-RPC**:
