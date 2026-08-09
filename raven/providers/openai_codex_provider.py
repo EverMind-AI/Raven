@@ -394,7 +394,18 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:
-            raise RuntimeError("Codex response failed")
+            # The code is the retry signal: classify_error buckets by message
+            # substring, and "server_is_overloaded" is what turns a dead-end
+            # unknown into a retryable server error. An `error` event carries
+            # it at the top level or under "error"; `response.failed` nests it
+            # under the response.
+            err = event.get("error") or (event.get("response") or {}).get("error") or {}
+            if not isinstance(err, dict):
+                err = {}
+            code = err.get("code") or event.get("code") or ""
+            message = err.get("message") or event.get("message") or ""
+            detail = ": ".join(str(part) for part in (code, message) if part)
+            raise RuntimeError(f"Codex response failed: {detail}" if detail else "Codex response failed")
 
     return content, tool_calls, finish_reason
 

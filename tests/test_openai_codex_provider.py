@@ -8,6 +8,7 @@ trips a test.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -15,6 +16,7 @@ from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,
     _build_headers,
+    _consume_sse,
     _convert_messages,
     _convert_tool_output,
     _iter_sse,
@@ -68,6 +70,66 @@ async def test_iter_sse_per_event_idle_timeout_raises():
         async for event in _iter_sse(resp, timeout=0.05):
             events.append(event)
     assert events == [{"type": "ping"}]
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_error_event_keeps_the_structured_code_and_message():
+    """The code is the retry signal: without it, an overloaded backend looks
+    like an unclassifiable error instead of a retryable one."""
+    event = {
+        "type": "error",
+        "code": "server_is_overloaded",
+        "message": "Our servers are currently overloaded. Please try again later.",
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _consume_sse(resp, timeout=1.0)
+
+    assert "server_is_overloaded" in str(exc_info.value)
+    assert "Our servers are currently overloaded. Please try again later." in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_response_failed_event_keeps_the_nested_error():
+    """response.failed nests the same error shape under "response" instead of
+    at the event's top level."""
+    event = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "Our servers are currently overloaded.",
+            },
+        },
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _consume_sse(resp, timeout=1.0)
+
+    assert "server_is_overloaded" in str(exc_info.value)
+    assert "Our servers are currently overloaded." in str(exc_info.value)
+
+
+def test_consume_sse_error_classifies_as_retryable_server_error():
+    """Closes the loop: the RuntimeError raised for a codex error event must
+    still land classify_error in the retryable "server" bucket, not unknown."""
+    event = {
+        "type": "error",
+        "code": "server_is_overloaded",
+        "message": "Our servers are currently overloaded.",
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(_consume_sse(resp, timeout=1.0))
+    classification = OpenAICodexProvider.classify_error(exc_info.value)
+
+    assert classification.category == "server"
+    assert classification.retryable is True
+    assert classification.should_fallback is True
 
 
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
