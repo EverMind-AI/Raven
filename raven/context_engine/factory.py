@@ -147,7 +147,11 @@ def build_context_engine(
             ),
         ),
         CuratorSegmentBuilder(
-            pin=provider_pool.bind_pin(config.curator_model) if provider_pool else None,
+            pin=(
+                provider_pool.bind_pin(config.curator_model, getattr(config, "curator_provider", None))
+                if provider_pool
+                else None
+            ),
             workspace=workspace,
             config=config,
             provider=provider,
@@ -267,7 +271,12 @@ def _build_rewriter_and_gate(
             legacy_top_k=int(skill_forge_router_config.top_k or 5),
             model=getattr(skill_forge_config, "llm_gate_model", None) or None,
             pin=(
-                provider_pool.bind_pin(getattr(skill_forge_config, "llm_gate_model", None)) if provider_pool else None
+                provider_pool.bind_pin(
+                    getattr(skill_forge_config, "llm_gate_model", None),
+                    getattr(skill_forge_config, "llm_gate_provider", None),
+                )
+                if provider_pool
+                else None
             ),
             temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
             max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),

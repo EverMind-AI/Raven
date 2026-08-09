@@ -47,17 +47,25 @@ verbatim. Changed by a `scope="default"` switch, which leaves sessions that
 already chose their own model where they are.
 
 **Provider pool**:
-The one place a model id becomes a model binding (`raven/providers/pool.py`),
-caching a provider per (vendor, model) and dropping the cache when the
-credentials behind it change. Also what turns a **subsystem pin** into a pair.
+The one place a model id is resolved to the credential that serves it
+(`raven/providers/pool.py`), caching a provider per (vendor, model) and dropping
+the cache when the credentials behind it change. Also what turns a **subsystem
+pin** into a pair. Constructing a `ModelBinding` from an already-resolved pair
+happens in several places; deciding *which* provider a model id pairs with
+happens only here.
 
 **Subsystem pin**:
-A model configured for one subsystem rather than for the conversation
-(`context.curator_model`, `skill_forge.llm_gate_model`). A pin is only honoured
-when the pool can pair it with credentials of its own, or when a gateway is
-serving it; otherwise the subsystem follows the conversation's model, because a
-bare pinned id sent on the conversation's key is exactly the mis-pairing above.
-Unset out of the box -- no subsystem ships a vendor default.
+A model configured for one subsystem rather than for the conversation, as a
+model and the provider serving it (`context.curator_model` +
+`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+halves because an id alone is ambiguous the moment a gateway is configured:
+`openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
+`claude-haiku-4-5` are both valid and name different credentials. With the
+provider set nothing is derived; with it unset the vendor is guessed from the
+id, which is what configs predating the field get. A pin that cannot be paired
+is reported and dropped, and the subsystem follows the conversation's model --
+a bare pinned id sent on the conversation's key is exactly the mis-pairing
+above. Unset out of the box -- no subsystem ships a vendor default.
 
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the

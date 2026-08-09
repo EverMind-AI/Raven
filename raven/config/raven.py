@@ -81,10 +81,20 @@ class ContextConfig(_Base):
     Worth setting, and worth setting to something small: one slow-path pass is
     a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
     housekeeping rather than an answer, and unset means a long conversation
-    pays conversation-model prices for it. A vendor id here needs that
-    vendor's credentials in ``providers``: a model id without a key of its own
-    is not a configured subsystem, and the Curator falls back to the
-    conversation rather than send that id on the conversation's key."""
+    pays conversation-model prices for it. Pair it with ``curator_provider``:
+    a model id alone does not say which credential serves it, and a model id
+    without a key of its own is not a configured subsystem -- the Curator
+    falls back to the conversation rather than send that id on the
+    conversation's key."""
+
+    curator_provider: str | None = None
+    """Which configured provider serves ``curator_model``.
+
+    Set this whenever the id alone is ambiguous, which is most of the time
+    once a gateway is involved: ``openrouter`` with ``anthropic/claude-haiku-4-5``
+    and ``anthropic`` with ``claude-haiku-4-5`` are both valid, name different
+    credentials and different bills, and only you know which was meant. Unset
+    falls back to deriving the vendor from the id."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -989,7 +999,17 @@ class SkillForgeConfig(_Base):
 
     llm_gate_model: str | None = None
     """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model)."""
+    provider's default chat model (typically the agent's main model).
+
+    Pair it with ``llm_gate_provider``: an id alone does not say which
+    credential serves it."""
+
+    llm_gate_provider: str | None = None
+    """Which configured provider serves ``llm_gate_model``.
+
+    Same rule as ``context.curator_provider``: set it when the id alone is
+    ambiguous (a gateway serving another vendor's model), leave it unset to
+    derive the vendor from the id."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic

@@ -45,29 +45,6 @@ def _pool(model: str = "claude-opus-4-5", **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# The default
-# ---------------------------------------------------------------------------
-
-
-def test_the_default_is_agents_defaults_verbatim() -> None:
-    pool = _pool(anthropic="sk-ant")
-    binding = pool.default()
-
-    assert binding.model == "claude-opus-4-5"
-    assert binding.provider.api_key == "sk-ant"
-
-
-def test_the_default_is_not_the_last_thing_anyone_switched_to() -> None:
-    """A per-session switch must not leak into what a new session starts on,
-    so the pool reads the config every time rather than caching a "current".
-    """
-    pool = _pool(anthropic="sk-ant", gemini="AIza")
-    pool.bind("gemini-2.5-flash")
-
-    assert pool.default().model == "claude-opus-4-5"
-
-
-# ---------------------------------------------------------------------------
 # Binding a model
 # ---------------------------------------------------------------------------
 
@@ -240,17 +217,6 @@ async def test_a_detached_task_keeps_the_binding_it_was_created_under() -> None:
     assert seen == ["started/model"]
 
 
-def test_the_default_is_re_read_every_time() -> None:
-    """Not cached: the configured default is what a new session starts on, and
-    a user editing it must not need a restart.
-    """
-    pool = _pool(anthropic="sk-ant")
-    assert pool.default().model == "claude-opus-4-5"
-
-    pool.config.agents.defaults.model = "claude-sonnet-4-5"
-    assert pool.default().model == "claude-sonnet-4-5"
-
-
 def test_a_config_supplier_is_re_read_and_drops_stale_bindings() -> None:
     """A credential fixed after start (an OAuth re-login, an edited file) has
     to be visible without a restart, which a snapshot would prevent.
@@ -358,3 +324,83 @@ def test_a_gateway_pin_that_cannot_be_built_is_reported_not_raised(monkeypatch) 
 
     monkeypatch.setattr(helpers, "make_provider", _boom)
     assert pool.bind_pin("gemini-2.5-flash") is None
+
+
+# ---------------------------------------------------------------------------
+# A pin configured as a pair
+# ---------------------------------------------------------------------------
+
+
+def test_a_configured_provider_beats_the_gateway_guess() -> None:
+    """The id alone cannot say which credential was meant.
+
+    On a gateway, ``anthropic/claude-...`` served by the gateway and
+    ``claude-...`` served by Anthropic direct are both valid, name different
+    credentials and different bills. Guessing picks one; the configured pair
+    says which.
+    """
+    cfg = _config("anthropic/claude-opus-4-5", openrouter="sk-or", anthropic="sk-ant")
+    cfg.agents.defaults.provider = "openrouter"
+
+    from raven.providers.pool import ProviderPool
+
+    pin = ProviderPool(cfg).bind_pin("claude-haiku-4-5", "anthropic")
+
+    assert pin is not None
+    assert pin.model == "claude-haiku-4-5"
+    assert pin.provider.api_key == "sk-ant", "the configured provider serves it, not the gateway"
+
+
+def test_a_configured_provider_beats_the_vendor_the_id_names() -> None:
+    """The other direction: a gateway reselling a vendor's model. Deriving from
+    the id would send it to Anthropic direct on a key the user may not hold.
+    """
+    cfg = _config("claude-opus-4-5", openrouter="sk-or", anthropic="sk-ant")
+
+    from raven.providers.pool import ProviderPool
+
+    pin = ProviderPool(cfg).bind_pin("anthropic/claude-haiku-4-5", "openrouter")
+
+    assert pin is not None
+    assert pin.provider.api_key == "sk-or", "the gateway serves it, not the vendor in the id"
+
+
+def test_a_configured_provider_without_credentials_is_not_a_pair() -> None:
+    """Explicitly configured and still unusable is a config error, and the
+    subsystem follows the conversation rather than borrowing another key.
+    """
+    cfg = _config("claude-opus-4-5", anthropic="sk-ant")
+
+    from raven.providers.pool import ProviderPool
+
+    assert ProviderPool(cfg).bind_pin("gemini-2.5-flash", "gemini") is None
+
+
+def test_an_unpaired_pin_still_derives_its_vendor() -> None:
+    """Configs written before the provider field existed keep working."""
+    cfg = _config("claude-opus-4-5", anthropic="sk-ant", gemini="AIza")
+
+    from raven.providers.pool import ProviderPool
+
+    pin = ProviderPool(cfg).bind_pin("gemini-2.5-flash")
+
+    assert pin is not None
+    assert pin.provider.api_key == "AIza"
+
+
+def test_a_pin_that_cannot_be_built_at_all_does_not_stop_the_agent(monkeypatch) -> None:
+    """``bind_pin`` runs in the context-engine factory at construction, and
+    building a provider imports a vendor module -- so the failures are not only
+    the credential ones the narrower guard covered.
+    """
+    import raven.cli._helpers as helpers
+
+    cfg = _config("claude-opus-4-5", anthropic="sk-ant")
+
+    from raven.providers.pool import ProviderPool
+
+    def _boom(_cfg):
+        raise ModuleNotFoundError("no module named 'litellm'")
+
+    monkeypatch.setattr(helpers, "make_provider", _boom)
+    assert ProviderPool(cfg).bind_pin("claude-haiku-4-5", "anthropic") is None

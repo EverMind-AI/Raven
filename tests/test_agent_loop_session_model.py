@@ -405,6 +405,69 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
     assert curator.curator_model == "gemini-2.5-flash", "a configured subsystem does not follow the turn"
 
 
+def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> None:
+    """Both halves of the configured pair have to reach the pool.
+
+    A gateway serving another vendor's model is exactly the case the id cannot
+    express: derived from ``claude-haiku-4-5`` the vendor is Anthropic, and the
+    curator would run on the Anthropic key while the user asked for the
+    gateway. Dropping the provider argument at the factory leaves the pin
+    looking configured and pointed at the wrong bill.
+    """
+    from raven.config.schema import Config
+    from raven.providers.pool import ProviderPool
+
+    cfg = Config()
+    cfg.agents.defaults.model = "claude-opus-4-5"
+    cfg.agents.defaults.provider = "auto"
+    cfg.providers.anthropic.api_key = "sk-ant"
+    cfg.providers.openrouter.api_key = "sk-or"
+
+    context_config = ContextConfig(curator_model="claude-haiku-4-5", curator_provider="openrouter")
+    loop = AgentLoop(
+        provider=_Provider("boot"),
+        workspace=tmp_path,
+        model="boot/model",
+        context_config=context_config,
+        skill_forge_config=SkillForgeConfig(),
+        provider_pool=ProviderPool(cfg),
+    )
+    curator = next(b for b in loop.context_engine._builders if isinstance(b, CuratorSegmentBuilder))
+
+    assert curator._pin is not None
+    assert curator._pin.provider.api_key == "sk-or", "the configured provider serves the pin"
+
+
+def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -> None:
+    """Same wiring, the other pin."""
+    from raven.config.schema import Config
+    from raven.context_engine.segments.skills import SkillsSegmentBuilder
+    from raven.providers.pool import ProviderPool
+
+    cfg = Config()
+    cfg.agents.defaults.model = "claude-opus-4-5"
+    cfg.agents.defaults.provider = "auto"
+    cfg.providers.anthropic.api_key = "sk-ant"
+    cfg.providers.openrouter.api_key = "sk-or"
+
+    loop = AgentLoop(
+        provider=_Provider("boot"),
+        workspace=tmp_path,
+        model="boot/model",
+        context_config=ContextConfig(),
+        skill_forge_config=SkillForgeConfig(
+            llm_gate_model="claude-haiku-4-5",
+            llm_gate_provider="openrouter",
+        ),
+        provider_pool=ProviderPool(cfg),
+    )
+    skills = next(b for b in loop.context_engine._builders if isinstance(b, SkillsSegmentBuilder))
+
+    assert skills._gate is not None
+    assert skills._gate._pin is not None
+    assert skills._gate._pin.provider.api_key == "sk-or"
+
+
 def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
     """The write half is useless without this read half. A switch has to
     survive a restart, or the user's choice lasts exactly as long as the

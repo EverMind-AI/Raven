@@ -67,15 +67,6 @@ class ProviderPool:
             return ""
         return hashlib.sha256(json.dumps(providers, sort_keys=True, default=str).encode()).hexdigest()
 
-    def default(self) -> ModelBinding:
-        """The binding a session starts on: ``agents.defaults``, verbatim.
-
-        Deliberately not "the last model anyone switched to" -- a per-session
-        switch is scoped to that session, so a new session starts here.
-        """
-        defaults = self.config.agents.defaults
-        return self.bind(defaults.model, defaults.provider)
-
     def bind(self, model: str, provider_name: str | None = None) -> ModelBinding:
         """Build (or reuse) the provider that serves ``model``.
 
@@ -100,31 +91,52 @@ class ProviderPool:
         cache[key] = binding
         return binding
 
-    def bind_pin(self, model: str | None) -> ModelBinding | None:
+    def bind_pin(self, model: str | None, provider_name: str | None = None) -> ModelBinding | None:
         """A subsystem's own model, on its own credential -- or None.
 
-        This is what lets a pinned subsystem run off the session's model: a
-        pin naming a vendor Raven has credentials for gets that vendor's key,
-        not the agent provider's. None means the pin is unusable (no
-        credentials, or nothing built), and the caller should fall back to the
+        This is what lets a pinned subsystem run off the session's model. None
+        means the pin is unusable, and the caller should fall back to the
         session's binding rather than send one vendor's key to another.
+
+        ``provider_name`` is the configured half of the pair, and when present
+        nothing is derived: an id alone cannot say whether ``anthropic`` or a
+        gateway reselling it is meant, and those are different credentials and
+        different bills. Absent, the vendor is guessed -- which is what a
+        config written before the provider field existed gets.
         """
         if not model:
             return None
-        # A gateway (or a local deployment) serves whatever id it is handed
-        # under its own credential, so the pin is already paired -- asking
-        # whether the upstream vendor has a key of its own would drop a pin
-        # that works. Bind it through the gateway instead.
-        gateway = self._configured_gateway()
-        resolved = gateway if gateway is not None else self._resolve_provider_name(model, None)
-        if gateway is None and not self._has_credentials(resolved, model):
-            return None
+        if provider_name and provider_name != "auto":
+            configured = provider_name
+            if not self._has_credentials(configured, model):
+                # Explicitly configured and still unusable: a config error the
+                # user can fix, and silence here is what let a pinned
+                # subsystem look configured while never running.
+                logger.warning(
+                    "pinned model {!r} names provider {!r}, which has no usable credentials; "
+                    "the subsystem follows the conversation's model instead",
+                    model,
+                    configured,
+                )
+                return None
+            resolved = configured
+        else:
+            # A gateway (or a local deployment) serves whatever id it is handed
+            # under its own credential, so the pin is already paired -- asking
+            # whether the upstream vendor has a key of its own would drop a pin
+            # that works. Bind it through the gateway instead.
+            gateway = self._configured_gateway()
+            resolved = gateway if gateway is not None else self._resolve_provider_name(model, None)
+            if gateway is None and not self._has_credentials(resolved, model):
+                return None
         try:
             return self.bind(model, resolved)
-        except (SystemExit, RuntimeError, ValueError) as exc:
+        except Exception as exc:
             # Called from the context-engine factory at construction, so this
             # must leave the subsystem following the conversation rather than
-            # stop the agent from starting.
+            # stop the agent from starting. Deliberately broad: building a
+            # provider imports a vendor module, so the failure modes are not
+            # only the credential ones.
             logger.warning("cannot build a provider for pinned model {!r}: {}", model, exc)
             return None
 
