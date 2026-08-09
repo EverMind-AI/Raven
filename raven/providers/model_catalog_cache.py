@@ -9,7 +9,7 @@ authoritative network source, so a lost write race just costs one extra refetch
 Named after what it persists (the model catalog), not its source: the storage
 layer is source-agnostic, so a future catalog source reuses it unchanged. This
 is the storage layer only; freshness (TTL), the in-process tier, and the actual
-fetch are the caller's concern (see ``pricing._fetch_openrouter_models``).
+fetch are the caller's concern (see ``providers.rates._fetch_openrouter_models``).
 """
 
 from __future__ import annotations

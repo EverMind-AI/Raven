@@ -13,9 +13,12 @@ from typing import Any
 import json_repair
 from loguru import logger
 
+from raven.providers import prompt_cache
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_keywords, find_by_model, find_gateway, split_model_id
+from raven.providers.prompt_cache import CACHE_CONTROL
+from raven.providers.registry import find_by_keywords, find_by_model, find_gateway
+from raven.providers.wire import wire_model
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -102,6 +105,10 @@ class LiteLLMProvider(LLMProvider):
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
         # api_key / api_base are fallback for auto-detection.
+        # Kept because the id alone cannot say where a request goes: a bare
+        # `anthropic/claude-...` sent through this client reads as Anthropic's
+        # wire, which is not the wire it will travel on.
+        self._provider_name = provider_name or ""
         self._gateway = find_gateway(provider_name, api_key, api_base)
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
@@ -147,53 +154,19 @@ class LiteLLMProvider(LLMProvider):
         return model[len(prefix) :] if model.startswith(prefix) else model
 
     def _resolve_model(self, model: str) -> str:
-        """Resolve model name by applying provider/gateway prefixes."""
-        if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes.
-            # model_prefix, not the raw field: a gateway whose name is already
-            # LiteLLM's declares nothing, and reading the field would drop the
-            # prefix entirely -- sending the gateway's key to the vendor named in
-            # the model id.
-            prefix = self._gateway.model_prefix
-            if self._gateway.strip_model_prefix:
-                # One leading vendor segment, not everything but the last: a
-                # model id may itself contain a slash ("openai/gpt-oss-120b" is
-                # Groq's own name for it), and keeping only the tail truncated
-                # the id this gateway is asked to serve.
-                _, model = split_model_id(model)
-            if prefix and not model.startswith(f"{prefix}/"):
-                model = f"{prefix}/{model}"
-            return model
-
-        # Standard mode: auto-prefix for known providers.
-        spec = find_by_model(model)
-        prefix = spec.model_prefix if spec else ""
-        if spec and prefix:
-            model = self._canonicalize_explicit_prefix(model, spec, prefix)
-            if not any(model.startswith(s) for s in (*spec.skip_prefixes, f"{prefix}/")):
-                model = f"{prefix}/{model}"
-
-        return model
-
-    @staticmethod
-    def _canonicalize_explicit_prefix(model: str, spec: Any, canonical_prefix: str) -> str:
-        """Normalize an explicit prefix (`github-copilot/...`, a former name)."""
-        if "/" not in model:
-            return model
-        prefix, remainder = split_model_id(model)
-        if prefix not in spec.route_names:
-            return model
-        return f"{canonical_prefix}/{remainder}"
+        """The id this request is sent under. See ``providers.wire``."""
+        return wire_model(model, gateway=self._gateway)
 
     def _supports_cache_control(self, model: str) -> bool:
-        """Return True when the provider supports cache_control on content blocks."""
-        if self._gateway is not None:
-            return self._gateway.supports_prompt_caching
-        # Keyword fallback for the same reason token_wise has one: an id routed
-        # through a vendor we carry no spec for ("bedrock/anthropic.claude-...")
-        # still reaches a model whose caching is the upstream vendor's.
-        spec = find_by_model(model) or find_by_keywords(model)
-        return spec is not None and spec.supports_prompt_caching
+        """Return True when this request may carry cache_control blocks.
+
+        Decided by ``providers.prompt_cache``, which the token strategies ask too
+        -- three copies of this question disagreed, and the one here could not
+        have answered for the marks they place.
+        """
+        from raven.providers.prompt_cache import accepts_cache_control
+
+        return accepts_cache_control(model, addressed_to=self._provider_name)
 
     def _apply_cache_control(
         self,
@@ -206,10 +179,10 @@ class LiteLLMProvider(LLMProvider):
             if msg.get("role") == "system":
                 content = msg["content"]
                 if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
                 else:
                     new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
@@ -217,7 +190,7 @@ class LiteLLMProvider(LLMProvider):
         new_tools = tools
         if tools:
             new_tools = list(tools)
-            new_tools[-1] = {**new_tools[-1], "cache_control": {"type": "ephemeral"}}
+            new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
 
         return new_messages, new_tools
 
@@ -323,8 +296,11 @@ class LiteLLMProvider(LLMProvider):
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
-        if self._supports_cache_control(original_model) and not self.disable_auto_cache_control:
-            messages, tools = self._apply_cache_control(messages, tools)
+        if self._supports_cache_control(original_model):
+            if not self.disable_auto_cache_control:
+                messages, tools = self._apply_cache_control(messages, tools)
+        else:
+            messages, tools = prompt_cache.strip(messages, tools)
 
         # Clamp max_tokens to at least 1 — negative or zero values cause
         # LiteLLM to reject the request with "max_tokens must be at least 1".
@@ -407,8 +383,11 @@ class LiteLLMProvider(LLMProvider):
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
-        if self._supports_cache_control(original_model) and not self.disable_auto_cache_control:
-            messages, tools = self._apply_cache_control(messages, tools)
+        if self._supports_cache_control(original_model):
+            if not self.disable_auto_cache_control:
+                messages, tools = self._apply_cache_control(messages, tools)
+        else:
+            messages, tools = prompt_cache.strip(messages, tools)
 
         max_tokens = max(1, max_tokens)
 
@@ -442,26 +421,79 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
+        def _retry_without_breakpoints(exc: Exception) -> bool:
+            """Learn the refusal and take the marks off, or say this is not one.
+
+            The one retry this path takes. Restarting a *partially streamed* call
+            is the problem that kept retry out of here, and this is not that: the
+            refusal arrives before any chunk has been handed to the caller, so
+            nothing has been said that would have to be unsaid. Without it the
+            learned downgrade never reaches the surface that actually streams --
+            the TUI, where the affected model answered 400 on every single turn.
+            """
+            if prompt_cache.is_suppressed(original_model) or not prompt_cache.is_rejection(exc):
+                return False
+            prompt_cache.suppress(original_model)
+            kwargs["messages"], stripped = prompt_cache.strip(kwargs["messages"], kwargs.get("tools"))
+            if stripped is not None:
+                kwargs["tools"] = stripped
+            return True
+
+        async def _open():
+            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)).__aiter__()
+
+        async def _close(target: Any) -> None:
+            aclose = getattr(target, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
         # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
-        # aclose() in finally closes the underlying HTTP stream deterministically
-        # on that timeout, mirroring the `async with` cleanup on the other paths.
-        stream = response.__aiter__()
+        # Everything from the open onward sits inside the one try/finally, so the
+        # underlying HTTP stream is closed deterministically on any exit -- a
+        # first-chunk timeout included, which is the most likely one there is
+        # (gateway queueing, cold start).
+        # A chunk of None is a chunk, not the end of the stream. Pulling the
+        # first one before the loop needs a value meaning "there was none", and
+        # reusing None for it would let a provider that yields one truncate the
+        # response silently -- which is not what the loop did before.
+        done = object()
+
+        stream: Any = None
         try:
-            while True:
+            # The open and the first pull are one unit, and the `except` has to
+            # cover both: an OpenAI-shaped route raises at the open, and a gateway
+            # that defers the request until the first pull raises there instead.
+            try:
+                stream = await _open()
+                first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+            except StopAsyncIteration:
+                first = done
+            except Exception as exc:
+                if not _retry_without_breakpoints(exc):
+                    raise
+                # The refused stream is finished with; closing it before opening
+                # the replacement keeps at most one live at a time. It is None
+                # when the open itself was what failed.
+                await _close(stream)
+                stream = await _open()
+                try:
+                    first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                except StopAsyncIteration:
+                    first = done
+
+            chunk = first
+            while chunk is not done:
+                delta = self._normalize_stream_chunk(chunk)
+                if delta is not None:
+                    yield delta
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
                     break
-                delta = self._normalize_stream_chunk(chunk)
-                if delta is not None:
-                    yield delta
         finally:
-            aclose = getattr(stream, "aclose", None)
-            if aclose is not None:
-                await aclose()
+            await _close(stream)
 
     def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
         """Normalize a raw provider chunk into a StreamDelta.

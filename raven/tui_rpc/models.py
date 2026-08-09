@@ -528,6 +528,18 @@ class SkillUnpinResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
+class ModelLabel(_Strict):
+    """How a model reads to a person, for the ids in ``models``.
+
+    Present only for models a catalogue describes; one released since the
+    bundled snapshot, or served by a local deployment, has no entry and the
+    picker shows its id.
+    """
+
+    label: str
+    description: str | None = None
+
+
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -538,6 +550,7 @@ class ModelOptionProvider(_Strict):
     auth_type: str
     key_env: str | None = None
     models: list[str]
+    model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
     warning: str

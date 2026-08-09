@@ -107,16 +107,16 @@ def _no_openrouter_network(tmp_path):
     and mock the transport. The disk cache path is also redirected to a temp
     file so the real ~/.raven/cache/ is never read or written.
     """
-    from raven.token_wise import model_catalog_cache, pricing
+    from raven.providers import model_catalog_cache, rates
 
-    original_fetch = pricing._fetch_openrouter_models
+    original_fetch = rates._fetch_openrouter_models
     original_path = model_catalog_cache._CACHE_PATH
-    pricing._fetch_openrouter_models = lambda: {}
+    rates._fetch_openrouter_models = lambda: {}
     model_catalog_cache._CACHE_PATH = tmp_path / "model-catalog.json"
     try:
         yield
     finally:
-        pricing._fetch_openrouter_models = original_fetch
+        rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        pricing._OPENROUTER_CACHE.clear()
-        pricing._OPENROUTER_CACHE_TIME = 0.0
+        rates._OPENROUTER_CACHE.clear()
+        rates._OPENROUTER_CACHE_TIME = 0.0

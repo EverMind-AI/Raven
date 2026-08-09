@@ -256,3 +256,253 @@ def test_an_empty_catalogue_is_not_cached_either() -> None:
     finally:
         common_models._cached_chat_models_by_provider = real  # type: ignore[assignment]
         real.cache_clear()
+
+
+def test_a_model_family_quirk_is_declared_not_branched_on_in_the_factory() -> None:
+    """The factory builds providers; it does not know which models need what.
+
+    OpenRouter's qwen routing flag lived as an `if` there, because a fact about
+    one model family behind one gateway had nowhere else to go. A second such
+    fact would have meant a second branch.
+    """
+    from pathlib import Path
+
+    from raven.cli import _helpers
+    from raven.providers.capabilities import wire_overrides
+
+    assert wire_overrides("openrouter", "openrouter/qwen/qwen3.7-max") == {"reasoning": {"enabled": False}}
+    assert wire_overrides("openrouter", "openrouter/anthropic/claude-opus-4-8") == {}
+    assert wire_overrides("anthropic", "anthropic/qwen-lookalike") == {}, "another provider must not inherit it"
+
+    source = Path(_helpers.__file__).read_text(encoding="utf-8")
+    assert "qwen" not in source, "the model-family branch is back in the factory"
+
+
+def test_the_bundled_label_snapshot_is_packaged() -> None:
+    """A data file the wheel omits is missing only for installed users.
+
+    The build include list is a whitelist of patterns, so a new non-Python asset
+    is absent from the wheel by default -- and every test here runs from a source
+    checkout, where it is present either way.
+    """
+    import fnmatch
+    import tomllib
+    from pathlib import Path
+
+    from raven.providers.catalog import SNAPSHOT
+
+    root = Path(__file__).resolve().parents[1]
+    assert SNAPSHOT.exists(), "the snapshot itself is missing; run scripts/refresh_models_dev_snapshot.py"
+
+    patterns = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["hatch"]["build"]["include"]
+    relative = str(SNAPSHOT.relative_to(root))
+    assert any(fnmatch.fnmatch(relative, p) for p in patterns), f"{relative} matches no build include pattern"
+
+
+#: Providers whose models the snapshot labels today. A refresh that drops one is
+#: a regression no total can show: the catalogue grew from 16 providers to 37
+#: while a criterion change silently took every label off three gateways, and
+#: both the provider count and the model count still went up. Taking a name off
+#: this list means arguing the vendor is gone, not noticing a test went red.
+LABELLED_PROVIDERS = frozenset(
+    {
+        "aihubmix",
+        "anthropic",
+        "azure_openai",
+        "dashscope",
+        "deepseek",
+        "gemini",
+        "github_copilot",
+        "groq",
+        "minimax",
+        "minimax_cn",
+        "minimax_global",
+        "moonshot",
+        "openai",
+        "openrouter",
+        "siliconflow",
+        "zai",
+    }
+)
+
+
+def _packaged_snapshot() -> dict:
+    import json
+
+    from raven.providers.catalog import SNAPSHOT
+
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+
+
+def test_the_snapshot_labels_every_provider_it_labelled_before() -> None:
+    snapshot = _packaged_snapshot()
+    missing = sorted(LABELLED_PROVIDERS - set(snapshot))
+    assert not missing, f"the refresh dropped labels for: {missing}"
+
+    empty = sorted(name for name in LABELLED_PROVIDERS if not snapshot[name].get("models"))
+    assert not empty, f"present but carrying no models: {empty}"
+
+    # Present, non-empty, and every row unlabelled renders exactly like being
+    # absent -- the id as its own label -- so presence alone is not the property.
+    unlabelled = sorted(
+        name for name in LABELLED_PROVIDERS if not any(model.get("name") for model in snapshot[name]["models"].values())
+    )
+    assert not unlabelled, f"present but no model carries a name: {unlabelled}"
+
+
+def test_the_snapshot_records_where_it_came_from() -> None:
+    """Provenance a reader can act on, not a date they have to trust.
+
+    The catalogue is refreshed from someone else's repository; without the commit
+    it was built at, "the snapshot is stale" is unanswerable and a regenerated
+    file is unreviewable.
+    """
+    source = _packaged_snapshot().get("_source")
+    assert source, "no _source; regenerate with scripts/refresh_models_dev_snapshot.py"
+    assert source.keys() >= {"repo", "ref", "sha"}, source
+    assert len(source["sha"]) == 40, source["sha"]
+
+
+def test_the_snapshot_carries_labels_and_cost_and_nothing_that_shapes_a_request() -> None:
+    """The split this file's module docstring rests on, asserted.
+
+    Cost prices a finished call and a stale figure costs an inaccurate total.
+    A context window sizes trimming and a capability flag picks a wire shape, so
+    both must come from the table that also routes -- carrying them here would
+    make a community-maintained file able to cause a wrong request.
+    """
+    fields: set[str] = set()
+    for name, entry in _packaged_snapshot().items():
+        if name.startswith("_"):
+            continue
+        assert set(entry) == {"models"}, f"{name} carries more than models: {sorted(entry)}"
+        for model in entry["models"].values():
+            fields |= set(model)
+    assert fields <= {"name", "description", "cost"}, f"snapshot carries request-shaping fields: {sorted(fields)}"
+
+
+def test_a_model_in_the_snapshot_is_described_and_one_outside_it_still_renders() -> None:
+    from raven.providers.catalog import describe
+
+    known = describe("anthropic", "claude-sonnet-4-6")
+    assert known.described
+    assert known.label == "Claude Sonnet 4.6"
+    assert known.ref == "anthropic/claude-sonnet-4-6"
+
+    # A local deployment serves whatever the user put there; no catalogue can
+    # know it, and the picker must still have something to show.
+    unknown = describe("hosted_vllm", "my-finetune-v3")
+    assert not unknown.described
+    assert unknown.label == "my-finetune-v3"
+    assert unknown.ref == "hosted-vllm/my-finetune-v3"
+
+
+def test_a_stored_id_round_trips_through_describe() -> None:
+    """Describing an already-qualified id must not re-qualify it."""
+    from raven.providers.catalog import describe
+
+    assert describe("anthropic", "anthropic/claude-sonnet-4-6").label == "Claude Sonnet 4.6"
+
+
+def test_what_the_user_states_about_a_model_beats_the_catalogue() -> None:
+    """The user naming their own deployment beats a catalogue that never heard of it.
+
+    Only presentation. The overlay also carried `context`/`max_output` once,
+    justified as fixing token accounting -- nothing read them, and that
+    accounting already has `agents.defaults.contextWindowTokens`.
+    """
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import SOURCE_OVERLAY, describe
+
+    unknown = describe(
+        "hosted_vllm",
+        "my-finetune-v3",
+        overlay=ModelOverlay(label="Our finetune", description="tuned on support tickets"),
+    )
+    assert unknown.described
+    assert unknown.source == SOURCE_OVERLAY
+    assert unknown.label == "Our finetune"
+
+    # Stating one fact must not blank the others the catalogue knows.
+    partial = describe("anthropic", "claude-sonnet-4-6", overlay=ModelOverlay(label="Sonnet (ours)"))
+    assert partial.label == "Sonnet (ours)"
+    assert partial.description
+
+
+def test_an_overlay_written_bare_matches_the_qualified_id() -> None:
+    """Overlays are matched by identity, so a pre-contract spelling still applies."""
+    from raven.providers.wire import merge_key
+
+    assert merge_key("anthropic", "claude-sonnet-4-6") == merge_key("anthropic", "anthropic/claude-sonnet-4-6")
+
+
+# ---------------------------------------------------------------------------
+# LiteLLM checks us, not the other way round
+# ---------------------------------------------------------------------------
+
+#: Providers whose ``env_key`` deliberately differs from LiteLLM's, with the
+#: argument. Adding a name here is a claim, not a way to make a test pass.
+_ENV_KEY_EXEMPT: dict[str, str] = {
+    # A gateway speaking OpenAI's API: its key travels in OPENAI_API_KEY because
+    # that is the variable the driver handling the request reads. LiteLLM names
+    # the vendor's own variable, which nothing here sets.
+    "volcengine": "OPENAI_API_KEY",
+    # A local deployment takes an address, not a key. LiteLLM answers with the
+    # address variable, which is a different field of ours.
+    "ollama_chat": "OLLAMA_API_KEY",
+}
+
+
+def _litellm_env_keys(spec) -> list[str]:
+    """The variables LiteLLM would look for, or [] when it has no answer.
+
+    Asked with the environment emptied of credentials, because the answer is
+    phrased as *missing* keys: on a machine that already exports the variable,
+    LiteLLM reports nothing missing and this test would quietly skip the provider
+    it was written to check. Coverage must not depend on whose laptop it runs on.
+    """
+    import os
+    from unittest import mock
+
+    from raven.providers.litellm_setup import import_litellm
+
+    stripped = {k: v for k, v in os.environ.items() if not k.endswith(("_API_KEY", "_API_BASE", "_KEY"))}
+    try:
+        with mock.patch.dict(os.environ, stripped, clear=True):
+            info = import_litellm().validate_environment(model=f"{spec.model_prefix or spec.name}/probe-model")
+    except Exception:
+        return []
+    return list(info.get("missing_keys") or [])
+
+
+@pytest.mark.parametrize("spec", [s for s in PROVIDERS if s.env_key], ids=lambda s: s.name)
+def test_our_env_key_is_the_one_litellm_will_read(spec) -> None:
+    """The registry was written by copying LiteLLM; this makes LiteLLM check it.
+
+    A vendor renaming its variable is a silent break otherwise -- the key is set,
+    the request goes out without it, and the error is about authentication rather
+    than about a stale table. Where LiteLLM has no answer there is nothing to
+    compare and the case is skipped rather than assumed correct.
+    """
+    expected = _litellm_env_keys(spec)
+    if not expected:
+        pytest.skip("LiteLLM does not name an environment variable for this provider")
+
+    if spec.name in _ENV_KEY_EXEMPT:
+        assert spec.env_key == _ENV_KEY_EXEMPT[spec.name], (
+            f"{spec.name}: exempted with a stated value that no longer matches the registry"
+        )
+        return
+
+    assert spec.env_key in expected, f"{spec.name}: we set {spec.env_key!r}, LiteLLM reads one of {expected}"
+
+
+def test_the_env_key_exemption_list_has_no_stale_entries() -> None:
+    """An exemption whose divergence has gone away is a claim nobody rechecked."""
+    stale = []
+    for name, declared in _ENV_KEY_EXEMPT.items():
+        spec = find_by_name(name)
+        expected = _litellm_env_keys(spec)
+        if expected and declared in expected:
+            stale.append(f"{name}: LiteLLM now names {declared!r} too -- drop the exemption")
+    assert not stale, "\n".join(stale)

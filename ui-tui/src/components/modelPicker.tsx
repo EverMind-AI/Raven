@@ -1012,6 +1012,11 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
         }
 
         const prefix = modelIdx === idx ? '▸ ' : row === currentModel ? '* ' : '  '
+        // The id stays: it is what gets stored, and a user comparing it against
+        // a vendor's docs needs to see it. The name goes first because that is
+        // what someone choosing a model is reading for.
+        const label = provider?.model_labels?.[row]?.label
+        const text = label && label !== row ? `${label} · ${row}` : row
 
         return (
           <Text
@@ -1022,13 +1027,20 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
             wrap="truncate-end"
           >
             {prefix}
-            {idx + 1}. {row}
+            {idx + 1}. {text}
           </Text>
         )
       })}
 
       <Text color={t.color.muted} wrap="truncate-end">
         {offset + VISIBLE < models.length ? ` ↓ ${models.length - offset - VISIBLE} more` : ' '}
+      </Text>
+
+      {/* One line about the highlighted model. Blank rather than absent, so the
+          list below does not jump as the cursor moves between a model the
+          catalogue describes and one it does not. */}
+      <Text color={t.color.label} wrap="truncate-end">
+        {provider?.model_labels?.[models[modelIdx] ?? '']?.description ?? ' '}
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">

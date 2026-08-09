@@ -47,9 +47,8 @@ from raven.providers.registry import (
     CRED_LOCAL,
     CRED_OAUTH,
     credential_kind,
-    needs_public_model_prefix,
-    public_model_prefix,
 )
+from raven.providers.wire import stored_model_id
 
 
 class _ThemedConsole(Console):
@@ -890,11 +889,16 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
     status = result.get("status", "unknown")
     # Some direct providers (openai / anthropic / deepseek / gemini) ship no
     # base URL and rely on the SDK's built-in endpoint, so there's nothing to
-    # hit for a GET /v1/models pre-check — the probe reports "not_configured"
-    # because api_base is empty. That's NOT a real auth failure: skip the pre-
-    # check (the test message sent later exercises real connectivity via
+    # hit for a GET /v1/models pre-check. That's NOT a real auth failure: skip
+    # the pre-check (the test message sent later exercises real connectivity via
     # litellm) instead of dumping the user into the failure submenu.
-    if status == "not_configured" and "api_base" in (result.get("error") or ""):
+    #
+    # `no_probe_endpoint` is the probe saying exactly this. It used to say
+    # `not_configured` with "api_base" in the text, which is why the old
+    # condition read that way -- and a rename this caller does not follow puts
+    # every one of those providers into the failure submenu on the first step
+    # of onboarding.
+    if status == "no_probe_endpoint" or (status == "not_configured" and "api_base" in (result.get("error") or "")):
         if skip_test:
             console.print(
                 _t(
@@ -971,45 +975,10 @@ def _format_model_for_provider(provider: str, spec: Any, model_id: str) -> str:
     Mistral alongside OpenAI produced "mistral-large-latest", which resolves to
     OpenAI and spends OpenAI's key.
 
-    Its section name is LiteLLM's own name for the vendor, which is exactly the
-    prefix LiteLLM routes on, so that is what goes in front.
+    The rule itself is ``providers.wire.stored_model_id``; deciding it here as
+    well is what made the wizard and the TUI write one model two ways.
     """
-
-    if not model_id:
-        return model_id
-    if spec is None:
-        # LiteLLM's own spelling, not the normalized one. A config section may be
-        # written either way and both resolve, but the wire prefix has to be the
-        # name LiteLLM routes on -- it hyphenates three vendors, and handing it
-        # "nano_gpt/..." is rejected with "LLM Provider NOT provided", so the
-        # provider configured fine and then could not be called.
-        from raven.providers.registry import litellm_spelling
-
-        prefix = litellm_spelling(provider)
-        return model_id if model_id.startswith(f"{prefix}/") else f"{prefix}/{model_id}"
-    # These providers are named by a prefix their own client strips back off
-    # (``minimax_oauth`` before signing, ``_strip_model_prefix`` for codex), so the
-    # id can carry it -- and has to: written bare, "gpt-5.6-sol" is claimed by
-    # OpenAI's keywords and the request goes somewhere it does not exist.
-    #
-    # Azure is not in the list and does not reach this function either: an endpoint
-    # provider is locked in as ``is_custom`` and its model is persisted directly,
-    # so nothing here decides its spelling. It would need the opposite treatment
-    # anyway -- the id is used verbatim as a deployment name in a URL path.
-    if needs_public_model_prefix(spec):
-        public_prefix = public_model_prefix(spec)
-        if model_id.startswith(f"{public_prefix}/"):
-            return model_id
-        return f"{public_prefix}/{model_id.split('/')[-1]}"
-    prefix = getattr(spec, "model_prefix", "") or ""
-    if not prefix:
-        return model_id
-    if model_id.startswith(f"{prefix}/"):
-        return model_id
-    for skip in getattr(spec, "skip_prefixes", ()) or ():
-        if model_id.startswith(skip):
-            return model_id
-    return f"{prefix}/{model_id}"
+    return stored_model_id(provider, model_id)
 
 
 def _pick_model(
@@ -1186,13 +1155,26 @@ def _write_provider_fields(provider: str, fields: dict[str, Any]) -> None:
         raise typer.Exit(1)
 
 
-def _persist_default_model(model: Optional[str]) -> None:
-    """Patch ``agents.defaults.model`` if we picked one."""
+def _persist_default_model(model: Optional[str], provider: str) -> None:
+    """Patch ``agents.defaults.model`` and the pin that overrides it.
+
+    Both, always. ``agents.defaults.provider`` wins over whatever a model id
+    names, so writing the model alone leaves the wizard's own choice routed to
+    whichever provider was pinned before -- with that provider's key. The rule
+    for what to pin is ``providers.pin``, the same one the picker and
+    ``raven provider use`` ask.
+    """
     if not model:
         return
+    from raven.config.loader import load_config
     from raven.config.update import set_default_model
+    from raven.providers import pin
 
-    set_default_model(model)
+    try:
+        pinned = load_config().agents.defaults.provider or ""
+    except Exception:
+        pinned = ""
+    set_default_model(model, provider=pin.resolve(model, provider=provider, pinned=pinned))
 
 
 # ---------------------------------------------------------------------------
@@ -1426,7 +1408,7 @@ def _configure_one_provider(
             _roll_back_provider_fields(provider, spec, old_key=old_key, old_base=old_base)
             _rewind()
             continue
-        _persist_default_model(chosen_model)
+        _persist_default_model(chosen_model, provider)
         return {"provider": provider, "model": chosen_model}
 
 
@@ -1631,7 +1613,7 @@ def _resolve_model_with_test(
         # Custom endpoints were previously trusted without a test message — the
         # highest-typo-risk case. Send the real probe (it builds from the stored
         # config, so a wrong base_url / model id fails here, not at first chat).
-        _persist_default_model(custom_model)
+        _persist_default_model(custom_model, provider)
         if skip_test:
             return custom_model
         while True:
@@ -1654,7 +1636,7 @@ def _resolve_model_with_test(
             user_provided_model=user_model_flag,
             non_interactive=non_interactive,
         )
-        _persist_default_model(chosen)
+        _persist_default_model(chosen, provider)
         if skip_test:
             return chosen
         result = _run_test_probe(
@@ -1716,7 +1698,7 @@ def _configure_existing_provider_model(*, non_interactive: bool) -> bool:
         user_provided_model=None,
         non_interactive=False,
     )
-    _persist_default_model(chosen)
+    _persist_default_model(chosen, provider)
     result = _run_test_probe(
         provider,
         non_interactive=False,
@@ -1869,7 +1851,9 @@ def _manage_existing_providers(*, non_interactive: bool) -> None:
                 # re-pick instead of leaving a model whose provider has no key.
                 from raven.config.update import set_default_model
 
-                set_default_model("")
+                # The pin goes with it: left behind it would route the next model
+                # the user picks to the provider whose key was just removed.
+                set_default_model("", provider="auto")
             console.print(
                 _t(
                     f"  [green]✓ Removed {_provider_label(target)}'s configuration.[/green]",
@@ -2768,8 +2752,11 @@ def _resolve_model_provider(model: str) -> Optional[str]:
         except KeyError:
             pass
     # No usable prefix → could be a bare custom-endpoint model.
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+
     custom = (_load_raw_config().get("providers") or {}).get("custom") or {}
-    if custom.get("apiKey"):
+    if credential_status("custom", ProviderConfig.model_validate(custom)).ok:
         return "custom"
     # A bare id that still matches a known provider head (rare; e.g. a direct
     # provider's bare default before prefixing) — accept the head if known.

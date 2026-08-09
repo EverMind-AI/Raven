@@ -33,9 +33,9 @@ from loguru import logger
 
 from raven.cli.update_notice import update_notice
 from raven.config.loader import load_config
+from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
-from raven.token_wise.pricing import resolve_context_window
 from raven.tui_rpc.errors import TurnInProgressError
 from raven.tui_rpc.methods import turn as turn_module
 from raven.tui_rpc.methods.system import _raven_version
@@ -113,7 +113,7 @@ def _baseline_usage(
     banner says so rather than opening at $0.00. Zero here read as free until the
     first turn replaced it, which is the answer this session will never have.
     """
-    from raven.token_wise.pricing import is_plan_billed
+    from raven.providers.rates import is_plan_billed
 
     context_max = config.agents.defaults.context_window_tokens
     model = getattr(agent_loop, "model", None)

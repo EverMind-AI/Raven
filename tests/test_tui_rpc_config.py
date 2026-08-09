@@ -197,6 +197,11 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
 async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
     # A bare `/model <name>` carries no provider; _set_model must derive it from
     # the model so a previously-forced provider does not silently mis-route.
+    # Configured, because an id naming a vendor with no section is deliberately
+    # left on `auto`: pinning it would stop routing before the fallback that lets
+    # a gateway serve that vendor's models.
+    _pin(fake_home, "auto", {"anthropic": {"api_key": "sk-ant"}})
+
     result = await config_set(
         {"key": "model", "value": "anthropic/claude-opus-4-8"},
         agent_loop_factory=lambda: None,
@@ -205,6 +210,23 @@ async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_config_set_model_leaves_an_unconfigured_vendor_on_auto(fake_home: Path) -> None:
+    """The picker must not write a pin that stops routing.
+
+    A pin is answered with the named vendor's section whether or not it holds
+    credentials, so pinning an unconfigured one fails every request on a missing
+    key -- never reaching the fallback written for a gateway serving that
+    vendor's models. An OpenRouter-only install picking `anthropic/...` would
+    reach nothing at all.
+    """
+    _pin(fake_home, "auto", {"openrouter": {"api_key": "sk-or"}})
+
+    await config_set({"key": "model", "value": "anthropic/claude-opus-4-8"}, agent_loop_factory=lambda: None)
+
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "auto"
 
 
 async def test_config_set_model_rejected_during_active_turn(fake_home: Path, monkeypatch) -> None:
@@ -377,7 +399,10 @@ async def test_a_bare_id_the_pinned_provider_does_serve_keeps_the_pin(fake_home:
     assert result["applied"] is True
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["provider"] == "mistral"
-    assert cfg["agents"]["defaults"]["model"] == "mistral-large-latest"
+    # Stored naming its provider, which is what every surface writes: the same
+    # input through `raven provider use` produced the qualified form while this
+    # one kept it bare, so the two disagreed about what the user had chosen.
+    assert cfg["agents"]["defaults"]["model"] == "mistral/mistral-large-latest"
 
 
 async def test_a_local_deployment_keeps_its_pin_for_any_bare_id(fake_home: Path) -> None:

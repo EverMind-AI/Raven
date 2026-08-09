@@ -45,10 +45,10 @@ from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
+from raven.providers.rates import resolve_context_window
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
-from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 

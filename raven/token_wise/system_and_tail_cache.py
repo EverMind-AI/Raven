@@ -24,21 +24,17 @@ from typing import Any
 
 from loguru import logger
 
-from raven.providers.registry import find_by_keywords, find_by_model
+from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.token_wise.base import TokenStrategy
 
-_CACHE_CONTROL = {"type": "ephemeral"}
+_CACHE_CONTROL = CACHE_CONTROL
 
 
 def _supports_cache_control(model: str) -> bool:
-    if not model:
-        return False
-    # An id routed through a vendor we carry no spec for
-    # ("bedrock/anthropic.claude-...") resolves to nothing, so fall back to
-    # keywords: caching is the upstream vendor's capability and survives being
-    # reached through someone else.
-    spec = find_by_model(model) or find_by_keywords(model)
-    return spec is not None and spec.supports_prompt_caching
+    """Asked of ``providers.prompt_cache`` -- see it for why (wire x family)."""
+    from raven.providers.prompt_cache import accepts_cache_control
+
+    return accepts_cache_control(model)
 
 
 def _apply_cache_marker(msg: dict[str, Any]) -> None:

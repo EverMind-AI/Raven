@@ -21,7 +21,7 @@ from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers.base import LLMProvider
-from raven.token_wise import pricing as _pricing
+from raven.providers import rates as _pricing
 
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
@@ -1145,7 +1145,7 @@ def _catalog(monkeypatch, models: dict[str, list[str] | None]) -> None:
     times a day, so an assertion against it is an assertion about someone
     else's deploy.
     """
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     built: dict[str, dict] = {}
     for model_id, mods in models.items():
@@ -1194,7 +1194,7 @@ def test_the_catalog_is_warmed_in_the_background_when_it_has_no_answer(monkeypat
     forever. Warmed off the request path because the fetch takes a 10s timeout.
     """
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     calls: list[str] = []
     monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
@@ -1217,7 +1217,7 @@ def test_a_failed_warm_is_retried_once_the_cooldown_passes(monkeypatch) -> None:
     answering from an empty catalog for the rest of the process -- an attempt
     that failed says nothing about the next one."""
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     calls: list[str] = []
 
@@ -1251,7 +1251,7 @@ def test_the_warm_resolves_its_fetch_before_the_thread_starts(monkeypatch) -> No
     body that looked the fetch up on entry could therefore lose a race with
     whoever patched it -- a restored test seam would send a real request from
     inside the suite and write the real cache file."""
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     calls: list[str] = []
     captured: dict[str, object] = {}
@@ -1283,7 +1283,7 @@ def test_the_warm_resolves_its_fetch_before_the_thread_starts(monkeypatch) -> No
 def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
     """The fetch degrades internally, but a thread that dies loudly writes a
     traceback into a user's terminal for a probe that has already answered."""
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     def _boom() -> dict:
         raise RuntimeError("no route to host")
@@ -1347,7 +1347,7 @@ def test_an_entry_written_before_modalities_were_kept_is_not_a_denial(monkeypatc
 def test_a_catalog_that_blows_up_does_not_break_the_probe(monkeypatch) -> None:
     """A capability probe must never be the thing that fails a turn."""
     from raven.providers import capabilities
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     def _boom(model):
         raise RuntimeError("catalog on fire")
@@ -1769,8 +1769,9 @@ def test_the_fetch_files_no_normalized_join_key_in_the_shared_table(monkeypatch)
     text-only verdict. Asserted through the real fetch: a hand-built table cannot
     see this, which is exactly why the mutation went unnoticed.
     """
+    from raven.providers import model_catalog_cache
+    from raven.providers import rates as pricing
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import model_catalog_cache, pricing
 
     payload = {
         "data": [
@@ -1868,7 +1869,7 @@ def test_a_cold_verdict_is_not_cached_for_the_life_of_the_loop(monkeypatch) -> N
     background warm filling a table nothing re-reads -- so only a real verdict is
     remembered."""
     from raven.agent.loop.main import AgentLoop
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}

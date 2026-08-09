@@ -270,9 +270,16 @@ def _parse_provider_flags(extra_args: list[str], provider_name: str) -> dict[str
     - ``--api-key abc``     -> ``{"api_key": "abc"}``
     - ``--api-key=abc``     -> ``{"api_key": "abc"}``
     - ``--api-base X``      -> ``{"api_base": "X"}``     (kebab -> snake)
-    - ``--vertex true``     -> ``{"vertex": True}``       (bool string coerced)
-    - ``--no-vertex``       -> ``{"vertex": False}``      (bool negative)
-    - ``--vertex`` alone    -> ``{"vertex": True}``       (bool positive)
+    - ``--<flag> true``     -> ``{"<flag>": "true"}``     (string; the schema coerces)
+    - ``--no-<flag>``       -> ``{"<flag>": False}``      (bool negative)
+    - ``--<flag>`` alone    -> ``{"<flag>": True}``       (bool positive)
+
+    Values come back as written; only the two valueless forms produce a bool
+    here, and the schema coerces the rest on validation. The bool forms are
+    named generically because no provider declares a bool field today -- the one
+    that did (Gemini's ``vertex``) described a mechanism that never existed and
+    was removed. They stay, matching ``_parse_channel_flags``, so a provider
+    gaining one needs no parser change.
 
     Unknown fields raise ``typer.BadParameter`` pointing at ``provider show``.
     """
@@ -331,6 +338,42 @@ def _parse_provider_flags(extra_args: list[str], provider_name: str) -> dict[str
             out[key] = value
 
     return out
+
+
+def _load_section(name: str) -> dict | None:
+    """This provider's stored fields, or None when it has no section yet."""
+    from raven.config.update_providers import get_provider_config
+
+    try:
+        return get_provider_config(name, redact_secrets=False)
+    except KeyError:
+        return None
+
+
+def _ineffective_because(provider: str, model: str) -> list[str]:
+    """Reasons this model will not actually be used, despite being written.
+
+    A stale ``agents.defaults.provider`` used to be the other one, and the note
+    for it told the user to edit a field no command wrote. Both surfaces that
+    change a model now write it by the same rule, so the note would be advice
+    about a state neither of them produces.
+    """
+    from raven.config.loader import load_config
+
+    try:
+        config = load_config()
+    except Exception:
+        return []
+
+    notes: list[str] = []
+    section = config.providers.get(provider)
+    deployment = getattr(section, "deployment", "") if section else ""
+    if deployment:
+        notes.append(
+            f"providers.{provider}.deployment is set to {deployment!r}, which decides the "
+            f"deployment regardless of the model id."
+        )
+    return notes
 
 
 def _register_config_commands(app: typer.Typer) -> None:
@@ -413,7 +456,7 @@ def _register_config_commands(app: typer.Typer) -> None:
 
             raven provider set openrouter --api-key sk-or-v1-...
             raven provider set azure-openai --api-key X --api-base https://...
-            raven provider set gemini --api-key K --vertex true
+            raven provider set gemini --api-key-list k1,k2
         """
         if _help_requested(ctx.args):
             _print_schema_table(name)
@@ -480,6 +523,14 @@ def _register_config_commands(app: typer.Typer) -> None:
             "oauth_token_missing": (f"Run: raven provider login {name.replace('_', '-')}"),
             "network_error": "Check network / firewall / VPN settings",
         }
+        if result["status"] == "no_probe_endpoint":
+            # Not a failure: this probe pings `/models`, and these vendors do not
+            # publish one at an address we hold. Saying "failed" here told seven
+            # correctly configured providers they were broken.
+            console.print(f"[yellow]?[/yellow] {name} not probed: {result['error']}")
+            console.print("  [dim]Credentials are set; run a turn to exercise them.[/dim]")
+            return
+
         hint = hints.get(result["status"], "")
         console.print(f"[red]✗[/red] {name} failed: {result['status']}")
         if hint:
@@ -487,6 +538,76 @@ def _register_config_commands(app: typer.Typer) -> None:
         if result.get("error"):
             console.print(f"  [dim]Detail: {result['error']}[/dim]")
         raise typer.Exit(1)
+
+    @app.command("use")
+    def provider_use_cmd(
+        model: str = typer.Argument(..., help="Model id, e.g. anthropic/claude-sonnet-5"),
+        provider: str = typer.Option("", "--provider", "-p", help="Provider serving it, when the id does not say"),
+    ):
+        """Make this the model the agent runs on.
+
+        Changing it used to mean re-running the whole wizard: the TUI picker and
+        onboarding could both switch models and the CLI could not, so a user on a
+        headless box had six setup steps to walk to change one field.
+
+        The id is stored the way every other surface stores it -- naming its
+        provider -- so the three cannot disagree about what was chosen.
+        """
+        from raven.config.loader import load_config
+        from raven.config.update import set_default_model
+        from raven.providers import pin
+        from raven.providers.auth import credential_status
+        from raven.providers.catalog import describe
+        from raven.providers.wire import stored_model_id
+
+        try:
+            pinned = load_config().agents.defaults.provider or ""
+        except Exception:
+            pinned = ""
+        # One rule for both entry points: the picker writes this field, and the
+        # CLI used to tell the user to hand-edit it instead.
+        resolved = pin.resolve(model, provider=provider, pinned=pinned)
+        if resolved is None:
+            console.print(f"[red]✗[/red] cannot tell which provider serves {model!r}.")
+            console.print(f"  [dim]Write it as <provider>/{model}, or pass --provider.[/dim]")
+            raise typer.Exit(1)
+
+        name = provider or (resolved if resolved != pin.AUTO else "")
+        if not name:
+            from raven.providers.registry import split_model_id
+
+            name = split_model_id(model)[0]
+
+        stored = stored_model_id(name, model) if name else model
+        previous = set_default_model(stored, provider=resolved)
+
+        row = describe(name, stored)
+        label = f"{row.label} ([dim]{stored}[/dim])" if row.described else stored
+        console.print(f"[green]✓[/green] default model: {label}")
+        if previous and previous != stored:
+            console.print(f"  [dim]was {previous}[/dim]")
+
+        # Reported rather than refused: choosing a model before configuring its
+        # provider is a normal order to do things in, and the startup gate says
+        # the same thing again if it is still missing then.
+        status = credential_status(name, _load_section(name), include_external=True)
+        if not status.ok:
+            console.print(f"  [yellow]![/yellow] {status.summary}")
+            if resolved == pin.AUTO:
+                # "buy a key from this vendor" is the wrong advice for someone
+                # already paying a gateway to serve that vendor's models. Routing
+                # is left on auto precisely so the gateway can answer.
+                console.print(
+                    f"  [dim]Routing stays on auto, so a configured gateway can serve it. "
+                    f"To pin the gateway instead, write it as <gateway>/{stored}.[/dim]"
+                )
+
+        # An Azure deployment can still make this write have no effect, and it
+        # fails silently otherwise: the command reports success, the file
+        # changes, and requests keep going where they went before. The stale-pin
+        # case used to be the other one; this command now writes the pin itself.
+        for note in _ineffective_because(name, stored):
+            console.print(f"  [yellow]![/yellow] {note}")
 
     @app.command("reset")
     def provider_reset_cmd(

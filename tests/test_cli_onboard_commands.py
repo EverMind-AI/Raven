@@ -1939,11 +1939,13 @@ def test_configure_existing_model_happy_path_persists_and_returns_true(
     )
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     persisted: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: persisted.append((m, provider)))
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "ok")
 
     assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
-    assert persisted == ["minimax-global/MiniMax-M3"]
+    # The pin travels with the model: writing one without the other leaves the
+    # wizard's own choice routed to whatever was pinned before.
+    assert persisted == [("minimax-global/MiniMax-M3", "minimax_global")]
 
 
 def test_configure_existing_model_verify_failure_returns_false_without_persist(
@@ -1953,7 +1955,7 @@ def test_configure_existing_model_verify_failure_returns_false_without_persist(
     _patch_single_provider_pick(monkeypatch, "openai")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (False, "invalid_key", None))
     persisted: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: persisted.append((m, provider)))
 
     assert onboard_commands._configure_existing_provider_model(non_interactive=False) is False
     assert persisted == []
@@ -1964,7 +1966,7 @@ def test_configure_existing_model_reauth_delegates_to_oauth_login(monkeypatch: p
     _patch_single_provider_pick(monkeypatch, "minimax_global")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", []))
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: None)
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "reauth")
     login_calls: list[str] = []
     monkeypatch.setattr(onboard_commands, "_run_oauth_login", lambda p: login_calls.append(p) or True)
@@ -2610,9 +2612,13 @@ def test_the_wizard_offers_every_provider_the_registry_carries() -> None:
     from raven.cli.onboard_commands import _CURATED_PROVIDERS
     from raven.providers.registry import PROVIDERS
 
-    offered = {entry["name"] for entry in _CURATED_PROVIDERS}
+    names = [entry["name"] for entry in _CURATED_PROVIDERS]
+    offered = set(names)
     registered = {spec.name for spec in PROVIDERS}
     assert registered - offered == set(), f"registry providers missing from the wizard: {sorted(registered - offered)}"
+    # Once each, on top of the two directions already asserted: nothing stopped
+    # one provider appearing twice under two labels.
+    assert len(names) == len(offered), f"offered twice: {sorted({n for n in names if names.count(n) > 1})}"
     assert offered - registered == set(), f"wizard offers providers with no spec: {sorted(offered - registered)}"
 
 
@@ -2788,7 +2794,7 @@ def test_resolve_model_with_test_runs_for_a_provider_with_no_spec(monkeypatch, t
         "_verify_provider",
         lambda provider, skip_test=False: (True, "valid", ["mistral-large-latest"]),
     )
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model, provider: None)
 
     chosen = onboard_commands._resolve_model_with_test(
         "mistral",
@@ -3028,7 +3034,7 @@ def test_a_spec_less_provider_can_have_its_default_model_changed(monkeypatch, tm
         onboard_commands, "_verify_provider", lambda provider: (True, "valid", ["mistral-large-latest"])
     )
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: f"{provider}/probe")
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model, provider: None)
     # Reaching this without an AttributeError is the second half of the fix: the
     # probe is told whether the provider is OAuth, read off a spec that is None.
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda provider, **kw: "ok")
@@ -3886,7 +3892,7 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     from raven.config.update_providers import set_provider_fields
 
     set_provider_fields("mistral", {"api_key": "sk-mistral"})
-    onboard_commands._persist_default_model("mistral/mistral-large-latest")
+    onboard_commands._persist_default_model("mistral/mistral-large-latest", "mistral")
 
     asked: list[str] = []
 
@@ -4288,3 +4294,45 @@ def test_a_stale_default_model_does_not_restart_the_wizard(
         result = runner.invoke(app, ["tui"])
 
     assert "openai-codex/gpt-5.6-sol" in result.output, "the notice did not name the model to fix"
+
+
+# ---------------------------------------------------------------------------
+# The wizard's vendor list against the registry
+# ---------------------------------------------------------------------------
+
+
+def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
+    """A vendor filed under the wrong heading is asked for the wrong thing.
+
+    The group decides which prompt the wizard runs -- a key, a sign-in, or an
+    address -- so it has to follow the declared connection shape rather than
+    where a hand edit happened to put the row.
+    """
+    from raven.providers.auth import KIND_API_KEY, KIND_DEVICE_FLOW, KIND_NONE, credential_status
+
+    # Every kind maps to exactly one group. Defaulting the unlisted kinds to
+    # "whatever group this row is already in" made the check tautological for
+    # them: a key-based provider filed under "oauth" compared "oauth" against
+    # "oauth" and passed, so only one of the two directions was ever tested.
+    # No entry for `ambient`: no provider the wizard offers declares it (Bedrock,
+    # the only one, has no spec and is not offered). Mapping it anyway would be
+    # guessing at a group for a row that cannot appear -- and the assertion below
+    # turns its arrival into an explicit decision rather than a silent default.
+    group_for_kind = {
+        KIND_DEVICE_FLOW: "oauth",
+        KIND_NONE: "local",
+        KIND_API_KEY: "api_key",
+    }
+    misfiled = []
+    for group in onboard_commands._CURATED_GROUPS:
+        if group["kind"] == "fallback":
+            continue  # not a provider group: the vendor search and the generic endpoint
+        for entry in group["providers"]:
+            if entry["name"] == onboard_commands._PICK_LITELLM_VENDOR:
+                continue
+            kind = credential_status(entry["name"], None).kind
+            want = group_for_kind.get(kind)
+            assert want, f"{entry['name']}: credential kind {kind!r} maps to no group"
+            if group["kind"] != want:
+                misfiled.append(f"{entry['name']}: filed under {group['kind']!r}, credentials say {want!r}")
+    assert not misfiled, "; ".join(misfiled)

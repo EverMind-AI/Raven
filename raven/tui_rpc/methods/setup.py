@@ -64,19 +64,38 @@ def _detect_provider_configured(payload: dict) -> bool:
     if not (isinstance(model, str) and model):
         return False
 
+    # `agents.defaults.provider` used to be waved through on its own, as a
+    # provider signal from configs predating per-provider sections. It is now
+    # written on every model change, so that branch would let a pinned name
+    # stand for credentials nobody has -- the gate would pass with an empty
+    # config. The name still says which section to ask about; whether it holds
+    # anything is asked below, like every other provider.
     provider = defaults.get("provider")
-    if isinstance(provider, str) and provider and provider != _AUTO_SENTINEL:
-        if provider in {"minimax_global", "minimax_cn"}:
-            from raven.providers.minimax_oauth import load_token
+    if isinstance(provider, str) and provider in {"minimax_global", "minimax_cn"}:
+        from raven.providers.minimax_oauth import load_token
 
-            region = "global" if provider == "minimax_global" else "cn"
-            return load_token(region) is not None
-        return True
+        return load_token("global" if provider == "minimax_global" else "cn") is not None
 
     providers = payload.get("providers")
     if isinstance(providers, dict):
-        if any(isinstance(v, dict) and v.get("apiKey") for v in providers.values()):
-            return True
+        # `providers.auth`, like every other gate. Reading `apiKey` off the raw
+        # payload made this the seventh rule and it disagreed with the other six
+        # in both directions -- on the exact two configurations this module's
+        # rewrite was filed to fix. A Gemini section holding only `apiKeyList`
+        # parked a working install on the setup panel; Azure with a key and no
+        # address was waved through into a chat that then could not run.
+        from raven.config.schema import ProvidersConfig
+        from raven.providers.auth import credential_status
+
+        try:
+            sections = ProvidersConfig.model_validate(providers)
+        except Exception:
+            sections = None
+        if sections is not None:
+            for name in providers:
+                section = sections.get(name)
+                if section is not None and credential_status(name, section, include_external=True).ok:
+                    return True
 
     from raven.providers.registry import split_model_id
 

@@ -22,6 +22,7 @@ from raven.config.update_providers import (
     set_provider_fields,
 )
 from raven.config.update_providers import test_provider as probe_provider
+from raven.providers.registry import PROVIDERS as _PROVIDERS
 
 
 @pytest.fixture
@@ -86,13 +87,12 @@ def test_set_complex_provider_azure(cfg_path: Path) -> None:
 def test_set_gemini_extra_fields(cfg_path: Path) -> None:
     set_provider_fields(
         "gemini",
-        {"api_key": "g-key", "vertex": "true", "api_key_list": "k1,k2,k3"},
+        {"api_key": "g-key", "api_key_list": "k1,k2,k3"},
         config_path=cfg_path,
     )
 
     section = _read(cfg_path)["providers"]["gemini"]
     assert section["apiKey"] == "g-key"
-    assert section["vertex"] is True
     assert section["apiKeyList"] == ["k1", "k2", "k3"]
 
 
@@ -882,3 +882,177 @@ def test_probing_codex_offers_a_sign_in_when_the_credential_is_the_problem(
 
     assert result["status"] == "oauth_token_missing", result
     assert "could not renew" in result["error"]
+
+
+def test_a_model_stored_one_way_is_removed_by_the_other(cfg_path: Path) -> None:
+    """Deletion matches the model, not the spelling.
+
+    The two write paths disagreed for most providers, so a list could hold one
+    model as both `glm-4.6` and `zai/glm-4.6`. Removing either string left the
+    other behind, and the call reported success.
+    """
+    from raven.config.update_providers import add_provider_model, remove_provider_model
+
+    add_provider_model("zai", "glm-4.6", config_path=cfg_path)
+    remaining = remove_provider_model("zai", "zai/glm-4.6", config_path=cfg_path)
+    assert remaining == []
+
+
+def test_the_same_model_in_two_spellings_is_added_once(cfg_path: Path) -> None:
+    from raven.config.update_providers import add_provider_model
+
+    add_provider_model("zai", "zai/glm-4.6", config_path=cfg_path)
+    assert add_provider_model("zai", "glm-4.6", config_path=cfg_path) == ["zai/glm-4.6"]
+
+
+def test_the_cli_writes_a_model_id_the_way_every_other_path_does(cfg_path: Path) -> None:
+    """`provider set --models` is the third write path and skipped the contract.
+
+    It stored a bare id while the picker and the wizard stored a qualified one.
+    Identity still matched so nothing visibly broke -- which is how the two
+    spellings coexisted the last time, right up until a delete matched neither.
+    """
+    from raven.providers.wire import stored_model_id
+
+    set_provider_fields("anthropic", {"models": "claude-opus-4-8,anthropic/claude-sonnet-5"}, config_path=cfg_path)
+
+    stored = _read(cfg_path)["providers"]["anthropic"]["models"]
+    assert stored == ["anthropic/claude-opus-4-8", "anthropic/claude-sonnet-5"]
+    assert stored[0] == stored_model_id("anthropic", "claude-opus-4-8")
+
+
+# ---------------------------------------------------------------------------
+# Providers that ship no default address: the probe used to call them unconfigured
+# ---------------------------------------------------------------------------
+
+
+def test_a_vendor_litellm_knows_the_address_of_is_actually_probed(cfg_path: Path) -> None:
+    """Ten providers carry no ``default_api_base``, and this returned
+    ``not_configured`` for every one of them -- telling a correctly configured
+    install to set the key it had already set. LiteLLM knows where four of them
+    live, because it is the thing that sends their requests.
+    """
+    _seed_key(cfg_path, "groq", "sk-groq")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(401, json={"error": "bad key"})
+
+    result = probe_provider("groq", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert seen, "the probe never left the building"
+    assert "groq.com" in seen[0], seen
+    assert result["status"] == "invalid_key", "a bad key is now distinguishable from an unconfigured one"
+
+
+def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(cfg_path: Path) -> None:
+    """Anthropic, OpenAI and Gemini compile the address into their SDKs, so
+    there is no ``/models`` to ping and nothing the user could supply. The key is
+    there; this probe simply cannot reach the vendor. Saying so is the honest
+    answer, and it is not a failure."""
+    _seed_key(cfg_path, "anthropic", "sk-ant")
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be reached
+        raise AssertionError(f"nothing should have been sent: {request.url}")
+
+    result = probe_provider("anthropic", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["status"] == "no_probe_endpoint"
+    assert result["ok"] is False
+    assert "credential present" in result["error"]
+
+
+def test_a_provider_that_genuinely_needs_an_address_still_says_so(cfg_path: Path) -> None:
+    """A self-hosted deployment and an Azure resource are addresses only the user
+    knows, so ``not_configured`` is the truth for those two -- the change must not
+    turn a real gap into a shrug."""
+    for name in ("hosted_vllm", "azure_openai"):
+        _seed_key(cfg_path, name, "sk-x")
+        result = probe_provider(name, config_path=cfg_path, transport=_mock_transport(lambda r: httpx.Response(200)))
+        assert result["status"] == "not_configured", name
+
+
+def test_a_404_from_an_address_we_guessed_is_not_reported_as_a_broken_key(cfg_path: Path) -> None:
+    """DeepSeek's completions endpoint is ``/beta``, which has no ``/models``.
+
+    A 404 never says anything about a credential, so surfacing it as a failure
+    would be the original lie in a new spelling. A 404 from an address the *user*
+    supplied is different -- that is a typo they need to see -- so this only
+    applies where the address was derived.
+    """
+    _seed_key(cfg_path, "deepseek", "sk-deepseek")
+
+    derived = probe_provider(
+        "deepseek",
+        config_path=cfg_path,
+        transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
+    )
+    assert derived["status"] == "no_probe_endpoint"
+
+    set_provider_fields("deepseek", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
+    typed = probe_provider(
+        "deepseek",
+        config_path=cfg_path,
+        transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
+    )
+    assert typed["status"] == "http_404", "a user's own wrong address must still surface"
+
+
+def test_probing_a_login_prompting_provider_never_asks_litellm_to_resolve_it(cfg_path: Path) -> None:
+    """Resolving a Copilot id resolves its credentials on the way.
+
+    With no token file that prints a device code to stdout and blocks; deriving
+    the address before the branch that handles Copilot separately hung this one
+    probe on that login. Recorded rather than raised, because the
+    derivation swallows exceptions to fall through -- a probe that raises is
+    caught and proves nothing.
+    """
+    import litellm
+
+    asked: list[str] = []
+
+    def _record(*args, **kwargs):
+        asked.append(str(kwargs.get("model") or (args[0] if args else "?")))
+        raise Exception("unmapped")
+
+    original = litellm.get_llm_provider
+    litellm.get_llm_provider = _record
+    try:
+        probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(lambda r: httpx.Response(200)))
+    finally:
+        litellm.get_llm_provider = original
+
+    assert not asked, f"a login-prompting id was handed to LiteLLM: {asked}"
+
+
+@pytest.mark.parametrize("spec", [s for s in _PROVIDERS if s.is_oauth], ids=lambda s: s.name)
+def test_an_oauth_provider_is_never_resolved_through_litellm_for_its_address(spec, cfg_path: Path) -> None:
+    """Resolving one of these resolves its credentials on the way, which prints a
+    device code and blocks.
+
+    Asserted per OAuth provider rather than for the one that broke: the guard
+    used to be asked about the *wire* form of the id, and `wire_model` strips the
+    provider name outright for the codex and azure shapes -- so it was handed a
+    bare "probe-model" and saw nothing to object to. Today that is masked by
+    those providers having an address already; it would come back the moment one
+    did not.
+    """
+    import litellm
+
+    from raven.config.update_providers import _litellm_api_base
+
+    asked: list[str] = []
+
+    def _record(*args, **kwargs):
+        asked.append(str(kwargs.get("model") or (args[0] if args else "?")))
+        raise Exception("unmapped")
+
+    original = litellm.get_llm_provider
+    litellm.get_llm_provider = _record
+    try:
+        assert _litellm_api_base(spec) == ""
+    finally:
+        litellm.get_llm_provider = original
+
+    assert not asked, f"{spec.name}: handed to LiteLLM anyway ({asked})"

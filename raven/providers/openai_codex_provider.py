@@ -109,9 +109,15 @@ class OpenAICodexProvider(LLMProvider):
 
 
 def _strip_model_prefix(model: str) -> str:
-    if model.startswith("openai-codex/") or model.startswith("openai_codex/"):
-        return model.split("/", 1)[1]
-    return model
+    """The id the Responses API is asked for. See ``providers.wire``.
+
+    The stored id names this provider so nothing else can claim it; the backend
+    knows only the vendor's own slug.
+    """
+    from raven.providers.registry import find_by_name
+    from raven.providers.wire import wire_model
+
+    return wire_model(model, spec=find_by_name("openai_codex"))
 
 
 def _build_headers(account_id: str, token: str) -> dict[str, str]:

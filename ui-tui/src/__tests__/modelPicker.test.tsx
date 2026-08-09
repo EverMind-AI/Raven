@@ -653,3 +653,44 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 })
+
+describe('model labels', () => {
+  const described: ModelOptionProvider = {
+    ...anthropic,
+    model_labels: {
+      'claude-sonnet-4-6': {
+        context: 1000000,
+        description: 'Claude workhorse for coding agents',
+        label: 'Claude Sonnet 4.6'
+      }
+    },
+    models: ['claude-sonnet-4-6', 'some-unlisted-finetune'],
+    total_models: 2
+  }
+
+  it('shows a name and a description beside the id, and the id alone without one', async () => {
+    const h = mount([described])
+    await waitForFrame(h, 'Anthropic')
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    const frame = normalize(h.frame())
+    // The id stays: it is what gets stored, and it is what a vendor's docs name.
+    expect(frame).toContain('Claude Sonnet 4.6 · claude-sonnet-4-6')
+    expect(frame).toContain('Claude workhorse for coding agents')
+    // No catalogue knows a local finetune, and the row still has to render.
+    expect(frame).toContain('some-unlisted-finetune')
+
+    h.unmount()
+  })
+
+  it('renders ids unchanged for a provider the payload describes nothing for', async () => {
+    const h = mount([anthropic])
+    await waitForFrame(h, 'Anthropic')
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    expect(normalize(h.frame())).toContain('claude-sonnet-4-6')
+    h.unmount()
+  })
+})

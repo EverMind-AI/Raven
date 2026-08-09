@@ -31,10 +31,33 @@ async def test_setup_status_provider_configured_true(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
     (cfg_dir / "config.json").write_text(
-        json.dumps({"agents": {"defaults": {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"}}})
+        json.dumps(
+            {
+                "agents": {"defaults": {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"}},
+                "providers": {"anthropic": {"apiKey": "sk-ant"}},
+            }
+        )
     )
     result = await setup_status({})
     assert result == {"provider_configured": True}
+
+
+async def test_a_pinned_provider_name_is_not_credentials(fake_home: Path) -> None:
+    """The name says which section to ask about, not that it holds anything.
+
+    ``agents.defaults.provider`` was waved through on its own, as a signal from
+    configs predating per-provider sections. It is now written on every model
+    change, so that branch would have let a pinned name stand for credentials
+    nobody has -- an empty config would pass the gate and the first turn would
+    fail with whatever the backend said about a missing key.
+    """
+    cfg_dir = fake_home / ".raven"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"provider": "anthropic", "model": "anthropic/claude-sonnet-4-5"}}})
+    )
+
+    assert await setup_status({}) == {"provider_configured": False}
 
 
 async def test_setup_status_provider_without_model_returns_false(fake_home: Path) -> None:
@@ -124,7 +147,12 @@ async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     cfg_dir = fake_home / ".raven"
     cfg_dir.mkdir()
     (cfg_dir / "config.json").write_text(
-        json.dumps({"agents": {"defaults": {"provider": "openai", "model": "openai/gpt-4o-mini"}}})
+        json.dumps(
+            {
+                "agents": {"defaults": {"provider": "openai", "model": "openai/gpt-4o-mini"}},
+                "providers": {"openai": {"apiKey": "sk-openai"}},
+            }
+        )
     )
     d = Dispatcher()
     register_setup_methods(d)

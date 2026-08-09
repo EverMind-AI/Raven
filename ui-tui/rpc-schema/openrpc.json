@@ -1413,7 +1413,22 @@
           },
           "total_models": { "type": "integer" },
           "needs_api_base": { "type": "boolean" },
-          "warning": { "type": "string" }
+          "warning": { "type": "string" },
+          "model_labels": {
+            "type": "object",
+            "description": "Keyed by the model id as it appears in `models`.",
+            "additionalProperties": { "$ref": "#/components/schemas/ModelLabel" }
+          }
+        }
+      },
+      "ModelLabel": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.",
+        "required": ["label"],
+        "properties": {
+          "label": { "type": "string" },
+          "description": { "type": "string" }
         }
       },
       "UsageSnapshot": {

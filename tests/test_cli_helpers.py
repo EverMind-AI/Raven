@@ -123,13 +123,18 @@ def _write_config(tmp_path: Path, *, api_key: str | None) -> Path:
     return p
 
 
-def test_check_provider_credentials_exits_when_no_key(tmp_path: Path) -> None:
-    import typer
-
+def test_check_provider_credentials_raises_when_no_key(tmp_path: Path) -> None:
+    """Raises rather than printing and exiting: three entry points ask this, and
+    only one of them is a terminal. The sentence travels with the exception so
+    each renders it in its own idiom."""
     from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(MissingCredentialsError) as excinfo:
         _helpers.check_provider_credentials(load_config(_write_config(tmp_path, api_key=None)))
+
+    assert "API key" in excinfo.value.summary
+    assert excinfo.value.provider
 
 
 def test_check_provider_credentials_passes_with_key(tmp_path: Path) -> None:
@@ -201,26 +206,49 @@ def _config_for(tmp_path: Path, provider: str, model: str, section: dict) -> Pat
     return p
 
 
-def test_the_credential_check_accepts_an_oauth_provider_with_no_key(tmp_path: Path) -> None:
-    """Its docstring promises to stay in sync with ``make_provider``, and the version
-    that compared provider names drifted the moment the factory stopped doing that.
-    Asserted through behaviour: a source scan passed while the branch was dead.
+def test_an_empty_config_section_is_not_a_rejection_for_an_oauth_provider(monkeypatch, tmp_path: Path) -> None:
+    """A signed-in OAuth provider passes with nothing in its config section.
+
+    Its credential is a token file, so an empty section is the normal shape and
+    must not read as "no API key". Asserted through behaviour: a source scan
+    passed while the branch was dead.
     """
     from raven.config.loader import load_config
 
+    monkeypatch.setattr("raven.providers.chatgpt_token.stored_credentials", lambda: {"access_token": "t"})
     cfg = _config_for(tmp_path, "openai_codex", "openai-codex/gpt-5.6-sol", {})
 
     _helpers.check_provider_credentials(load_config(cfg))  # no raise: the token is not in config
 
 
-def test_the_credential_check_wants_both_halves_of_an_azure_endpoint(tmp_path: Path) -> None:
-    import typer
+def test_an_oauth_provider_that_was_never_signed_in_is_told_to_sign_in(monkeypatch, tmp_path: Path, capsys) -> None:
+    """Missing credentials name the fix, rather than surfacing at the first call.
 
+    This gate used to return early for Codex without checking anything, so an
+    agent configured for it started and then failed on the first request with
+    whatever the backend said about an absent token.
+    """
     from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
+
+    monkeypatch.setattr("raven.providers.chatgpt_token.stored_credentials", lambda: None)
+    cfg = _config_for(tmp_path, "openai_codex", "openai-codex/gpt-5.6-sol", {})
+
+    with pytest.raises(MissingCredentialsError) as excinfo:
+        _helpers.check_provider_credentials(load_config(cfg))
+
+    # Carried on the exception rather than printed: the TUI reaches this same
+    # check and a stdout line there goes to a log nobody is reading.
+    assert "raven provider login openai-codex" in excinfo.value.summary
+
+
+def test_the_credential_check_wants_both_halves_of_an_azure_endpoint(tmp_path: Path) -> None:
+    from raven.config.loader import load_config
+    from raven.providers.auth import MissingCredentialsError
 
     # A key without an address is the half Azure cannot work with, and the generic
     # "no API key" message would not say which half is missing.
     cfg = _config_for(tmp_path, "azure_openai", "my-deployment", {"apiKey": "az-key"})
 
-    with pytest.raises(typer.Exit):
+    with pytest.raises(MissingCredentialsError):
         _helpers.check_provider_credentials(load_config(cfg))

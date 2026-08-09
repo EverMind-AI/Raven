@@ -152,6 +152,22 @@ export interface ModelOptionProvider {
   total_models: number;
   needs_api_base: boolean;
   warning: string;
+  /**
+   * Keyed by the model id as it appears in `models`.
+   */
+  model_labels?: {
+    [k: string]: ModelLabel;
+  };
+}
+/**
+ * How a model reads to a person. Absent for a model no catalogue knows -- one released since the bundled snapshot, or served by a local deployment -- in which case the id is all there is to show.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelLabel".
+ */
+export interface ModelLabel {
+  label: string;
+  description?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

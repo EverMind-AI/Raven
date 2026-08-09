@@ -30,6 +30,7 @@ from raven.config.update_providers import (
     reset_provider,
     set_provider_fields,
 )
+from raven.providers.auth import credential_status
 from raven.providers.common_models import common_models_for, litellm_models_for
 from raven.providers.registry import (
     CRED_ENDPOINT,
@@ -39,9 +40,8 @@ from raven.providers.registry import (
     credential_kind,
     find_by_model,
     find_by_name,
-    needs_public_model_prefix,
-    public_model_prefix,
 )
+from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
     ConfigValidationError,
     NotSupportedInV01Error,
@@ -83,6 +83,8 @@ def _provider_models(slug: str, *, configured: bool) -> list[str]:
     # providers have no shortlist at all, which is why the picker used to offer
     # them nothing; the account last because only one provider can be asked and
     # asking costs a request (see ``_account_models``).
+    from raven.providers.wire import merge_key
+
     out: list[str] = []
     seen: set[str] = set()
     chain = (
@@ -92,8 +94,11 @@ def _provider_models(slug: str, *, configured: bool) -> list[str]:
         *_account_models(slug, configured=configured),
     )
     for candidate in chain:
-        if candidate not in seen:
-            seen.add(candidate)
+        # By identity: a model reaching this list from two sources in two
+        # spellings used to appear twice in the picker.
+        key = merge_key(slug, candidate)
+        if key not in seen:
+            seen.add(key)
             out.append(candidate)
 
     return out
@@ -118,6 +123,51 @@ def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
     return tuple(_stored_spelling(slug, model) for model in account_models())
 
 
+def _model_labels(slug: str, models: "list[str]") -> dict[str, dict[str, Any]]:
+    """Display facts for each offered id, skipping the ones nothing describes.
+
+    What the user wrote under ``model_overlay`` wins: they are describing their
+    own deployment, and for a model no catalogue carries they are the only
+    source there is.
+    """
+    from raven.providers.catalog import describe
+
+    overlays = _configured_overlays(slug)
+    out: dict[str, dict[str, Any]] = {}
+    for model in models:
+        row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
+        if not row.described:
+            continue
+        entry: dict[str, Any] = {"label": row.label}
+        if row.description:
+            entry["description"] = row.description
+        out[model] = entry
+    return out
+
+
+def _configured_overlays(slug: str) -> dict[str, Any]:
+    """This provider's user-written model descriptions, keyed by merge key.
+
+    Keyed by identity rather than by the string the user typed, so an overlay
+    written against a bare id still matches the qualified id the picker offers.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.wire import merge_key
+
+    try:
+        section = load_config().providers.get(slug)
+    except Exception:
+        return {}
+    overlay = getattr(section, "model_overlay", None) or {}
+    return {merge_key(slug, model): value for model, value in overlay.items()}
+
+
+def _overlay_for(overlays: dict[str, Any], slug: str, model: str) -> Any:
+    from raven.providers.wire import merge_key
+
+    return overlays.get(merge_key(slug, model))
+
+
 def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
     spec = find_by_name(slug)
     providers = {p["name"]: p for p in list_providers()}
@@ -132,6 +182,11 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
 
     models = _provider_models(slug, configured=configured)
     return {
+        # Names and one-liners for the ids above, so the picker shows what a
+        # model is rather than only what it is called on the wire. Omitted for
+        # ids no catalogue carries -- a local finetune, or a release newer than
+        # the bundled snapshot -- and the picker falls back to the id for those.
+        "model_labels": _model_labels(slug, models),
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),
         "authenticated": configured,
@@ -213,6 +268,9 @@ async def model_save_key(params: dict) -> dict:
             data={"slug": parsed.slug},
         )
     kind = credential_kind(parsed.slug)
+    # The shape drives which fields to ask for; whether the submission is
+    # complete is `providers.auth`, the same answer every other gate uses. This
+    # branch chain was the sixth place deciding that independently.
     if kind in (CRED_ENDPOINT, CRED_LOCAL) and not parsed.api_base:
         raise ConfigValidationError(
             f"{label} requires an api_base",
@@ -225,7 +283,8 @@ async def model_save_key(params: dict) -> dict:
             f"{label} is a local deployment and takes no api_key; send api_base instead",
             data={"slug": parsed.slug, "field": "api_key"},
         )
-    if kind != CRED_LOCAL and not parsed.api_key:
+    submitted = {"api_key": parsed.api_key, "api_base": parsed.api_base}
+    if not credential_status(parsed.slug, submitted).ok and kind != CRED_LOCAL:
         raise ConfigValidationError(
             f"{label} requires an api_key",
             data={"slug": parsed.slug, "field": "api_key"},
@@ -262,20 +321,14 @@ async def model_disconnect(params: dict) -> dict:
 
 
 def _stored_spelling(slug: str, model: str) -> str:
-    """The id to store for a model the user typed, for the provider they typed it under.
+    """The id to store for a model the user typed. See ``providers.wire``.
 
-    A bare id is claimed by keyword matching rather than by the provider it was
-    entered for: "gpt-5.6-sol" resolves to OpenAI, so the request leaves for a
-    provider that does not serve it. The listed models already carry the prefix,
-    and a typed one has to end up spelled the same way.
+    This used to prefix only the three providers whose own client strips the
+    prefix back off, while the wizard prefixed nearly all of them -- so the same
+    model picked in the two places was written two different ways into the same
+    list.
     """
-    spec = find_by_name(slug)
-    if not needs_public_model_prefix(spec) or not model:
-        return model
-
-    prefix = public_model_prefix(spec)  # type: ignore[arg-type]
-
-    return model if model.startswith(f"{prefix}/") else f"{prefix}/{model.split('/')[-1]}"
+    return stored_model_id(slug, model)
 
 
 async def model_add_model(params: dict) -> dict:
