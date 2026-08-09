@@ -83,6 +83,16 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "model": "ollama_chat/llama3.2",
         "section": {},
     },
+    "anthropic_endpoints_only": {
+        "provider": "anthropic",
+        "model": "anthropic/claude-sonnet-5",
+        "section": {"endpoints": [{"label": "primary", "apiKey": "sk-ant-TEST"}]},
+    },
+    "anthropic_endpoints_all_keys_empty": {
+        "provider": "anthropic",
+        "model": "anthropic/claude-sonnet-5",
+        "section": {"endpoints": [{"label": "primary", "apiKey": ""}, {"label": "backup", "apiKey": ""}]},
+    },
 }
 
 
@@ -192,6 +202,43 @@ def test_a_key_in_the_plural_field_is_a_configured_provider(tmp_path: Path) -> N
     assert _display_says(case, path)
     assert _routing_says(case, path)
     assert _startup_says(case, path)
+
+
+def test_a_key_in_an_endpoints_entry_is_a_configured_provider(tmp_path: Path) -> None:
+    """An endpoints-only section is exactly as usable as a flat key -- routing and
+    startup both read the resolved list (``provider_endpoints``), not the flat
+    field, so a gate that only looked at the flat field would reject a section
+    its own request path can serve.
+    """
+    case = SCENARIOS["anthropic_endpoints_only"]
+    path = _config_file(tmp_path, case)
+    assert _display_says(case, path)
+    assert _routing_says(case, path)
+    assert _startup_says(case, path)
+
+
+def test_an_endpoints_list_with_every_key_empty_is_not_configured(tmp_path: Path) -> None:
+    case = SCENARIOS["anthropic_endpoints_all_keys_empty"]
+    path = _config_file(tmp_path, case)
+    assert not _display_says(case, path)
+    assert not _routing_says(case, path)
+    assert not _startup_says(case, path)
+
+
+def test_credential_status_ok_for_an_endpoints_only_section() -> None:
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+
+    section = ProviderConfig.model_validate({"endpoints": [{"label": "a", "apiKey": "sk-1"}]})
+    assert credential_status("anthropic", section).ok
+
+
+def test_credential_status_not_ok_when_every_endpoint_key_is_empty() -> None:
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+
+    section = ProviderConfig.model_validate({"endpoints": [{"label": "a", "apiKey": ""}, {"label": "b", "apiKey": ""}]})
+    assert not credential_status("anthropic", section).ok
 
 
 def test_a_provider_whose_key_lives_in_a_list_sends_a_key(tmp_path: Path) -> None:

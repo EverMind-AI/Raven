@@ -372,6 +372,10 @@ class ProviderConfig(Base):
     # one place that resolves which of the two shapes (or Gemini's
     # `api_key_list`) is in effect.
     endpoints: list[ProviderEndpoint] = Field(default_factory=list)
+    # How requests spread across `endpoints` when there is more than one:
+    # "sticky" keeps using the first healthy entry until it fails, "round_robin"
+    # cycles through all of them. Meaningless with zero or one endpoint.
+    endpoint_strategy: Literal["sticky", "round_robin"] = "sticky"
     # Keyed by model id, in any spelling: what the user knows about a model that
     # the catalogues do not. Deliberately additive rather than a change to
     # `models` -- that list already lets a model be added, and what was missing

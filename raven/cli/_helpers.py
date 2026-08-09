@@ -103,6 +103,7 @@ def check_provider_credentials(config: Config) -> None:
 
 def make_provider(config: Config):
     """Create the appropriate LLM provider from config."""
+    from raven.providers.auth import MissingCredentialsError
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
     from raven.providers.base import GenerationSettings
     from raven.providers.openai_codex_provider import OpenAICodexProvider
@@ -117,6 +118,21 @@ def make_provider(config: Config):
 
     spec = find_by_name(provider_name) if provider_name else None
     client = spec.client if spec else ""
+
+    # codex / minimax_oauth / azure each need more than a key and an address
+    # (a device-flow token, a deployment path, ...), and an OAuth section
+    # (spec.is_oauth, e.g. github_copilot -- which has no dedicated client and
+    # falls to the litellm branch below) connects through one signed-in
+    # account, not several. `endpoints` is meaningful only for a plain
+    # API-key vendor reached through litellm, so a section combining it with
+    # any of these is rejected here rather than silently using just the first
+    # entry.
+    if p and p.endpoints and (client in {"codex", "minimax_oauth", "azure"} or (spec is not None and spec.is_oauth)):
+        raise MissingCredentialsError(
+            f"{provider_name} does not support multiple endpoints -- remove the `endpoints` "
+            "field from its config; this provider connects through a single account, not several",
+            provider=provider_name or "",
+        )
 
     if client == "codex":
         provider = OpenAICodexProvider(default_model=model)
@@ -137,18 +153,41 @@ def make_provider(config: Config):
         )
     else:
         from raven.providers.capabilities import wire_overrides
+        from raven.providers.endpoints import provider_endpoints
         from raven.providers.litellm_provider import LiteLLMProvider
 
-        extra_body = wire_overrides(provider_name, model) or None
-        provider = LiteLLMProvider(
-            api_key=p.effective_api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-            extra_body=extra_body,
-            model_overrides=config.agents.defaults.model_overrides,
-        )
+        eps = provider_endpoints(p) if p else []
+        if len(eps) > 1:
+            from raven.providers.endpoint_rotor import EndpointRotorProvider
+
+            def make_inner(ep):
+                return LiteLLMProvider(
+                    api_key=ep.api_key,
+                    api_base=ep.api_base or config.get_api_base(model),
+                    default_model=model,
+                    extra_headers=ep.extra_headers or (p.extra_headers if p else None),
+                    provider_name=provider_name,
+                    extra_body=wire_overrides(provider_name, model) or None,
+                    model_overrides=config.agents.defaults.model_overrides,
+                )
+
+            provider = EndpointRotorProvider(
+                eps,
+                make_inner,
+                default_model=model,
+                strategy=p.endpoint_strategy if p else "sticky",
+            )
+        else:
+            extra_body = wire_overrides(provider_name, model) or None
+            provider = LiteLLMProvider(
+                api_key=p.effective_api_key if p else None,
+                api_base=config.get_api_base(model),
+                default_model=model,
+                extra_headers=p.extra_headers if p else None,
+                provider_name=provider_name,
+                extra_body=extra_body,
+                model_overrides=config.agents.defaults.model_overrides,
+            )
 
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(

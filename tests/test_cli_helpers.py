@@ -252,3 +252,96 @@ def test_the_credential_check_wants_both_halves_of_an_azure_endpoint(tmp_path: P
 
     with pytest.raises(MissingCredentialsError):
         _helpers.check_provider_credentials(load_config(cfg))
+
+
+# ---------------------------------------------------------------------------
+# make_provider — several endpoints under one section (S3)
+# ---------------------------------------------------------------------------
+
+
+def test_make_provider_builds_a_rotor_over_several_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    """More than one endpoint fans out behind an ``EndpointRotorProvider``,
+    one inner ``LiteLLMProvider`` per entry."""
+    from raven.config.schema import Config
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    config = Config.model_validate(
+        {
+            "providers": {
+                "custom": {
+                    "endpoints": [
+                        {"label": "a", "apiKey": "k1", "apiBase": "https://a.example"},
+                        {"label": "b", "apiKey": "k2", "apiBase": "https://b.example"},
+                    ]
+                }
+            },
+            "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    provider = _helpers.make_provider(config)
+
+    assert isinstance(provider, EndpointRotorProvider)
+    assert len(provider._inners) == 2
+    assert all(isinstance(inner, LiteLLMProvider) for inner in provider._inners)
+
+
+def test_make_provider_a_single_endpoint_entry_still_returns_a_plain_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One entry in ``endpoints`` takes the unchanged single-provider path,
+    same as the flat ``apiKey``/``apiBase`` fields -- no rotor for one."""
+    from raven.config.schema import Config
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    config = Config.model_validate(
+        {
+            "providers": {"custom": {"endpoints": [{"label": "only", "apiKey": "k1"}]}},
+            "agents": {"defaults": {"model": "my-model", "provider": "custom"}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    provider = _helpers.make_provider(config)
+
+    assert type(provider) is LiteLLMProvider
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "extra_section"),
+    [
+        ("openai_codex", "openai-codex/gpt-5.3-codex", {}),
+        ("minimax_global", "minimax-global/MiniMax-M3", {}),
+        ("azure_openai", "azure_openai/my-deployment", {}),
+        ("github_copilot", "github_copilot/gpt-4o", {}),
+    ],
+)
+def test_make_provider_rejects_endpoints_on_providers_that_cannot_rotate(
+    provider: str,
+    model: str,
+    extra_section: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codex / minimax_oauth / azure need more than a key and an address, and
+    an OAuth section connects through one signed-in account -- ``endpoints``
+    on any of them is a configuration error at construction time, not a
+    silently-ignored field."""
+    from raven.config.schema import Config
+    from raven.providers.auth import MissingCredentialsError
+
+    section = {
+        "endpoints": [{"label": "a", "apiKey": "k1"}, {"label": "b", "apiKey": "k2"}],
+        **extra_section,
+    }
+    config = Config.model_validate(
+        {
+            "providers": {provider: section},
+            "agents": {"defaults": {"model": model, "provider": provider}},
+        }
+    )
+    monkeypatch.setattr("raven.cli._helpers.check_provider_credentials", lambda _config: None)
+
+    with pytest.raises(MissingCredentialsError, match="endpoints"):
+        _helpers.make_provider(config)

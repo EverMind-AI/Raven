@@ -14,6 +14,9 @@ resolves it against the older flat/``api_key_list`` shapes.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from raven.config.schema import AgentDefaults, ProviderConfig, ProviderEndpoint
 
 
@@ -67,3 +70,17 @@ def test_provider_config_endpoints_round_trip_with_camel_alias() -> None:
     dumped = section.model_dump(by_alias=True)
     assert dumped["endpoints"][0]["apiKey"] == "sk-1"
     assert dumped["endpoints"][1]["label"] == "backup"
+
+
+def test_endpoint_strategy_defaults_to_sticky() -> None:
+    assert ProviderConfig().endpoint_strategy == "sticky"
+
+
+def test_endpoint_strategy_accepts_round_robin_with_camel_alias() -> None:
+    section = ProviderConfig.model_validate({"endpointStrategy": "round_robin"})
+    assert section.endpoint_strategy == "round_robin"
+
+
+def test_endpoint_strategy_rejects_an_unknown_value() -> None:
+    with pytest.raises(ValidationError):
+        ProviderConfig.model_validate({"endpointStrategy": "random"})
