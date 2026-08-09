@@ -24,7 +24,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from raven.cli import onboard_commands
+from raven.cli import onboard_commands, onboard_everos
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
@@ -652,7 +652,7 @@ def test_onboard_interactive_uses_stubbed_pickers(
     # interactive Step 1 path can be asserted without driving every screen.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -788,7 +788,7 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
     monkeypatch.setattr(questionary, "autocomplete", _fake_autocomplete)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -1294,7 +1294,7 @@ def test_memory_giving_up_sets_backend_null(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
     data = json.loads(tmp_env.read_text())
     assert data["memory"]["backend"] is None
     assert not everos_isolated.exists()
@@ -1319,7 +1319,7 @@ def test_giving_up_says_what_is_lost(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     assert "no memory across sessions" in out
@@ -1354,7 +1354,7 @@ def test_giving_up_says_what_is_lost_in_both_languages(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -1396,9 +1396,9 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
     # No network: model list can't be fetched → free-text entry; probe succeeds.
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
     import raven.plugin.memory.everos._server as everos_server
 
@@ -1407,7 +1407,7 @@ def test_memory_enable_writes_everos_sections(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
 
-    onboard_commands._step4_memory(
+    onboard_everos._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1455,9 +1455,9 @@ def test_the_memory_step_reaches_the_capability_report(
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
     import raven.plugin.memory.everos._server as everos_server
 
@@ -1467,9 +1467,9 @@ def test_the_memory_step_reaches_the_capability_report(
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
 
     reported: list[int] = []
-    monkeypatch.setattr(onboard_commands, "_report_everos_capabilities", lambda: reported.append(1))
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: reported.append(1))
 
-    onboard_commands._step4_memory(
+    onboard_everos._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1507,10 +1507,10 @@ def test_memory_llm_reuse_pulls_provider_creds(
     select_answers = iter([("provider", openai_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("gpt-4.1-mini"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
 
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="llm", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
     with everos_isolated.open("rb") as f:
@@ -1546,15 +1546,15 @@ def test_memory_rerank_reuse_llm_provider(
         def ask(self):
             return self._a
 
-    deepinfra_prov = next(p for p in onboard_commands._EVEROS_PROVIDERS if p["name"] == "deepinfra")
+    deepinfra_prov = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "deepinfra")
     # No service-type select needed — curated provider auto-resolves it.
     select_answers = iter(["redo", ("provider", deepinfra_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("rerank-model"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_rerank", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_rerank", lambda *a, **kw: (True, "ok"))
 
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="rerank",
         main_model="openrouter/anthropic/claude-sonnet-4-5",
         non_interactive=False,
@@ -1572,11 +1572,11 @@ def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Pa
     """A seeded model with an empty api_key does not count as configured."""
     from raven.config.update_everos import set_everos_section
 
-    assert onboard_commands._everos_role_configured("llm") is False
+    assert onboard_everos._everos_role_configured("llm") is False
     set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
-    assert onboard_commands._everos_role_configured("llm") is False
+    assert onboard_everos._everos_role_configured("llm") is False
     set_everos_section("llm", {"api_key": "sk-real"})
-    assert onboard_commands._everos_role_configured("llm") is True
+    assert onboard_everos._everos_role_configured("llm") is True
 
 
 def test_memory_required_role_back_reaches_give_up_menu(
@@ -1608,14 +1608,14 @@ def test_memory_required_role_back_reaches_give_up_menu(
 
     monkeypatch.setattr(questionary, "select", _FQ)
 
-    out = onboard_commands._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
+    out = onboard_everos._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
     assert out is onboard_commands._ABORT_EVEROS
     assert asked == ["picker", "give-up"]
 
 
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
     """Compat heuristic gates whether the memory LLM can reuse the main model."""
-    f = onboard_commands._model_is_openai_compatible
+    f = onboard_everos._model_is_openai_compatible
     assert f("openai/gpt-4o-mini")
     assert f("openrouter/anthropic/claude-sonnet-4-5")
     assert f("deepseek/deepseek-chat")
@@ -1634,9 +1634,9 @@ def test_custom_model_reuse_is_compatible(
     from raven.config.update_providers import set_provider_fields
 
     set_provider_fields("custom", {"api_key": "sk-cust", "api_base": "https://my-llm/v1"})
-    assert onboard_commands._model_is_openai_compatible("qwen-max")
+    assert onboard_everos._model_is_openai_compatible("qwen-max")
 
-    creds = onboard_commands._resolve_reuse_llm_creds("qwen-max")
+    creds = onboard_everos._resolve_reuse_llm_creds("qwen-max")
     assert creds["model"] == "qwen-max"
     assert creds["api_key"] == "sk-cust"
     assert creds["base_url"] == "https://my-llm/v1"
@@ -1854,7 +1854,7 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_step1_provider", _s1)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
     monkeypatch.setattr(onboard_commands, "_step3_channel", _s3)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -1883,7 +1883,7 @@ def test_first_screen_back_does_not_skip_step1(
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -1930,7 +1930,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -1965,7 +1965,7 @@ def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
 
@@ -2440,7 +2440,7 @@ def _run_import_step(
     # whoever's machine runs the suite, not of the behaviour under test. Left
     # real, these tests pass on a developer box that has onboarded and fail
     # everywhere else, including CI.
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr(
         "raven.importer.scanners.scan_all",
@@ -2492,7 +2492,7 @@ def test_import_step_installs_skills_when_the_scan_finds_nothing(
     already covers, on the entry point that matters more.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     _patch_skills_only_install(monkeypatch, tmp_path)
@@ -2529,7 +2529,7 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
             ("Select import tier", Tier.MEMORY_FILES),
         ]
     )
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[conversation]))
     _patch_skill_count(monkeypatch, 12)
@@ -2551,7 +2551,7 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
     directory copy nothing undoes.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
@@ -3730,7 +3730,7 @@ def test_the_wizard_says_which_roles_everos_could_build(
 ) -> None:
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=True)
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     assert "llm and embedding are available" in capsys.readouterr().out
 
@@ -3743,7 +3743,7 @@ def test_the_wizard_flags_a_role_everos_could_not_build(
     degrades to keyword-only search, so a tick there would be a lie."""
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=False)
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     out = capsys.readouterr().out
     assert "embedding is configured but EverOS could not build it" in out
@@ -3757,7 +3757,7 @@ def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
     condemn a working install."""
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"))
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     assert capsys.readouterr().out.strip() == ""
 
@@ -3769,7 +3769,7 @@ def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
     """A recommended model id is only a recommendation if the user's key can
     reach it, and many keys cannot. Their main model is one they demonstrably
     have, and the routing prefix has to come off for EverOS's bare client."""
-    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
 
     assert got == "anthropic/claude-sonnet-4-5"
 
@@ -3777,14 +3777,14 @@ def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
 def test_no_pre_fill_when_the_picked_provider_is_not_the_main_models() -> None:
     """No other provider carries that model id; pre-filling one it cannot serve
     would turn Enter into a verification failure."""
-    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
+    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
 
     assert got is None
 
 
 def test_no_pre_fill_for_roles_that_do_not_serve_a_chat_model() -> None:
     for section in ("embedding", "rerank", "multimodal"):
-        got = onboard_commands._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+        got = onboard_everos._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
         assert got is None, section
 
 
@@ -3807,9 +3807,9 @@ def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.Monk
         return _FQ()
 
     monkeypatch.setattr(questionary, "autocomplete", _autocomplete)
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
 
-    onboard_commands._everos_pick_model(
+    onboard_everos._everos_pick_model(
         base_url="https://x/v1",
         api_key="k",
         example="gpt-4.1-mini",
@@ -3834,9 +3834,9 @@ def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypat
             return "chosen"
 
     monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ())[1])
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
 
-    onboard_commands._everos_pick_model(
+    onboard_everos._everos_pick_model(
         base_url="https://x/v1",
         api_key="k",
         example="gpt-4.1-mini",
@@ -3878,7 +3878,7 @@ def test_the_memory_step_states_the_capability_tiers(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -3891,7 +3891,7 @@ def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch,
     altogether. The second cannot read like the first."""
     monkeypatch.setattr(onboard_commands, "_LANG", lang)
 
-    note = onboard_commands._t(*onboard_commands._EVEROS_ROLES["embedding"]["skip_note"])
+    note = onboard_commands._t(*onboard_everos._EVEROS_ROLES["embedding"]["skip_note"])
 
     assert "yellow" in note, "a degradation this large must not be dim"
     assert "cascade backfill" in note
@@ -3904,7 +3904,7 @@ def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch,
 def test_every_optional_role_carries_its_own_skip_note() -> None:
     """The renderer prints these verbatim now, so a note without its own markup
     would come out unstyled."""
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         if not role.get("optional"):
             continue
         note = role.get("skip_note")
@@ -4068,7 +4068,7 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
 def test_embedding_states_what_skipping_it_costs() -> None:
     """The one role whose absence changes how recall works at all -- searching
     lexically instead of semantically -- has to say so before it is skipped."""
-    en, zh = onboard_commands._EVEROS_ROLES["embedding"]["cost"]
+    en, zh = onboard_everos._EVEROS_ROLES["embedding"]["cost"]
 
     assert "keywords" in en, en
     assert "关键词" in zh, zh
@@ -4077,7 +4077,7 @@ def test_embedding_states_what_skipping_it_costs() -> None:
 def test_cost_lines_lead_with_the_consequence() -> None:
     """Whichever roles carry one, they read the same way, so a reader comparing
     two of them is comparing like with like."""
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         cost = role.get("cost")
         if not cost:
             continue
@@ -4091,7 +4091,7 @@ def test_the_roles_we_want_configured_say_so(name: str) -> None:
     """Calling all three merely "optional" flattens the difference between
     losing semantic recall and losing some ranking accuracy. These two carry the
     encouragement in their own tag."""
-    tag = onboard_commands._EVEROS_ROLES[name].get("tag")
+    tag = onboard_everos._EVEROS_ROLES[name].get("tag")
 
     assert tag, f"{name} should carry its own tag"
     en, zh = tag
@@ -4106,7 +4106,7 @@ def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: s
     from rich.text import Text
 
     monkeypatch.setattr(onboard_commands, "_LANG", lang)
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
         for key in ("tag", "cost", "recommendation", "skip_note"):
             if role.get(key):
@@ -4140,7 +4140,7 @@ def test_the_cost_line_actually_reaches_the_screen(
             return "skip"
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="embedding", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
 
