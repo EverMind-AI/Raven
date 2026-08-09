@@ -9,7 +9,12 @@ import { Box, Text, useInput, useStdout } from '@hermes/ink'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { GatewayClient } from '../gatewayClientStub.js'
-import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
+import type {
+  ModelEndpointsResponse,
+  ModelOptionProvider,
+  ModelOptionsResponse,
+  ProviderEndpointInfo
+} from '../gatewayTypes.js'
 import type { LaunchResult } from '../lib/externalCli.js'
 import type { Theme } from '../theme.js'
 
@@ -21,7 +26,16 @@ const VISIBLE = 12
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
-type Stage = 'provider' | 'addProvider' | 'key' | 'model' | 'addModel' | 'disconnect' | 'oauthLogin'
+type Stage =
+  | 'provider'
+  | 'addProvider'
+  | 'key'
+  | 'model'
+  | 'addModel'
+  | 'disconnect'
+  | 'oauthLogin'
+  | 'endpoints'
+  | 'addEndpoint'
 
 /** Where the sign-in handoff is: waiting to start, running, or back from it. */
 type LoginPhase = 'idle' | 'running' | 'done'
@@ -55,6 +69,11 @@ function unconfiguredWarning(p: ModelOptionProvider): string {
 }
 type KeyField = 'api_key' | 'api_base'
 
+/** The three fields the add-endpoint screen collects, in the order it asks. */
+type EndpointField = 'label' | 'api_key' | 'api_base'
+
+const ENDPOINT_FIELD_ORDER: EndpointField[] = ['label', 'api_key', 'api_base']
+
 export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspend, t }: ModelPickerProps) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([])
   const [currentModel, setCurrentModel] = useState('')
@@ -70,6 +89,14 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
   const [keySaving, setKeySaving] = useState(false)
   const [keyError, setKeyError] = useState('')
   const [modelNameInput, setModelNameInput] = useState('')
+  const [endpoints, setEndpoints] = useState<ProviderEndpointInfo[]>([])
+  const [endpointIdx, setEndpointIdx] = useState(0)
+  const [endpointField, setEndpointField] = useState<EndpointField>('label')
+  const [endpointInputs, setEndpointInputs] = useState<Record<EndpointField, string>>({
+    api_base: '',
+    api_key: '',
+    label: ''
+  })
   // The sign-in screen names its provider from here rather than from the
   // selection: a successful login moves that provider out of the unconfigured
   // list the cursor is pointing into, which would rename the screen mid-flow.
@@ -157,7 +184,44 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
     : provider?.authenticated === false
   const names = useMemo(() => providerDisplayNames(rowsForStage), [rowsForStage])
 
+  // Refetch only, same as ``loadOptions``: the endpoint list is not carried by
+  // ``model.options``, so every screen that shows it asks for it.
+  const loadEndpoints = useCallback(
+    async (slug: string) => {
+      try {
+        const raw = await gw.request<ModelEndpointsResponse>('model.endpoints', {
+          slug,
+          ...(sessionId ? { session_id: sessionId } : {})
+        })
+        setEndpoints(asRpcResult<ModelEndpointsResponse>(raw)?.endpoints ?? [])
+      } catch (e: unknown) {
+        setKeyError(rpcErrorMessage(e))
+      }
+    },
+    [gw, sessionId]
+  )
+
+  const clearEndpointInputs = () => {
+    setEndpointInputs({ api_base: '', api_key: '', label: '' })
+    setEndpointField('label')
+  }
+
   const back = () => {
+    if (stage === 'addEndpoint') {
+      setStage('endpoints')
+      clearEndpointInputs()
+      setKeyError('')
+
+      return
+    }
+
+    if (stage === 'endpoints') {
+      setStage('model')
+      setKeyError('')
+
+      return
+    }
+
     if (stage === 'addProvider') {
       setStage('provider')
       setFromAddList(false)
@@ -268,7 +332,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
     // Both stages type into a field, and the sign-in has handed the terminal to
     // a child process -- leaving the screen from under either one loses input
     // the user has already given.
-    closeOnQ: stage !== 'key' && stage !== 'addModel',
+    closeOnQ: stage !== 'key' && stage !== 'addModel' && stage !== 'addEndpoint',
     disabled: loginPhase === 'running',
     onBack: back,
     onClose: onCancel
@@ -455,6 +519,164 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       return
     }
 
+    // Add-endpoint sub-input: label, then key, then base.
+    if (stage === 'addEndpoint') {
+      if (keySaving) {
+        return
+      }
+
+      const fieldIdx = ENDPOINT_FIELD_ORDER.indexOf(endpointField)
+
+      if (key.tab) {
+        setEndpointField(ENDPOINT_FIELD_ORDER[(fieldIdx + 1) % ENDPOINT_FIELD_ORDER.length])
+
+        return
+      }
+
+      if (key.return) {
+        // Enter advances through the fields and only submits on the last one,
+        // so the whole endpoint can be entered without reaching for Tab.
+        if (fieldIdx < ENDPOINT_FIELD_ORDER.length - 1) {
+          setEndpointField(ENDPOINT_FIELD_ORDER[fieldIdx + 1])
+
+          return
+        }
+
+        const label = endpointInputs.label.trim()
+
+        if (!provider) {
+          return
+        }
+
+        // The label is what every later edit addresses this entry by, so an
+        // unnamed one is not something the list could offer back.
+        if (!label) {
+          setKeyError('a label is required')
+
+          return
+        }
+
+        const apiKey = endpointInputs.api_key.trim()
+        const apiBase = endpointInputs.api_base.trim()
+
+        setKeySaving(true)
+        setKeyError('')
+        gw.request<ModelEndpointsResponse>('model.add_endpoint', {
+          slug: provider.slug,
+          label,
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(apiBase ? { api_base: apiBase } : {}),
+          ...(sessionId ? { session_id: sessionId } : {})
+        })
+          .then(raw => {
+            const r = asRpcResult<ModelEndpointsResponse>(raw)
+
+            if (!r?.endpoints) {
+              setKeyError('failed to add endpoint')
+              setKeySaving(false)
+
+              return
+            }
+
+            setEndpoints(r.endpoints)
+            setEndpointIdx(
+              Math.max(
+                0,
+                r.endpoints.findIndex(ep => ep.label === label)
+              )
+            )
+            clearEndpointInputs()
+            setKeySaving(false)
+            setStage('endpoints')
+          })
+          .catch((e: unknown) => {
+            setKeyError(rpcErrorMessage(e))
+            setKeySaving(false)
+          })
+
+        return
+      }
+
+      if (key.backspace || key.delete) {
+        setEndpointInputs(v => ({ ...v, [endpointField]: v[endpointField].slice(0, -1) }))
+
+        return
+      }
+
+      if (ch === '\u0015') {
+        setEndpointInputs(v => ({ ...v, [endpointField]: '' }))
+
+        return
+      }
+
+      if (ch && !key.ctrl && !key.meta) {
+        setEndpointInputs(v => ({ ...v, [endpointField]: v[endpointField] + ch }))
+      }
+
+      return
+    }
+
+    // Endpoint list stage: same add/delete vocabulary as the model list.
+    if (stage === 'endpoints') {
+      if (keySaving) {
+        return
+      }
+
+      if (key.upArrow && endpointIdx > 0) {
+        setEndpointIdx(v => v - 1)
+
+        return
+      }
+
+      if (key.downArrow && endpointIdx < endpoints.length - 1) {
+        setEndpointIdx(v => v + 1)
+
+        return
+      }
+
+      if (ch.toLowerCase() === 'a') {
+        clearEndpointInputs()
+        setKeyError('')
+        setStage('addEndpoint')
+
+        return
+      }
+
+      if (ch.toLowerCase() === 'd' || ch.toLowerCase() === 'x') {
+        const target = endpoints[endpointIdx]
+
+        if (!provider || !target) {
+          return
+        }
+
+        setKeySaving(true)
+        setKeyError('')
+        gw.request<ModelEndpointsResponse>('model.remove_endpoint', {
+          slug: provider.slug,
+          label: target.label,
+          ...(sessionId ? { session_id: sessionId } : {})
+        })
+          .then(raw => {
+            const r = asRpcResult<ModelEndpointsResponse>(raw)
+
+            if (r?.endpoints) {
+              setEndpoints(r.endpoints)
+              setEndpointIdx(idx => Math.max(0, Math.min(idx, r.endpoints!.length - 1)))
+            }
+
+            setKeySaving(false)
+          })
+          .catch((e: unknown) => {
+            setKeyError(rpcErrorMessage(e))
+            setKeySaving(false)
+          })
+
+        return
+      }
+
+      return
+    }
+
     // Disconnect confirmation stage
     if (stage === 'disconnect') {
       if (ch.toLowerCase() === 'y' || key.return) {
@@ -601,6 +823,17 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       setStage('addModel')
       setModelNameInput('')
       setKeyError('')
+
+      return
+    }
+
+    // Model stage: manage the several accounts/regions behind this provider.
+    if (ch.toLowerCase() === 'e' && stage === 'model' && provider && !keySaving) {
+      setEndpoints([])
+      setEndpointIdx(0)
+      setKeyError('')
+      setStage('endpoints')
+      void loadEndpoints(provider.slug)
 
       return
     }
@@ -793,6 +1026,141 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
         )}
 
         <OverlayHint t={t}>Enter add · Ctrl+U clear · Esc back</OverlayHint>
+      </Box>
+    )
+  }
+
+  // ── Endpoint list stage ──────────────────────────────────────────────
+  if (stage === 'endpoints' && provider) {
+    const rows = endpoints.map(
+      ep => `${ep.label} · ${ep.api_key || '(empty)'}${ep.api_base ? ` · ${ep.api_base}` : ''}`
+    )
+    const { items, offset } = windowItems(rows, endpointIdx, VISIBLE)
+
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text bold color={t.color.accent} wrap="truncate-end">
+          Endpoints for {provider.name}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          Several accounts or regions under one provider · keys are never shown
+        </Text>
+
+        <Text color={t.color.label} wrap="truncate-end">
+          {keyError ? `error: ${keyError}` : ' '}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {offset > 0 ? ` ↑ ${offset} more` : ' '}
+        </Text>
+
+        {Array.from({ length: VISIBLE }, (_, i) => {
+          const row = items[i]
+          const idx = offset + i
+
+          if (!row) {
+            return !rows.length && i === 0 ? (
+              <Text color={t.color.muted} key="empty" wrap="truncate-end">
+                no endpoints configured · a adds one
+              </Text>
+            ) : (
+              <Text color={t.color.muted} key={`pad-${i}`} wrap="truncate-end">
+                {' '}
+              </Text>
+            )
+          }
+
+          return (
+            <Text
+              bold={endpointIdx === idx}
+              color={endpointIdx === idx ? t.color.accent : t.color.muted}
+              inverse={endpointIdx === idx}
+              key={`${provider.slug}:${endpoints[idx]?.label ?? idx}`}
+              wrap="truncate-end"
+            >
+              {endpointIdx === idx ? '▸ ' : '  '}
+              {idx + 1}. {row}
+            </Text>
+          )
+        })}
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {offset + VISIBLE < rows.length ? ` ↓ ${rows.length - offset - VISIBLE} more` : ' '}
+        </Text>
+
+        {keySaving ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            saving…
+          </Text>
+        ) : (
+          <OverlayHint t={t}>↑/↓ select · a add · d/x delete · Esc back · q close</OverlayHint>
+        )}
+      </Box>
+    )
+  }
+
+  // ── Add endpoint stage ───────────────────────────────────────────────
+  if (stage === 'addEndpoint' && provider) {
+    const fields: { label: string; name: EndpointField; value: string }[] = [
+      { label: 'Label', name: 'label', value: endpointInputs.label },
+      { label: 'API key', name: 'api_key', value: '•'.repeat(Math.min(endpointInputs.api_key.length, 40)) },
+      { label: 'API base (optional)', name: 'api_base', value: endpointInputs.api_base }
+    ]
+    const caret = keySaving ? '' : '▎'
+
+    return (
+      <Box flexDirection="column" width={width}>
+        <Text bold color={t.color.accent} wrap="truncate-end">
+          Add endpoint to {provider.name}
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          A label already in the list replaces that entry · Tab switches field
+        </Text>
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
+
+        {fields.map(field => {
+          const focused = endpointField === field.name
+
+          return (
+            <Box flexDirection="column" key={field.name}>
+              <Text color={focused ? t.color.accent : t.color.muted} wrap="truncate-end">
+                {focused ? '▸ ' : '  '}
+                {field.label}:
+              </Text>
+
+              <Text color={t.color.accent} wrap="truncate-end">
+                {'  '}
+                {field.value || '(empty)'}
+                {focused ? caret : ''}
+              </Text>
+            </Box>
+          )
+        })}
+
+        <Text color={t.color.muted} wrap="truncate-end">
+          {' '}
+        </Text>
+
+        {keyError ? (
+          <Text color={t.color.label} wrap="truncate-end">
+            error: {keyError}
+          </Text>
+        ) : keySaving ? (
+          <Text color={t.color.muted} wrap="truncate-end">
+            saving…
+          </Text>
+        ) : (
+          <Text color={t.color.muted} wrap="truncate-end">
+            {' '}
+          </Text>
+        )}
+
+        <OverlayHint t={t}>Enter next/add · Tab field · Ctrl+U clear · Esc back</OverlayHint>
       </Box>
     )
   }
@@ -1048,8 +1416,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       </Text>
       <OverlayHint t={t}>
         {models.length
-          ? '↑/↓ select · Enter switch · a add · d/x delete · Esc back · q close'
-          : 'a add model · Enter/Esc back · q close'}
+          ? '↑/↓ select · Enter switch · a add · d/x delete · e endpoints · Esc back'
+          : 'a add model · e endpoints · Enter/Esc back · q close'}
       </OverlayHint>
     </Box>
   )

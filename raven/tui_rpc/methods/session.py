@@ -157,6 +157,10 @@ def _default_session_info(
         "version": _RAVEN_VERSION,
         "cwd": os.getcwd(),
         "mcp_servers": [],
+        # Which of a multi-endpoint provider's endpoints this session is on.
+        # None for every single-endpoint provider -- there is one address and it
+        # carries no label worth showing.
+        "endpoint": getattr(getattr(agent_loop, "provider", None), "active_endpoint_label", None),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release

@@ -608,6 +608,46 @@ class ModelRemoveModelResult(_Strict):
     provider: ModelOptionProvider
 
 
+class ProviderEndpointInfo(_Strict):
+    """One of a provider section's endpoints, as the picker shows it."""
+
+    label: str
+    api_key: str = Field(..., description="Redacted for display: `****set****` or `(empty)`.")
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
+
+
+class ModelEndpointsParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelEndpointsResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelAddEndpointParams(_Strict):
+    slug: str
+    label: str = Field(..., description="Idempotency key: an existing entry with this label is replaced wholesale.")
+    api_key: str = ""
+    api_base: str | None = None
+    session_id: str | None = None
+
+
+class ModelAddEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelRemoveEndpointParams(_Strict):
+    slug: str
+    label: str
+    session_id: str | None = None
+
+
+class ModelRemoveEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
 # ---------------------------------------------------------------------------
 # config.* methods
 # ---------------------------------------------------------------------------
@@ -881,6 +921,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
+    "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
+    "model.add_endpoint": (ModelAddEndpointParams, ModelAddEndpointResult),
+    "model.remove_endpoint": (ModelRemoveEndpointParams, ModelRemoveEndpointResult),
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
@@ -915,6 +958,7 @@ __all__ = [
     "McpToolInfo",
     "SkillInfo",
     "ModelOptionProvider",
+    "ProviderEndpointInfo",
     "UsageSnapshot",
     "CliResult",
     "StubResult",

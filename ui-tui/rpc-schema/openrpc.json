@@ -839,6 +839,126 @@
       ]
     },
     {
+      "name": "model.endpoints",
+      "summary": "List a provider's endpoints, api_key redacted for display.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "ModelEndpointsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoints"],
+          "properties": {
+            "endpoints": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "model.add_endpoint",
+      "summary": "Add or replace one of a provider's endpoints, keyed by label.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "label",
+          "description": "Idempotency key: an existing entry with this label is replaced wholesale.",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "api_key",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "api_base",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "ModelAddEndpointResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoints"],
+          "properties": {
+            "endpoints": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "model.remove_endpoint",
+      "summary": "Remove one of a provider's endpoints by label.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "label",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "ModelRemoveEndpointResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["endpoints"],
+          "properties": {
+            "endpoints": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/ProviderEndpointInfo" }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
       "name": "config.get",
       "summary": "Read hot-changeable config fields (whitelist).",
       "params": [
@@ -1429,6 +1549,24 @@
         "properties": {
           "label": { "type": "string" },
           "description": { "type": "string" }
+        }
+      },
+      "ProviderEndpointInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.",
+        "required": ["label", "api_key"],
+        "properties": {
+          "label": { "type": "string" },
+          "api_key": {
+            "type": "string",
+            "description": "Redacted for display: `****set****` or `(empty)`."
+          },
+          "api_base": { "type": "string" },
+          "extra_headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
         }
       },
       "UsageSnapshot": {

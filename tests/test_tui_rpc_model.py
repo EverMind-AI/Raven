@@ -1,6 +1,6 @@
 """Tests for the ``model.*`` RPC handlers (TUI ``/model`` v1 backend).
 
-The five handlers wrap ``raven.config.update_providers`` write/read helpers
+The eight handlers wrap ``raven.config.update_providers`` write/read helpers
 plus the provider registry. Config is sandboxed by redirecting ``Path.home()``
 to a tmp dir (same mechanism as ``test_tui_rpc_config`` / ``test_tui_rpc_setup``)
 so the real user config is never touched. No network is hit.
@@ -18,9 +18,12 @@ from raven.providers.registry import PROVIDERS
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
 from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
+    model_add_endpoint,
     model_add_model,
     model_disconnect,
+    model_endpoints,
     model_options,
+    model_remove_endpoint,
     model_remove_model,
     model_save_key,
 )
@@ -253,6 +256,90 @@ async def test_add_model_unknown_provider_rejected(fake_home: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# model.endpoints / model.add_endpoint / model.remove_endpoint
+# ----------------------------------------------------------------------------
+
+
+async def test_add_endpoint_answers_with_the_refreshed_list(fake_home: Path) -> None:
+    result = await model_add_endpoint(
+        {"slug": "deepseek", "label": "eu", "api_key": "sk-eu", "api_base": "https://eu.example.test/v1"}
+    )
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+    assert result["endpoints"][0]["api_base"] == "https://eu.example.test/v1"
+
+    listed = await model_endpoints({"slug": "deepseek"})
+    assert listed == result
+
+
+async def test_endpoints_never_hand_back_the_key(fake_home: Path) -> None:
+    """The picker only ever displays this list, and a key it did not need to see
+    is a key a screenshot can leak."""
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu-secret"})
+    await model_add_endpoint({"slug": "deepseek", "label": "keyless"})
+
+    by_label = {ep["label"]: ep["api_key"] for ep in (await model_endpoints({"slug": "deepseek"}))["endpoints"]}
+
+    assert "sk-eu-secret" not in by_label.values()
+    assert by_label == {"eu": "****set****", "keyless": "(empty)"}
+
+
+async def test_add_endpoint_replaces_the_entry_with_the_same_label(fake_home: Path) -> None:
+    """``label`` is the idempotency key, so re-adding it is how a rotated key is
+    written -- appending a second entry would leave the dead key in rotation."""
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-old"})
+    result = await model_add_endpoint(
+        {"slug": "deepseek", "label": "eu", "api_key": "sk-new", "api_base": "https://eu.example.test/v1"}
+    )
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+    assert result["endpoints"][0]["api_base"] == "https://eu.example.test/v1"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["deepseek"]
+    assert [ep["apiKey"] for ep in section["endpoints"]] == ["sk-new"]
+
+
+async def test_remove_endpoint_reflected_in_the_list(fake_home: Path) -> None:
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu"})
+    await model_add_endpoint({"slug": "deepseek", "label": "us", "api_key": "sk-us"})
+
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "eu"})
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["us"]
+    listed = await model_endpoints({"slug": "deepseek"})
+    assert [ep["label"] for ep in listed["endpoints"]] == ["us"]
+
+
+async def test_removing_an_absent_label_is_a_no_op(fake_home: Path) -> None:
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu"})
+
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "never-existed"})
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda: model_endpoints({"slug": "no_such_provider"}), id="endpoints"),
+        pytest.param(lambda: model_add_endpoint({"slug": "no_such_provider", "label": "eu"}), id="add_endpoint"),
+        pytest.param(lambda: model_remove_endpoint({"slug": "no_such_provider", "label": "eu"}), id="remove_endpoint"),
+    ],
+)
+async def test_endpoint_handlers_reject_an_unknown_provider(fake_home: Path, call) -> None:
+    with pytest.raises(ConfigValidationError):
+        await call()
+
+
+async def test_endpoint_handlers_accept_session_id(fake_home: Path) -> None:
+    # The picker passes its session down like it does for every other model.*
+    # call; a strict param model would reject the key otherwise.
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "session_id": "tui:default"})
+    await model_endpoints({"slug": "deepseek", "session_id": "tui:default"})
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "eu", "session_id": "tui:default"})
+
+    assert result["endpoints"] == []
+
+
+# ----------------------------------------------------------------------------
 # Dispatcher wiring
 # ----------------------------------------------------------------------------
 
@@ -277,6 +364,17 @@ async def test_model_methods_registered_via_helper(fake_home: Path) -> None:
         }
     )
     assert resp["error"]["code"] == -32012
+
+    resp = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "model.endpoints",
+            "params": {"slug": "deepseek"},
+        }
+    )
+    assert "error" not in resp
+    assert resp["result"] == {"endpoints": []}
 
 
 # ----------------------------------------------------------------------------

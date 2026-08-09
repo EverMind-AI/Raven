@@ -1,12 +1,15 @@
 """``model.*`` RPC handlers — backend for the TUI ``/model`` v1 picker.
 
-Five methods drive the picker:
+Eight methods drive the picker:
 
 * ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated
   model list.
+* ``model.endpoints`` / ``model.add_endpoint`` / ``model.remove_endpoint`` —
+  edit the several url/key groups one provider section can carry, each write
+  answering with the refreshed (key-redacted) list.
 
 All write helpers live in ``raven.config.update_providers`` (the single
 write path for provider config); the handlers wrap the synchronous calls in
@@ -23,9 +26,12 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from raven.config.update_providers import (
+    add_provider_endpoint,
     add_provider_model,
     get_provider_config,
+    list_provider_endpoints,
     list_providers,
+    remove_provider_endpoint,
     remove_provider_model,
     reset_provider,
     set_provider_fields,
@@ -47,9 +53,12 @@ from raven.tui_rpc.errors import (
     NotSupportedInV01Error,
 )
 from raven.tui_rpc.models import (
+    ModelAddEndpointParams,
     ModelAddModelParams,
     ModelDisconnectParams,
+    ModelEndpointsParams,
     ModelOptionsParams,
+    ModelRemoveEndpointParams,
     ModelRemoveModelParams,
     ModelSaveKeyParams,
 )
@@ -355,13 +364,58 @@ async def model_remove_model(params: dict) -> dict:
     }
 
 
+async def _endpoints_off_loop(slug: str) -> list[dict[str, Any]]:
+    """The provider's endpoint list, api_key redacted, off the event loop."""
+    try:
+        return await asyncio.to_thread(list_provider_endpoints, slug)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": slug}) from exc
+
+
+async def model_endpoints(params: dict) -> dict:
+    parsed = _parse(ModelEndpointsParams, params)
+    return {"endpoints": await _endpoints_off_loop(parsed.slug)}
+
+
+async def model_add_endpoint(params: dict) -> dict:
+    parsed = _parse(ModelAddEndpointParams, params)
+    try:
+        # extra_headers is deliberately not a parameter: the picker has no screen
+        # that could collect one, and a field only `raven provider` can write is
+        # not made reachable by declaring it here.
+        await asyncio.to_thread(
+            add_provider_endpoint,
+            parsed.slug,
+            label=parsed.label,
+            api_key=parsed.api_key,
+            api_base=parsed.api_base,
+        )
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    # Re-read rather than redacting what the write returned, so the one place
+    # deciding how a key is masked stays ``list_provider_endpoints``.
+    return {"endpoints": await _endpoints_off_loop(parsed.slug)}
+
+
+async def model_remove_endpoint(params: dict) -> dict:
+    parsed = _parse(ModelRemoveEndpointParams, params)
+    try:
+        await asyncio.to_thread(remove_provider_endpoint, parsed.slug, parsed.label)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    return {"endpoints": await _endpoints_off_loop(parsed.slug)}
+
+
 def register_model_methods(dispatcher: "Dispatcher") -> None:
-    """Register the five ``model.*`` handlers on a dispatcher instance."""
+    """Register the eight ``model.*`` handlers on a dispatcher instance."""
     dispatcher.register("model.options", model_options)
     dispatcher.register("model.save_key", model_save_key)
     dispatcher.register("model.disconnect", model_disconnect)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.remove_model", model_remove_model)
+    dispatcher.register("model.endpoints", model_endpoints)
+    dispatcher.register("model.add_endpoint", model_add_endpoint)
+    dispatcher.register("model.remove_endpoint", model_remove_endpoint)
 
 
 __all__ = [
@@ -370,6 +424,9 @@ __all__ = [
     "model_disconnect",
     "model_add_model",
     "model_remove_model",
+    "model_endpoints",
+    "model_add_endpoint",
+    "model_remove_endpoint",
     "register_model_methods",
     "_build_provider_entry",
 ]

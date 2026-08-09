@@ -362,6 +362,20 @@ export interface ModelOptionsResponse {
   providers?: ModelOptionProvider[]
 }
 
+// One of the several url/key groups a provider section can carry. `api_key`
+// arrives redacted (`****set****` / `(empty)`) — the gateway never sends the
+// real one back, so there is nothing here to unmask.
+export interface ProviderEndpointInfo {
+  api_base?: null | string
+  api_key?: string
+  extra_headers?: null | Record<string, string>
+  label: string
+}
+
+export interface ModelEndpointsResponse {
+  endpoints?: ProviderEndpointInfo[]
+}
+
 // ── MCP ──────────────────────────────────────────────────────────────
 
 export interface ReloadMcpResponse {

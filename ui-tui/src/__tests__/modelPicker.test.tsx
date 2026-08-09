@@ -641,6 +641,136 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('lists a provider endpoints, masked, on `e`', async () => {
+    const h = mount([anthropic], method => {
+      if (method === 'model.endpoints') {
+        return {
+          endpoints: [
+            { api_base: 'https://eu.example.test/v1', api_key: '****set****', label: 'eu' },
+            { api_base: null, api_key: '(empty)', label: 'spare' }
+          ]
+        }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    await h.type('e')
+    await waitForFrame(h, 'eu · ****set**** · https://eu.example.test/v1')
+
+    expect(h.gw.request).toHaveBeenCalledWith('model.endpoints', expect.objectContaining({ slug: 'anthropic' }))
+    // The second row proves the empty-key spelling renders as its own state
+    // rather than collapsing into a blank cell.
+    expect(h.frame()).toContain('spare · (empty)')
+
+    h.unmount()
+  })
+
+  it('adds an endpoint via model.add_endpoint with all three fields', async () => {
+    const h = mount([anthropic], (method, params) => {
+      if (method === 'model.endpoints') {
+        return { endpoints: [] }
+      }
+
+      if (method === 'model.add_endpoint') {
+        return { endpoints: [{ api_base: params.api_base, api_key: '****set****', label: params.label }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // label -> Enter -> key -> Enter -> base -> Enter submits.
+    await h.type('a')
+    await h.type('eu')
+    await h.type(ENTER)
+    await h.type('sk-eu')
+    await h.type(ENTER)
+    await h.type('https://eu.example.test/v1')
+    await h.type(ENTER)
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.add_endpoint',
+      expect.objectContaining({
+        api_base: 'https://eu.example.test/v1',
+        api_key: 'sk-eu',
+        label: 'eu',
+        slug: 'anthropic'
+      })
+    )
+    // The write answers with the refreshed list, and the screen shows it.
+    await waitForFrame(h, 'eu · ****set****')
+
+    h.unmount()
+  })
+
+  it('removes the selected endpoint via model.remove_endpoint', async () => {
+    const h = mount([anthropic], method => {
+      if (method === 'model.endpoints') {
+        return {
+          endpoints: [
+            { api_base: null, api_key: '****set****', label: 'eu' },
+            { api_base: null, api_key: '****set****', label: 'us' }
+          ]
+        }
+      }
+
+      if (method === 'model.remove_endpoint') {
+        return { endpoints: [{ api_base: null, api_key: '****set****', label: 'us' }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'eu · ****set****')
+
+    await h.type(DOWN)
+    await h.type('d')
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.remove_endpoint',
+      expect.objectContaining({ label: 'us', slug: 'anthropic' })
+    )
+
+    h.unmount()
+  })
+
+  it('returns from the endpoint list to the model list on Esc', async () => {
+    const h = mount([anthropic], method => (method === 'model.endpoints' ? { endpoints: [] } : {}))
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // Asserted by what the next Enter reaches rather than by screen text:
+    // `frame()` accumulates, so the model list is on screen either way.
+    await h.type(ESCAPE)
+    // Ink holds a lone ESC back to see whether it opens a sequence, so the next
+    // key has to arrive after that window or the two are read as one chord.
+    await delay(120)
+    await h.type(ENTER)
+    await delay(30)
+
+    expect(h.onSelect).toHaveBeenCalledWith('claude-sonnet-4-6', 'anthropic')
+
+    h.unmount()
+  })
+
   it('emits a structured model + provider selection on Enter', async () => {
     const h = mount([anthropic])
     await delay(60)

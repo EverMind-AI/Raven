@@ -134,16 +134,35 @@ class EndpointRotorProvider(LLMProvider):
         somewhere, and cooldown is a preference between healthy endpoints,
         not a breaker that can leave nothing to try.
         """
-        n = len(self._inners)
-        now = time.monotonic()
         if self.strategy == "round_robin":
             start = self._state.index
-            self._state.index = (start + 1) % n
-            order = [(start + i) % n for i in range(n)]
+            self._state.index = (start + 1) % len(self._inners)
         else:
-            order = list(range(n))
+            start = 0
+        return self._order_from(start)
+
+    def _order_from(self, start: int) -> list[int]:
+        """The order ``_healthy_order`` returns for a given starting index.
+
+        Split out so the cursor advance stays in ``_healthy_order`` alone and
+        ``active_endpoint_label`` can ask the same question without answering
+        it differently or moving the rotation on.
+        """
+        n = len(self._inners)
+        now = time.monotonic()
+        order = [(start + i) % n for i in range(n)]
         healthy = [i for i in order if not self._state.is_cooling(i, now)]
         return healthy or order
+
+    @property
+    def active_endpoint_label(self) -> str:
+        """Label of the endpoint the next request would go to.
+
+        Read-only: unlike ``_healthy_order`` it never advances the round-robin
+        cursor, so asking is not a rotation.
+        """
+        start = self._state.index if self.strategy == "round_robin" else 0
+        return self._endpoints[self._order_from(start)[0]].label
 
     async def _chat_attempt_with_retry(
         self,

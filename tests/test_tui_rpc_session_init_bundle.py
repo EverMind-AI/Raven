@@ -267,7 +267,7 @@ def test_resolve_context_window_helper_removed() -> None:
 
 
 def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, config) -> None:
-    """wire-shape lock — info dict has exactly the 11 expected keys.
+    """wire-shape lock — info dict has exactly the 12 expected keys.
 
     Anti-drift gate: adding a new field to the init bundle MUST update this
     expected set, forcing an explicit spec amendment, until the dict is
@@ -289,6 +289,7 @@ def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, con
         "lazy",
         # extended bundle
         "usage",
+        "endpoint",
     }
     assert set(info) == expected_keys, (
         f"init bundle key set drift: unexpected={set(info) - expected_keys}, missing={expected_keys - set(info)}"
@@ -383,3 +384,53 @@ def test_default_session_info_omits_the_nudge_when_up_to_date(fake_agent_loop, c
 
     assert "update_available" not in info
     assert "update_command" not in info
+
+
+# ---------------------------------------------------------------------------
+# Which endpoint the session is on (multi-endpoint providers only)
+# ---------------------------------------------------------------------------
+
+
+def _rotor(labels: list[str], strategy: str = "sticky"):
+    from raven.providers.base import LLMProvider
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.endpoints import ResolvedEndpoint
+
+    class _Inner(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs):  # pragma: no cover - never called
+            raise AssertionError("the banner must not send a request")
+
+        def get_default_model(self) -> str:
+            return "m"
+
+    return EndpointRotorProvider(
+        endpoints=[ResolvedEndpoint(label=label, api_key="k", api_base=None, extra_headers=None) for label in labels],
+        make_inner=lambda _e: _Inner(api_key="test"),
+        default_model="m",
+        strategy=strategy,
+    )
+
+
+def test_default_session_info_names_the_endpoint_in_use(config) -> None:
+    """A rotor serves several accounts, so which one is answering is a fact the
+    banner has to carry -- naming only the provider makes them indistinguishable."""
+    loop = _FakeAgentLoop(with_usage_tracker=True)
+    loop.provider = _rotor(["eu", "us"])
+
+    assert _default_session_info(loop, config)["endpoint"] == "eu"
+
+
+def test_default_session_info_endpoint_is_none_for_a_single_endpoint_provider(fake_agent_loop, config) -> None:
+    """Every provider but the rotor is reached at one address with no label, so
+    the field is present-and-null rather than a borrowed name."""
+    assert _default_session_info(fake_agent_loop, config)["endpoint"] is None
+
+
+def test_reading_the_banner_endpoint_does_not_rotate(config) -> None:
+    """Under round_robin the order cursor advances per request. Building the
+    banner is not a request, and a getter that moved it would skip an endpoint
+    every time the panel was rendered."""
+    loop = _FakeAgentLoop(with_usage_tracker=True)
+    loop.provider = _rotor(["eu", "us"], strategy="round_robin")
+
+    assert [_default_session_info(loop, config)["endpoint"] for _ in range(3)] == ["eu", "eu", "eu"]

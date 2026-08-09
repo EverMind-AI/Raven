@@ -170,6 +170,23 @@ export interface ModelLabel {
   description?: string;
 }
 /**
+ * One of a provider section's several url/key groups. `label` is the idempotency key the write methods address an entry by.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ProviderEndpointInfo".
+ */
+export interface ProviderEndpointInfo {
+  label: string;
+  /**
+   * Redacted for display: `****set****` or `(empty)`.
+   */
+  api_key: string;
+  api_base?: string;
+  extra_headers?: {
+    [k: string]: string;
+  };
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "UsageSnapshot".
  */
@@ -865,6 +882,55 @@ export interface ModelRemoveModelParams {
  */
 export interface ModelRemoveModelResult {
   provider: ModelOptionProvider;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelEndpointsParams".
+ */
+export interface ModelEndpointsParams {
+  slug: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelEndpointsResult".
+ */
+export interface ModelEndpointsResult {
+  endpoints: ProviderEndpointInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddEndpointParams".
+ */
+export interface ModelAddEndpointParams {
+  slug: string;
+  label: string;
+  api_key?: string;
+  api_base?: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddEndpointResult".
+ */
+export interface ModelAddEndpointResult {
+  endpoints: ProviderEndpointInfo[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRemoveEndpointParams".
+ */
+export interface ModelRemoveEndpointParams {
+  slug: string;
+  label: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRemoveEndpointResult".
+ */
+export interface ModelRemoveEndpointResult {
+  endpoints: ProviderEndpointInfo[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

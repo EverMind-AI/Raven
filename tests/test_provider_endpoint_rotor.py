@@ -142,6 +142,42 @@ async def test_round_robin_cursor_advances_each_call(clock):
     assert (e0.chat_calls, e1.chat_calls, e2.chat_calls) == (2, 1, 1)
 
 
+async def test_active_endpoint_label_names_the_next_endpoint_without_rotating(clock):
+    """The banner reads this to say which account is answering. Asking is not a
+    request, so it must not consume a round-robin slot -- a getter that advanced
+    the cursor would skip an endpoint on every render."""
+    e0 = _StubInner("e0")
+    e1 = _StubInner("e1")
+    rotor = _make_rotor([e0, e1], strategy="round_robin")
+
+    assert [rotor.active_endpoint_label for _ in range(3)] == ["e0", "e0", "e0"]
+
+    await rotor.chat_with_retry(messages=[], model="m")
+
+    assert rotor.active_endpoint_label == "e1"
+
+
+async def test_active_endpoint_label_skips_a_cooling_endpoint(clock):
+    """It names where the next request would land, which under sticky is the
+    first endpoint that is not cooling -- not simply the first one."""
+    e0 = _StubInner(
+        "e0",
+        chat_script=[
+            LLMResponse(content="e0 unavailable", finish_reason="error", error_classification=_FALLBACK_FATAL)
+        ],
+    )
+    e1 = _StubInner("e1")
+    rotor = _make_rotor([e0, e1], strategy="sticky")
+
+    assert rotor.active_endpoint_label == "e0"
+
+    await rotor.chat_with_retry(messages=[], model="m")
+    assert rotor.active_endpoint_label == "e1"
+
+    clock.now += 30.0
+    assert rotor.active_endpoint_label == "e0"
+
+
 async def test_non_fallback_error_returns_immediately_without_rotating(clock):
     e0 = _StubInner(
         "e0",
