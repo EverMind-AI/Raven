@@ -133,3 +133,73 @@ async def test_config_override_wins_over_registry(monkeypatch: pytest.MonkeyPatc
     await p.chat(messages=[{"role": "user", "content": "hi"}], temperature=0.1)
 
     assert seen[0]["temperature"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_model_override_forwards_arbitrary_backend_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    # sglang's repetition_penalty has no dedicated kwarg in chat() -- it must
+    # reach LiteLLM as a top-level kwarg so LiteLLM auto-forwards it into
+    # extra_body for OpenAI-compatible backends.
+    seen = _capture(monkeypatch)
+    p = _provider("my-sglang-model", {"my-sglang-model": {"repetition_penalty": 1.05}})
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert seen[0]["repetition_penalty"] == 1.05
+
+
+@pytest.mark.asyncio
+async def test_model_override_extra_body_merges_with_wire_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The user's Qwen3 chat_template_kwargs must survive alongside the
+    # provider's own OpenRouter routing pin, not be clobbered by it.
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="test-key",
+        default_model="openrouter/qwen/qwen3",
+        provider_name="openrouter",
+        extra_body={"provider": {"order": ["Alibaba"]}},
+        model_overrides={"qwen3": {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}},
+    )
+    p.generation = GenerationSettings(temperature=0.1)
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert seen[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "provider": {"order": ["Alibaba"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_model_override_extra_body_wire_key_wins_on_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On a colliding key, the provider's own wire-routing extra_body must win --
+    # routing correctness over a user override that would misroute the request.
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="test-key",
+        default_model="openrouter/qwen/qwen3",
+        provider_name="openrouter",
+        extra_body={"provider": {"order": ["Anthropic"]}},
+        model_overrides={"qwen3": {"extra_body": {"provider": {"order": ["Alibaba"]}}}},
+    )
+    p.generation = GenerationSettings(temperature=0.1)
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert seen[0]["extra_body"] == {"provider": {"order": ["Anthropic"]}}
+
+
+@pytest.mark.asyncio
+async def test_extra_body_unchanged_without_user_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture(monkeypatch)
+    p = LiteLLMProvider(
+        api_key="test-key",
+        default_model="openrouter/moonshotai/kimi-k2.5",
+        provider_name="openrouter",
+        extra_body={"provider": {"order": ["Anthropic"]}},
+    )
+    p.generation = GenerationSettings(temperature=0.1)
+
+    await p.chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert seen[0]["extra_body"] == {"provider": {"order": ["Anthropic"]}}

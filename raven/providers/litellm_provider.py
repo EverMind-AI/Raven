@@ -60,6 +60,23 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
+def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
+    """Merge the provider's wire-routing extra_body into kwargs instead of overwriting it.
+
+    A model_overrides entry (see _apply_model_overrides) may have already placed
+    a user extra_body dict in kwargs -- for example Qwen3's
+    extra_body.chat_template_kwargs.enable_thinking. Assigning wire_extra_body
+    over it would silently drop those keys. On a key collision, wire_extra_body
+    wins: it carries routing pins (e.g. OpenRouter provider order) that must
+    reach the wire intact.
+    """
+    existing = kwargs.get("extra_body")
+    if isinstance(existing, dict):
+        kwargs["extra_body"] = {**existing, **wire_extra_body}
+    else:
+        kwargs["extra_body"] = wire_extra_body
+
+
 def session_affinity_headers() -> dict[str, str]:
     """Headers pinning one caller to one backend replica.
 
@@ -336,7 +353,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Pass provider-specific body extras (e.g. OpenRouter routing pin)
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
 
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
@@ -414,7 +431,7 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True

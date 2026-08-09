@@ -283,6 +283,10 @@ class AgentDefaults(Base):
     # name: {"kimi-k2.5": {"temperature": 1.0}}. Some models reject the usual
     # defaults, and hard-coding those quirks in the registry left users unable to
     # adjust them. Entries here win over the registry's built-in defaults.
+    # This is also the direct channel for arbitrary sampling/serving params: an
+    # unknown top-level key is auto-forwarded into extra_body by LiteLLM for
+    # OpenAI-compatible backends (e.g. sglang's repetition_penalty); a nested
+    # structure can be written directly as extra_body: {...}.
     model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
