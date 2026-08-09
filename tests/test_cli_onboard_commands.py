@@ -233,6 +233,51 @@ def test_curated_providers_do_not_restate_registry_flags() -> None:
         assert "is_oauth" not in entry
 
 
+def test_curated_and_registry_provider_names_match_exactly() -> None:
+    """The curated catalogue must name exactly the registry's providers, no more
+    and no fewer.
+
+    ``test_curated_providers_all_exist_in_registry`` only checks one direction
+    (nothing curated is unknown to the registry) -- a provider added to the
+    registry and never added to this hand-written shortlist passed that test
+    silently, and stayed unreachable from the wizard's picker. Comparing the
+    full sets both ways means either mistake, in either direction, turns this
+    test red. The sentinel row is not a provider, so it is added to the
+    registry side rather than dropped from the curated one.
+    """
+    from raven.providers.registry import PROVIDERS
+
+    curated_names = {entry["name"] for group in onboard_commands._CURATED_GROUPS for entry in group["providers"]}
+    registry_names = {spec.name for spec in PROVIDERS}
+    assert curated_names == registry_names | {onboard_commands._PICK_LITELLM_VENDOR}
+
+
+# --------------------------------------------------------------------------- language step
+
+
+def test_pick_language_preselects_the_currently_active_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A re-run of the wizard must default the language screen to whatever
+    language is already active, not silently reset a Chinese user to English.
+    """
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", "zh")
+    captured: dict[str, Any] = {}
+
+    class _FQ:
+        def ask(self):
+            return "zh"
+
+    def _select(message, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "select", _select)
+    onboard_commands._pick_language()
+
+    assert captured["default"] == "zh"
+
+
 # --------------------------------------------------------------------------- non-interactive happy path
 
 
@@ -4316,6 +4361,46 @@ def test_pressing_enter_on_the_model_prompt_takes_the_first_one_offered(monkeypa
 
     assert captured["default"] == "openai-codex/gpt-5.6-sol", "the prompt offered no default to accept"
     assert chosen == "openai-codex/gpt-5.6-sol"
+
+
+def test_an_already_routing_current_model_stays_the_offered_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model already pointed at this provider must stay the prompt's default.
+
+    Every other ``_pick_model`` test in this file passes ``current_model=None``,
+    so the branch that seeds ``default_value`` from an already-configured model
+    had nothing asserting it: deleting it left every one of them green, and the
+    prompt would have silently fallen back to the newest account model instead
+    of what was already set.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict = {}
+
+    class _FQ:
+        def ask(self):
+            return "openai-codex/gpt-5.4"
+
+    def fake_autocomplete(label, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "autocomplete", fake_autocomplete)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model="openai-codex/gpt-5.4",
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert captured["default"] == "openai-codex/gpt-5.4", "the already-configured model was not offered as default"
+    assert chosen == "openai-codex/gpt-5.4"
 
 
 def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
