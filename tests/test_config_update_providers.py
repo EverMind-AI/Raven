@@ -404,6 +404,42 @@ def test_list_reports_endpoints_only_provider_key_state_consistently(cfg_path: P
     assert row["api_key_redacted"] == "****set**** (2 endpoints)"
 
 
+def test_list_does_not_call_keyless_endpoints_set(cfg_path: Path) -> None:
+    """The mirror direction of the consistency rule: endpoints whose keys are
+    all empty hold no credential, so the key column must not say set while
+    credential_status says the section is unconfigured."""
+    add_provider_endpoint("openrouter", label="a", api_base="https://a.example/v1", config_path=cfg_path)
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["api_key_redacted"] == "(empty)"
+
+
+def test_endpoint_ops_refuse_an_invalid_section_instead_of_wiping_it(cfg_path: Path) -> None:
+    """A section that no longer validates must stop the endpoint commands loudly.
+
+    Swallowing the error made them see an empty list and write it back: a
+    hand-edited duplicate label -- which already stops Raven from starting --
+    plus one `provider endpoint add` erased every real endpoint in the
+    section, on exactly the command a user would reach for to fix things.
+    """
+    import json
+
+    from pydantic import ValidationError
+
+    add_provider_endpoint("openrouter", label="keep-1", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="keep-2", api_key="k2", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["endpoints"].append({"label": "keep-1", "apiKey": "dup"})
+    cfg_path.write_text(json.dumps(data))
+
+    with pytest.raises(ValidationError):
+        add_provider_endpoint("openrouter", label="new", api_key="k3", config_path=cfg_path)
+
+    survivors = json.loads(cfg_path.read_text())["providers"]["openrouter"]["endpoints"]
+    assert [ep["label"] for ep in survivors] == ["keep-1", "keep-2", "keep-1"]
+
+
 # ---------------------------------------------------------------------------
 # provider_field_specs
 # ---------------------------------------------------------------------------

@@ -596,7 +596,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
             api_key_redacted = "(not needed for local)" if not api_key else "****set****"
         elif api_key or api_key_list:
             api_key_redacted = "****set****"
-        elif endpoints:
+        elif endpoints and any(ep.api_key for ep in endpoints):
             api_key_redacted = f"****set**** ({len(endpoints)} endpoints)"
         else:
             api_key_redacted = "(empty)"
@@ -869,12 +869,17 @@ def remove_provider_model(
 
 
 def _load_provider_endpoints(name: str, data: dict[str, Any]) -> tuple[type, list[ProviderEndpoint]]:
+    """Deliberately lets ValidationError out instead of falling back to ``cls()``.
+
+    A section that no longer validates (say, a hand-edited duplicate label)
+    already stops ``Config.model_validate`` -- Raven will not start on it. The
+    endpoint commands are the user's likeliest self-rescue there, and a swallow
+    here made them see an empty list and then *write it back*, wiping every
+    real endpoint in the section. A loud error names the problem instead.
+    """
     cls = _provider_schema_cls(name)
     section = _raw_section(data, name)
-    try:
-        instance = cls.model_validate(section)
-    except ValidationError:
-        instance = cls()
+    instance = cls.model_validate(section)
     return cls, list(getattr(instance, "endpoints", []) or [])
 
 
