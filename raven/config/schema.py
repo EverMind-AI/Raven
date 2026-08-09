@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -372,6 +372,18 @@ class ProviderConfig(Base):
     # one place that resolves which of the two shapes (or Gemini's
     # `api_key_list`) is in effect.
     endpoints: list[ProviderEndpoint] = Field(default_factory=list)
+
+    @field_validator("endpoints")
+    @classmethod
+    def _unique_endpoint_labels(cls, value: list[ProviderEndpoint]) -> list[ProviderEndpoint]:
+        """Reject a duplicate label -- see the class docstring for why one must be unique."""
+        seen: set[str] = set()
+        for ep in value:
+            if ep.label in seen:
+                raise ValueError(f"duplicate endpoint label {ep.label!r}: labels must be unique within a provider")
+            seen.add(ep.label)
+        return value
+
     # How requests spread across `endpoints` when there is more than one:
     # "sticky" keeps using the first healthy entry until it fails, "round_robin"
     # cycles through all of them. Meaningless with zero or one endpoint.

@@ -84,3 +84,17 @@ def test_endpoint_strategy_accepts_round_robin_with_camel_alias() -> None:
 def test_endpoint_strategy_rejects_an_unknown_value() -> None:
     with pytest.raises(ValidationError):
         ProviderConfig.model_validate({"endpointStrategy": "random"})
+
+
+def test_duplicate_endpoint_labels_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="duplicate endpoint label"):
+        ProviderConfig.model_validate(
+            {"endpoints": [{"label": "primary", "apiKey": "sk-1"}, {"label": "primary", "apiKey": "sk-2"}]}
+        )
+
+
+def test_distinct_endpoint_labels_are_accepted() -> None:
+    section = ProviderConfig.model_validate(
+        {"endpoints": [{"label": "primary", "apiKey": "sk-1"}, {"label": "backup", "apiKey": "sk-2"}]}
+    )
+    assert [e.label for e in section.endpoints] == ["primary", "backup"]

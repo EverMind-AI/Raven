@@ -184,6 +184,29 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     return None
 
 
+def _cache_only_openrouter_models() -> dict[str, dict]:
+    """Whatever OpenRouter table is already on hand, without a network call.
+
+    For a caller inside object construction or an asyncio event loop --
+    ``AgentLoop.__init__`` and a ``/model`` switch, both of which resolve a
+    context window before there is a request to size. Those callers want
+    whatever is already on hand: an in-process cache of any age answers, then
+    an on-disk cache of any age, then an empty table -- the network is never
+    touched, because a synchronous ``httpx.Client`` there would block startup
+    or freeze the running event loop for up to 10s. A stale answer only costs
+    a stale window; a blocked event loop costs the whole turn.
+    """
+    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
+
+    if _OPENROUTER_CACHE:
+        return _OPENROUTER_CACHE
+    disk = model_catalog_cache.load()
+    if disk is not None:
+        _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME = disk
+        return _OPENROUTER_CACHE
+    return {}
+
+
 def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
     """Return OpenRouter's model table, fetched live and cached 1h in-process.
 
@@ -191,28 +214,15 @@ def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
     id. On any network failure, returns the stale cache (or an empty dict) --
     pricing must never raise into the cost path.
 
-    ``allow_fetch=False`` is for a caller inside object construction or an
-    asyncio event loop -- ``AgentLoop.__init__`` and a ``/model`` switch, both of
-    which resolve a context window before there is a request to size. Those
-    callers want whatever is already on hand: an in-process cache of any age
-    answers, then an on-disk cache of any age, then an empty table -- the
-    network is never touched, because a synchronous ``httpx.Client`` there would
-    block startup or freeze the running event loop for up to 10s. A stale
-    answer only costs a stale window; a blocked event loop costs the whole
-    turn. The per-call usage path is the place that still refreshes normally --
-    it already runs inside an ``await``, and is where a stale price or window
-    is supposed to catch up.
+    ``allow_fetch=False`` delegates to ``_cache_only_openrouter_models``; see
+    there for what it changes. The per-call usage path is the place that still
+    refreshes normally -- it already runs inside an ``await``, and is where a
+    stale price or window is supposed to catch up.
     """
     global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
 
     if not allow_fetch:
-        if _OPENROUTER_CACHE:
-            return _OPENROUTER_CACHE
-        disk = model_catalog_cache.load()
-        if disk is not None:
-            _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME = disk
-            return _OPENROUTER_CACHE
-        return {}
+        return _cache_only_openrouter_models()
 
     now = time.time()
     if _OPENROUTER_CACHE and (now - _OPENROUTER_CACHE_TIME) < _OPENROUTER_CACHE_TTL:
@@ -386,15 +396,15 @@ def _lookup_openrouter_entry(model: str, *, allow_fetch: bool = True) -> dict | 
     alias, which stays because within OpenRouter's own namespace a bare id names
     the same model the full one does.
 
-    ``allow_fetch`` passes straight through to ``_fetch_openrouter_models``; see
-    there for what it changes. Called with the default omitted rather than
-    ``allow_fetch=True`` explicitly, so a test double standing in for the fetch
-    with the old zero-argument signature still works unchanged.
+    ``allow_fetch=False`` reaches ``_cache_only_openrouter_models`` directly
+    rather than ``_fetch_openrouter_models(allow_fetch=False)`` -- the latter is
+    the name a test double stands in for with the fetch's old zero-argument
+    signature, and that double does not declare ``allow_fetch``.
     """
     if not model.startswith("openrouter/"):
         return None
     key = model.removeprefix("openrouter/")
-    table = _fetch_openrouter_models() if allow_fetch else _fetch_openrouter_models(allow_fetch=False)
+    table = _fetch_openrouter_models() if allow_fetch else _cache_only_openrouter_models()
     entry = table.get(key)
     if entry is None and "/" in key:
         entry = table.get(key.split("/", 1)[1])

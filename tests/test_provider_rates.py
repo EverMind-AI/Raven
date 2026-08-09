@@ -737,3 +737,24 @@ def test_allow_fetch_false_with_nothing_cached_is_none_and_never_hits_the_networ
         == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
     )
     assert counter["calls"] == 0
+
+
+def test_allow_fetch_false_never_calls_fetch_with_a_keyword_it_may_not_accept(monkeypatch):
+    """``resolve_context_window(..., allow_fetch=False)`` must not depend on
+    ``_fetch_openrouter_models`` declaring ``allow_fetch``.
+
+    ``conftest``'s autouse network guard binds ``rates._fetch_openrouter_models``
+    to a zero-argument stub (``lambda: {}``) for every test by default. Calling
+    that name with ``allow_fetch=False`` -- as the no-fetch branch of
+    ``_lookup_openrouter_entry`` used to -- raises ``TypeError`` against that
+    exact stub. This test reproduces the stub shape directly (not via the
+    fixture, so it stays correct even if the fixture's own lambda changes) and
+    asserts the no-fetch ladder still answers.
+    """
+    monkeypatch.setattr(rates, "_fetch_openrouter_models", lambda: {})
+
+    assert resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False) is None
+    assert (
+        rates.effective_context_window("openrouter/deepseek/deepseek-v4-pro", None, allow_fetch=False)
+        == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
+    )

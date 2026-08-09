@@ -422,6 +422,22 @@ def _redact(value: Any) -> Any:
     return "****set****"
 
 
+def _redact_nested_model(instance: BaseModel) -> BaseModel:
+    """Redact this model's own secret fields, by the same rule as the flat ones.
+
+    ``_flatten_instance`` only recurses into ``BaseModel`` fields, not into a
+    ``list[BaseModel]`` field like ``ProviderConfig.endpoints`` -- so a caller
+    that walks ``specs`` (field-name keyed) never sees a per-endpoint field and
+    can't redact it. This is applied to each list element instead.
+    """
+    updates = {
+        fname: _redact(getattr(instance, fname))
+        for fname, finfo in type(instance).model_fields.items()
+        if _is_secret_field(fname, finfo)
+    }
+    return instance.model_copy(update=updates) if updates else instance
+
+
 #: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
 #: access token and the short-lived API key it is exchanged for.
 _COPILOT_TOKEN_FILES = ("access-token", "api-key.json")
@@ -567,6 +583,7 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key = getattr(instance, "api_key", "") or ""
         api_base = getattr(instance, "api_base", None)
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
+        endpoints = list(getattr(instance, "endpoints", []) or [])
 
         # One rule for every gate: this used to accept a Gemini section holding
         # only `api_key_list` that routing then skipped and startup refused.
@@ -577,8 +594,12 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             api_key_redacted = "(not needed for local)" if not api_key else "****set****"
+        elif api_key or api_key_list:
+            api_key_redacted = "****set****"
+        elif endpoints:
+            api_key_redacted = f"****set**** ({len(endpoints)} endpoints)"
         else:
-            api_key_redacted = "****set****" if (api_key or api_key_list) else "(empty)"
+            api_key_redacted = "(empty)"
 
         out.append(
             {
@@ -625,6 +646,8 @@ def get_provider_config(
         val = flat.get(path_key)
         if redact_secrets and spec["is_secret"]:
             out[path_key] = _redact(val)
+        elif redact_secrets and isinstance(val, list) and val and isinstance(val[0], BaseModel):
+            out[path_key] = [_redact_nested_model(item) for item in val]
         else:
             out[path_key] = val
     return out

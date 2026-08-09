@@ -189,6 +189,35 @@ def test_gemini_api_key_list_plaintext_with_redact_false(cfg_path: Path) -> None
     assert cfg["api_key_list"] == ["k1", "k2"]
 
 
+def test_get_redacts_api_key_nested_inside_endpoints(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="a", api_key="sk-SUPER-SECRET-A", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="b", api_key="sk-SUPER-SECRET-B", config_path=cfg_path)
+
+    cfg = get_provider_config("openrouter", config_path=cfg_path)
+
+    assert [ep.api_key for ep in cfg["endpoints"]] == ["****set****", "****set****"]
+    assert "sk-SUPER-SECRET-A" not in repr(cfg)
+    assert "sk-SUPER-SECRET-B" not in repr(cfg)
+    # Non-secret fields on the same endpoint pass through untouched.
+    assert [ep.label for ep in cfg["endpoints"]] == ["a", "b"]
+
+
+def test_get_endpoints_plaintext_with_redact_false(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="a", api_key="sk-SUPER-SECRET-A", config_path=cfg_path)
+
+    cfg = get_provider_config("openrouter", redact_secrets=False, config_path=cfg_path)
+
+    assert cfg["endpoints"][0].api_key == "sk-SUPER-SECRET-A"
+
+
+def test_get_endpoints_empty_key_renders_as_empty(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="a", api_key="", config_path=cfg_path)
+
+    cfg = get_provider_config("openrouter", config_path=cfg_path)
+
+    assert cfg["endpoints"][0].api_key == "(empty)"
+
+
 # ---------------------------------------------------------------------------
 # reset_provider
 # ---------------------------------------------------------------------------
@@ -361,6 +390,18 @@ def test_list_reports_every_provider_with_correct_status(cfg_path: Path) -> None
     assert by_name["ollama_chat"]["api_key_redacted"] == "(not needed for local)"
 
     assert len(rows) >= 18
+
+
+def test_list_reports_endpoints_only_provider_key_state_consistently(cfg_path: Path) -> None:
+    """No flat ``api_key`` set, only ``endpoints`` -- the key column must not say
+    ``(empty)`` while the same row's ``configured`` says the credential is present."""
+    add_provider_endpoint("openrouter", label="a", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="b", api_key="k2", config_path=cfg_path)
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["configured"] is True
+    assert row["api_key_redacted"] == "****set**** (2 endpoints)"
 
 
 # ---------------------------------------------------------------------------
