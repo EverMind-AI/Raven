@@ -296,6 +296,14 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/providers/litellm_provider.py",
         "raven/cli/_helpers.py",
         "raven/cli/onboard_commands.py",
+        # Carries the wizard's EverOS cluster split out of onboard_commands --
+        # same reads, same argument, new file name.
+        "raven/cli/onboard_everos.py",
+        # The connection-material reading layer itself: resolves flat fields,
+        # api_key_list and endpoints into one list for whoever sends requests.
+        # Configuredness still rules through auth, which consults this shape
+        # via its own _present.
+        "raven/providers/endpoints.py",
         "raven/cli/provider_commands.py",
         "raven/cli/status_commands.py",
         "raven/tui_rpc/methods/model.py",
