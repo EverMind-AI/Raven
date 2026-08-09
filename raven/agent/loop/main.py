@@ -1632,7 +1632,11 @@ class AgentLoop:
 
         content = "".join(content_buf)
         reasoning_content = "".join(reasoning_buf) or None
-        if reasoning_content is None and self.provider.emits_unparsed_reasoning():
+        # getattr because the loop accepts duck-typed providers (test stubs and
+        # thin adapters implement just chat/chat_stream); absent means the
+        # LLMProvider default, False.
+        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
+        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
             split_reasoning, content = split_orphan_think(content)
             reasoning_content = split_reasoning
 
