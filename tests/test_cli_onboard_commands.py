@@ -24,7 +24,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from raven.cli import onboard_commands, onboard_everos
+from raven.cli import onboard_channels, onboard_commands, onboard_everos
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
@@ -651,10 +651,10 @@ def test_onboard_interactive_uses_stubbed_pickers(
     # Optional steps 2-4 are covered separately; no-op them here so the
     # interactive Step 1 path can be asserted without driving every screen.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -787,10 +787,10 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
 
     monkeypatch.setattr(questionary, "autocomplete", _fake_autocomplete)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -1647,7 +1647,7 @@ def test_custom_model_reuse_is_compatible(
 
 def test_channel_uses_interactive_login_real_specs() -> None:
     """Scancode channels (WhatsApp / WeChat) report interactive_login; others don't."""
-    f = onboard_commands._channel_uses_interactive_login
+    f = onboard_channels._channel_uses_interactive_login
     assert f("whatsapp") is True
     assert f("weixin") is True
     assert f("telegram") is False
@@ -1658,7 +1658,7 @@ def test_channel_order_overseas_common_before_domestic() -> None:
 
     (Reordered from the old domestic-first layout.)
     """
-    names = onboard_commands._ordered_channel_names()
+    names = onboard_channels._ordered_channel_names()
     # US/global-common lead the list, ahead of the China-common group.
     for overseas in ("telegram", "discord", "slack", "whatsapp"):
         for domestic in ("weixin", "wecom", "feishu", "dingtalk", "qq"):
@@ -1677,9 +1677,9 @@ def test_scancode_login_success_enables_channel(tmp_env: Path, monkeypatch: pyte
         _async_return(True),
     )
     # Guard: the reflected-schema prompt must NOT be used for scancode channels.
-    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
+    monkeypatch.setattr(onboard_channels, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
 
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["weixin"]["enabled"] is True
 
@@ -1698,7 +1698,7 @@ def test_scancode_login_retry_then_success(tmp_env: Path, monkeypatch: pytest.Mo
         "_failure_choice",
         lambda options, *, non_interactive: "retry",
     )
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["weixin"]["enabled"] is True
 
@@ -1715,7 +1715,7 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
         "_failure_choice",
         lambda options, *, non_interactive: "skip",
     )
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     # Not logged in → disabled, so it never falsely shows as connected.
     assert data["channels"]["weixin"]["enabled"] is False
@@ -1724,18 +1724,18 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
 def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_add_one_channel` sends a scancode channel to login, NOT schema prompts."""
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "weixin")
-    monkeypatch.setattr(onboard_commands, "_select_channel", lambda: "weixin")
+    monkeypatch.setattr(onboard_channels, "_select_channel", lambda: "weixin")
     routed: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c, **kw: routed.append(c))
-    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
-    onboard_commands._add_one_channel()
+    monkeypatch.setattr(onboard_channels, "_scancode_login", lambda c, **kw: routed.append(c))
+    monkeypatch.setattr(onboard_channels, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
+    onboard_channels._add_one_channel()
     assert routed == ["weixin"]
 
 
 def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """WhatsApp with no Node/npm shows the install menu (NOT the QR menu); skip
     reverts the enable; the adapter's login is never called."""
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda c: True)
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda c: True)
     # The Node-missing menu is distinct from the QR menu — assert its options
     # (no 're-show QR') and that login is never reached.
     captured: dict[str, list] = {}
@@ -1749,7 +1749,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
         "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
         _must_not_call("WhatsAppChannel.login"),
     )
-    onboard_commands._scancode_login("whatsapp")
+    onboard_channels._scancode_login("whatsapp")
     data = json.loads(tmp_env.read_text())
     # Not logged in → reverted to disabled.
     assert data["channels"]["whatsapp"]["enabled"] is False
@@ -1761,7 +1761,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
 def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Node-missing → 'retry' re-checks; once npm appears, login runs."""
     missing = iter([True, False])  # first check missing, then present
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda c: next(missing))
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda c: next(missing))
     monkeypatch.setattr(
         onboard_commands,
         "_failure_choice",
@@ -1771,7 +1771,7 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
         "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
         _async_return(True),
     )
-    onboard_commands._scancode_login("whatsapp")
+    onboard_channels._scancode_login("whatsapp")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["whatsapp"]["enabled"] is True
 
@@ -1853,10 +1853,10 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_bootstrap_empty_config", lambda: None)
     monkeypatch.setattr(onboard_commands, "_step1_provider", _s1)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", _s3)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", _s3)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
     # s2 returns BACK once → s1 replays → s2 again → forward.
@@ -1882,10 +1882,10 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -1929,10 +1929,10 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     # On the failure submenu, choose "switch".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     # Should complete (not raise typer.Exit) — steps 2/3/4 ran.
     onboard_commands.run_wizard(non_interactive=False)
@@ -1964,10 +1964,10 @@ def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     monkeypatch.setattr(onboard_commands, "_prompt_api_key", _fake_prompt_api_key)
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
     monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -2256,7 +2256,7 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
     monkeypatch.setattr(questionary, "text", lambda label, **kw: _Prompt(label, **kw))
     monkeypatch.setattr(questionary, "password", lambda label, **kw: _Prompt(label, **kw))
 
-    onboard_commands._prompt_channel_fields("feishu")
+    onboard_channels._prompt_channel_fields("feishu")
 
     # promptable order: app_id, app_secret (both required), encrypt_key, verification_token (optional)
     def _ph_text(placeholder: Any) -> Any:
@@ -2454,7 +2454,7 @@ def _run_import_step(
         "raven.cli.import_commands._build_and_run",
         AsyncMock(return_value=_no_op_import_result()),
     )
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
     return scripted
 
 
@@ -2497,7 +2497,7 @@ def test_import_step_installs_skills_when_the_scan_finds_nothing(
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -2535,7 +2535,7 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
     _patch_skill_count(monkeypatch, 12)
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -2556,7 +2556,7 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     installer.assert_not_awaited()
     out = " ".join(capsys.readouterr().out.split())
