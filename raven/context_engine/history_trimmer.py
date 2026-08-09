@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from raven.providers.base import LLMProvider
+from raven.providers.binding import ModelBinding, resolve
 from raven.utils.helpers import estimate_prompt_tokens_chain
 
 # Provider-safe message keys. Anything else on a session message
@@ -75,16 +76,24 @@ class HistoryTrimmer:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         context_window_tokens: int,
     ) -> None:
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.get_tool_definitions = get_tool_definitions
         self.context_window_tokens = context_window_tokens
+
+    @property
+    def provider(self) -> "LLMProvider":
+        """The provider of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        """The model of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).model
 
     def set_provider(self, provider: LLMProvider, model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built, so token
         estimates keep matching the model actually being called."""
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
 
     # ------------------------------------------------------------------
     # Pure history-shaping helpers (no token estimation / no I/O)

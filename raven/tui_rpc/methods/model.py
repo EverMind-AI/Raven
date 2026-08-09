@@ -21,6 +21,7 @@ providers cannot have keys written from the picker — that is gated to
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -65,6 +66,7 @@ from raven.tui_rpc.models import (
 
 if TYPE_CHECKING:
     from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.tui_rpc.methods.session import AgentLoopFactory
 
 
 def _parse(model_cls: type, params: dict) -> Any:
@@ -298,9 +300,20 @@ def _current_selection() -> tuple[str, str | None]:
 # ---------------------------------------------------------------------------
 
 
-async def model_options(params: dict) -> dict:
-    _parse(ModelOptionsParams, params)
+async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Which models exist, and which one *this conversation* is on.
+
+    The session matters: the model is per conversation now, so answering from
+    ``agents.defaults`` would star the wrong row for every session that has
+    switched -- the picker would disagree with the status bar it sits under.
+    """
+    parsed = _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
+    session_model = _session_model(agent_loop_factory, getattr(parsed, "session_id", None))
+    if session_model:
+        current_model = session_model
+        spec = find_by_model(session_model)
+        current_provider = spec.name if spec else current_provider
     entries = await _entries_off_loop(current_provider)
     return {
         "model": current_model,
@@ -452,9 +465,27 @@ async def model_remove_endpoint(params: dict) -> dict:
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
-def register_model_methods(dispatcher: "Dispatcher") -> None:
+def _session_model(agent_loop_factory: "AgentLoopFactory | None", session_id: str | None) -> str | None:
+    """This session's own model, or None when it never switched."""
+    if not agent_loop_factory or not session_id:
+        return None
+    try:
+        loop = agent_loop_factory()
+    except Exception:
+        return None
+    # ``session_model`` falls back to the default, so it never answers None --
+    # asking it alone would override a forced ``agents.defaults.provider`` for
+    # every session, including the ones that never switched.
+    has_own = getattr(loop, "has_session_binding", None)
+    if not callable(has_own) or not has_own(session_id):
+        return None
+    reader = getattr(loop, "session_model", None)
+    return reader(session_id) if callable(reader) else None
+
+
+def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "AgentLoopFactory | None" = None) -> None:
     """Register the eight ``model.*`` handlers on a dispatcher instance."""
-    dispatcher.register("model.options", model_options)
+    dispatcher.register("model.options", partial(model_options, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.save_key", model_save_key)
     dispatcher.register("model.disconnect", model_disconnect)
     dispatcher.register("model.add_model", model_add_model)

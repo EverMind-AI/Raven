@@ -469,7 +469,10 @@ def _build_tui_agent_loop():
             registry=plugin_registry,
         )
 
+        from raven.providers.pool import ProviderPool
+
         agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             workspace=config.workspace_path,
             model=config.agents.defaults.model,

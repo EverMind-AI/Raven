@@ -142,16 +142,48 @@ async def _baseline_usage(
     }
 
 
+def _restore_session_model(agent_loop: "AgentLoop", session_key: str) -> None:
+    """Re-apply the model this session was last switched to.
+
+    Overrides live in the loop's memory, so a restart would otherwise move
+    every switched session back to the default. The session record is the only
+    place that choice survives, and this is the only reader of it.
+    """
+    restore = getattr(agent_loop, "restore_session_model", None)
+    sessions = getattr(agent_loop, "sessions", None)
+    if not callable(restore) or sessions is None:
+        return
+    try:
+        record = sessions.peek(session_key)
+    except Exception:
+        return
+    metadata = getattr(record, "metadata", None) or {}
+    model = metadata.get("model")
+    if model:
+        restore(session_key, model, metadata.get("provider"))
+
+
 async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
+    session_key: str | None = None,
 ) -> dict[str, Any]:
     """Build the init bundle returned by ``session.create`` / ``session.resume``.
 
     ``agent_loop=None`` triggers graceful fallback (``tools={}``, ``skills={}``,
     zero usage, ``lazy=True``); version is always real (cached at module load).
+
+    The model reported is the one this session runs on, not the configured
+    default: a session that switched has its own, and reporting the default
+    would show every other session's user the wrong model. With no
+    ``session_key`` (a session being created) the default is the right answer,
+    because that is what a new session starts on.
     """
     model_id = config.agents.defaults.model
+    if session_key and agent_loop is not None:
+        session_model = getattr(agent_loop, "session_model", None)
+        if callable(session_model):
+            model_id = session_model(session_key)
     usage = await _baseline_usage(agent_loop, config)
     info: dict[str, Any] = {
         "model": model_id,
@@ -307,8 +339,10 @@ async def session_resume(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    info = await _default_session_info(agent_loop, config)
     session_key = params.get("session_id")
+    if isinstance(session_key, str) and session_key and agent_loop is not None:
+        _restore_session_model(agent_loop, session_key)
+    info = await _default_session_info(agent_loop, config, session_key if isinstance(session_key, str) else None)
 
     if session_key:
         try:
@@ -402,6 +436,12 @@ async def session_delete(
         config = load_config()
         mgr = _manager_for(agent_loop, config)
         removed = mgr.delete(session_key)
+        if removed and agent_loop is not None:
+            # Overrides are per session and live for the process; a deleted
+            # session must not leave one behind.
+            clear = getattr(agent_loop, "clear_session_binding", None)
+            if callable(clear):
+                clear(session_key)
     return {"deleted": session_key if removed else None}
 
 
@@ -558,6 +598,14 @@ async def session_branch(
     config = load_config()
     mgr = _manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
+    if child is not None and agent_loop is not None:
+        # A fork continues its parent's conversation, so it continues on the
+        # parent's model; without this it would silently drop to the default.
+        binding_for = getattr(agent_loop, "binding_for_session", None)
+        setter = getattr(agent_loop, "set_session_binding", None)
+        has_own = getattr(agent_loop, "has_session_binding", None)
+        if callable(binding_for) and callable(setter) and callable(has_own) and has_own(session_key):
+            setter(child.key, binding_for(session_key))
     if child is None:
         return {"session_id": None, "title": None}
     return {

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 
+from raven.providers.binding import ModelBinding, resolve
 from raven.tracing import semconv, trace
 from raven.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
@@ -1711,8 +1712,7 @@ class MemoryConsolidator:
         enable_foresight: bool = False,
     ):
         self.store = MemoryStore(workspace, now_fn=now_fn)
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self._build_messages = build_messages
@@ -1723,10 +1723,19 @@ class MemoryConsolidator:
         self.enable_foresight = enable_foresight
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
+    @property
+    def provider(self) -> "LLMProvider":
+        """The provider of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).provider
+
+    @property
+    def model(self) -> str:
+        """The model of the turn's binding; the build-time one outside a turn."""
+        return resolve(None, self._fallback).model
+
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built."""
-        self.provider = provider
-        self.model = model
+        self._fallback = ModelBinding(provider, model)
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""

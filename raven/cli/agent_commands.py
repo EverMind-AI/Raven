@@ -233,11 +233,14 @@ def register(app: typer.Typer) -> None:
             registry=plugin_registry,
         )
 
+        from raven.providers.pool import ProviderPool
+
         # No cron_service here: with the REPL gone this process is never a
         # cron runner, so registering CronTool would create jobs nothing
         # fires. Scripted reminder creation is `raven cron add` with an
         # explicit --channel.
         agent_loop = AgentLoop(
+            provider_pool=ProviderPool(lambda: load_runtime_config(None, None)),
             provider=provider,
             now_fn=parse_fake_now(fake_now),
             workspace=config.workspace_path,

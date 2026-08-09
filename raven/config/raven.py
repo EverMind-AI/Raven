@@ -74,8 +74,17 @@ class ContextConfig(_Base):
     fast_path_threshold: float = 0.60
     """Curator Fast Path cutoff. Below this % of budget → zero-LLM pass-through."""
 
-    curator_model: str = "gemini-2.5-flash"
-    """Model used by the Curator agent loop (Slow Path). Kept small & fast."""
+    curator_model: str | None = None
+    """Model for the Curator agent loop (Slow Path). Unset means the Curator
+    runs on the model of the conversation it is curating.
+
+    Worth setting, and worth setting to something small: one slow-path pass is
+    a bounded agent loop of up to 12 tool-calling requests, so it is per-turn
+    housekeeping rather than an answer, and unset means a long conversation
+    pays conversation-model prices for it. A vendor id here needs that
+    vendor's credentials in ``providers``: a model id without a key of its own
+    is not a configured subsystem, and the Curator falls back to the
+    conversation rather than send that id on the conversation's key."""
 
     curator_timeout_seconds: float = 30.0
     """Max wall time for one Curator slow-path invocation before fallback."""
@@ -668,13 +677,12 @@ class SmartRoutingConfig(_Base):
     """SmartRouter configuration."""
 
     enabled: bool = False
-    tiers: dict[str, list[str]] = Field(
-        default_factory=lambda: {
-            "light": ["gemini-2.5-flash", "claude-haiku-4-5"],
-            "medium": ["claude-sonnet-4-6", "gpt-4.1-mini"],
-            "heavy": ["claude-opus-4-6", "gpt-4.1"],
-        }
-    )
+    tiers: dict[str, list[str]] = Field(default_factory=dict)
+    """Which models each tier may route to. Empty out of the box: the table
+    this replaced named six models across three vendors, for users who may
+    hold no key for any of them, and routing has no meaning without models to
+    choose between -- so enabling this means listing your own."""
+
     default_tier: Literal["light", "medium", "heavy"] = "heavy"
     """Fallback tier when routing is uncertain — conservative default."""
 
@@ -686,7 +694,8 @@ class ToolResultLifecycleConfig(_Base):
     full_retention_turns: int = 3
     summary_retention_turns: int = 10
     placeholder_text: str = "[Tool result archived — retrievable via Curator]"
-    summary_model: str = "gemini-2.5-flash"
+    summary_model: str | None = None
+    """Unset means the conversation's own model. See ``curator_model``."""
 
 
 class TokenWiseConfig(_Base):
@@ -1018,7 +1027,7 @@ class SkillForgeConfig(_Base):
     rewrites — e.g. ``"claude-opus-4-6"``."""
 
     # --- Detect / extraction gating (wired into everos) ---
-    detect_model: str = "gemini-2.5-flash"
+    detect_model: str | None = None
     """LLM used for the cheap per-turn classification work — today that's
     the everos boundary detector (multi-turn task split). A
     smaller / faster model than ``evolve_model`` is intentional: boundary

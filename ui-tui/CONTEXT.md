@@ -9,6 +9,14 @@ talks to the Runtime only via TUI-RPC. Single-session per client in v0.1.
 
 ## Language
 
+**Model scope** (TUI):
+Which conversations a `/model` switch reaches. Plain `/model <name>` is
+session-scoped: it moves this conversation only and does not touch the
+configured default, so a new session still starts where it always did.
+`/model <name> --default` changes that default instead, leaving conversations
+that already chose their own model alone. The picker shows the scope it will
+use. _Avoid_: "global model switch" -- that was the pre-session behaviour.
+
 **Overlay**:
 A modal layer over the chat view, tracked in `overlayStore` and driven by keyboard. Kinds
 split into RPC-driven (Confirm, Approval, Clarify, Sudo, Secret) and user-toggled (Agents,

@@ -684,6 +684,11 @@ class ConfigGetResult(_Strict):
 class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
+    # Model-switch extras. ``scope`` decides the reach of a ``key="model"``
+    # switch: this conversation, or the default a new one starts on.
+    session_id: str | None = None
+    provider: str | None = None
+    scope: Literal["session", "default"] | None = None
 
 
 class ConfigSetResult(_Strict):
@@ -693,6 +698,10 @@ class ConfigSetResult(_Strict):
     # already includes ``null``; the schema's redundant ``oneOf: [JsonValue,
     # null]`` collapses to the same canonical "any" form.
     previous: JsonValue = Field(...)
+    # Present on a model switch: what was applied, and where it reached.
+    value: str | None = None
+    scope: Literal["session", "default"] | None = None
+    session_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 
-// v1 model switch is global-scope only. The picker passes `<model> --provider
+// A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
 // structured config.set params {key:'model', value, provider?}.
 const parseModelArg = (arg: string): { provider?: string; value: string } => {
@@ -69,20 +69,27 @@ export const sessionCommands: SlashCommand[] = [
     help: 'change or show model',
     name: 'model',
     run: (arg, ctx) => {
-      if (ctx.session.guardBusySessionSwitch('change models')) {
-        return
-      }
-
-      if (!arg.trim()) {
+      // No busy guard: the server captures the binding at turn entry, so a
+      // switch asked for mid-answer lands on the next turn instead of being
+      // refused.
+      // `--default` changes what new sessions start on; without it the switch
+      // is this conversation's alone. Stripped before parsing, in any
+      // position and however many times, so it never lands in the model id.
+      const raw = arg.trim()
+      const asDefault = /(^|\s)--default(\s|$)/.test(raw)
+      const rest = raw.replace(/(^|\s)--default(?=\s|$)/g, '').trim()
+      if (!rest) {
+        // `/model` and `/model --default` both mean "show me the choices".
         return patchOverlayState({ modelPicker: true })
       }
 
-      const { provider, value } = parseModelArg(arg)
+      const { provider, value } = parseModelArg(rest)
 
       ctx.gateway
         .rpc<ConfigSetResponse>('config.set', {
           key: 'model',
           session_id: ctx.sid,
+          scope: asDefault ? 'default' : 'session',
           value,
           ...(provider ? { provider } : {})
         })
@@ -92,13 +99,18 @@ export const sessionCommands: SlashCommand[] = [
               return ctx.transcript.sys('error: invalid response: model switch')
             }
 
-            ctx.transcript.sys(`model → ${r.value}`)
+            ctx.transcript.sys(asDefault ? `default model → ${r.value}` : `model → ${r.value}`)
             ctx.local.maybeWarn(r)
 
-            patchUiState(state => ({
-              ...state,
-              info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }
-            }))
+            // A default-scoped switch does not move a session that already has
+            // its own model, so painting it into the status bar would show a
+            // model this conversation is not on.
+            if (!asDefault) {
+              patchUiState(state => ({
+                ...state,
+                info: state.info ? { ...state.info, model: r.value! } : { model: r.value!, skills: {}, tools: {} }
+              }))
+            }
           })
         )
     }

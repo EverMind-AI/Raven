@@ -24,6 +24,41 @@ The bare `chat_id` value shown to and accepted from users (the channel prefix is
 stripped for display, re-prepended to form the session key). Presentation term; in
 code the value lives in the `chat_id` field and the composite is the `session_key`.
 
+**Model binding**:
+A model id together with the provider whose credential serves it, as one value
+(`raven/providers/binding.py`). The pairing is the point: a model id alone does
+not say which key reaches it, and updating one half is how one vendor's key ends
+up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
+entry and holds it in a context var for the whole turn tree, so everything under
+that turn -- the loop, the context engine's LLM-backed segments, the skill gate
+and rewriter, the consolidator, and any task the turn detaches -- reads the same
+pair. _Avoid_: "the current model" / "the active provider" for this; both name
+one half.
+
+**Session binding**:
+The model binding one conversation runs on. Sessions that never switched have no
+entry and resolve to the **default binding**; a switch writes only that
+session's entry, so it moves no other conversation and does not change what a
+new one starts on. Stored on the session record so it survives a restart.
+
+**Default binding**:
+What a session with no binding of its own runs on: `agents.defaults` from config,
+verbatim. Changed by a `scope="default"` switch, which leaves sessions that
+already chose their own model where they are.
+
+**Provider pool**:
+The one place a model id becomes a model binding (`raven/providers/pool.py`),
+caching a provider per (vendor, model) and dropping the cache when the
+credentials behind it change. Also what turns a **subsystem pin** into a pair.
+
+**Subsystem pin**:
+A model configured for one subsystem rather than for the conversation
+(`context.curator_model`, `skill_forge.llm_gate_model`). A pin is only honoured
+when the pool can pair it with credentials of its own, or when a gateway is
+serving it; otherwise the subsystem follows the conversation's model, because a
+bare pinned id sent on the conversation's key is exactly the mis-pairing above.
+Unset out of the box -- no subsystem ships a vendor default.
+
 **Turn**:
 One complete agent reaction: from an inbound message entering the agent loop to the
 agent's final response, including every LLM call and tool execution in between.

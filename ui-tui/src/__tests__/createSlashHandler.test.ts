@@ -65,8 +65,54 @@ describe('createSlashHandler', () => {
     expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
       key: 'model',
       session_id: 'sid-abc',
+      scope: 'session',
       value: 'x-model'
     })
+  })
+
+  it('sends scope default and leaves the status bar alone for /model --default', async () => {
+    patchUiState({ sid: 'sid-abc', info: { model: 'session-model', skills: {}, tools: {} } })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'new-default' }))
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model new-default --default')).toBe(true)
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
+      key: 'model',
+      session_id: 'sid-abc',
+      scope: 'default',
+      value: 'new-default'
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    // The session keeps its own model, so painting the new default into the
+    // status bar would show a model this conversation is not on.
+    expect(getUiState().info?.model).toBe('session-model')
+  })
+
+  it('strips --default from any position and opens the picker when nothing is left', async () => {
+    patchUiState({ sid: 'sid-abc' })
+
+    const ctx = buildCtx({
+      gateway: {
+        ...buildGateway(),
+        rpc: vi.fn(() => Promise.resolve({ applied: true, previous: null, value: 'leading' }))
+      }
+    })
+
+    expect(createSlashHandler(ctx)('/model --default leading')).toBe(true)
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      expect.objectContaining({ value: 'leading', scope: 'default' })
+    )
+
+    const picker = buildCtx({ gateway: { ...buildGateway(), rpc: vi.fn() } })
+    expect(createSlashHandler(picker)('/model --default')).toBe(true)
+    expect(picker.gateway.rpc).not.toHaveBeenCalled()
   })
 
   it('parses a --provider suffix into a structured provider param', async () => {
@@ -84,6 +130,7 @@ describe('createSlashHandler', () => {
       key: 'model',
       provider: 'openrouter',
       session_id: 'sid-abc',
+      scope: 'session',
       value: 'claude-sonnet-4.6'
     })
   })

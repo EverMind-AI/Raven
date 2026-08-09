@@ -1423,7 +1423,7 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
       </Text>
 
       <Text color={t.color.muted} wrap="truncate-end">
-        scope: global
+        {'scope: this conversation  ·  /model <name> --default sets the new-session default'}
       </Text>
       <OverlayHint t={t}>
         {models.length

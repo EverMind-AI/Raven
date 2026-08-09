@@ -772,11 +772,14 @@ def test_capability_cache_is_keyed_by_model() -> None:
     """The loop is a long-lived singleton taking a per-call model, so a verdict
     learned for one model must not answer for another."""
     from raven.agent.loop.main import AgentLoop
+    from raven.providers.binding import ModelBinding
     from raven.providers.litellm_provider import LiteLLMProvider
 
     loop = object.__new__(AgentLoop)
-    loop.provider = object.__new__(LiteLLMProvider)
-    loop.model = "claude-opus-4-5"
+    # The pair, not one half of it: ``provider``/``model`` are read-only views
+    # onto whichever binding is current.
+    loop._default_binding = ModelBinding(object.__new__(LiteLLMProvider), "claude-opus-4-5")
+    loop._session_bindings = {}
     loop._image_tool_result_ok = {}
 
     assert loop._supports_image_tool_result("claude-opus-4-5") is True

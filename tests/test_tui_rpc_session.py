@@ -1138,3 +1138,83 @@ async def test_session_export_is_read_only_during_active_turn(tmp_path: Path, mo
     result = await session_export({"session_id": session_key})
 
     assert result["exported"] is True
+
+
+async def test_session_info_reports_this_sessions_model_not_the_default(monkeypatch) -> None:
+    """The picker and the status bar sit next to each other; reporting the
+    global default here would show two models for one conversation.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.tui_rpc.methods.session as session_mod
+
+    # MagicMock so the unrelated skills/tools enumeration in the bundle works;
+    # only ``session_model`` is under test.
+    loop = MagicMock()
+    loop.session_model = lambda key: "vendor-a/model" if key == "tui:a" else "boot/model"
+    info = session_mod._default_session_info(loop, session_mod.load_config(), "tui:a")
+
+    assert info["model"] == "vendor-a/model"
+    assert info["model_id"] == "vendor-a/model"
+
+
+async def test_session_info_without_a_session_reports_the_default() -> None:
+    """A session being created has no model of its own yet; the default is the
+    right answer, because that is what it will start on.
+    """
+    from unittest.mock import MagicMock
+
+    import raven.tui_rpc.methods.session as session_mod
+
+    config = session_mod.load_config()
+    loop = MagicMock()
+    loop.session_model = lambda key: "vendor-a/model"
+    info = session_mod._default_session_info(loop, config, None)
+
+    assert info["model"] == config.agents.defaults.model
+
+
+async def test_session_resume_puts_the_session_back_on_its_stored_model(tmp_path) -> None:
+    """The handler, not the helper: a resume that stops passing the session key
+    would leave every restored session on the default with the suite green.
+    """
+    from unittest.mock import MagicMock
+
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.session import session_resume
+
+    sessions = SessionManager(tmp_path)
+    record = sessions.get_or_create("tui:a")
+    record.metadata["model"] = "vendor-a/model"
+    record.metadata["provider"] = "anthropic"
+    sessions.save(record)
+
+    restored: list[tuple[str, str, str | None]] = []
+    loop = MagicMock()
+    loop.sessions = sessions
+    loop.restore_session_model = lambda key, model, provider=None: restored.append((key, model, provider))
+    loop.session_model = lambda key: "vendor-a/model"
+
+    await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert restored == [("tui:a", "vendor-a/model", "anthropic")]
+
+
+async def test_session_resume_without_a_stored_model_restores_nothing(tmp_path) -> None:
+    from unittest.mock import MagicMock
+
+    from raven.session.manager import SessionManager
+    from raven.tui_rpc.methods.session import session_resume
+
+    sessions = SessionManager(tmp_path)
+    sessions.save(sessions.get_or_create("tui:a"))
+
+    restored: list[object] = []
+    loop = MagicMock()
+    loop.sessions = sessions
+    loop.restore_session_model = lambda *a, **k: restored.append(a)
+    loop.session_model = lambda key: "boot/model"
+
+    await session_resume({"session_id": "tui:a"}, agent_loop_factory=lambda: loop)
+
+    assert restored == []
