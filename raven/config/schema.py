@@ -340,6 +340,20 @@ class ModelOverlay(Base):
     description: str = ""
 
 
+class ProviderEndpoint(Base):
+    """One named URL/key group under a provider section.
+
+    ``label`` is not decoration: it is the idempotency key a later stage
+    (rotation, failover, per-endpoint health) uses to address one entry across
+    edits, so two endpoints in the same list must not share one.
+    """
+
+    label: str
+    api_key: str = ""
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -347,6 +361,17 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
+    # Several full url/key/header groups under one provider section, for a
+    # vendor reachable by more than one account or region. Meaningful only for
+    # a plain API-key provider reached through the litellm client -- a section
+    # whose auth is OAuth, or that needs more than a key and an address (Azure
+    # OpenAI, Codex), gets this rejected at `make_provider` construction time
+    # (wired in a later stage; this field exists regardless). Set and non-empty,
+    # it replaces the flat `api_key`/`api_base` outright rather than merging
+    # with them -- see `raven.providers.endpoints.provider_endpoints` for the
+    # one place that resolves which of the two shapes (or Gemini's
+    # `api_key_list`) is in effect.
+    endpoints: list[ProviderEndpoint] = Field(default_factory=list)
     # Keyed by model id, in any spelling: what the user knows about a model that
     # the catalogues do not. Deliberately additive rather than a change to
     # `models` -- that list already lets a model be added, and what was missing

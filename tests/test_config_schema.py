@@ -1,13 +1,20 @@
-"""Tests for ``raven.config.schema.AgentDefaults.context_window_tokens``.
+"""Tests for ``raven.config.schema.AgentDefaults.context_window_tokens`` and
+``ProviderConfig.endpoints``.
 
-None (or 0) means "figure it out" against the model's real window; a positive
-value pins it. See ``raven.providers.rates.effective_context_window`` for the
-ladder that reads this field.
+The context-window tests: None (or 0) means "figure it out" against the
+model's real window; a positive value pins it. See
+``raven.providers.rates.effective_context_window`` for the ladder that reads
+this field.
+
+The endpoints tests: ``ProviderEndpoint`` is the S1 data shape for a provider
+section holding several url/key/header groups. See
+``raven.providers.endpoints.provider_endpoints`` for the read point that
+resolves it against the older flat/``api_key_list`` shapes.
 """
 
 from __future__ import annotations
 
-from raven.config.schema import AgentDefaults
+from raven.config.schema import AgentDefaults, ProviderConfig, ProviderEndpoint
 
 
 def test_context_window_tokens_defaults_to_none() -> None:
@@ -23,3 +30,40 @@ def test_context_window_tokens_camel_alias_round_trips() -> None:
     defaults = AgentDefaults.model_validate({"contextWindowTokens": 200_000})
     assert defaults.context_window_tokens == 200_000
     assert defaults.model_dump(by_alias=True)["contextWindowTokens"] == 200_000
+
+
+def test_provider_endpoints_defaults_to_empty_list() -> None:
+    assert ProviderConfig().endpoints == []
+
+
+def test_provider_endpoint_round_trips_with_camel_alias() -> None:
+    endpoint = ProviderEndpoint.model_validate(
+        {"label": "us-east", "apiKey": "sk-1", "apiBase": "https://a.example", "extraHeaders": {"X-Region": "us"}}
+    )
+    assert endpoint.label == "us-east"
+    assert endpoint.api_key == "sk-1"
+    assert endpoint.api_base == "https://a.example"
+    assert endpoint.extra_headers == {"X-Region": "us"}
+
+    dumped = endpoint.model_dump(by_alias=True)
+    assert dumped["apiKey"] == "sk-1"
+    assert dumped["apiBase"] == "https://a.example"
+    assert dumped["extraHeaders"] == {"X-Region": "us"}
+
+
+def test_provider_endpoint_defaults() -> None:
+    endpoint = ProviderEndpoint(label="only")
+    assert endpoint.api_key == ""
+    assert endpoint.api_base is None
+    assert endpoint.extra_headers is None
+
+
+def test_provider_config_endpoints_round_trip_with_camel_alias() -> None:
+    section = ProviderConfig.model_validate(
+        {"endpoints": [{"label": "primary", "apiKey": "sk-1"}, {"label": "backup", "apiKey": "sk-2"}]}
+    )
+    assert [e.label for e in section.endpoints] == ["primary", "backup"]
+
+    dumped = section.model_dump(by_alias=True)
+    assert dumped["endpoints"][0]["apiKey"] == "sk-1"
+    assert dumped["endpoints"][1]["label"] == "backup"
