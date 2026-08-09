@@ -67,18 +67,21 @@ def _short_tool_id() -> str:
 
 
 def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
-    """Merge the provider's wire-routing extra_body into kwargs instead of overwriting it.
+    """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
 
     A model_overrides entry (see _apply_model_overrides) may have already placed
     a user extra_body dict in kwargs -- for example Qwen3's
     extra_body.chat_template_kwargs.enable_thinking. Assigning wire_extra_body
-    over it would silently drop those keys. On a key collision, wire_extra_body
-    wins: it carries routing pins (e.g. OpenRouter provider order) that must
-    reach the wire intact.
+    over it would silently drop those keys. On a key collision, the user's
+    value wins: everything wire_extra_body carries is a shipped default
+    workaround (see capabilities._WIRE_OVERRIDES -- disabling OpenRouter's
+    qwen reasoning mode is the whole table today), and model_overrides is
+    documented as the channel that overrides shipped defaults, so a collision
+    is the user deliberately reversing one.
     """
     existing = kwargs.get("extra_body")
     if isinstance(existing, dict):
-        kwargs["extra_body"] = {**existing, **wire_extra_body}
+        kwargs["extra_body"] = {**wire_extra_body, **existing}
     else:
         kwargs["extra_body"] = wire_extra_body
 

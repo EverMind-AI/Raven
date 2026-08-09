@@ -171,22 +171,26 @@ async def test_model_override_extra_body_merges_with_wire_routing(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_model_override_extra_body_wire_key_wins_on_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
-    # On a colliding key, the provider's own wire-routing extra_body must win --
-    # routing correctness over a user override that would misroute the request.
+async def test_model_override_extra_body_user_key_wins_on_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    # On a colliding key, the user's model_overrides value must win: everything
+    # the provider ships in extra_body is a default workaround (the whole
+    # _WIRE_OVERRIDES table is one qwen reasoning switch), and model_overrides
+    # is documented as the channel that overrides shipped defaults. Mirrors the
+    # real collision: the shipped {"reasoning": {"enabled": False}} against a
+    # user who wants reasoning back on.
     seen = _capture(monkeypatch)
     p = LiteLLMProvider(
         api_key="test-key",
         default_model="openrouter/qwen/qwen3",
         provider_name="openrouter",
-        extra_body={"provider": {"order": ["Anthropic"]}},
-        model_overrides={"qwen3": {"extra_body": {"provider": {"order": ["Alibaba"]}}}},
+        extra_body={"reasoning": {"enabled": False}},
+        model_overrides={"qwen3": {"extra_body": {"reasoning": {"enabled": True}}}},
     )
     p.generation = GenerationSettings(temperature=0.1)
 
     await p.chat(messages=[{"role": "user", "content": "hi"}])
 
-    assert seen[0]["extra_body"] == {"provider": {"order": ["Anthropic"]}}
+    assert seen[0]["extra_body"] == {"reasoning": {"enabled": True}}
 
 
 @pytest.mark.asyncio
