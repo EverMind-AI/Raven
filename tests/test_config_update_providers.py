@@ -13,10 +13,13 @@ import pytest
 from raven.config.update_providers import (
     _copilot_token_dir,
     _oauth_token_path,
+    add_provider_endpoint,
     add_provider_model,
     get_provider_config,
+    list_provider_endpoints,
     list_providers,
     provider_field_specs,
+    remove_provider_endpoint,
     remove_provider_model,
     reset_provider,
     set_provider_fields,
@@ -619,6 +622,121 @@ def test_remove_absent_model_is_noop(cfg_path: Path) -> None:
 def test_add_provider_model_unknown_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError):
         add_provider_model("nonexistent_provider", "x", config_path=cfg_path)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints (add_provider_endpoint / remove_provider_endpoint / list_provider_endpoints)
+# ---------------------------------------------------------------------------
+
+
+def test_add_provider_endpoint_appends(cfg_path: Path) -> None:
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary"]
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["endpoints"] == [{"label": "primary", "apiKey": "k1", "apiBase": None, "extraHeaders": None}]
+
+
+def test_add_provider_endpoint_appends_a_second_label(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    endpoints = add_provider_endpoint("openrouter", label="backup", api_key="k2", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary", "backup"]
+
+
+def test_add_provider_endpoint_same_label_replaces_wholesale(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        api_base="https://old.example.com",
+        extra_headers={"X-Old": "1"},
+        config_path=cfg_path,
+    )
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k2", config_path=cfg_path)
+
+    # A field omitted on the replacement is gone, not carried over from the old
+    # entry: this is a replace, not a merge.
+    assert len(endpoints) == 1
+    assert endpoints[0].api_key == "k2"
+    assert endpoints[0].api_base is None
+    assert endpoints[0].extra_headers is None
+
+
+def test_add_provider_endpoint_with_api_base_and_headers(cfg_path: Path) -> None:
+    endpoints = add_provider_endpoint(
+        "openrouter",
+        label="eu",
+        api_key="k1",
+        api_base="https://eu.example.com",
+        extra_headers={"X-Region": "eu"},
+        config_path=cfg_path,
+    )
+
+    assert endpoints[0].api_base == "https://eu.example.com"
+    assert endpoints[0].extra_headers == {"X-Region": "eu"}
+
+
+def test_add_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        add_provider_endpoint("nonexistent_provider", label="x", api_key="k", config_path=cfg_path)
+
+
+def test_remove_provider_endpoint(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="backup", api_key="k2", config_path=cfg_path)
+
+    endpoints = remove_provider_endpoint("openrouter", "primary", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["backup"]
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["backup"]
+
+
+def test_remove_absent_endpoint_is_noop(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+
+    endpoints = remove_provider_endpoint("openrouter", "not-there", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary"]
+
+
+def test_remove_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        remove_provider_endpoint("nonexistent_provider", "x", config_path=cfg_path)
+
+
+def test_list_provider_endpoints_redacts_api_key(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        api_base="https://example.com",
+        config_path=cfg_path,
+    )
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out == [
+        {"label": "primary", "api_key": "****set****", "api_base": "https://example.com", "extra_headers": None}
+    ]
+
+
+def test_list_provider_endpoints_reports_empty_key(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="", config_path=cfg_path)
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out[0]["api_key"] == "(empty)"
+
+
+def test_list_provider_endpoints_default_when_none_configured(cfg_path: Path) -> None:
+    assert list_provider_endpoints("openrouter", config_path=cfg_path) == []
+
+
+def test_list_provider_endpoints_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        list_provider_endpoints("nonexistent_provider", config_path=cfg_path)
 
 
 def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:

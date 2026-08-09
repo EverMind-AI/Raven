@@ -853,3 +853,129 @@ def test_use_still_pins_a_vendor_that_is_configured(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5"])
     assert r.exit_code == 0, r.output
     assert json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "anthropic"
+
+
+# ---------------------------------------------------------------------------
+# provider endpoint add / remove / list
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_help_lists_subcommands() -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "--help"])
+    assert r.exit_code == 0
+    assert "add" in r.stdout
+    assert "remove" in r.stdout
+    assert "list" in r.stdout
+
+
+def test_endpoint_add_writes_the_section(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "primary" in r.stdout
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert section["endpoints"] == [{"label": "primary", "apiKey": "k1", "apiBase": None, "extraHeaders": None}]
+
+
+def test_endpoint_add_with_api_base_and_headers(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "provider",
+            "endpoint",
+            "add",
+            "openrouter",
+            "--label",
+            "eu",
+            "--api-key",
+            "k1",
+            "--api-base",
+            "https://eu.example.com",
+            "--extra-headers",
+            '{"X-Region": "eu"}',
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert section["endpoints"][0]["apiBase"] == "https://eu.example.com"
+    assert section["endpoints"][0]["extraHeaders"] == {"X-Region": "eu"}
+
+
+def test_endpoint_add_rejects_malformed_headers_json(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "x", "--api-key", "k", "--extra-headers", "{not-json"],
+    )
+    assert r.exit_code != 0
+    assert "JSON" in r.output
+
+
+def test_endpoint_add_same_label_replaces(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+    r = runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k2"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert len(section["endpoints"]) == 1
+    assert section["endpoints"][0]["apiKey"] == "k2"
+
+
+def test_endpoint_add_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "no-such-provider", "--label", "x", "--api-key", "k"],
+    )
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output
+
+
+def test_endpoint_remove_drops_the_label(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "backup", "--api-key", "k2"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "openrouter", "--label", "primary"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["backup"]
+
+
+def test_endpoint_remove_absent_label_is_noop(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "openrouter", "--label", "not-there"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["primary"]
+
+
+def test_endpoint_remove_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "no-such-provider", "--label", "x"])
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output
+
+
+def test_endpoint_list_redacts_api_key(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+    assert r.exit_code == 0, r.output
+    assert "primary" in r.stdout
+    assert "****set****" in r.stdout
+    assert "k1" not in r.stdout
+
+
+def test_endpoint_list_empty_when_none_configured(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+    assert r.exit_code == 0, r.output
+
+
+def test_endpoint_list_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "list", "no-such-provider"])
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output

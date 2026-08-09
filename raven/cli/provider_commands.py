@@ -15,6 +15,16 @@ Config subcommands:
                                       also lose their token file
 - ``provider show <name>``          — reflect available ``--flag`` fields
 
+Endpoint subcommands (``provider endpoint ...``) manage a plain API-key
+provider's ``endpoints`` list -- several full key/base/header groups under one
+section, for a vendor reachable by more than one account or region. OAuth
+providers and Azure OpenAI / OpenAI Codex reject this at startup; only vendors
+reached through the plain LiteLLM client accept it:
+
+- ``provider endpoint add <name> --label X --api-key ... [--api-base ...]``
+- ``provider endpoint remove <name> --label X``
+- ``provider endpoint list <name>``
+
 Architecture: write operations go ONLY through
 :mod:`raven.config.update_providers`. Command bodies do not import
 ``load_config`` / ``save_config`` / provider Pydantic classes.
@@ -25,6 +35,7 @@ Architecture: write operations go ONLY through
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Any
@@ -689,6 +700,110 @@ def _register_config_commands(app: typer.Typer) -> None:
 
 
 _register_config_commands(provider_app)
+
+
+endpoint_app = typer.Typer(
+    help=(
+        "Manage a provider's endpoints -- several full key/base/header groups "
+        "under one section, for a vendor reachable by more than one account or "
+        "region. Only plain API-key providers accept this: a provider using "
+        "OAuth, or Azure OpenAI / OpenAI Codex, is rejected at startup if it has "
+        "any configured."
+    )
+)
+
+
+def _parse_extra_headers(value: str) -> dict[str, str] | None:
+    """Parse ``--extra-headers`` JSON into a dict, or None when unset."""
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        raise typer.BadParameter('--extra-headers must be a JSON object, e.g. \'{"X-Foo": "bar"}\'')
+    if not isinstance(parsed, dict):
+        raise typer.BadParameter("--extra-headers must be a JSON object")
+    return parsed
+
+
+@endpoint_app.command("add")
+def endpoint_add_cmd(
+    name: str = typer.Argument(..., help="Provider name (e.g. openrouter)"),
+    label: str = typer.Option(..., "--label", help="Idempotency key: an existing label is replaced, not merged"),
+    api_key: str = typer.Option(..., "--api-key", help="API key for this endpoint"),
+    api_base: str = typer.Option("", "--api-base", help="Base URL for this endpoint"),
+    extra_headers: str = typer.Option("", "--extra-headers", help='Extra headers as JSON, e.g. {"X-Foo": "bar"}'),
+):
+    """Add or replace one endpoint on a provider, keyed by ``--label``.
+
+    Only meaningful for plain API-key providers reached through the LiteLLM
+    client -- a provider using OAuth, or Azure OpenAI / OpenAI Codex, refuses
+    to start with any endpoints configured.
+    """
+    from raven.config.update_providers import add_provider_endpoint
+
+    headers = _parse_extra_headers(extra_headers)
+    try:
+        endpoints = add_provider_endpoint(
+            name,
+            label=label,
+            api_key=api_key,
+            api_base=api_base or None,
+            extra_headers=headers,
+        )
+    except KeyError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] {name} endpoint {label!r} saved ({len(endpoints)} total)")
+
+
+@endpoint_app.command("remove")
+def endpoint_remove_cmd(
+    name: str = typer.Argument(..., help="Provider name"),
+    label: str = typer.Option(..., "--label", help="Label of the endpoint to remove"),
+):
+    """Remove one endpoint by ``--label`` (no-op if the label is not present)."""
+    from raven.config.update_providers import remove_provider_endpoint
+
+    try:
+        endpoints = remove_provider_endpoint(name, label)
+    except KeyError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] {name} endpoint {label!r} removed ({len(endpoints)} remaining)")
+
+
+@endpoint_app.command("list")
+def endpoint_list_cmd(
+    name: str = typer.Argument(..., help="Provider name"),
+):
+    """List a provider's endpoints. API keys redacted."""
+    from raven.config.update_providers import list_provider_endpoints
+
+    try:
+        endpoints = list_provider_endpoints(name)
+    except KeyError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+
+    table = Table(title=f"Provider endpoints: {name}")
+    table.add_column("Label", style="cyan", no_wrap=True)
+    table.add_column("API Key")
+    table.add_column("API Base", overflow="fold")
+    table.add_column("Extra Headers", overflow="fold")
+    for ep in endpoints:
+        table.add_row(
+            ep["label"],
+            ep["api_key"],
+            ep["api_base"] or "",
+            str(ep["extra_headers"]) if ep["extra_headers"] else "",
+        )
+    console.print(table)
+
+
+provider_app.add_typer(endpoint_app, name="endpoint")
 
 
 __all__ = ["provider_app"]

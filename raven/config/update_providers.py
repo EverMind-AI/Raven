@@ -29,7 +29,7 @@ from pydantic.alias_generators import to_camel
 from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.config.schema import ProviderConfig, ProvidersConfig
+from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
 from raven.providers.registry import (
     ProviderSpec,
     canonical_provider_name,
@@ -845,6 +845,99 @@ def remove_provider_model(
     return models
 
 
+def _load_provider_endpoints(name: str, data: dict[str, Any]) -> tuple[type, list[ProviderEndpoint]]:
+    cls = _provider_schema_cls(name)
+    section = _raw_section(data, name)
+    try:
+        instance = cls.model_validate(section)
+    except ValidationError:
+        instance = cls()
+    return cls, list(getattr(instance, "endpoints", []) or [])
+
+
+def add_provider_endpoint(
+    name: str,
+    *,
+    label: str,
+    api_key: str = "",
+    api_base: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    config_path: Path | None = None,
+) -> list[ProviderEndpoint]:
+    """Add or replace one entry in a provider's ``endpoints`` list, keyed by ``label``.
+
+    ``label`` is the idempotency key ``ProviderEndpoint`` declares it as: an
+    existing entry with that label is replaced wholesale, not merged field by
+    field, so re-running this with a rotated ``api_key`` is how the rotation
+    gets written. A new label appends.
+
+    Returns the new endpoint list. Raises KeyError for an unknown provider.
+    """
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    cls, endpoints = _load_provider_endpoints(name, data)
+
+    new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
+    updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
+    if not any(ep.label == label for ep in endpoints):
+        updated.append(new_endpoint)
+
+    section = _raw_section(data, name)
+    section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
+    validated = cls.model_validate(section)
+    _write_raw_section(data, name, validated.model_dump(by_alias=True))
+    _write_atomic(path, data)
+    return updated
+
+
+def remove_provider_endpoint(
+    name: str,
+    label: str,
+    *,
+    config_path: Path | None = None,
+) -> list[ProviderEndpoint]:
+    """Remove one endpoint by ``label`` (no-op if absent, mirrors ``remove_provider_model``).
+
+    Returns the new endpoint list. Raises KeyError for an unknown provider.
+    """
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    cls, endpoints = _load_provider_endpoints(name, data)
+
+    remaining = [ep for ep in endpoints if ep.label != label]
+    if len(remaining) != len(endpoints):
+        section = _raw_section(data, name)
+        section["endpoints"] = [ep.model_dump(by_alias=True) for ep in remaining]
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        _write_atomic(path, data)
+    return remaining
+
+
+def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> list[dict[str, Any]]:
+    """List a provider's ``endpoints``, ``api_key`` redacted for display.
+
+    Returns one dict per endpoint: ``label``, ``api_key`` (``****set****`` /
+    ``(empty)``, same rule as every other secret field), ``api_base``,
+    ``extra_headers``. Raises KeyError for an unknown provider.
+    """
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    _, endpoints = _load_provider_endpoints(name, data)
+    return [
+        {
+            "label": ep.label,
+            "api_key": _redact(ep.api_key),
+            "api_base": ep.api_base,
+            "extra_headers": ep.extra_headers,
+        }
+        for ep in endpoints
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Public API: credential health check
 # ---------------------------------------------------------------------------
@@ -1316,5 +1409,8 @@ __all__ = [
     "get_provider_config",
     "set_provider_fields",
     "reset_provider",
+    "add_provider_endpoint",
+    "remove_provider_endpoint",
+    "list_provider_endpoints",
     "test_provider",
 ]
