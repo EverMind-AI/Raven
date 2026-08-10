@@ -187,6 +187,7 @@ def test_parse_response_leaves_bare_close_tag_alone_behind_a_gateway():
     assert result.reasoning_content is None
     assert result.content == "discussing the </think> tag in my answer"
 
+
 # --- cache-control gate: the address is the wire, not the model id ---
 
 
