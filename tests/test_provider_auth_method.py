@@ -331,6 +331,26 @@ def test_the_gate_never_accepts_a_default_address_the_reader_will_not_serve() ->
             assert cfg.get_api_base(f"{spec.name}/some-model") == spec.usable_default_api_base != "", spec.name
 
 
+def test_a_default_the_reader_never_serves_does_not_satisfy_the_gate() -> None:
+    """The every-spec invariant above is vacuous while the registry happens to
+    contain no spec whose default_api_base differs from its usable one; this
+    synthetic spec is exactly that shape, so reverting the gate to read the
+    raw default turns it red."""
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+    from raven.providers.registry import ProviderSpec
+
+    spec = ProviderSpec(
+        name="synthetic_vendor",
+        keywords=(),
+        env_key="SYNTHETIC_API_KEY",
+        requires_api_base=True,
+        default_api_base="https://display-only.example/v1",
+    )
+
+    assert not credential_status("synthetic_vendor", ProviderConfig(api_key="sk-x"), spec=spec).ok
+
+
 def test_credential_status_false_for_flat_key_and_keyless_endpoint() -> None:
     from raven.config.schema import ProviderConfig
     from raven.providers.auth import credential_status
