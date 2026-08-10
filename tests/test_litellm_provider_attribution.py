@@ -64,7 +64,7 @@ def test_extra_msg_keys_non_anthropic_preserves_nothing():
     assert LiteLLMProvider._extra_msg_keys("gpt-4o", "gpt-4o") == frozenset()
 
 
-# --- orphan <think> recovery in _parse_response (issue #152, keyless, no live call) ---
+# --- orphan <think> recovery in _parse_response (keyless, no live call) ---
 # A backend run without a reasoning parser swallows the opening tag into its
 # prompt template and returns bare reasoning text + a lone `</think>`. That
 # shape only comes from a self-hosted inference server (hosted_vllm / custom /

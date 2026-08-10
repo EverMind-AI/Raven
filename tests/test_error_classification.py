@@ -100,6 +100,13 @@ def test_classify_follows_cause_chain():
         # A rendered azure non-200 body: no exception, no status attribute,
         # and a route-level 404 text that names none of the wordier markers.
         ("Azure OpenAI API Error 404: Resource not found", "model_unavailable"),
+        # The status must match as its own token: each of these carries "404"
+        # inside a larger number or id, and classifying them model_unavailable
+        # burned a fallback model and cooled a healthy endpoint for an error
+        # no swap can fix.
+        ("Error: retry after 1404ms", "unknown"),
+        ("upstream error id=req_a404bc7f", "unknown"),
+        ("invalid JSON at char 4041", "unknown"),
         ("This model's maximum context length is 8192 tokens", "context_overflow"),
         ("401 unauthorized: invalid api key", "auth"),
         ("400 invalid request: bad schema", "invalid_request"),

@@ -357,7 +357,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
     assert not offenders, "decide configuredness through providers.auth.credential_status: " + ", ".join(offenders)
 
 
-#: The six vendors issue #254 identified as unconfigurable by a bare key --
+#: The six vendors the refusal table marks unconfigurable by a bare key --
 #: each needs credential material the onboarding wizard's generic single-key
 #: prompt has no field for.
 _KEY_REFUSED_VENDORS = ("chatgpt", "bedrock", "sagemaker", "vertex_ai", "azure", "cloudflare")

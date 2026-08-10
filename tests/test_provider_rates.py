@@ -628,6 +628,22 @@ def test_version_mismatch_ignored(monkeypatch, disk_cache):
     assert json.loads(disk_cache.read_text(encoding="utf-8"))["version"] == model_catalog_cache.CACHE_VERSION
 
 
+def test_valid_json_non_dict_cache_is_a_miss(monkeypatch, disk_cache):
+    """A file holding valid JSON that is not a dict ([] / null / 42) is a miss.
+
+    raw.get on a list raised AttributeError straight through
+    resolve_context_window and token_rates -- the exact raise the loader's
+    docstring promises never reaches the cost path.
+    """
+    disk_cache.write_text("[]", encoding="utf-8")
+    counter = _patch_openrouter(monkeypatch, lambda req: _models_response(_DEEPSEEK_MODELS))
+
+    cost = _rate_cost("openrouter/deepseek/deepseek-v4-pro", 1000, 500)
+
+    assert counter["calls"] == 1
+    assert cost == pytest.approx(1000 * _DEEPSEEK_PRICE[0] + 500 * _DEEPSEEK_PRICE[1], rel=1e-9)
+
+
 def test_corrupt_disk_degrades_to_network(monkeypatch, disk_cache):
     """An unparseable cache file degrades to a miss and falls through to network."""
     disk_cache.write_text("{ this is not valid json", encoding="utf-8")

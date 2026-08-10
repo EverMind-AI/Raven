@@ -306,7 +306,7 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Orphan <think> recovery (issue #152) -- backend never emitted a structured
+# Orphan <think> recovery -- backend never emitted a structured
 # reasoning delta, and the accumulated content carries a closing tag with no
 # opener (the server's prompt template swallowed it). Only fires for a
 # provider shaped like a parser-less self-hosted backend

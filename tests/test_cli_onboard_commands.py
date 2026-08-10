@@ -449,7 +449,7 @@ def test_onboard_oauth_non_interactive_errors(tmp_env: Path) -> None:
 
 @pytest.mark.parametrize("vendor", ["chatgpt", "bedrock", "sagemaker", "vertex_ai", "azure", "cloudflare"])
 def test_onboard_non_interactive_bare_key_refused_vendor_errors(tmp_env: Path, vendor: str) -> None:
-    """A vendor issue #254 identified as unconfigurable by a bare key is
+    """A vendor the refusal table marks unconfigurable by a bare key is
     refused before any credentials are written, instead of being sent through
     the generic single-key branch that would 401 (or, for chatgpt, be
     silently ignored) at the first call."""
@@ -1945,7 +1945,7 @@ def test_switch_provider_returns_to_picker_keeps_steps(
 def test_step1_bare_key_refused_vendor_rewinds_to_picker(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3, capsys: pytest.CaptureFixture
 ) -> None:
-    """Picking a vendor issue #254 identified as unconfigurable by a bare key
+    """Picking a vendor the refusal table marks unconfigurable by a bare key
     (chatgpt: it authenticates through Raven's own OAuth path instead) prints
     the reason and rewinds to the picker via the wizard's existing back
     mechanism, the same one 'Switch provider' uses -- instead of prompting for

@@ -57,6 +57,10 @@ def load() -> tuple[dict[str, dict], float] | None:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+    # Valid JSON is not necessarily a dict: a file holding [] / null / 42
+    # made raw.get raise into the cost path this function promises never to.
+    if not isinstance(raw, dict):
+        return None
     if raw.get("version") != CACHE_VERSION:
         return None
     models = raw.get("models")

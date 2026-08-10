@@ -98,7 +98,7 @@ class RavenSession:
         restrict_to_workspace: bool,
     ) -> None:
         from raven.agent.loop import AgentLoop
-        from raven.cli.commands import _make_provider
+        from raven.cli._helpers import make_provider as _make_provider
         from raven.config.loader import load_config, set_config_path
         from raven.config.raven import ContextConfig
         from raven.providers.rates import effective_context_window
