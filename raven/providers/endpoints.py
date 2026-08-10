@@ -17,7 +17,8 @@ The three do not mix in one respect: ``endpoints`` set means the flat
 ``api_key`` and ``api_key_list`` are ignored outright, not merged with the
 list -- a partial merge of the key is how a stale flat one would outlive the
 endpoint meant to replace it. ``api_base``/``extra_headers`` are different:
-an entry that names neither inherits the section's flat value, the same way
+an entry inherits the section's flat value for each one it does not name
+itself (each falls back independently), the same way
 every ``api_key_list`` entry already shares the flat address -- an
 ``endpoint add`` that only ever set ``--label``/``--api-key`` is otherwise
 unable to run at all, address included, while the very config it wrote passes
@@ -68,9 +69,9 @@ def provider_endpoints(section: Any) -> list[ResolvedEndpoint]:
             ResolvedEndpoint(
                 label=_field(endpoint, "label"),
                 api_key=_field(endpoint, "api_key") or "",
-                # An entry that names neither inherits the section's flat
-                # value -- never the key, which must come from the entry
-                # itself or not at all (see the module docstring).
+                # Each falls back to the section's flat value independently --
+                # never the key, which must come from the entry itself or not
+                # at all (see the module docstring).
                 api_base=_field(endpoint, "api_base") or flat_base,
                 extra_headers=_field(endpoint, "extra_headers") or flat_headers,
             )

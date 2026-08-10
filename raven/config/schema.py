@@ -370,8 +370,8 @@ class ProviderConfig(Base):
     # OpenAI, Codex), gets this rejected at `make_provider` construction time
     # (wired in a later stage; this field exists regardless). Set and non-empty,
     # it replaces the flat `api_key` outright rather than merging with it; an
-    # entry naming neither its own `api_base` nor `extra_headers` inherits the
-    # flat ones -- see `raven.providers.endpoints.provider_endpoints` for the
+    # entry inherits the flat `api_base`/`extra_headers` for whichever it does
+    # not name itself -- see `raven.providers.endpoints.provider_endpoints` for the
     # one place that resolves which of the two shapes (or Gemini's
     # `api_key_list`) is in effect.
     endpoints: list[ProviderEndpoint] = Field(default_factory=list)
