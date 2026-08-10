@@ -8,6 +8,7 @@ arithmetic on top of it stays with the module that does the arithmetic.
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 import httpx
@@ -546,6 +547,58 @@ def test_the_window_those_families_report_is_the_vendors_own():
     """Read from LiteLLM's table offline, so this is the number, not a default."""
     assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex") == 128_000
     assert rates._try_litellm_context_window("minimax-global/MiniMax-M3") == 1_000_000
+
+
+# --- allow_import=False: a cheap caller must not pay LiteLLM's ~2-7s import ---
+#
+# SF11: ``AgentLoop.__init__`` resolves a construction-time window with
+# ``allow_fetch=False`` before ``LazyProvider``'s background thread has had a
+# chance to import LiteLLM. Reaching for the import here on the main thread
+# defeats the whole point of deferring it. ``import_litellm()`` was already
+# forced at module load (see the top of this file) so LiteLLM is always
+# present in ``sys.modules`` for every other test below -- these two
+# temporarily hide that key to exercise the "not yet imported" branch.
+
+
+def test_try_litellm_context_window_allow_import_false_skips_the_import_when_absent(monkeypatch):
+    monkeypatch.delitem(sys.modules, "litellm", raising=False)
+    called = {"n": 0}
+    real_import_litellm = import_litellm
+
+    def _spy():
+        called["n"] += 1
+        return real_import_litellm()
+
+    monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", _spy)
+
+    assert rates._try_litellm_context_window("openai-codex/gpt-5.3-codex", allow_import=False) is None
+    assert called["n"] == 0
+
+
+def test_try_litellm_context_window_allow_import_false_still_answers_once_imported():
+    """Once LiteLLM is already imported the gate is free, and the answer must
+    not differ from the ``allow_import=True`` (default) path."""
+    assert "litellm" in sys.modules
+    assert rates._try_litellm_context_window(
+        "openai-codex/gpt-5.3-codex", allow_import=False
+    ) == rates._try_litellm_context_window("openai-codex/gpt-5.3-codex")
+
+
+def test_resolve_context_window_allow_fetch_false_also_forwards_allow_import_false(monkeypatch):
+    """One flag, one layer of semantics: allow_fetch=False must reach the
+    LiteLLM tier as allow_import=False, not just the OpenRouter tier."""
+    seen = {}
+
+    def _fake_litellm_tier(model, *, allow_import=True):
+        seen["allow_import"] = allow_import
+        return None
+
+    monkeypatch.setattr(rates, "_try_litellm_context_window", _fake_litellm_tier)
+    monkeypatch.setattr(rates, "_lookup_openrouter_entry", lambda model, *, allow_fetch=True: None)
+
+    rates.resolve_context_window("openrouter/deepseek/deepseek-v4-pro", allow_fetch=False)
+
+    assert seen["allow_import"] is False
 
 
 # --- Disk persistence of the OpenRouter catalog ---

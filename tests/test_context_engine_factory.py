@@ -31,6 +31,7 @@ from raven.config.raven import (
 from raven.context_engine import ContextAssembler
 from raven.context_engine.factory import build_context_engine
 from raven.context_engine.segments import MemorySegmentBuilder, SkillsSegmentBuilder
+from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.memory_engine.skill_forge import (
     EverosSkillSource,
     HubSkillSource,
@@ -114,6 +115,10 @@ def _memory_builder(engine: ContextAssembler) -> MemorySegmentBuilder:
     return next(b for b in engine._builders if isinstance(b, MemorySegmentBuilder))
 
 
+def _curator_builder(engine: ContextAssembler) -> CuratorSegmentBuilder:
+    return next(b for b in engine._builders if isinstance(b, CuratorSegmentBuilder))
+
+
 # ---------------------------------------------------------------------------
 # Factory — always builds the assembler
 # ---------------------------------------------------------------------------
@@ -127,6 +132,36 @@ class TestFactory:
         engine = _build_engine(tmp_path, backend=None)
         assert isinstance(engine, ContextAssembler)
         assert _memory_builder(engine)._backend is None
+
+
+# ---------------------------------------------------------------------------
+# SF6: set_context_window cascades down to the Curator's trimmer -- a
+# /model switch must not leave it budgeting against the pre-switch window.
+# ---------------------------------------------------------------------------
+
+
+class TestSetContextWindow:
+    def test_engine_cascades_into_the_curator_trimmer(self, tmp_path: Path) -> None:
+        engine = _build_engine(tmp_path)
+        curator = _curator_builder(engine)
+        assert curator.context_window_tokens == 8192
+        assert curator.assembler.context_window_tokens == 8192
+        assert curator.assembler.trimmer.context_window_tokens == 8192
+
+        engine.set_context_window(4096)
+
+        assert curator.context_window_tokens == 4096
+        assert curator.assembler.context_window_tokens == 4096
+        assert curator.assembler.trimmer.context_window_tokens == 4096
+
+    def test_engine_cascade_does_not_raise_for_builders_without_the_hook(self, tmp_path: Path) -> None:
+        """seg1-5 carry no budget and have no ``set_context_window`` -- the
+        cascade must skip them rather than assume every builder has it."""
+        engine = _build_engine(tmp_path)
+        non_curator = [b for b in engine._builders if not isinstance(b, CuratorSegmentBuilder)]
+        assert non_curator, "fixture should include builders other than the Curator"
+
+        engine.set_context_window(4096)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -263,3 +298,71 @@ class TestInjectedIdsFromMetadata:
         fake_meta.id = "git-resolver"
         ids = agent._collect_injected_skill_ids([fake_meta])
         assert "local/git-resolver" in ids
+
+
+# ---------------------------------------------------------------------------
+# SF6: AgentLoop.refresh_context_window must cascade into the Curator's
+# trimmer and the MemoryConsolidator, not just AgentLoop.context_window_tokens
+# -- both are built once at construction and hold a snapshot int.
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshContextWindowCascade:
+    def test_model_switch_updates_curator_trimmer_and_consolidator(self, tmp_path: Path, monkeypatch) -> None:
+        import raven.agent.loop.main as agent_loop_main
+
+        windows = {"stub": 8192, "other-model": 4096}
+        monkeypatch.setattr(
+            agent_loop_main,
+            "effective_context_window",
+            lambda model, configured, allow_fetch=True: windows[model],
+        )
+
+        agent = _make_loop(tmp_path, backend=None)
+        assert agent.context_window_tokens == 8192
+
+        curator = _curator_builder(agent.context_engine)
+        assert curator.context_window_tokens == 8192
+        assert curator.assembler.trimmer.context_window_tokens == 8192
+        assert agent.memory_consolidator.context_window_tokens == 8192
+
+        agent.model = "other-model"
+        agent.refresh_context_window()
+
+        assert agent.context_window_tokens == 4096
+        assert curator.context_window_tokens == 4096
+        assert curator.assembler.context_window_tokens == 4096
+        assert curator.assembler.trimmer.context_window_tokens == 4096
+        assert agent.memory_consolidator.context_window_tokens == 4096
+
+    def test_no_cascade_when_the_window_was_pinned_explicitly(self, tmp_path: Path, monkeypatch) -> None:
+        """An explicit ``context_window_tokens`` is a deliberate override --
+        a later model switch must leave the whole chain untouched."""
+        import raven.agent.loop.main as agent_loop_main
+
+        monkeypatch.setattr(
+            agent_loop_main,
+            "effective_context_window",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called when explicit")),
+        )
+
+        agent = AgentLoop(
+            provider=_StubProvider(),
+            workspace=tmp_path,
+            model="stub",
+            max_iterations=2,
+            restrict_to_workspace=True,
+            context_window_tokens=8192,
+            context_config=ContextConfig(),
+            memory_config=MemoryConfig(),
+            skill_forge_router_config=SkillForgeRouterConfig(),
+        )
+        curator = _curator_builder(agent.context_engine)
+
+        agent.model = "other-model"
+        agent.refresh_context_window()
+
+        assert agent.context_window_tokens == 8192
+        assert curator.context_window_tokens == 8192
+        assert curator.assembler.trimmer.context_window_tokens == 8192
+        assert agent.memory_consolidator.context_window_tokens == 8192

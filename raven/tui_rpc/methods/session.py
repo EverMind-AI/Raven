@@ -25,6 +25,7 @@ Known divergence: ``system.hello`` still advertises ``default_session_key``
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -96,7 +97,7 @@ def _enumerate_skills(agent_loop: "AgentLoop | None") -> dict[str, list[str]]:
     return {source: sorted(names) for source, names in grouped.items()}
 
 
-def _baseline_usage(
+async def _baseline_usage(
     agent_loop: "AgentLoop | None",
     config: "Config",
 ) -> dict[str, Any]:
@@ -114,6 +115,11 @@ def _baseline_usage(
     Cost is the exception: on a subscription there is no per-token figure, so the
     banner says so rather than opening at $0.00. Zero here read as free until the
     first turn replaced it, which is the answer this session will never have.
+
+    ``resolve_context_window`` defaults to ``allow_fetch=True``, so a cold
+    OpenRouter model can reach for a synchronous 10s HTTP call; this handler
+    runs on the event loop (an RPC method), so that call is pushed to a
+    thread rather than blocking every other session in flight.
     """
     from raven.providers.rates import is_plan_billed
 
@@ -121,8 +127,10 @@ def _baseline_usage(
     configured = config.agents.defaults.context_window_tokens
     if configured:
         context_max = configured
+    elif model:
+        context_max = await asyncio.to_thread(resolve_context_window, model) or 0
     else:
-        context_max = (resolve_context_window(model) if model else None) or 0
+        context_max = 0
     return {
         "input": 0,
         "output": 0,
@@ -134,7 +142,7 @@ def _baseline_usage(
     }
 
 
-def _default_session_info(
+async def _default_session_info(
     agent_loop: "AgentLoop | None",
     config: "Config",
 ) -> dict[str, Any]:
@@ -144,7 +152,7 @@ def _default_session_info(
     zero usage, ``lazy=True``); version is always real (cached at module load).
     """
     model_id = config.agents.defaults.model
-    usage = _baseline_usage(agent_loop, config)
+    usage = await _baseline_usage(agent_loop, config)
     info: dict[str, Any] = {
         "model": model_id,
         "model_id": model_id,
@@ -247,7 +255,7 @@ async def session_create(
     session_id = f"tui:{new_chat_id()}"
     return {
         "session_id": session_id,
-        "info": _default_session_info(agent_loop, load_config()),
+        "info": await _default_session_info(agent_loop, load_config()),
     }
 
 
@@ -291,7 +299,7 @@ async def session_resume(
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
-    info = _default_session_info(agent_loop, config)
+    info = await _default_session_info(agent_loop, config)
     session_key = params.get("session_id")
 
     if session_key:

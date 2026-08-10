@@ -176,3 +176,78 @@ def test_prewarm_swallows_build_error() -> None:
     # the error surfaces on a real call instead
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(lp.chat([]))
+
+
+# --------------------------------------------------------------------------- #
+# on_built -- SF11's fix-up hook: a caller that answered a context-window     #
+# question cheaply (no import) before the real provider existed gets one     #
+# chance to correct it once the real provider is on hand.                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_on_built_defaults_to_none() -> None:
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    assert lp.on_built is None
+
+
+def test_on_built_fires_once_after_the_first_real_call_builds_it() -> None:
+    calls: list = []
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = lambda: calls.append("fired")
+
+    assert calls == []  # setting it does not itself build
+    asyncio.run(lp.chat([]))
+
+    assert calls == ["fired"]
+
+
+def test_on_built_fires_immediately_when_set_after_the_build_already_happened() -> None:
+    """prewarm can finish importing before the constructor gets around to
+    wiring the callback -- the setter must not miss the one build event
+    there is just because it arrived late."""
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    asyncio.run(lp.chat([]))  # materializes _provider before on_built is set
+
+    calls: list = []
+    lp.on_built = lambda: calls.append("fired")
+
+    assert calls == ["fired"]
+
+
+def test_on_built_does_not_fire_twice_for_one_build() -> None:
+    calls: list = []
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = lambda: calls.append("fired")
+
+    asyncio.run(lp.chat([]))
+    asyncio.run(lp.chat([]))  # second call reuses the memoized provider
+
+    assert calls == ["fired"]
+
+
+def test_on_built_exception_is_swallowed_and_does_not_break_the_build() -> None:
+    def bad_callback() -> None:
+        raise RuntimeError("callback boom")
+
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = bad_callback
+
+    # must not raise, and the build result must still be usable
+    assert asyncio.run(lp.chat([])) == "chat"
+
+
+def test_on_built_fires_from_the_prewarm_thread_not_the_caller() -> None:
+    fired = threading.Event()
+    seen: dict[str, threading.Thread] = {}
+
+    def on_built() -> None:
+        seen["thread"] = threading.current_thread()
+        fired.set()
+
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = on_built
+    lp.prewarm()
+
+    assert fired.wait(timeout=2.0), "on_built did not fire after prewarm built the provider"
+    assert seen["thread"] is not threading.current_thread()
+    assert seen["thread"].name == "litellm-prewarm"

@@ -621,6 +621,15 @@ class AgentLoop:
         self._register_default_tools()
         self._apply_disabled_tools()
 
+        # LazyProvider defers the litellm import behind a background prewarm
+        # thread (see providers.lazy); the window this constructor just
+        # resolved above was answered with allow_import=False, so it can be
+        # wrong until that import lands. Wiring the callback fixes it up in
+        # place once the real provider is built -- a no-op for any other
+        # provider, which has no ``on_built`` to set.
+        if hasattr(provider, "on_built"):
+            provider.on_built = self.refresh_context_window
+
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
 
@@ -713,6 +722,10 @@ class AgentLoop:
         must not quietly discard it. Otherwise the ladder is re-walked so a
         ``/model`` switch picks up the new model's real window instead of
         keeping the old one's.
+
+        Also the callback ``LazyProvider.on_built`` fires from its prewarm
+        thread, i.e. off the event loop -- safe because the only write here is
+        one ``int`` attribute, and the GIL makes that assignment atomic.
         """
         if self._context_window_explicit:
             return
@@ -720,6 +733,13 @@ class AgentLoop:
         # loop, so this must not block it on a synchronous network call. See
         # rates._fetch_openrouter_models.
         self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
+        # Cascade into the builders that sized themselves against the window
+        # at construction (the Curator's trimmer) and the consolidator --
+        # both would otherwise keep budgeting against the pre-switch model's
+        # window for the rest of the session. The consolidator's window is a
+        # plain attribute (no setter of its own), set directly here.
+        self.context_engine.set_context_window(self.context_window_tokens)
+        self.memory_consolidator.context_window_tokens = self.context_window_tokens
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -1956,7 +1976,10 @@ class AgentLoop:
                 if self._context_window_explicit:
                     context_max = self.context_window_tokens
                 else:
-                    context_max = resolve_context_window(call_model) or 0
+                    # Off the event loop: allow_fetch=True here can hit the
+                    # network for up to 10s on an OpenRouter model with both
+                    # caches expired. See rates._fetch_openrouter_models.
+                    context_max = await asyncio.to_thread(resolve_context_window, call_model) or 0
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens

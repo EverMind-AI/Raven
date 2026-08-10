@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -17,6 +18,7 @@ import httpx
 import pytest
 
 from raven.agent.loop import AgentLoop
+from raven.agent.loop import main as agent_loop_main
 from raven.providers import rates
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.message import ChatType, Source
@@ -182,6 +184,38 @@ async def test_usage_sink_context_max_stays_explicit_over_live_openrouter(worksp
 
     assert sink["context_max"] == 8192
     assert sink["context_used"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_usage_sink_context_max_is_resolved_off_the_event_loop_thread(workspace, monkeypatch):
+    """SF10: this per-call tier defaults to ``allow_fetch=True``, so a cold
+    OpenRouter model with both caches expired can reach for a synchronous
+    ~10s HTTP call. ``_run_agent_loop`` runs on the event loop, so that call
+    must run on a worker thread, not inline."""
+    seen: dict[str, threading.Thread] = {}
+
+    def fake_resolve(model: str) -> int:
+        seen["thread"] = threading.current_thread()
+        return 99_999
+
+    monkeypatch.setattr(agent_loop_main, "resolve_context_window", fake_resolve)
+
+    provider = UsageProvider("stub", 1000, 500)
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+    sink: dict = {}
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+        usage_sink=sink,
+    )
+
+    assert sink["context_max"] == 99_999
+    assert seen["thread"] is not threading.current_thread()
 
 
 # --------------------------------------------------------------------------- #

@@ -13,6 +13,8 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
+from loguru import logger
+
 from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 
 
@@ -34,13 +36,47 @@ class LazyProvider(LLMProvider):
         self._initial_endpoint_label = initial_endpoint_label
         self._provider: LLMProvider | None = None
         self._lock = threading.Lock()
+        self._on_built: Callable[[], None] | None = None
 
     def _built(self) -> LLMProvider:
         if self._provider is None:
             with self._lock:
                 if self._provider is None:
                     self._provider = self._factory()
+                    callback = self._on_built
+                    if callback is not None:
+                        self._invoke_on_built(callback)
         return self._provider
+
+    @property
+    def on_built(self) -> "Callable[[], None] | None":
+        """Fired once, right after the real provider finishes building.
+
+        Lets a caller that skipped the real provider's import at construction
+        (see ``rates._try_litellm_context_window``'s ``allow_import``) correct
+        a value it answered cheaply once the real thing is on hand -- e.g.
+        ``AgentLoop.refresh_context_window``, so a window guessed before
+        LiteLLM was imported gets fixed once prewarm finishes it.
+        """
+        return self._on_built
+
+    @on_built.setter
+    def on_built(self, callback: "Callable[[], None] | None") -> None:
+        """Setting this after the build already happened (prewarm can finish
+        before the constructor gets here) still fires the callback once,
+        rather than silently missing the one build event there is."""
+        with self._lock:
+            self._on_built = callback
+            already_built = self._provider is not None
+        if already_built and callback is not None:
+            self._invoke_on_built(callback)
+
+    @staticmethod
+    def _invoke_on_built(callback: Callable[[], None]) -> None:
+        try:
+            callback()
+        except Exception:
+            logger.debug("LazyProvider.on_built callback raised", exc_info=True)
 
     def prewarm(self) -> None:
         """Build the real provider in a daemon thread so the ~2-7s litellm import

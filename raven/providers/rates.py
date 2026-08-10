@@ -20,6 +20,7 @@ Two questions, deliberately answered from different places:
 from __future__ import annotations
 
 import pathlib
+import sys
 import threading
 import time
 from functools import lru_cache
@@ -483,8 +484,18 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
     )
 
 
-def _try_litellm_context_window(model: str) -> int | None:
-    """LiteLLM's static model metadata -- offline, covers most mapped providers."""
+def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
+    """LiteLLM's static model metadata -- offline, covers most mapped providers.
+
+    ``allow_import=False`` answers only from a LiteLLM already sitting in
+    ``sys.modules``: importing it costs ~2-7s, and a caller passing this
+    (``AgentLoop`` construction, before the lazy provider's prewarm thread has
+    had a chance to import it) wants the cheap tiers only, not to trigger the
+    same import it is trying to defer. Once LiteLLM is imported the check is
+    free and the lookup proceeds exactly as with ``allow_import=True``.
+    """
+    if not allow_import and "litellm" not in sys.modules:
+        return None
     try:
         from raven.providers.litellm_setup import import_litellm
 
@@ -519,10 +530,13 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
     shape the next request rather than cost a label. Unknown models return None
     so the caller keeps its configured default.
 
-    ``allow_fetch=False`` passes straight through to the OpenRouter tier; see
-    ``_fetch_openrouter_models`` for what it changes.
+    ``allow_fetch=False`` means "answer from what is already on hand": it
+    passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
+    and also tells the LiteLLM tier not to import LiteLLM on this caller's
+    behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
+    pass this is cheap enough not to pay a fresh import either.
     """
-    window = _try_litellm_context_window(model)
+    window = _try_litellm_context_window(model, allow_import=allow_fetch)
     if window:
         return window
 

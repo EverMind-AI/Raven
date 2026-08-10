@@ -367,6 +367,12 @@ class CuratorAssembler:
         self.model = model
         self.trimmer.set_provider(provider, model)
 
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch: the trimmer must budget against the
+        new model's window, not the one it was built with."""
+        self.context_window_tokens = tokens
+        self.trimmer.context_window_tokens = tokens
+
     @staticmethod
     def working_state_segment(working_state: str | None) -> str:
         """Render segment 6 text (``# Curator Working State``) or ``""``."""
