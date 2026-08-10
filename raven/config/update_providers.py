@@ -418,11 +418,14 @@ def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
 
 
 def _redact(value: Any) -> Any:
-    """Redact a single value or list of values."""
+    """Redact a single value, list of values, or dict of values (per value,
+    keys left visible -- see ``_redact_headers``)."""
     if value in (None, "", [], {}):
         return "(empty)"
     if isinstance(value, list):
         return ["****set****" for _ in value]
+    if isinstance(value, dict):
+        return _redact_headers(value)
     return "****set****"
 
 

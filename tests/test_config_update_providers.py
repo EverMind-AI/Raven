@@ -202,6 +202,20 @@ def test_get_redacts_api_key_nested_inside_endpoints(cfg_path: Path) -> None:
     assert [ep.label for ep in cfg["endpoints"]] == ["a", "b"]
 
 
+def test_get_redacts_flat_extra_header_values_too(cfg_path: Path) -> None:
+    """The section-level ``extra_headers`` (an AiHubMix APP-Code lives there)
+    must follow the same per-value rule as the per-endpoint dict -- one table,
+    one rule."""
+    set_provider_fields("aihubmix", {"api_key": "k", "extra_headers": {"APP-Code": "SECRET-VALUE"}}, config_path=cfg_path)
+
+    cfg = get_provider_config("aihubmix", config_path=cfg_path)
+
+    assert cfg["extra_headers"] == {"APP-Code": "****set****"}
+    assert "SECRET-VALUE" not in repr(cfg)
+    plain = get_provider_config("aihubmix", redact_secrets=False, config_path=cfg_path)
+    assert plain["extra_headers"] == {"APP-Code": "SECRET-VALUE"}
+
+
 def test_get_redacts_extra_header_values_keeping_keys_visible(cfg_path: Path) -> None:
     add_provider_endpoint(
         "openrouter",

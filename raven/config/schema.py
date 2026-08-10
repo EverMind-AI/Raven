@@ -359,7 +359,9 @@ class ProviderConfig(Base):
 
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
+    # display faces redact the values (keys stay visible).
+    extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
     # Several full url/key/header groups under one provider section, for a
     # vendor reachable by more than one account or region. Meaningful only for
