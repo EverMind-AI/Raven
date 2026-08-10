@@ -730,7 +730,9 @@ def _parse_extra_headers(value: str) -> dict[str, str] | None:
 def endpoint_add_cmd(
     name: str = typer.Argument(..., help="Provider name (e.g. openrouter)"),
     label: str = typer.Option(..., "--label", help="Idempotency key: an existing label is replaced, not merged"),
-    api_key: str = typer.Option(..., "--api-key", help="API key for this endpoint"),
+    api_key: str = typer.Option(
+        "", "--api-key", help="API key for this endpoint (omit only for a local, keyless deployment)"
+    ),
     api_base: str = typer.Option("", "--api-base", help="Base URL for this endpoint"),
     extra_headers: str = typer.Option("", "--extra-headers", help='Extra headers as JSON, e.g. {"X-Foo": "bar"}'),
 ):

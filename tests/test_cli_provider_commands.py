@@ -958,6 +958,30 @@ def test_endpoint_add_unknown_provider_exits_1(tmp_config: Path) -> None:
     assert "Unknown provider" in r.output
 
 
+def test_endpoint_add_without_a_key_is_refused_for_a_key_based_provider(tmp_config: Path) -> None:
+    """``--api-key`` is no longer required at the flag level -- the shape-aware
+    refusal lives in the ops layer, shared with the RPC picker, so this must
+    still exit non-zero with a readable reason rather than silently persist a
+    keyless endpoint into the rotation."""
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "x", "--api-base", "https://a.example/v1"],
+    )
+    assert r.exit_code == 1
+    assert "api_key" in r.output
+
+
+def test_endpoint_add_without_a_key_is_allowed_for_a_local_deployment(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "hosted_vllm", "--label", "x", "--api-base", "http://10.0.0.5:8000/v1"],
+    )
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["hosted_vllm"]
+    assert section["endpoints"][0]["apiKey"] == ""
+
+
 def test_endpoint_remove_drops_the_label(tmp_config: Path) -> None:
     runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
     runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "backup", "--api-key", "k2"])

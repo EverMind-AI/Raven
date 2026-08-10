@@ -86,6 +86,11 @@ def test_endpoint_strategy_rejects_an_unknown_value() -> None:
         ProviderConfig.model_validate({"endpointStrategy": "random"})
 
 
+def test_empty_endpoint_label_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ProviderEndpoint(label="")
+
+
 def test_duplicate_endpoint_labels_are_rejected() -> None:
     with pytest.raises(ValidationError, match="duplicate endpoint label"):
         ProviderConfig.model_validate(

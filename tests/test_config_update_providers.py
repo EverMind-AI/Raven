@@ -211,9 +211,13 @@ def test_get_endpoints_plaintext_with_redact_false(cfg_path: Path) -> None:
 
 
 def test_get_endpoints_empty_key_renders_as_empty(cfg_path: Path) -> None:
-    add_provider_endpoint("openrouter", label="a", api_key="", config_path=cfg_path)
+    # hosted_vllm rather than openrouter: a key-based provider now refuses to
+    # persist a keyless endpoint (see the write-time tests in the endpoints
+    # section below) -- a local deployment is the shape that legitimately has
+    # none, and the redaction rule under test does not depend on which.
+    add_provider_endpoint("hosted_vllm", label="a", api_base="http://localhost:8000/v1", config_path=cfg_path)
 
-    cfg = get_provider_config("openrouter", config_path=cfg_path)
+    cfg = get_provider_config("hosted_vllm", config_path=cfg_path)
 
     assert cfg["endpoints"][0].api_key == "(empty)"
 
@@ -838,6 +842,26 @@ def test_add_provider_endpoint_with_api_base_and_headers(cfg_path: Path) -> None
 def test_add_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError):
         add_provider_endpoint("nonexistent_provider", label="x", api_key="k", config_path=cfg_path)
+
+
+def test_add_provider_endpoint_refuses_an_empty_key_for_a_key_based_provider(cfg_path: Path) -> None:
+    """The write-time half of the rule: an endpoint with no key is a request
+    that will 401, so a key-based provider refuses to persist one -- the same
+    check the picker and the CLI both need, decided once in the ops layer.
+    """
+    with pytest.raises(RuntimeError, match="api_key"):
+        add_provider_endpoint("openrouter", label="a", api_base="https://a.example/v1", config_path=cfg_path)
+
+
+def test_add_provider_endpoint_allows_an_empty_key_for_a_local_deployment(cfg_path: Path) -> None:
+    """Derived from the registry's credential shape (``credential_kind``), not
+    a hardcoded vendor list: a local deployment has no key to give."""
+    endpoints = add_provider_endpoint(
+        "hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path
+    )
+
+    assert endpoints[0].api_key == ""
+    assert endpoints[0].api_base == "http://10.0.0.5:8000/v1"
 
 
 @pytest.mark.parametrize("provider", ["azure_openai", "github_copilot"])

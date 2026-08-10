@@ -348,7 +348,7 @@ class ProviderEndpoint(Base):
     edits, so two endpoints in the same list must not share one.
     """
 
-    label: str
+    label: str = Field(min_length=1)
     api_key: str = ""
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None

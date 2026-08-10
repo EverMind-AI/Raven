@@ -273,14 +273,27 @@ async def test_add_endpoint_answers_with_the_refreshed_list(fake_home: Path) -> 
 
 async def test_endpoints_never_hand_back_the_key(fake_home: Path) -> None:
     """The picker only ever displays this list, and a key it did not need to see
-    is a key a screenshot can leak."""
-    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu-secret"})
-    await model_add_endpoint({"slug": "deepseek", "label": "keyless"})
+    is a key a screenshot can leak.
 
-    by_label = {ep["label"]: ep["api_key"] for ep in (await model_endpoints({"slug": "deepseek"}))["endpoints"]}
+    ``hosted_vllm`` rather than ``deepseek``: a key-based provider now refuses
+    a keyless endpoint at write time (see the tests below), so a local
+    deployment -- which legitimately has none -- is what exercises the
+    keyless half of this without also asserting the opposite rule.
+    """
+    await model_add_endpoint({"slug": "hosted_vllm", "label": "eu", "api_key": "sk-eu-secret"})
+    await model_add_endpoint({"slug": "hosted_vllm", "label": "keyless"})
+
+    by_label = {ep["label"]: ep["api_key"] for ep in (await model_endpoints({"slug": "hosted_vllm"}))["endpoints"]}
 
     assert "sk-eu-secret" not in by_label.values()
     assert by_label == {"eu": "****set****", "keyless": "(empty)"}
+
+
+async def test_add_endpoint_without_a_key_is_refused_for_a_key_based_provider(fake_home: Path) -> None:
+    """Same ops-layer rule the CLI ``endpoint add`` command goes through --
+    the picker must not be able to persist what the CLI refuses."""
+    with pytest.raises(ConfigValidationError, match="api_key"):
+        await model_add_endpoint({"slug": "deepseek", "label": "keyless"})
 
 
 async def test_add_endpoint_replaces_the_entry_with_the_same_label(fake_home: Path) -> None:
@@ -341,7 +354,7 @@ async def test_add_endpoint_rejects_providers_that_cannot_rotate(slug: str, fake
 async def test_endpoint_handlers_accept_session_id(fake_home: Path) -> None:
     # The picker passes its session down like it does for every other model.*
     # call; a strict param model would reject the key otherwise.
-    await model_add_endpoint({"slug": "deepseek", "label": "eu", "session_id": "tui:default"})
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu", "session_id": "tui:default"})
     await model_endpoints({"slug": "deepseek", "session_id": "tui:default"})
     result = await model_remove_endpoint({"slug": "deepseek", "label": "eu", "session_id": "tui:default"})
 

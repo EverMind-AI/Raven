@@ -559,6 +559,17 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, sessionId, suspe
         const apiKey = endpointInputs.api_key.trim()
         const apiBase = endpointInputs.api_base.trim()
 
+        // Same rule the ops layer enforces on write: only a local, keyless
+        // deployment may add an endpoint without a key. Checked here too so
+        // the picker doesn't round-trip to the RPC just to learn that -- the
+        // RPC error still catches it if this ever runs ahead of stale
+        // provider metadata.
+        if (!apiKey && provider.auth_type !== 'local') {
+          setKeyError('API key is required')
+
+          return
+        }
+
         setKeySaving(true)
         setKeyError('')
         gw.request<ModelEndpointsResponse>('model.add_endpoint', {

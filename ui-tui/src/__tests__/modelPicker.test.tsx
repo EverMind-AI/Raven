@@ -713,6 +713,70 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('refuses to submit an endpoint with no key for a key-based provider', async () => {
+    // Mirrors the ops-layer rule the RPC/CLI both enforce: an endpoint with no
+    // key on a key-based provider is a request that will 401, so the picker
+    // should not even round-trip to the RPC to learn that.
+    const h = mount([anthropic], method => (method === 'model.endpoints' ? { endpoints: [] } : {}))
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // label -> Enter -> (blank key) -> Enter -> (blank base) -> Enter attempts submit.
+    await h.type('a')
+    await h.type('eu')
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await h.type(ENTER)
+
+    await waitForFrame(h, 'error: API key is required')
+    expect(h.gw.request).not.toHaveBeenCalledWith('model.add_endpoint', expect.anything())
+
+    h.unmount()
+  })
+
+  it('allows submitting an endpoint with no key for a local deployment', async () => {
+    const ollamaConfigured: ModelOptionProvider = { ...ollama, authenticated: true }
+    const h = mount([ollamaConfigured], (method, params) => {
+      if (method === 'model.endpoints') {
+        return { endpoints: [] }
+      }
+
+      if (method === 'model.add_endpoint') {
+        return { endpoints: [{ api_base: params.api_base, api_key: '(empty)', label: params.label }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    // Not `'no endpoints'`: the fake terminal's escape stripping mangles that
+    // exact run at this render depth (see the endpoints-list test above) --
+    // `'a adds one'` sits on the same line without falling in the mangled span.
+    await waitForFrame(h, 'a adds one')
+
+    // label -> Enter -> (blank key) -> Enter -> base -> Enter submits.
+    await h.type('a')
+    await h.type('local')
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await h.type('http://10.0.0.5:8000/v1')
+    await h.type(ENTER)
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.add_endpoint',
+      expect.objectContaining({ label: 'local', slug: 'ollama_chat' })
+    )
+
+    h.unmount()
+  })
+
   it('removes the selected endpoint via model.remove_endpoint', async () => {
     const h = mount([anthropic], method => {
       if (method === 'model.endpoints') {
