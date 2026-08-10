@@ -304,7 +304,7 @@ def credential_status(
         gap = method.missing(section, name, spec=spec, include_external=include_external)
         if not gap:
             return CredentialStatus(name, True, method.kind, (), method)
-        unsatisfied.append((method, tuple(_localize(req, name) for req in gap)))
+        unsatisfied.append((method, tuple(_localize(req, name, section=section) for req in gap)))
 
     # Report against the first declared method: it is the preferred one, so its
     # gap is the shortest path to a working provider.
@@ -379,13 +379,22 @@ def key_refusal(vendor: str) -> str | None:
     return _KEY_CANNOT_CONFIGURE.get(normalize_provider_name(vendor))
 
 
-def _localize(req: Requirement, name: str) -> Requirement:
+def _localize(req: Requirement, name: str, section: Any = None) -> Requirement:
     """Put the provider's own name into the hint, so it can be pasted.
 
     The hint names a command, not a config path: telling someone to hand-edit
     `~/.raven/config.json` asks them to know a file layout the CLI exists to
     hide, and the OAuth hint already gave a command.
+
+    When the section carries ``endpoints``, a key hint must name
+    ``endpoint add``: the flat field the generic hint writes to is ignored the
+    moment endpoints exist (see ``_present``), so following that hint changes
+    nothing and the gate repeats itself.
     """
-    if "{public}" not in req.hint:
+    hint = req.hint
+    endpoints = section.get("endpoints") if isinstance(section, dict) else getattr(section, "endpoints", None)
+    if "api_key" in req.fields and endpoints:
+        hint = "an API key on an endpoint -- run `raven provider endpoint add {public} --label <label> --api-key <key>`"
+    if "{public}" not in hint:
         return req
-    return Requirement(req.fields, req.label, req.hint.replace("{public}", name.replace("_", "-")))
+    return Requirement(req.fields, req.label, hint.replace("{public}", name.replace("_", "-")), req.spec_fallback)

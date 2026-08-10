@@ -298,6 +298,22 @@ def test_a_spec_shipped_default_address_satisfies_the_address_requirement() -> N
     assert not credential_status("ollama_chat", ProviderConfig()).ok
 
 
+def test_the_key_hint_names_endpoint_add_when_endpoints_exist() -> None:
+    """The generic hint says `provider set --api-key`, which writes the flat
+    field -- ignored the moment endpoints exist, so a user following it loops.
+    With endpoints in the section, the hint must name the command that works."""
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+
+    section = ProviderConfig.model_validate({"endpoints": [{"label": "a", "apiKey": ""}]})
+    status = credential_status("openrouter", section)
+
+    assert not status.ok
+    assert "endpoint add" in status.summary
+    flat = credential_status("openrouter", ProviderConfig())
+    assert "endpoint add" not in flat.summary
+
+
 def test_the_gate_never_accepts_a_default_address_the_reader_will_not_serve() -> None:
     """Closed loop over every spec: whenever the gate passes a bare-key config
     because of a shipped default, `Config.get_api_base` must serve that same
