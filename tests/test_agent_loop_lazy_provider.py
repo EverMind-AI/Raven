@@ -129,7 +129,16 @@ with tempfile.TemporaryDirectory() as td:
         restrict_to_workspace=True,
     )
 
-print("LITELLM_IMPORTED" if "litellm" in sys.modules else "LITELLM_NOT_IMPORTED")
+ok = "litellm" not in sys.modules
+print("LITELLM_NOT_IMPORTED" if ok else "LITELLM_IMPORTED", flush=True)
+
+# The claim under test is the mid-process sys.modules state above; interpreter
+# teardown is not part of it, and AgentLoop's construction drags in native
+# libraries whose atexit hooks segfault the teardown on Linux (observed as
+# returncode -11 in CI while the same script exits 0 on macOS). Skip teardown.
+import os
+
+os._exit(0 if ok else 2)
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
