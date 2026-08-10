@@ -399,9 +399,19 @@ async def test_options_accepts_session_id(fake_home: Path) -> None:
     assert "providers" in result
 
 
-async def test_save_key_custom_without_api_base_rejected(fake_home: Path) -> None:
-    with pytest.raises(ConfigValidationError):
-        await model_save_key({"slug": "custom", "api_key": "x"})
+async def test_save_key_custom_key_only_accepted(fake_home: Path) -> None:
+    """The spec ships a default address, so a bare key is a runnable submission --
+    the same answer `credential_status` gives; the picker must not refuse what
+    `raven provider set custom --api-key` accepts."""
+    result = await model_save_key({"slug": "custom", "api_key": "x"})
+    assert result["provider"]["authenticated"] is True
+
+
+async def test_save_key_azure_key_only_still_rejected(fake_home: Path) -> None:
+    """No spec default to fall back on: the address stays mandatory."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "azure_openai", "api_key": "x"})
+    assert excinfo.value.data["field"] == "api_base"
 
 
 # ----------------------------------------------------------------------------
@@ -647,14 +657,14 @@ async def test_save_key_still_requires_a_key_for_a_keyed_provider(fake_home: Pat
     """Relaxing the field for local deployments must not relax it for the rest."""
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "deepseek", "api_key": ""})
-    assert "api_key" in str(excinfo.value)
+    assert excinfo.value.data["field"] == "api_key"
 
 
 async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Path) -> None:
     """Neither field given is not a configured provider."""
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "ollama_chat"})
-    assert "api_base" in str(excinfo.value)
+    assert excinfo.value.data["field"] == "api_base"
 
 
 async def test_options_lists_the_codex_models_the_account_reports(

@@ -53,9 +53,16 @@ class Requirement:
     fields: tuple[str, ...]
     label: str
     hint: str = ""
+    #: A ``ProviderSpec`` attribute that also satisfies this requirement when
+    #: truthy, even though the config carries nothing for it -- e.g. custom's
+    #: ``default_api_base``, a working address the user may still override.
+    #: Empty for every requirement but ``_ADDRESS``.
+    spec_fallback: str = ""
 
-    def satisfied_by(self, section: Any) -> bool:
-        return any(_present(section, name) for name in self.fields)
+    def satisfied_by(self, section: Any, spec: "ProviderSpec | None" = None) -> bool:
+        if any(_present(section, name) for name in self.fields):
+            return True
+        return bool(self.spec_fallback and spec is not None and getattr(spec, self.spec_fallback, None))
 
 
 @dataclass(frozen=True)
@@ -68,7 +75,14 @@ class AuthMethod:
     checks_token_file: bool = False
     label: str = ""
 
-    def missing(self, section: Any, provider: str, *, include_external: bool) -> list[Requirement]:
+    def missing(
+        self,
+        section: Any,
+        provider: str,
+        *,
+        spec: "ProviderSpec | None" = None,
+        include_external: bool,
+    ) -> list[Requirement]:
         """What this method still needs.
 
         ``include_external`` decides whether material held outside the config is
@@ -83,7 +97,7 @@ class AuthMethod:
             if not include_external:
                 return []
             return [] if _token_present(provider) else [_SIGN_IN(provider)]
-        return [req for req in self.requires if not req.satisfied_by(section)]
+        return [req for req in self.requires if not req.satisfied_by(section, spec)]
 
 
 class MissingCredentialsError(Exception):
@@ -210,6 +224,20 @@ _KEY_OR_LIST = Requirement(
     "an API key -- run `raven provider set {public} --api-key <key>` (or --api-key-list k1,k2)",
 )
 _ADDRESS = Requirement(("api_base",), "an address", "an address -- run `raven provider set {public} --api-base <url>`")
+#: Same requirement, plus the spec's own working default. Only for
+#: `requires_api_base`: that flag means the *user's* address is mandatory
+#: (Azure, a bespoke endpoint) with no config-independent fallback of its own
+#: to fall back to -- unless the spec ships one anyway (`custom`'s
+#: localhost gateway). `is_local` keeps the plain `_ADDRESS`: a local
+#: deployment's spec default (Ollama's standard port) must not make it look
+#: configured before the user has pointed it anywhere, which is the bug
+#: `_has_credentials`'s docstring already names.
+_ADDRESS_OR_SPEC_DEFAULT = Requirement(
+    ("api_base",),
+    "an address",
+    "an address -- run `raven provider set {public} --api-base <url>`",
+    spec_fallback="default_api_base",
+)
 
 
 #: Declarations for the providers whose shape the spec flags cannot express.
@@ -242,7 +270,7 @@ def auth_methods(spec: "ProviderSpec | None", name: str = "") -> tuple[AuthMetho
     if spec.is_local:
         return (AuthMethod(KIND_NONE, (_ADDRESS,), label="address"),)
     if spec.requires_api_base:
-        return (AuthMethod(KIND_API_KEY, (_KEY, _ADDRESS), label="key and endpoint"),)
+        return (AuthMethod(KIND_API_KEY, (_KEY, _ADDRESS_OR_SPEC_DEFAULT), label="key and endpoint"),)
     return (AuthMethod(KIND_API_KEY, (_KEY,), label="API key"),)
 
 
@@ -272,7 +300,7 @@ def credential_status(
 
     unsatisfied: list[tuple[AuthMethod, tuple[Requirement, ...]]] = []
     for method in methods:
-        gap = method.missing(section, name, include_external=include_external)
+        gap = method.missing(section, name, spec=spec, include_external=include_external)
         if not gap:
             return CredentialStatus(name, True, method.kind, (), method)
         unsatisfied.append((method, tuple(_localize(req, name) for req in gap)))

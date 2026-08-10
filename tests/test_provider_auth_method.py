@@ -284,6 +284,20 @@ def test_endpoints_without_their_own_base_inherit_the_flat_one_at_the_gate() -> 
     ]
 
 
+def test_a_spec_shipped_default_address_satisfies_the_address_requirement() -> None:
+    """`custom` ships a `default_api_base`, so a bare key is a runnable config
+    and the gate must say so; `azure_openai` ships none, so its address stays
+    mandatory. `is_local` specs keep the plain requirement either way: their
+    default (Ollama's standard port) must not make an untouched section look
+    configured."""
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+
+    assert credential_status("custom", ProviderConfig(api_key="sk-local")).ok
+    assert not credential_status("azure_openai", ProviderConfig(api_key="sk-azure")).ok
+    assert not credential_status("ollama_chat", ProviderConfig()).ok
+
+
 def test_credential_status_false_for_flat_key_and_keyless_endpoint() -> None:
     from raven.config.schema import ProviderConfig
     from raven.providers.auth import credential_status

@@ -277,14 +277,6 @@ async def model_save_key(params: dict) -> dict:
             data={"slug": parsed.slug},
         )
     kind = credential_kind(parsed.slug)
-    # The shape drives which fields to ask for; whether the submission is
-    # complete is `providers.auth`, the same answer every other gate uses. This
-    # branch chain was the sixth place deciding that independently.
-    if kind in (CRED_ENDPOINT, CRED_LOCAL) and not parsed.api_base:
-        raise ConfigValidationError(
-            f"{label} requires an api_base",
-            data={"slug": parsed.slug, "field": "api_base"},
-        )
     if kind == CRED_LOCAL and parsed.api_key:
         # Said out loud rather than dropped: a local deployment writes no key, so
         # storing one silently would look like it had been accepted.
@@ -292,11 +284,17 @@ async def model_save_key(params: dict) -> dict:
             f"{label} is a local deployment and takes no api_key; send api_base instead",
             data={"slug": parsed.slug, "field": "api_key"},
         )
+    # Whether the submission is complete is `providers.auth`'s answer, the same
+    # one every other gate uses -- including which requirement a spec default
+    # already covers (custom's shipped address). An address rule of this
+    # handler's own is how the picker refused a submission the gate runs.
     submitted = {"api_key": parsed.api_key, "api_base": parsed.api_base}
-    if not credential_status(parsed.slug, submitted).ok and kind != CRED_LOCAL:
+    status = credential_status(parsed.slug, submitted)
+    if not status.ok:
+        req = next(iter(status.missing), None)
         raise ConfigValidationError(
-            f"{label} requires an api_key",
-            data={"slug": parsed.slug, "field": "api_key"},
+            f"{label} requires {req.label}" if req else f"{label} is missing credentials",
+            data={"slug": parsed.slug, "field": req.fields[0] if req else "api_key"},
         )
 
     # A local deployment is reached by address and has no key, said explicitly
