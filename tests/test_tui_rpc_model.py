@@ -808,25 +808,34 @@ async def test_options_config_reads_do_not_scale_with_the_row_count(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_entries_off_loop` hoists the config read: one parse for all rows plus
-    one for the current selection. Without the hoist every row re-parsed the
-    config from disk (`_configured_overlays`, plus the `list_providers` mapping
-    in `_build_provider_entry`), so this count sat above the row count instead.
-    An absolute bound because the row count itself never varies -- the picker
-    lists every registry provider whether or not it is configured."""
+    """`_entries_off_loop` hoists the config read: one `load_config` for all
+    rows, one for the current selection, one raw read inside `list_providers`.
+    Without the hoist every row re-parsed the config from disk (the
+    `list_providers` mapping and `_configured_overlays` via `load_config`,
+    the curated models via `get_provider_config`'s raw read), so these counts
+    sat above the row count instead. An absolute bound because the row count
+    itself never varies -- the picker lists every registry provider whether
+    or not it is configured."""
     import raven.config.loader as loader
+    import raven.config.update_providers as update_providers
 
     _write_config(fake_home, {"providers": {"anthropic": {"api_key": "sk-1"}}})
-    real = loader.load_config
-    calls = 0
+    real_load = loader.load_config
+    real_raw = update_providers.read_raw_or_raise
+    calls = {"load_config": 0, "raw_read": 0}
 
-    def counting(*args: object, **kwargs: object):
-        nonlocal calls
-        calls += 1
-        return real(*args, **kwargs)
+    def counting_load(*args: object, **kwargs: object):
+        calls["load_config"] += 1
+        return real_load(*args, **kwargs)
 
-    monkeypatch.setattr(loader, "load_config", counting)
+    def counting_raw(*args: object, **kwargs: object):
+        calls["raw_read"] += 1
+        return real_raw(*args, **kwargs)
+
+    monkeypatch.setattr(loader, "load_config", counting_load)
+    monkeypatch.setattr(update_providers, "read_raw_or_raise", counting_raw)
     result = await model_options({})
 
-    assert len(result["providers"]) > 2, "too few rows for the bound to mean anything"
-    assert calls <= 2, f"{calls} config parses for {len(result['providers'])} rows"
+    assert len(result["providers"]) > 3, "too few rows for the bound to mean anything"
+    assert calls["load_config"] <= 2, f"{calls} for {len(result['providers'])} rows"
+    assert calls["raw_read"] <= 1, f"{calls} for {len(result['providers'])} rows"

@@ -77,12 +77,20 @@ def _parse(model_cls: type, params: dict) -> Any:
         ) from exc
 
 
-def _provider_models(slug: str, *, configured: bool) -> list[str]:
-    try:
-        cfg = get_provider_config(slug, redact_secrets=False)
-    except KeyError:
-        cfg = {}
-    from_config = cfg.get("models", [])
+#: "No section was passed in" marker for the helpers below -- distinct from
+#: ``None``, which is what a provider absent from the config resolves to.
+_UNLOADED: Any = object()
+
+
+def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -> list[str]:
+    if section is _UNLOADED:
+        try:
+            cfg = get_provider_config(slug, redact_secrets=False)
+        except KeyError:
+            cfg = {}
+        from_config = cfg.get("models", [])
+    else:
+        from_config = getattr(section, "models", None) or []
     from_config = list(from_config) if isinstance(from_config, list) else []
     # Priority: what the user configured (manual entry via ``model.add_model``
     # writes here), then the curated shortlist, then LiteLLM's own catalogue,
@@ -130,11 +138,6 @@ def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
     from raven.providers.codex_catalog import account_models
 
     return tuple(_stored_spelling(slug, model) for model in account_models())
-
-
-#: "No section was passed in" marker for the helpers below -- distinct from
-#: ``None``, which is what a provider absent from the config resolves to.
-_UNLOADED: Any = object()
 
 
 def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -> dict[str, dict[str, Any]]:
@@ -207,7 +210,7 @@ def _build_provider_entry(
     if is_oauth and not configured:
         warning = f"run `raven provider login {slug.replace('_', '-')}` to authenticate"
 
-    models = _provider_models(slug, configured=configured)
+    models = _provider_models(slug, configured=configured, section=section)
     return {
         # Names and one-liners for the ids above, so the picker shows what a
         # model is rather than only what it is called on the wire. Omitted for
