@@ -349,5 +349,16 @@ class EndpointRotorProvider(LLMProvider):
         of its wire is one answer, not one per endpoint."""
         return self._inners[0].emits_unparsed_reasoning()
 
+    @property
+    def model_overrides(self) -> dict[str, dict[str, Any]]:
+        """Delegates to the first endpoint's inner, same reasoning as ``can_serve``:
+        every inner was built from this same section, so the overrides are one
+        answer, not one per endpoint. Without this, ``PerModelProvider``'s
+        ``getattr(fallback, "model_overrides", None)`` silently read nothing
+        back whenever ``fallback`` was a rotor -- the shape a multi-endpoint
+        section builds -- and per-model overrides went missing on exactly the
+        configs that had several endpoints to rotate."""
+        return self._inners[0].model_overrides
+
     def get_default_model(self) -> str:
         return self._default_model

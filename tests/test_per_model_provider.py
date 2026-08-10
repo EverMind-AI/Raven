@@ -196,6 +196,38 @@ def test_sub_providers_inherit_configured_model_overrides():
     assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
 
 
+def test_sub_providers_inherit_overrides_from_a_rotor_fallback():
+    """``fallback`` in production is whatever ``make_provider`` built, and a
+    multi-endpoint section builds an ``EndpointRotorProvider`` there, not a
+    ``LiteLLMProvider`` -- the only class every other test in this module
+    exercises. ``getattr(fallback, "model_overrides", None)`` silently read
+    nothing back off a rotor before it gained the delegating property, and a
+    routed model's overrides went missing on exactly the configs with several
+    endpoints to rotate.
+    """
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.endpoints import ResolvedEndpoint
+
+    def make_inner(ep):
+        return LiteLLMProvider(
+            api_key=ep.api_key,
+            api_base=ep.api_base,
+            default_model="fb",
+            provider_name="openrouter",
+            model_overrides={"small": {"top_p": 0.3}},
+        )
+
+    rotor = EndpointRotorProvider(
+        [ResolvedEndpoint(label="a", api_key="k1", api_base="http://a/v1", extra_headers=None)],
+        make_inner,
+        default_model="fb",
+    )
+
+    p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=rotor)
+
+    assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
+
+
 def test_sub_providers_go_through_litellm():
     p = _provider()
     assert all(isinstance(sub, LiteLLMProvider) for sub in p._by_model.values())
