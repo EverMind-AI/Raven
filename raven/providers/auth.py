@@ -391,7 +391,7 @@ def _localize(req: Requirement, name: str, section: Any = None) -> Requirement:
     """
     hint = req.hint
     endpoints = section.get("endpoints") if isinstance(section, dict) else getattr(section, "endpoints", None)
-    if "api_key" in req.fields and endpoints:
+    if "api_key" in req.fields and isinstance(endpoints, (list, tuple)) and endpoints:
         hint = "an API key on an endpoint -- run `raven provider endpoint add {public} --label <label> --api-key <key>`"
     if "{public}" not in hint:
         return req
