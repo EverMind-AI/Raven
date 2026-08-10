@@ -1,6 +1,6 @@
 """Tests for the ``model.*`` RPC handlers (TUI ``/model`` v1 backend).
 
-The five handlers wrap ``raven.config.update_providers`` write/read helpers
+The eight handlers wrap ``raven.config.update_providers`` write/read helpers
 plus the provider registry. Config is sandboxed by redirecting ``Path.home()``
 to a tmp dir (same mechanism as ``test_tui_rpc_config`` / ``test_tui_rpc_setup``)
 so the real user config is never touched. No network is hit.
@@ -18,9 +18,12 @@ from raven.providers.registry import PROVIDERS
 from raven.tui_rpc.errors import ConfigValidationError, NotSupportedInV01Error
 from raven.tui_rpc.methods import model as model_module
 from raven.tui_rpc.methods.model import (
+    model_add_endpoint,
     model_add_model,
     model_disconnect,
+    model_endpoints,
     model_options,
+    model_remove_endpoint,
     model_remove_model,
     model_save_key,
 )
@@ -78,8 +81,18 @@ async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     # catalogue (deduped). The order is the contract: recommendations stay at the
     # top of a list the catalogue makes long.
     assert entry["models"][:2] == ["claude-opus-4-8", "claude-sonnet-4-5"]
-    curated = common_models_for("anthropic")
+
+    # The configured entries are written in the pre-contract bare spelling, and
+    # the curated list carries the qualified one. They are the same two models,
+    # so the shortlist contributes everything except those -- listing a model the
+    # user already has, under the other spelling, is the duplicate the picker
+    # used to show.
+    from raven.providers.wire import merge_key
+
+    configured_keys = {merge_key("anthropic", m) for m in ("claude-opus-4-8", "claude-sonnet-4-5")}
+    curated = [m for m in common_models_for("anthropic") if merge_key("anthropic", m) not in configured_keys]
     assert entry["models"][2 : 2 + len(curated)] == curated
+    assert len(entry["models"]) == len({merge_key("anthropic", m) for m in entry["models"]}), "a model is listed twice"
     assert entry["total_models"] > 2 + len(curated), "the catalogue tier added nothing"
     assert entry["auth_type"] == "key"
     assert entry["key_env"] == "ANTHROPIC_API_KEY"
@@ -137,10 +150,15 @@ async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> 
 
 
 async def test_options_needs_api_base_flag(fake_home: Path) -> None:
+    """True only when the gate itself demands an address: azure ships no
+    default, a local deployment's address IS the credential -- while custom
+    runs on a bare key over its shipped localhost default, so the picker must
+    not block the submission the gate accepts."""
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
-    assert _entry(result, "custom")["needs_api_base"] is True
+    assert _entry(result, "custom")["needs_api_base"] is False
     assert _entry(result, "azure_openai")["needs_api_base"] is True
+    assert _entry(result, "ollama_chat")["needs_api_base"] is True
     assert _entry(result, "anthropic")["needs_api_base"] is False
 
 
@@ -204,10 +222,11 @@ async def test_disconnect_clears_creds(fake_home: Path) -> None:
 async def test_add_model_reflected_in_options(fake_home: Path) -> None:
     await model_save_key({"slug": "anthropic", "api_key": "sk-ant-xxx"})
     result = await model_add_model({"slug": "anthropic", "model": "claude-opus-4-8"})
-    assert "claude-opus-4-8" in result["provider"]["models"]
+    # Stored qualified: a bare id is claimed by keyword matching instead.
+    assert "anthropic/claude-opus-4-8" in result["provider"]["models"]
 
     options = await model_options({})
-    assert "claude-opus-4-8" in _entry(options, "anthropic")["models"]
+    assert "anthropic/claude-opus-4-8" in _entry(options, "anthropic")["models"]
 
 
 async def test_a_bare_model_typed_for_codex_is_stored_so_it_finds_codex(fake_home: Path) -> None:
@@ -242,6 +261,112 @@ async def test_add_model_unknown_provider_rejected(fake_home: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# model.endpoints / model.add_endpoint / model.remove_endpoint
+# ----------------------------------------------------------------------------
+
+
+async def test_add_endpoint_answers_with_the_refreshed_list(fake_home: Path) -> None:
+    result = await model_add_endpoint(
+        {"slug": "deepseek", "label": "eu", "api_key": "sk-eu", "api_base": "https://eu.example.test/v1"}
+    )
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+    assert result["endpoints"][0]["api_base"] == "https://eu.example.test/v1"
+
+    listed = await model_endpoints({"slug": "deepseek"})
+    assert listed == result
+
+
+async def test_endpoints_never_hand_back_the_key(fake_home: Path) -> None:
+    """The picker only ever displays this list, and a key it did not need to see
+    is a key a screenshot can leak.
+
+    ``hosted_vllm`` rather than ``deepseek``: a key-based provider now refuses
+    a keyless endpoint at write time (see the tests below), so a local
+    deployment -- which legitimately has none -- is what exercises the
+    keyless half of this without also asserting the opposite rule.
+    """
+    await model_add_endpoint({"slug": "hosted_vllm", "label": "eu", "api_key": "sk-eu-secret"})
+    await model_add_endpoint({"slug": "hosted_vllm", "label": "keyless"})
+
+    by_label = {ep["label"]: ep["api_key"] for ep in (await model_endpoints({"slug": "hosted_vllm"}))["endpoints"]}
+
+    assert "sk-eu-secret" not in by_label.values()
+    assert by_label == {"eu": "****set****", "keyless": "(empty)"}
+
+
+async def test_add_endpoint_without_a_key_is_refused_for_a_key_based_provider(fake_home: Path) -> None:
+    """Same ops-layer rule the CLI ``endpoint add`` command goes through --
+    the picker must not be able to persist what the CLI refuses."""
+    with pytest.raises(ConfigValidationError, match="api_key"):
+        await model_add_endpoint({"slug": "deepseek", "label": "keyless"})
+
+
+async def test_add_endpoint_replaces_the_entry_with_the_same_label(fake_home: Path) -> None:
+    """``label`` is the idempotency key, so re-adding it is how a rotated key is
+    written -- appending a second entry would leave the dead key in rotation."""
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-old"})
+    result = await model_add_endpoint(
+        {"slug": "deepseek", "label": "eu", "api_key": "sk-new", "api_base": "https://eu.example.test/v1"}
+    )
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+    assert result["endpoints"][0]["api_base"] == "https://eu.example.test/v1"
+    section = json.loads((fake_home / ".raven" / "config.json").read_text())["providers"]["deepseek"]
+    assert [ep["apiKey"] for ep in section["endpoints"]] == ["sk-new"]
+
+
+async def test_remove_endpoint_reflected_in_the_list(fake_home: Path) -> None:
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu"})
+    await model_add_endpoint({"slug": "deepseek", "label": "us", "api_key": "sk-us"})
+
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "eu"})
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["us"]
+    listed = await model_endpoints({"slug": "deepseek"})
+    assert [ep["label"] for ep in listed["endpoints"]] == ["us"]
+
+
+async def test_removing_an_absent_label_is_a_no_op(fake_home: Path) -> None:
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu"})
+
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "never-existed"})
+
+    assert [ep["label"] for ep in result["endpoints"]] == ["eu"]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda: model_endpoints({"slug": "no_such_provider"}), id="endpoints"),
+        pytest.param(lambda: model_add_endpoint({"slug": "no_such_provider", "label": "eu"}), id="add_endpoint"),
+        pytest.param(lambda: model_remove_endpoint({"slug": "no_such_provider", "label": "eu"}), id="remove_endpoint"),
+    ],
+)
+async def test_endpoint_handlers_reject_an_unknown_provider(fake_home: Path, call) -> None:
+    with pytest.raises(ConfigValidationError):
+        await call()
+
+
+@pytest.mark.parametrize("slug", ["azure_openai", "github_copilot"])
+async def test_add_endpoint_rejects_providers_that_cannot_rotate(slug: str, fake_home: Path) -> None:
+    """Mirrors ``make_provider``'s build-time rejection: a provider that
+    connects through one dedicated client/account, not several, must be
+    rejected here too, with a readable message rather than a bare traceback."""
+    with pytest.raises(ConfigValidationError, match="does not support multiple endpoints"):
+        await model_add_endpoint({"slug": slug, "label": "x", "api_key": "k"})
+
+
+async def test_endpoint_handlers_accept_session_id(fake_home: Path) -> None:
+    # The picker passes its session down like it does for every other model.*
+    # call; a strict param model would reject the key otherwise.
+    await model_add_endpoint({"slug": "deepseek", "label": "eu", "api_key": "sk-eu", "session_id": "tui:default"})
+    await model_endpoints({"slug": "deepseek", "session_id": "tui:default"})
+    result = await model_remove_endpoint({"slug": "deepseek", "label": "eu", "session_id": "tui:default"})
+
+    assert result["endpoints"] == []
+
+
+# ----------------------------------------------------------------------------
 # Dispatcher wiring
 # ----------------------------------------------------------------------------
 
@@ -267,6 +392,17 @@ async def test_model_methods_registered_via_helper(fake_home: Path) -> None:
     )
     assert resp["error"]["code"] == -32012
 
+    resp = await d.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "model.endpoints",
+            "params": {"slug": "deepseek"},
+        }
+    )
+    assert "error" not in resp
+    assert resp["result"] == {"endpoints": []}
+
 
 # ----------------------------------------------------------------------------
 # Regressions (code review)
@@ -281,9 +417,19 @@ async def test_options_accepts_session_id(fake_home: Path) -> None:
     assert "providers" in result
 
 
-async def test_save_key_custom_without_api_base_rejected(fake_home: Path) -> None:
-    with pytest.raises(ConfigValidationError):
-        await model_save_key({"slug": "custom", "api_key": "x"})
+async def test_save_key_custom_key_only_accepted(fake_home: Path) -> None:
+    """The spec ships a default address, so a bare key is a runnable submission --
+    the same answer `credential_status` gives; the picker must not refuse what
+    `raven provider set custom --api-key` accepts."""
+    result = await model_save_key({"slug": "custom", "api_key": "x"})
+    assert result["provider"]["authenticated"] is True
+
+
+async def test_save_key_azure_key_only_still_rejected(fake_home: Path) -> None:
+    """No spec default to fall back on: the address stays mandatory."""
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await model_save_key({"slug": "azure_openai", "api_key": "x"})
+    assert excinfo.value.data["field"] == "api_base"
 
 
 # ----------------------------------------------------------------------------
@@ -406,7 +552,7 @@ def test_catalogue_ids_are_spelled_the_way_they_route() -> None:
     bare would be routed by keyword instead of to the provider the user picked.
     """
     from raven.providers.common_models import litellm_models_for
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_model, find_by_name
 
     for slug in ("moonshot", "volcengine", "ollama_chat"):
         spec = find_by_name(slug)
@@ -418,9 +564,14 @@ def test_catalogue_ids_are_spelled_the_way_they_route() -> None:
             # reads "moonshot/moonshot/x" as correct, so it could not tell a
             # re-prefixed id from a right one.
             head, _, rest = model.partition("/")
-            assert head == spec.model_prefix, f"{slug}: {model}"
             assert rest, f"{slug}: {model} has no id after the prefix"
-            assert not rest.startswith(f"{spec.model_prefix}/"), f"{slug}: double-prefixed {model}"
+            # The outcome, not one spelling of it: a candidate has to resolve
+            # back to the provider it was offered for. Asserting the wire prefix
+            # instead tied this to how the id happens to be spelled, which is
+            # `stored_model_id`'s business and differs from the routing prefix
+            # for every underscore-named provider.
+            assert find_by_model(model) is spec, f"{slug}: {model} resolves elsewhere"
+            assert not rest.startswith(f"{head}/"), f"{slug}: double-prefixed {model}"
 
 
 def test_catalogue_offers_only_chat_models() -> None:
@@ -524,14 +675,14 @@ async def test_save_key_still_requires_a_key_for_a_keyed_provider(fake_home: Pat
     """Relaxing the field for local deployments must not relax it for the rest."""
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "deepseek", "api_key": ""})
-    assert "api_key" in str(excinfo.value)
+    assert excinfo.value.data["field"] == "api_key"
 
 
 async def test_save_key_requires_an_address_for_a_local_deployment(fake_home: Path) -> None:
     """Neither field given is not a configured provider."""
     with pytest.raises(ConfigValidationError) as excinfo:
         await model_save_key({"slug": "ollama_chat"})
-    assert "api_base" in str(excinfo.value)
+    assert excinfo.value.data["field"] == "api_base"
 
 
 async def test_options_lists_the_codex_models_the_account_reports(
@@ -591,15 +742,22 @@ def test_the_account_catalogue_is_asked_only_when_it_can_answer(
         pytest.param("openai_codex", "gpt-5.6-sol", "openai-codex/gpt-5.6-sol", id="codex-typed-bare"),
         pytest.param("openai_codex", "openai-codex/gpt-5.4", "openai-codex/gpt-5.4", id="codex-typed-prefixed"),
         pytest.param("minimax_global", "MiniMax-M2", "minimax-global/MiniMax-M2", id="minimax-typed-bare"),
-        pytest.param("deepseek", "deepseek-chat", "deepseek-chat", id="a-provider-that-routes-on-it"),
-        pytest.param("azure_openai", "my-deployment", "my-deployment", id="azure-uses-it-verbatim-in-a-url"),
+        pytest.param("deepseek", "deepseek-chat", "deepseek/deepseek-chat", id="a-provider-that-routes-on-it"),
+        pytest.param("azure_openai", "my-deployment", "azure-openai/my-deployment", id="azure-names-its-provider-too"),
+        pytest.param("zai", "zhipu/glm-4.6", "zai/glm-4.6", id="a-former-name-is-canonicalized"),
+        pytest.param("zai", "openrouter/z-ai/glm-4.6", "openrouter/z-ai/glm-4.6", id="a-declared-skip-prefix-is-left"),
     ],
 )
 def test_a_typed_model_is_stored_the_way_it_resolves_back(slug: str, typed: str, stored: str) -> None:
     """The add-model screen takes free text, and a bare id is claimed by keyword
     matching rather than by the provider it was entered under: "gpt-5.6-sol"
-    resolves to OpenAI. The listed models already carry the prefix; a typed one
-    has to end up spelled the same way."""
+    resolves to OpenAI.
+
+    Every provider now stores a qualified id, not the three whose own client
+    strips the prefix back off. Azure included: its deployment comes off again in
+    the URL builder, which is where that belongs -- storing it bare was the one
+    thing that made Azure ids shaped unlike everyone else's.
+    """
     from raven.tui_rpc.methods.model import _stored_spelling
 
     assert _stored_spelling(slug, typed) == stored
@@ -612,13 +770,72 @@ def test_every_provider_stores_a_model_id_that_finds_it_again(spec) -> None:
     whoever else claims the bare name. Providers that route on the prefix or use
     the id verbatim are covered by resolving as themselves.
     """
-    from raven.providers.registry import find_by_model, needs_public_model_prefix
+    from raven.providers.registry import find_by_model
     from raven.tui_rpc.methods.model import _stored_spelling
-
-    if not needs_public_model_prefix(spec):
-        pytest.skip("no public prefix to add; the id is routed or used verbatim")
 
     stored = _stored_spelling(spec.name, "some-model")
     resolved = find_by_model(stored)
 
     assert resolved is not None and resolved.name == spec.name, f"{stored} resolves to {resolved and resolved.name}"
+
+
+async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> None:
+    """A model the catalogues cannot describe still arrives with a name.
+
+    The list already let a model be added; naming one is what was missing, so a
+    self-hosted deployment reached the picker as a bare id with no description
+    line at all -- `_model_labels` skips every row nothing describes.
+    """
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "hosted-vllm/my-finetune-v3"}},
+            "providers": {
+                "hosted_vllm": {
+                    "apiBase": "http://localhost:8000/v1",
+                    "models": ["hosted-vllm/my-finetune-v3"],
+                    "modelOverlay": {"my-finetune-v3": {"label": "Our finetune", "description": "tuned on tickets"}},
+                }
+            },
+        },
+    )
+    entry = _entry(await model_options({}), "hosted_vllm")
+    label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
+    assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+
+
+async def test_options_config_reads_do_not_scale_with_the_row_count(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_entries_off_loop` hoists the config read: one `load_config` for all
+    rows, one for the current selection, one raw read inside `list_providers`.
+    Without the hoist every row re-parsed the config from disk (the
+    `list_providers` mapping and `_configured_overlays` via `load_config`,
+    the curated models via `get_provider_config`'s raw read), so these counts
+    sat above the row count instead. An absolute bound because the row count
+    itself never varies -- the picker lists every registry provider whether
+    or not it is configured."""
+    import raven.config.loader as loader
+    import raven.config.update_providers as update_providers
+
+    _write_config(fake_home, {"providers": {"anthropic": {"api_key": "sk-1"}}})
+    real_load = loader.load_config
+    real_raw = update_providers.read_raw_or_raise
+    calls = {"load_config": 0, "raw_read": 0}
+
+    def counting_load(*args: object, **kwargs: object):
+        calls["load_config"] += 1
+        return real_load(*args, **kwargs)
+
+    def counting_raw(*args: object, **kwargs: object):
+        calls["raw_read"] += 1
+        return real_raw(*args, **kwargs)
+
+    monkeypatch.setattr(loader, "load_config", counting_load)
+    monkeypatch.setattr(update_providers, "read_raw_or_raise", counting_raw)
+    result = await model_options({})
+
+    assert len(result["providers"]) > 3, "too few rows for the bound to mean anything"
+    assert calls["load_config"] <= 2, f"{calls} for {len(result['providers'])} rows"
+    assert calls["raw_read"] <= 1, f"{calls} for {len(result['providers'])} rows"

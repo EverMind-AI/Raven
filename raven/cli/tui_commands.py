@@ -397,6 +397,7 @@ def _build_tui_agent_loop():
     """
     from pydantic import ValidationError
 
+    from raven.providers.auth import MissingCredentialsError
     from raven.tui_rpc.errors import InternalError
 
     try:
@@ -479,6 +480,18 @@ def _build_tui_agent_loop():
         # scheduler and its reply is fanned out as a cron.delivered event.
 
         return agent_loop
+    except MissingCredentialsError as e:
+        # Not a crash: the install simply is not finished. Surfaced as the
+        # sentence that says which provider needs what, where the generic
+        # handler below reported `exception_message: "1"` -- `typer.Exit`
+        # stringified -- and put the real one in a log file.
+        from loguru import logger as _logger
+
+        _logger.warning("tui: provider not usable: {}", e.summary)
+        raise InternalError(
+            e.summary,
+            data={"reason": "missing_credentials", "provider": e.provider, "remedy": e.remedy},
+        ) from e
     except (*_TUI_INIT_CRASH_TYPES, ValidationError) as e:
         from loguru import logger as _logger
 

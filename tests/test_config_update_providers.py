@@ -13,15 +13,19 @@ import pytest
 from raven.config.update_providers import (
     _copilot_token_dir,
     _oauth_token_path,
+    add_provider_endpoint,
     add_provider_model,
     get_provider_config,
+    list_provider_endpoints,
     list_providers,
     provider_field_specs,
+    remove_provider_endpoint,
     remove_provider_model,
     reset_provider,
     set_provider_fields,
 )
 from raven.config.update_providers import test_provider as probe_provider
+from raven.providers.registry import PROVIDERS as _PROVIDERS
 
 
 @pytest.fixture
@@ -86,13 +90,12 @@ def test_set_complex_provider_azure(cfg_path: Path) -> None:
 def test_set_gemini_extra_fields(cfg_path: Path) -> None:
     set_provider_fields(
         "gemini",
-        {"api_key": "g-key", "vertex": "true", "api_key_list": "k1,k2,k3"},
+        {"api_key": "g-key", "api_key_list": "k1,k2,k3"},
         config_path=cfg_path,
     )
 
     section = _read(cfg_path)["providers"]["gemini"]
     assert section["apiKey"] == "g-key"
-    assert section["vertex"] is True
     assert section["apiKeyList"] == ["k1", "k2", "k3"]
 
 
@@ -103,6 +106,17 @@ def test_set_api_key_for_oauth_provider_raises(cfg_path: Path) -> None:
             {"api_key": "ghu_abc"},
             config_path=cfg_path,
         )
+
+
+def test_set_extra_headers_for_oauth_provider_is_allowed(cfg_path: Path) -> None:
+    """The OAuth guard forbids credential fields, not everything the display
+    faces redact: extra_headers is secret to show but no credential, and
+    `provider login` would never write it -- refusing it here sent the user
+    to a command that changes nothing."""
+    set_provider_fields("github_copilot", {"extra_headers": {"X-Trace": "on"}}, config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["github_copilot"]
+    assert section["extraHeaders"] == {"X-Trace": "on"}
 
 
 def test_set_unknown_provider_raises_with_helpful_message(cfg_path: Path) -> None:
@@ -184,6 +198,70 @@ def test_gemini_api_key_list_plaintext_with_redact_false(cfg_path: Path) -> None
     )
     cfg = get_provider_config("gemini", redact_secrets=False, config_path=cfg_path)
     assert cfg["api_key_list"] == ["k1", "k2"]
+
+
+def test_get_redacts_api_key_nested_inside_endpoints(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="a", api_key="sk-SUPER-SECRET-A", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="b", api_key="sk-SUPER-SECRET-B", config_path=cfg_path)
+
+    cfg = get_provider_config("openrouter", config_path=cfg_path)
+
+    assert [ep.api_key for ep in cfg["endpoints"]] == ["****set****", "****set****"]
+    assert "sk-SUPER-SECRET-A" not in repr(cfg)
+    assert "sk-SUPER-SECRET-B" not in repr(cfg)
+    # Non-secret fields on the same endpoint pass through untouched.
+    assert [ep.label for ep in cfg["endpoints"]] == ["a", "b"]
+
+
+def test_get_redacts_flat_extra_header_values_too(cfg_path: Path) -> None:
+    """The section-level ``extra_headers`` (an AiHubMix APP-Code lives there)
+    must follow the same per-value rule as the per-endpoint dict -- one table,
+    one rule."""
+    set_provider_fields(
+        "aihubmix", {"api_key": "k", "extra_headers": {"APP-Code": "SECRET-VALUE"}}, config_path=cfg_path
+    )
+
+    cfg = get_provider_config("aihubmix", config_path=cfg_path)
+
+    assert cfg["extra_headers"] == {"APP-Code": "****set****"}
+    assert "SECRET-VALUE" not in repr(cfg)
+    plain = get_provider_config("aihubmix", redact_secrets=False, config_path=cfg_path)
+    assert plain["extra_headers"] == {"APP-Code": "SECRET-VALUE"}
+
+
+def test_get_redacts_extra_header_values_keeping_keys_visible(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="a",
+        api_key="k1",
+        extra_headers={"X-Region": "eu-secret"},
+        config_path=cfg_path,
+    )
+
+    cfg = get_provider_config("openrouter", config_path=cfg_path)
+
+    assert cfg["endpoints"][0].extra_headers == {"X-Region": "****set****"}
+    assert "eu-secret" not in repr(cfg)
+
+
+def test_get_endpoints_plaintext_with_redact_false(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="a", api_key="sk-SUPER-SECRET-A", config_path=cfg_path)
+
+    cfg = get_provider_config("openrouter", redact_secrets=False, config_path=cfg_path)
+
+    assert cfg["endpoints"][0].api_key == "sk-SUPER-SECRET-A"
+
+
+def test_get_endpoints_empty_key_renders_as_empty(cfg_path: Path) -> None:
+    # hosted_vllm rather than openrouter: a key-based provider now refuses to
+    # persist a keyless endpoint (see the write-time tests in the endpoints
+    # section below) -- a local deployment is the shape that legitimately has
+    # none, and the redaction rule under test does not depend on which.
+    add_provider_endpoint("hosted_vllm", label="a", api_base="http://localhost:8000/v1", config_path=cfg_path)
+
+    cfg = get_provider_config("hosted_vllm", config_path=cfg_path)
+
+    assert cfg["endpoints"][0].api_key == "(empty)"
 
 
 # ---------------------------------------------------------------------------
@@ -360,6 +438,94 @@ def test_list_reports_every_provider_with_correct_status(cfg_path: Path) -> None
     assert len(rows) >= 18
 
 
+def test_list_reports_endpoints_only_provider_key_state_consistently(cfg_path: Path) -> None:
+    """No flat ``api_key`` set, only ``endpoints`` -- the key column must not say
+    ``(empty)`` while the same row's ``configured`` says the credential is present."""
+    add_provider_endpoint("openrouter", label="a", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="b", api_key="k2", config_path=cfg_path)
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["configured"] is True
+    assert row["api_key_redacted"] == "****set**** (2 endpoints)"
+
+
+def test_list_does_not_call_keyless_endpoints_set(cfg_path: Path) -> None:
+    """The mirror direction of the consistency rule: endpoints whose keys are
+    all empty hold no credential, so the key column must not say set while
+    credential_status says the section is unconfigured.
+
+    Blanked out by hand after the write rather than passed to
+    ``add_provider_endpoint`` directly: that function now refuses to persist a
+    keyless endpoint for a key-based provider like openrouter, so a section
+    shaped like this can only exist from a config written before that rule, or
+    hand-edited -- ``list_providers`` still has to describe it accurately.
+    """
+    add_provider_endpoint("openrouter", label="a", api_key="k1", api_base="https://a.example/v1", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["endpoints"][0]["apiKey"] = ""
+    cfg_path.write_text(json.dumps(data))
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["configured"] is False
+    assert row["api_key_redacted"] == "(empty) (1 endpoints)"
+
+
+def test_list_shows_the_endpoint_count_for_a_local_deployment(cfg_path: Path) -> None:
+    """Keyless endpoints are a local deployment's normal shape (several vLLM
+    instances behind one section); the key column must surface the count
+    instead of hiding it behind the local wording."""
+    add_provider_endpoint("hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path)
+    add_provider_endpoint("hosted_vllm", label="b", api_base="http://10.0.0.6:8000/v1", config_path=cfg_path)
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["hosted_vllm"]
+
+    assert row["api_key_redacted"] == "(not needed for local) (2 endpoints)"
+
+
+def test_list_flat_key_residue_does_not_paper_over_keyless_endpoints(cfg_path: Path) -> None:
+    """A stale flat ``api_key`` left behind by an ``endpoints`` migration must
+    not display as set while ``configured`` -- decided off the endpoints list,
+    same as every other gate -- says the section is not usable.
+    """
+    add_provider_endpoint("openrouter", label="a", api_key="k1", api_base="https://a.example/v1", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["apiKey"] = "stale-flat-key"
+    data["providers"]["openrouter"]["endpoints"][0]["apiKey"] = ""
+    cfg_path.write_text(json.dumps(data))
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["configured"] is False
+    assert row["api_key_redacted"] == "(empty) (1 endpoints)"
+
+
+def test_endpoint_ops_refuse_an_invalid_section_instead_of_wiping_it(cfg_path: Path) -> None:
+    """A section that no longer validates must stop the endpoint commands loudly.
+
+    Swallowing the error made them see an empty list and write it back: a
+    hand-edited duplicate label -- which already stops Raven from starting --
+    plus one `provider endpoint add` erased every real endpoint in the
+    section, on exactly the command a user would reach for to fix things.
+    """
+    import json
+
+    from pydantic import ValidationError
+
+    add_provider_endpoint("openrouter", label="keep-1", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="keep-2", api_key="k2", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["endpoints"].append({"label": "keep-1", "apiKey": "dup"})
+    cfg_path.write_text(json.dumps(data))
+
+    with pytest.raises(ValidationError):
+        add_provider_endpoint("openrouter", label="new", api_key="k3", config_path=cfg_path)
+
+    survivors = json.loads(cfg_path.read_text())["providers"]["openrouter"]["endpoints"]
+    assert [ep["label"] for ep in survivors] == ["keep-1", "keep-2", "keep-1"]
+
+
 # ---------------------------------------------------------------------------
 # provider_field_specs
 # ---------------------------------------------------------------------------
@@ -523,6 +689,59 @@ def test_test_provider_not_configured_when_api_key_empty(cfg_path: Path) -> None
     assert result["status"] == "not_configured"
 
 
+def test_test_provider_endpoints_only_section_probes_the_endpoints_key(cfg_path: Path) -> None:
+    """No flat ``api_key`` at all -- the credential lives only in ``endpoints``.
+
+    The probe used to read ``cfg.get("api_key")`` directly, which is empty for
+    an endpoints-only section, and reported ``not_configured`` on a section the
+    runtime could already serve. It must read the same resolved list
+    (``provider_endpoints``) that a real request does -- including that
+    request's own ``api_base``, not the vendor default.
+    """
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="sk-or-endpoint-test",
+        api_base="https://example-endpoint.test/v1",
+        config_path=cfg_path,
+    )
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert seen["auth"] == "Bearer sk-or-endpoint-test"
+    assert seen["url"].startswith("https://example-endpoint.test/v1")
+
+
+def test_test_provider_gemini_api_key_list_section_probes_the_first_key(cfg_path: Path) -> None:
+    """Same gap, Gemini's shape: a plural ``api_key_list`` and no flat ``api_key``."""
+    set_provider_fields(
+        "gemini",
+        {"api_key_list": "AIzaTEST1,AIzaTEST2", "api_base": "https://example-gemini.test/v1"},
+        config_path=cfg_path,
+    )
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"data": []})
+
+    result = probe_provider("gemini", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert seen["auth"] == "Bearer AIzaTEST1"
+
+
 def test_test_provider_oauth_sends_the_stored_token(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -619,6 +838,196 @@ def test_remove_absent_model_is_noop(cfg_path: Path) -> None:
 def test_add_provider_model_unknown_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(KeyError):
         add_provider_model("nonexistent_provider", "x", config_path=cfg_path)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints (add_provider_endpoint / remove_provider_endpoint / list_provider_endpoints)
+# ---------------------------------------------------------------------------
+
+
+def test_add_provider_endpoint_appends(cfg_path: Path) -> None:
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary"]
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert section["endpoints"] == [{"label": "primary", "apiKey": "k1", "apiBase": None, "extraHeaders": None}]
+
+
+def test_add_provider_endpoint_appends_a_second_label(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    endpoints = add_provider_endpoint("openrouter", label="backup", api_key="k2", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary", "backup"]
+
+
+def test_add_provider_endpoint_same_label_replaces_wholesale(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        api_base="https://old.example.com",
+        extra_headers={"X-Old": "1"},
+        config_path=cfg_path,
+    )
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k2", config_path=cfg_path)
+
+    # A field omitted on the replacement is gone, not carried over from the old
+    # entry: this is a replace, not a merge.
+    assert len(endpoints) == 1
+    assert endpoints[0].api_key == "k2"
+    assert endpoints[0].api_base is None
+    assert endpoints[0].extra_headers is None
+
+
+def test_add_provider_endpoint_with_api_base_and_headers(cfg_path: Path) -> None:
+    endpoints = add_provider_endpoint(
+        "openrouter",
+        label="eu",
+        api_key="k1",
+        api_base="https://eu.example.com",
+        extra_headers={"X-Region": "eu"},
+        config_path=cfg_path,
+    )
+
+    assert endpoints[0].api_base == "https://eu.example.com"
+    assert endpoints[0].extra_headers == {"X-Region": "eu"}
+
+
+def test_add_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        add_provider_endpoint("nonexistent_provider", label="x", api_key="k", config_path=cfg_path)
+
+
+def test_add_provider_endpoint_refuses_an_empty_key_for_a_key_based_provider(cfg_path: Path) -> None:
+    """The write-time half of the rule: an endpoint with no key is a request
+    that will 401, so a key-based provider refuses to persist one -- the same
+    check the picker and the CLI both need, decided once in the ops layer.
+    """
+    with pytest.raises(RuntimeError, match="api_key"):
+        add_provider_endpoint("openrouter", label="a", api_base="https://a.example/v1", config_path=cfg_path)
+
+
+def test_add_provider_endpoint_allows_an_empty_key_for_a_local_deployment(cfg_path: Path) -> None:
+    """Derived from the registry's credential shape (``credential_kind``), not
+    a hardcoded vendor list: a local deployment has no key to give."""
+    endpoints = add_provider_endpoint(
+        "hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path
+    )
+
+    assert endpoints[0].api_key == ""
+    assert endpoints[0].api_base == "http://10.0.0.5:8000/v1"
+
+
+@pytest.mark.parametrize("provider", ["azure_openai", "github_copilot"])
+def test_add_provider_endpoint_rejects_providers_that_cannot_rotate(provider: str, cfg_path: Path) -> None:
+    """Azure connects through a dedicated client, github_copilot through OAuth --
+    neither takes an ``endpoints`` list. ``make_provider`` already refused this
+    at build time; the write path must refuse it before ever touching disk,
+    not accept a section that starts up broken."""
+    with pytest.raises(RuntimeError, match="does not support multiple endpoints"):
+        add_provider_endpoint(provider, label="x", api_key="k", config_path=cfg_path)
+
+    assert not cfg_path.exists()
+
+
+def test_add_provider_endpoint_still_accepts_a_plain_api_key_provider(cfg_path: Path) -> None:
+    """openrouter is a plain API-key vendor reached through litellm -- the one
+    shape ``endpoints`` is meaningful for -- and must be unaffected by the
+    guard above."""
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    assert [e.label for e in endpoints] == ["primary"]
+
+
+def test_remove_provider_endpoint(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    add_provider_endpoint("openrouter", label="backup", api_key="k2", config_path=cfg_path)
+
+    endpoints = remove_provider_endpoint("openrouter", "primary", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["backup"]
+    section = _read(cfg_path)["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["backup"]
+
+
+def test_remove_absent_endpoint_is_noop(cfg_path: Path) -> None:
+    add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+
+    endpoints = remove_provider_endpoint("openrouter", "not-there", config_path=cfg_path)
+
+    assert [e.label for e in endpoints] == ["primary"]
+
+
+def test_remove_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        remove_provider_endpoint("nonexistent_provider", "x", config_path=cfg_path)
+
+
+def test_list_provider_endpoints_redacts_api_key(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        api_base="https://example.com",
+        config_path=cfg_path,
+    )
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out == [
+        {"label": "primary", "api_key": "****set****", "api_base": "https://example.com", "extra_headers": None}
+    ]
+
+
+def test_list_provider_endpoints_reports_empty_key(cfg_path: Path) -> None:
+    # hosted_vllm: a key-based provider (openrouter) now refuses to persist a
+    # keyless endpoint -- see the write-time tests above.
+    add_provider_endpoint("hosted_vllm", label="primary", api_base="http://localhost:8000/v1", config_path=cfg_path)
+
+    out = list_provider_endpoints("hosted_vllm", config_path=cfg_path)
+
+    assert out[0]["api_key"] == "(empty)"
+
+
+def test_list_provider_endpoints_redacts_extra_header_values(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        extra_headers={"X-Region": "eu-secret"},
+        config_path=cfg_path,
+    )
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out[0]["extra_headers"] == {"X-Region": "****set****"}
+
+
+def test_list_provider_endpoints_shows_the_inherited_flat_address(cfg_path: Path) -> None:
+    """An entry written with only ``--label``/``--api-key`` runs against the
+    section's flat address (see ``provider_endpoints``); the display face must
+    show that resolved address, not an empty field the user reads as "the
+    config did not take"."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "openrouter", {"api_key": "flat-key", "api_base": "https://shared.example/v1"}, config_path=cfg_path
+    )
+    add_provider_endpoint("openrouter", label="a", api_key="k1", config_path=cfg_path)
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out == [
+        {"label": "a", "api_key": "****set****", "api_base": "https://shared.example/v1", "extra_headers": None}
+    ]
+
+
+def test_list_provider_endpoints_default_when_none_configured(cfg_path: Path) -> None:
+    assert list_provider_endpoints("openrouter", config_path=cfg_path) == []
+
+
+def test_list_provider_endpoints_unknown_provider_raises(cfg_path: Path) -> None:
+    with pytest.raises(KeyError):
+        list_provider_endpoints("nonexistent_provider", config_path=cfg_path)
 
 
 def test_malformed_config_refuses_write_and_preserves_file(cfg_path: Path) -> None:
@@ -882,3 +1291,177 @@ def test_probing_codex_offers_a_sign_in_when_the_credential_is_the_problem(
 
     assert result["status"] == "oauth_token_missing", result
     assert "could not renew" in result["error"]
+
+
+def test_a_model_stored_one_way_is_removed_by_the_other(cfg_path: Path) -> None:
+    """Deletion matches the model, not the spelling.
+
+    The two write paths disagreed for most providers, so a list could hold one
+    model as both `glm-4.6` and `zai/glm-4.6`. Removing either string left the
+    other behind, and the call reported success.
+    """
+    from raven.config.update_providers import add_provider_model, remove_provider_model
+
+    add_provider_model("zai", "glm-4.6", config_path=cfg_path)
+    remaining = remove_provider_model("zai", "zai/glm-4.6", config_path=cfg_path)
+    assert remaining == []
+
+
+def test_the_same_model_in_two_spellings_is_added_once(cfg_path: Path) -> None:
+    from raven.config.update_providers import add_provider_model
+
+    add_provider_model("zai", "zai/glm-4.6", config_path=cfg_path)
+    assert add_provider_model("zai", "glm-4.6", config_path=cfg_path) == ["zai/glm-4.6"]
+
+
+def test_the_cli_writes_a_model_id_the_way_every_other_path_does(cfg_path: Path) -> None:
+    """`provider set --models` is the third write path and skipped the contract.
+
+    It stored a bare id while the picker and the wizard stored a qualified one.
+    Identity still matched so nothing visibly broke -- which is how the two
+    spellings coexisted the last time, right up until a delete matched neither.
+    """
+    from raven.providers.wire import stored_model_id
+
+    set_provider_fields("anthropic", {"models": "claude-opus-4-8,anthropic/claude-sonnet-5"}, config_path=cfg_path)
+
+    stored = _read(cfg_path)["providers"]["anthropic"]["models"]
+    assert stored == ["anthropic/claude-opus-4-8", "anthropic/claude-sonnet-5"]
+    assert stored[0] == stored_model_id("anthropic", "claude-opus-4-8")
+
+
+# ---------------------------------------------------------------------------
+# Providers that ship no default address: the probe used to call them unconfigured
+# ---------------------------------------------------------------------------
+
+
+def test_a_vendor_litellm_knows_the_address_of_is_actually_probed(cfg_path: Path) -> None:
+    """Ten providers carry no ``default_api_base``, and this returned
+    ``not_configured`` for every one of them -- telling a correctly configured
+    install to set the key it had already set. LiteLLM knows where four of them
+    live, because it is the thing that sends their requests.
+    """
+    _seed_key(cfg_path, "groq", "sk-groq")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(401, json={"error": "bad key"})
+
+    result = probe_provider("groq", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert seen, "the probe never left the building"
+    assert "groq.com" in seen[0], seen
+    assert result["status"] == "invalid_key", "a bad key is now distinguishable from an unconfigured one"
+
+
+def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(cfg_path: Path) -> None:
+    """Anthropic, OpenAI and Gemini compile the address into their SDKs, so
+    there is no ``/models`` to ping and nothing the user could supply. The key is
+    there; this probe simply cannot reach the vendor. Saying so is the honest
+    answer, and it is not a failure."""
+    _seed_key(cfg_path, "anthropic", "sk-ant")
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be reached
+        raise AssertionError(f"nothing should have been sent: {request.url}")
+
+    result = probe_provider("anthropic", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["status"] == "no_probe_endpoint"
+    assert result["ok"] is False
+    assert "credential present" in result["error"]
+
+
+def test_a_provider_that_genuinely_needs_an_address_still_says_so(cfg_path: Path) -> None:
+    """A self-hosted deployment and an Azure resource are addresses only the user
+    knows, so ``not_configured`` is the truth for those two -- the change must not
+    turn a real gap into a shrug."""
+    for name in ("hosted_vllm", "azure_openai"):
+        _seed_key(cfg_path, name, "sk-x")
+        result = probe_provider(name, config_path=cfg_path, transport=_mock_transport(lambda r: httpx.Response(200)))
+        assert result["status"] == "not_configured", name
+
+
+def test_a_404_from_an_address_we_guessed_is_not_reported_as_a_broken_key(cfg_path: Path) -> None:
+    """DeepSeek's completions endpoint is ``/beta``, which has no ``/models``.
+
+    A 404 never says anything about a credential, so surfacing it as a failure
+    would be the original lie in a new spelling. A 404 from an address the *user*
+    supplied is different -- that is a typo they need to see -- so this only
+    applies where the address was derived.
+    """
+    _seed_key(cfg_path, "deepseek", "sk-deepseek")
+
+    derived = probe_provider(
+        "deepseek",
+        config_path=cfg_path,
+        transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
+    )
+    assert derived["status"] == "no_probe_endpoint"
+
+    set_provider_fields("deepseek", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
+    typed = probe_provider(
+        "deepseek",
+        config_path=cfg_path,
+        transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
+    )
+    assert typed["status"] == "http_404", "a user's own wrong address must still surface"
+
+
+def test_probing_a_login_prompting_provider_never_asks_litellm_to_resolve_it(cfg_path: Path) -> None:
+    """Resolving a Copilot id resolves its credentials on the way.
+
+    With no token file that prints a device code to stdout and blocks; deriving
+    the address before the branch that handles Copilot separately hung this one
+    probe on that login. Recorded rather than raised, because the
+    derivation swallows exceptions to fall through -- a probe that raises is
+    caught and proves nothing.
+    """
+    import litellm
+
+    asked: list[str] = []
+
+    def _record(*args, **kwargs):
+        asked.append(str(kwargs.get("model") or (args[0] if args else "?")))
+        raise Exception("unmapped")
+
+    original = litellm.get_llm_provider
+    litellm.get_llm_provider = _record
+    try:
+        probe_provider("github_copilot", config_path=cfg_path, transport=_mock_transport(lambda r: httpx.Response(200)))
+    finally:
+        litellm.get_llm_provider = original
+
+    assert not asked, f"a login-prompting id was handed to LiteLLM: {asked}"
+
+
+@pytest.mark.parametrize("spec", [s for s in _PROVIDERS if s.is_oauth], ids=lambda s: s.name)
+def test_an_oauth_provider_is_never_resolved_through_litellm_for_its_address(spec, cfg_path: Path) -> None:
+    """Resolving one of these resolves its credentials on the way, which prints a
+    device code and blocks.
+
+    Asserted per OAuth provider rather than for the one that broke: the guard
+    used to be asked about the *wire* form of the id, and `wire_model` strips the
+    provider name outright for the codex and azure shapes -- so it was handed a
+    bare "probe-model" and saw nothing to object to. Today that is masked by
+    those providers having an address already; it would come back the moment one
+    did not.
+    """
+    import litellm
+
+    from raven.config.update_providers import _litellm_api_base
+
+    asked: list[str] = []
+
+    def _record(*args, **kwargs):
+        asked.append(str(kwargs.get("model") or (args[0] if args else "?")))
+        raise Exception("unmapped")
+
+    original = litellm.get_llm_provider
+    litellm.get_llm_provider = _record
+    try:
+        assert _litellm_api_base(spec) == ""
+    finally:
+        litellm.get_llm_provider = original
+
+    assert not asked, f"{spec.name}: handed to LiteLLM anyway ({asked})"

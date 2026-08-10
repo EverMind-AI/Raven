@@ -204,7 +204,7 @@ def litellm_models_for(slug: str) -> list[str]:
     do not -- and offering a bare id would route it by keyword rather than to the
     provider the user picked.
     """
-    from raven.providers.registry import find_by_name, litellm_spelling, normalize_provider_name
+    from raven.providers.registry import find_by_name, litellm_spelling
 
     spec = find_by_name(slug)
     if spec is None:
@@ -228,23 +228,19 @@ def litellm_models_for(slug: str) -> list[str]:
             bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
             out.append(f"{prefix}/{bare}")
         return out
-    if normalize_provider_name(spec.model_prefix) not in spec.route_names:
-        # The wire prefix names somebody else -- this provider is reached through
-        # another vendor's driver. Prefixing candidates with it would hand the
-        # user ids that resolve to the driver's owner instead of to the provider
-        # they picked. Today the catalogue has no rows for those five, so the
-        # loop below would be empty anyway; the guard states the rule rather than
-        # relying on what LiteLLM happens to contain.
-        return []
+    from raven.providers.wire import merge_key, stored_model_id
+
     index = _litellm_chat_models_by_provider()
-    prefix = spec.model_prefix
     out: list[str] = []
     seen: set[str] = set()
     for route_name in sorted(spec.route_names):
         for model in index.get(route_name, ()):
             bare = model.split("/", 1)[1] if "/" in model else model
-            full = f"{prefix}/{bare}" if prefix else bare
-            if full not in seen:
-                seen.add(full)
+            # One spelling for a candidate and for a stored pick, so choosing an
+            # offered model cannot write a second entry for one already listed.
+            full = stored_model_id(spec.name, bare)
+            key = merge_key(spec.name, full)
+            if key not in seen:
+                seen.add(key)
                 out.append(full)
     return out

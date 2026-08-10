@@ -8,15 +8,19 @@ trips a test.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
+from raven.providers.base import ProviderHTTPError
 from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,
     _build_headers,
+    _consume_sse,
     _convert_messages,
     _convert_tool_output,
+    _friendly_error,
     _iter_sse,
 )
 
@@ -68,6 +72,122 @@ async def test_iter_sse_per_event_idle_timeout_raises():
         async for event in _iter_sse(resp, timeout=0.05):
             events.append(event)
     assert events == [{"type": "ping"}]
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_error_event_keeps_the_structured_code_and_message():
+    """The code is the retry signal: without it, an overloaded backend looks
+    like an unclassifiable error instead of a retryable one."""
+    event = {
+        "type": "error",
+        "code": "server_is_overloaded",
+        "message": "Our servers are currently overloaded. Please try again later.",
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _consume_sse(resp, timeout=1.0)
+
+    assert "server_is_overloaded" in str(exc_info.value)
+    assert "Our servers are currently overloaded. Please try again later." in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_consume_sse_response_failed_event_keeps_the_nested_error():
+    """response.failed nests the same error shape under "response" instead of
+    at the event's top level."""
+    event = {
+        "type": "response.failed",
+        "response": {
+            "status": "failed",
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "Our servers are currently overloaded.",
+            },
+        },
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await _consume_sse(resp, timeout=1.0)
+
+    assert "server_is_overloaded" in str(exc_info.value)
+    assert "Our servers are currently overloaded." in str(exc_info.value)
+
+
+def test_consume_sse_error_classifies_as_retryable_server_error():
+    """Closes the loop: the RuntimeError raised for a codex error event must
+    still land classify_error in the retryable "server" bucket, not unknown."""
+    event = {
+        "type": "error",
+        "code": "server_is_overloaded",
+        "message": "Our servers are currently overloaded.",
+    }
+    resp = _FakeStreamResponse([f"data: {json.dumps(event)}", ""])
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(_consume_sse(resp, timeout=1.0))
+    classification = OpenAICodexProvider.classify_error(exc_info.value)
+
+    assert classification.category == "server"
+    assert classification.retryable is True
+    assert classification.should_fallback is True
+
+
+def test_http_404_classifies_as_model_unavailable_via_the_live_status():
+    """The non-200 branch raises ProviderHTTPError so classify_error reads the
+    real status instead of guessing from the rendered text -- a plain 404 body
+    carrying none of the model-not-found phrases must still bucket correctly."""
+    exc = ProviderHTTPError(404, _friendly_error(404, "Resource not found"))
+
+    classification = OpenAICodexProvider.classify_error(exc)
+
+    assert classification.category == "model_unavailable"
+    assert classification.should_fallback is True
+
+
+def test_chat_classifies_a_wire_404_from_the_live_status(monkeypatch):
+    """Pins the raise site itself, not just the exception class: a non-200 off
+    the wire must reach ``error_classification`` still carrying its status.
+    A plain RuntimeError here degrades the same input to ``unknown``."""
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok", "acct"))
+
+    class _Resp:
+        status_code = 404
+
+        async def aread(self):
+            return b"Resource not found"
+
+    class _StreamCM:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCM()
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider.httpx.AsyncClient", _Client)
+    provider = OpenAICodexProvider(default_model="gpt-5")
+
+    resp = asyncio.run(provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5"))
+
+    assert resp.finish_reason == "error"
+    assert resp.error_classification is not None
+    assert resp.error_classification.category == "model_unavailable"
+    assert resp.error_classification.should_fallback is True
+    assert "404" in (resp.content or "")
 
 
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="

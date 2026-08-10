@@ -190,6 +190,9 @@ export interface McpServerStatus {
 export interface SessionInfo {
   context_window?: number
   cwd?: string
+  // Which of a multi-endpoint provider's endpoints this session is on;
+  // absent for single-endpoint providers, which have no label worth showing.
+  endpoint?: string | null
   fast?: boolean
   lazy?: boolean
   mcp_servers?: McpServerStatus[]

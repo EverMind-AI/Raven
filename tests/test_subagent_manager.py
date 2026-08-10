@@ -4,12 +4,19 @@ Isolates the gate: build_executor and _run_subagent_inner are stubbed, so the
 test drives only the Semaphore in _run_subagent (no real VM, no real LLM). A
 stubbed inner holds each subagent inside the gate on an Event, letting the test
 observe the concurrent peak.
+
+Also covers: a subagent reuses the main LiteLLMProvider instance verbatim
+(SubagentManager.provider), so the api_key that instance was constructed
+with reaches acompletion on the subagent's own chat_with_retry() calls too —
+acompletion is mocked, so this stays "no real LLM".
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -18,6 +25,7 @@ from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.manager import SubagentManager
 from raven.config.schema import AgentDefaults
 from raven.providers.base import LLMResponse, ToolCallRequest
+from raven.providers.litellm_provider import LiteLLMProvider
 from raven.sandbox import ExecResult, SandboxExecutor
 
 
@@ -327,3 +335,47 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
     mgr._build_subagent_prompt()
 
     assert calls == [False]
+
+
+async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
+    """A subagent runs in-process against the exact provider instance the main
+    agent was built with (manager.provider), not a fresh one — so an api_key
+    set only on the main instance must still reach acompletion for the
+    subagent's own chat_with_retry() calls.
+
+    A reported spawn-subagent 401 could not be reproduced by reading the
+    code (chat()/chat_stream() already pass api_key explicitly to
+    acompletion), but nothing in the test suite actually asserted that
+    kwarg ever arrived -- this pins it down.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )
+            ],
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
+    manager = SubagentManager(provider=provider, workspace=Path("/tmp"))
+
+    assert manager.provider is provider
+
+    response = await manager.provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="openai/gpt-4o",
+    )
+
+    assert response.finish_reason != "error"
+    assert captured["api_key"] == "k-main"

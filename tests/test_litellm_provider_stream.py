@@ -6,6 +6,9 @@ Covers:
 - None-content chunks (e.g. final stop chunk) are skipped (return None → no yield)
 - signature parity with chat() (messages/tools/model/max_tokens/temperature/
   reasoning_effort/tool_choice all accepted; stream=True forwarded to acompletion)
+- chat() and chat_stream() both forward the provider's api_key to acompletion
+  as an explicit kwarg, rather than relying on it having been exported to the
+  environment
 
 Mocks patch `raven.providers.litellm_provider.acompletion` because the
 provider module imports `from litellm import acompletion` at top level, so
@@ -46,6 +49,14 @@ class _FakeChunk:
 
 def _chunk(content: str | None) -> _FakeChunk:
     return _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=content))])
+
+
+class _FakeResponse:
+    """Non-streaming acompletion result with one text choice."""
+
+    def __init__(self, text: str) -> None:
+        self.choices = [_FakeChoice(delta=_FakeDelta(content=text), finish_reason="stop")]
+        self.usage = None
 
 
 async def _fake_stream(chunks: list[_FakeChunk]):
@@ -180,3 +191,55 @@ async def test_chat_stream_signature_parity_with_chat(monkeypatch: pytest.Monkey
     assert captured["tools"] == tools
     # model should be resolved (openai/gpt-4o-mini already has prefix → stays the same)
     assert "gpt-4o-mini" in captured["model"]
+
+
+@pytest.mark.asyncio
+async def test_chat_forwards_api_key_to_acompletion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """chat() must pass the provider's api_key explicitly to acompletion.
+
+    A subagent spawned in-process reuses the main provider instance (see
+    SubagentManager), so if this explicit forwarding were ever dropped in
+    favor of relying on an exported environment variable, a request made
+    under a different/missing env context (e.g. a subprocess or a provider
+    with no matching env var) would silently lose the key.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _FakeResponse("hi")
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
+    await provider.chat(messages=[{"role": "user", "content": "hi"}], model="openai/gpt-4o")
+
+    assert captured["api_key"] == "k-main"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_forwards_api_key_to_acompletion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """chat_stream() must pass the provider's api_key explicitly to acompletion.
+
+    Same regression as test_chat_forwards_api_key_to_acompletion, for the
+    streaming code path.
+    """
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["api_key"] == "k-main"

@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from raven.cli._helpers import load_runtime_config, make_provider
-from raven.providers.registry import find_by_model, find_by_name
+from raven.providers import pin
+from raven.providers.auth import MissingCredentialsError
+from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
@@ -273,50 +275,6 @@ async def config_set(
     return {"applied": True, "previous": previous}
 
 
-def _resolve_bare_model_against_pin(raw_value: str) -> str | None:
-    """Who serves this bare id, when its own text names nobody?
-
-    A bare id that matches no provider's keywords is what a vendor Raven holds no
-    spec for looks like, and the picker never produces one -- it always sends the
-    provider alongside. So this is the hand-typed path, where the only other
-    evidence is the provider currently pinned.
-
-    Rather than guess, ask whether that provider serves the model: its own curated
-    list first, then the catalogue. If it does, the pin was right and stays. A local
-    deployment stays too without asking -- its server names whatever models it
-    likes, and there is no key to mis-route.
-
-    With no such evidence the pin is not kept: it would send one vendor's key to
-    another, the mis-routing the prefix rules exist to prevent. Returning None
-    leaves the caller to say so rather than pick a vendor on the user's behalf.
-    """
-    forced = _get_nested(_load_config(), "agents.defaults.provider")
-    if not forced or forced == "auto":
-        return "auto"
-
-    spec = find_by_name(forced)
-    if spec is not None and spec.is_local:
-        return forced
-
-    from raven.config.update_providers import get_provider_config
-    from raven.providers.common_models import common_models_for, litellm_models_for
-    from raven.providers.registry import split_model_id
-
-    try:
-        configured = get_provider_config(forced, redact_secrets=True).get("models") or []
-    except KeyError:
-        configured = []
-    known = [*configured, *common_models_for(forced), *litellm_models_for(forced)]
-    for candidate in known:
-        # Stripping the prefix covers every spelling the sources use: the
-        # catalogue keys ids the way LiteLLM spells the vendor, a hand-added one
-        # sits in the provider's list bare.
-        _, bare = split_model_id(candidate)
-        if bare == raw_value or candidate == raw_value:
-            return forced
-    return None
-
-
 def _set_model(
     params: dict,
     raw_value: Any,
@@ -340,23 +298,23 @@ def _set_model(
         )
     # Bare `/model <name>` carries no provider; derive it from the model so a
     # previously-forced provider does not silently mis-route the new model. The
-    # picker always sends one, so this is the hand-typed path.
+    # picker always sends one, so this is the hand-typed path. The rule itself is
+    # `providers.pin`, which `raven provider use` asks too.
     if new_provider is None:
-        spec = find_by_model(raw_value)
-        if spec is not None:
-            new_provider = spec.name
-        elif "/" in raw_value:
-            # A prefixed id whose vendor has no spec of ours ("mistral/..."):
-            # keeping the previously forced provider would send that provider's
-            # key to this other vendor, so hand routing back to auto-detection.
-            new_provider = "auto"
-        else:
-            new_provider = _resolve_bare_model_against_pin(raw_value)
-            if new_provider is None:
-                raise ConfigValidationError(
-                    f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
-                    data={"field": "value", "got": raw_value},
-                )
+        new_provider = pin.resolve(raw_value, pinned=_get_nested(_load_config(), "agents.defaults.provider") or "")
+        if new_provider is None:
+            raise ConfigValidationError(
+                f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
+                data={"field": "value", "got": raw_value},
+            )
+
+    # Stored the way every other surface stores it -- naming its provider -- so
+    # the three cannot disagree about what was chosen. A hand-typed bare id used
+    # to be written raw here while the wizard qualified the same input, which is
+    # the spelling drift the storage rule exists to end. `auto` names nobody,
+    # so there is no prefix to add.
+    if new_provider and new_provider != pin.AUTO:
+        raw_value = stored_model_id(new_provider, raw_value)
 
     session_id = params.get("session_id")
     if isinstance(session_id, str) and session_id and is_turn_active(session_id):
@@ -377,6 +335,15 @@ def _set_model(
             runtime.agents.defaults.provider = new_provider
         try:
             built_provider = make_provider(runtime)
+        except MissingCredentialsError as exc:
+            # Carried through as the sentence the user needs. `typer.Exit`
+            # subclasses RuntimeError, so this used to land in the branch below
+            # and `str(exc)` was the exit code -- the picker said
+            # `cannot build provider ... error: "1"`.
+            raise ModelNotAvailableError(
+                exc.summary,
+                data={"model": raw_value, "provider": exc.provider, "remedy": exc.remedy},
+            ) from exc
         except (SystemExit, RuntimeError, ValueError) as exc:
             raise ModelNotAvailableError(
                 f"cannot build provider for model {raw_value!r}",
@@ -391,7 +358,9 @@ def _set_model(
     if loop is not None:
         # Not a two-attribute assignment: the loop hands its provider to the
         # subagent manager, the context engine and the consolidator at build
-        # time, and each keeps it. set_provider is what reaches them.
+        # time, and each keeps it. set_provider is what reaches them (and
+        # re-resolves the context window at adoption -- which for a parked
+        # switch happens long after this call returns).
         loop.set_provider(built_provider, raw_value)
 
     return {"applied": True, "previous": previous, "value": raw_value}

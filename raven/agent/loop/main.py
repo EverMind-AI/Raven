@@ -43,12 +43,13 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
+from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.reasoning import split_orphan_think
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
-from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
 from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
 
@@ -290,7 +291,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int = 65_536,
+        context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -377,7 +378,30 @@ class AgentLoop:
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.context_window_tokens = context_window_tokens
+        # A caller that passed a positive value set the window explicitly;
+        # None/0 means "figure it out", resolved once here against the model's
+        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
+        # registered term, see CONTEXT.md.)
+        self._context_window_explicit = bool(context_window_tokens)
+        if context_window_tokens == 65536:
+            # The retired schema default, which the old bootstrap wrote to
+            # disk verbatim -- so on upgraded installs this exact value is
+            # more often a fossil than a choice. The config is deliberately
+            # not rewritten (a value the user can see in their own file stays
+            # theirs); this line is what keeps that stance from failing
+            # silently.
+            logger.warning(
+                "contextWindowTokens: 65536 is pinning the context window (the old default, "
+                "written out by earlier versions); remove the line from config.json to size "
+                "it from each model's real window"
+            )
+        # allow_fetch=False: construction must not block on a synchronous
+        # network call for an OpenRouter model's window -- whatever is already
+        # cached (in-process or on disk, any age) answers instead. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = context_window_tokens or effective_context_window(
+            self.model, None, allow_fetch=False
+        )
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -464,7 +488,7 @@ class AgentLoop:
             builder=self.context,
             provider=provider,
             model=self.model,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -546,7 +570,7 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
@@ -609,6 +633,15 @@ class AgentLoop:
         self._register_default_tools()
         self._apply_disabled_tools()
 
+        # LazyProvider defers the litellm import behind a background prewarm
+        # thread (see providers.lazy); the window this constructor just
+        # resolved above was answered with allow_import=False, so it can be
+        # wrong until that import lands. Wiring the callback fixes it up in
+        # place once the real provider is built -- a no-op for any other
+        # provider, which has no ``on_built`` to set.
+        if hasattr(provider, "on_built"):
+            provider.on_built = self.refresh_context_window
+
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
 
@@ -659,17 +692,27 @@ class AgentLoop:
         turn that spawned them -- so ``SubagentManager`` snapshots instead.
         """
         if self._turns_in_flight:
+            # The only trace of the window the docstring describes.
+            logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
             self._pending_provider = (provider, model)
             return
         self._adopt_provider(provider, model)
 
     def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
         """Hand a provider to the loop and every subsystem holding the old one."""
+        logger.info("adopting provider switch: model={}", model)
         self.provider = provider
         self.model = model
+        # Cached per model id but computed from the provider, so a swap that
+        # keeps the model id would keep serving the old transport's verdict.
+        self._image_tool_result_ok.clear()
         self.subagents.set_provider(provider, model)
         self.context_engine.set_provider(provider, model)
         self.memory_consolidator.set_provider(provider, model)
+        # Here rather than at the RPC call site: a parked switch adopts long
+        # after that call returns, and the window must follow the pair that
+        # was actually adopted, not the model the RPC saw.
+        self.refresh_context_window()
 
     def _adopt_pending_provider(self) -> None:
         """Apply a parked switch. Callers must check that no turn is running."""
@@ -692,6 +735,35 @@ class AgentLoop:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
+
+    def refresh_context_window(self) -> None:
+        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
+
+        A no-op once the window was set explicitly at construction -- an
+        explicit value is a deliberate override, and a model switch afterwards
+        must not quietly discard it. Otherwise the ladder is re-walked so a
+        ``/model`` switch picks up the new model's real window instead of
+        keeping the old one's.
+
+        Also the callback ``LazyProvider.on_built`` fires from its prewarm
+        thread, i.e. off the event loop -- safe because every write this
+        method triggers, transitively through the consolidator and the
+        context engine's builders, is a plain ``int`` attribute assignment,
+        and the GIL makes each one atomic.
+        """
+        if self._context_window_explicit:
+            return
+        # allow_fetch=False: a /model switch runs inside the running event
+        # loop, so this must not block it on a synchronous network call. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
+        # Cascade into the builders that sized themselves against the window
+        # at construction (the Curator's trimmer) and the consolidator --
+        # both would otherwise keep budgeting against the pre-switch model's
+        # window for the rest of the session. The consolidator's window is a
+        # plain attribute (no setter of its own), set directly here.
+        self.context_engine.set_context_window(self.context_window_tokens)
+        self.memory_consolidator.context_window_tokens = self.context_window_tokens
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -1544,6 +1616,9 @@ class AgentLoop:
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
+        had_error = False
+        error_content: str | None = None
+        error_classification: ErrorClassification | None = None
 
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when a TimeoutError from the per-chunk idle cap unwinds the
@@ -1553,6 +1628,18 @@ class AgentLoop:
         try:
             async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
                 async for delta in stream:
+                    if delta.finish_reason == "error":
+                        # A non-streaming provider's chat() error, replayed
+                        # through the fallback as its single terminal delta.
+                        # Its content is the error text, not a token to render
+                        # or accumulate -- surface it via error_classification
+                        # instead of the normal success collation below.
+                        had_error = True
+                        error_content = delta.content
+                        error_classification = delta.error_classification
+                        if delta.usage is not None:
+                            final_usage = delta.usage
+                        continue
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -1576,15 +1663,33 @@ class AgentLoop:
                 error_classification=self.provider.classify_error(TimeoutError()),
             )
 
+        if had_error:
+            return LLMResponse(
+                content=error_content,
+                finish_reason="error",
+                error_classification=error_classification,
+                usage=final_usage or {},
+            )
+
         tool_calls = _finalize_tool_calls(tool_call_slots)
         finish_reason = "tool_calls" if tool_calls else "stop"
 
+        content = "".join(content_buf)
+        reasoning_content = "".join(reasoning_buf) or None
+        # getattr because the loop accepts duck-typed providers (test stubs and
+        # thin adapters implement just chat/chat_stream); absent means the
+        # LLMProvider default, False.
+        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
+        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning
+
         return LLMResponse(
-            content="".join(content_buf),
+            content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
-            reasoning_content="".join(reasoning_buf) or None,
+            reasoning_content=reasoning_content,
         )
 
     @classmethod
@@ -1886,9 +1991,19 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # Real window from the model's provider table when LiteLLM lags
-                # (e.g. OpenRouter); otherwise the configured default.
-                context_max = resolve_context_window(call_model) or self.context_window_tokens
+                # An explicitly configured window always wins over the live
+                # table -- that is what setting it means. Otherwise the live
+                # window from the model's provider table (e.g. OpenRouter,
+                # when LiteLLM lags) answers instead; unknown to that table
+                # too, 0 tells the UI to show its empty state rather than a
+                # number that isn't this model's.
+                if self._context_window_explicit:
+                    context_max = self.context_window_tokens
+                else:
+                    # Off the event loop: allow_fetch=True here can hit the
+                    # network for up to 10s on an OpenRouter model with both
+                    # caches expired. See rates._fetch_openrouter_models.
+                    context_max = await asyncio.to_thread(resolve_context_window, call_model) or 0
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens

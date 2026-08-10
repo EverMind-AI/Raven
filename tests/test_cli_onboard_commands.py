@@ -24,7 +24,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from raven.cli import onboard_commands
+from raven.cli import onboard_channels, onboard_commands, onboard_everos
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 
@@ -233,6 +233,51 @@ def test_curated_providers_do_not_restate_registry_flags() -> None:
         assert "is_oauth" not in entry
 
 
+def test_curated_and_registry_provider_names_match_exactly() -> None:
+    """The curated catalogue must name exactly the registry's providers, no more
+    and no fewer.
+
+    ``test_curated_providers_all_exist_in_registry`` only checks one direction
+    (nothing curated is unknown to the registry) -- a provider added to the
+    registry and never added to this hand-written shortlist passed that test
+    silently, and stayed unreachable from the wizard's picker. Comparing the
+    full sets both ways means either mistake, in either direction, turns this
+    test red. The sentinel row is not a provider, so it is added to the
+    registry side rather than dropped from the curated one.
+    """
+    from raven.providers.registry import PROVIDERS
+
+    curated_names = {entry["name"] for group in onboard_commands._CURATED_GROUPS for entry in group["providers"]}
+    registry_names = {spec.name for spec in PROVIDERS}
+    assert curated_names == registry_names | {onboard_commands._PICK_LITELLM_VENDOR}
+
+
+# --------------------------------------------------------------------------- language step
+
+
+def test_pick_language_preselects_the_currently_active_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A re-run of the wizard must default the language screen to whatever
+    language is already active, not silently reset a Chinese user to English.
+    """
+    import questionary
+
+    monkeypatch.setattr(onboard_commands, "_LANG", "zh")
+    captured: dict[str, Any] = {}
+
+    class _FQ:
+        def ask(self):
+            return "zh"
+
+    def _select(message, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "select", _select)
+    onboard_commands._pick_language()
+
+    assert captured["default"] == "zh"
+
+
 # --------------------------------------------------------------------------- non-interactive happy path
 
 
@@ -400,6 +445,36 @@ def test_onboard_oauth_non_interactive_errors(tmp_env: Path) -> None:
     )
     assert r.exit_code != 0
     assert "OAuth providers require an interactive browser flow" in r.stdout
+
+
+@pytest.mark.parametrize("vendor", ["chatgpt", "bedrock", "sagemaker", "vertex_ai", "azure", "cloudflare"])
+def test_onboard_non_interactive_bare_key_refused_vendor_errors(tmp_env: Path, vendor: str) -> None:
+    """A vendor the refusal table marks unconfigurable by a bare key is
+    refused before any credentials are written, instead of being sent through
+    the generic single-key branch that would 401 (or, for chatgpt, be
+    silently ignored) at the first call."""
+    r = runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            vendor,
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--yes",
+        ],
+    )
+    assert r.exit_code != 0
+    from raven.providers.auth import key_refusal
+
+    reason = key_refusal(vendor)
+    assert reason is not None
+    out = " ".join(r.stdout.split())
+    assert " ".join(reason.split()) in out
+    data = json.loads(tmp_env.read_text())
+    assert vendor not in data.get("providers", {})
 
 
 def test_onboard_non_tty_no_flag_fails(tmp_env: Path) -> None:
@@ -576,10 +651,10 @@ def test_onboard_interactive_uses_stubbed_pickers(
     # Optional steps 2-4 are covered separately; no-op them here so the
     # interactive Step 1 path can be asserted without driving every screen.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -712,10 +787,10 @@ def test_step1_picker_uses_catalog_when_available(tmp_env: Path, monkeypatch: py
 
     monkeypatch.setattr(questionary, "autocomplete", _fake_autocomplete)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 0, r.stdout
@@ -1219,7 +1294,7 @@ def test_memory_giving_up_sets_backend_null(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
     data = json.loads(tmp_env.read_text())
     assert data["memory"]["backend"] is None
     assert not everos_isolated.exists()
@@ -1244,7 +1319,7 @@ def test_giving_up_says_what_is_lost(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     assert "no memory across sessions" in out
@@ -1279,7 +1354,7 @@ def test_giving_up_says_what_is_lost_in_both_languages(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -1321,9 +1396,9 @@ def test_memory_enable_writes_everos_sections(
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
     # No network: model list can't be fetched → free-text entry; probe succeeds.
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
     import raven.plugin.memory.everos._server as everos_server
 
@@ -1332,7 +1407,7 @@ def test_memory_enable_writes_everos_sections(
 
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
 
-    onboard_commands._step4_memory(
+    onboard_everos._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1380,9 +1455,9 @@ def test_the_memory_step_reaches_the_capability_report(
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ(next(text_answers)))
     monkeypatch.setattr(questionary, "password", lambda *a, **kw: _FQ(next(password_answers)))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_verify_embedding_dim", lambda **kw: True)
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_verify_embedding_dim", lambda **kw: True)
 
     import raven.plugin.memory.everos._server as everos_server
 
@@ -1392,9 +1467,9 @@ def test_the_memory_step_reaches_the_capability_report(
     monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure_everos_server)
 
     reported: list[int] = []
-    monkeypatch.setattr(onboard_commands, "_report_everos_capabilities", lambda: reported.append(1))
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: reported.append(1))
 
-    onboard_commands._step4_memory(
+    onboard_everos._step4_memory(
         skip=False,
         non_interactive=False,
         main_model="openrouter/anthropic/claude-sonnet-4-5",
@@ -1432,10 +1507,10 @@ def test_memory_llm_reuse_pulls_provider_creds(
     select_answers = iter([("provider", openai_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "autocomplete", lambda *a, **kw: _FQ("gpt-4.1-mini"))
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["gpt-4.1-mini"])
 
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="llm", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
     with everos_isolated.open("rb") as f:
@@ -1471,15 +1546,15 @@ def test_memory_rerank_reuse_llm_provider(
         def ask(self):
             return self._a
 
-    deepinfra_prov = next(p for p in onboard_commands._EVEROS_PROVIDERS if p["name"] == "deepinfra")
+    deepinfra_prov = next(p for p in onboard_everos._EVEROS_PROVIDERS if p["name"] == "deepinfra")
     # No service-type select needed — curated provider auto-resolves it.
     select_answers = iter(["redo", ("provider", deepinfra_prov)])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(select_answers)))
     monkeypatch.setattr(questionary, "text", lambda *a, **kw: _FQ("rerank-model"))
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: None)
-    monkeypatch.setattr(onboard_commands, "_probe_rerank", lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: None)
+    monkeypatch.setattr(onboard_everos, "_probe_rerank", lambda *a, **kw: (True, "ok"))
 
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="rerank",
         main_model="openrouter/anthropic/claude-sonnet-4-5",
         non_interactive=False,
@@ -1497,11 +1572,11 @@ def test_memory_seeded_role_is_not_configured(tmp_env: Path, everos_isolated: Pa
     """A seeded model with an empty api_key does not count as configured."""
     from raven.config.update_everos import set_everos_section
 
-    assert onboard_commands._everos_role_configured("llm") is False
+    assert onboard_everos._everos_role_configured("llm") is False
     set_everos_section("llm", {"model": "openai/gpt-4.1-mini", "api_key": ""})
-    assert onboard_commands._everos_role_configured("llm") is False
+    assert onboard_everos._everos_role_configured("llm") is False
     set_everos_section("llm", {"api_key": "sk-real"})
-    assert onboard_commands._everos_role_configured("llm") is True
+    assert onboard_everos._everos_role_configured("llm") is True
 
 
 def test_memory_required_role_back_reaches_give_up_menu(
@@ -1533,14 +1608,14 @@ def test_memory_required_role_back_reaches_give_up_menu(
 
     monkeypatch.setattr(questionary, "select", _FQ)
 
-    out = onboard_commands._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
+    out = onboard_everos._config_everos_role(section="llm", main_model=None, non_interactive=False, warnings=[])
     assert out is onboard_commands._ABORT_EVEROS
     assert asked == ["picker", "give-up"]
 
 
 def test_model_openai_compatible_heuristic(tmp_env: Path) -> None:
     """Compat heuristic gates whether the memory LLM can reuse the main model."""
-    f = onboard_commands._model_is_openai_compatible
+    f = onboard_everos._model_is_openai_compatible
     assert f("openai/gpt-4o-mini")
     assert f("openrouter/anthropic/claude-sonnet-4-5")
     assert f("deepseek/deepseek-chat")
@@ -1559,9 +1634,9 @@ def test_custom_model_reuse_is_compatible(
     from raven.config.update_providers import set_provider_fields
 
     set_provider_fields("custom", {"api_key": "sk-cust", "api_base": "https://my-llm/v1"})
-    assert onboard_commands._model_is_openai_compatible("qwen-max")
+    assert onboard_everos._model_is_openai_compatible("qwen-max")
 
-    creds = onboard_commands._resolve_reuse_llm_creds("qwen-max")
+    creds = onboard_everos._resolve_reuse_llm_creds("qwen-max")
     assert creds["model"] == "qwen-max"
     assert creds["api_key"] == "sk-cust"
     assert creds["base_url"] == "https://my-llm/v1"
@@ -1572,7 +1647,7 @@ def test_custom_model_reuse_is_compatible(
 
 def test_channel_uses_interactive_login_real_specs() -> None:
     """Scancode channels (WhatsApp / WeChat) report interactive_login; others don't."""
-    f = onboard_commands._channel_uses_interactive_login
+    f = onboard_channels._channel_uses_interactive_login
     assert f("whatsapp") is True
     assert f("weixin") is True
     assert f("telegram") is False
@@ -1583,7 +1658,7 @@ def test_channel_order_overseas_common_before_domestic() -> None:
 
     (Reordered from the old domestic-first layout.)
     """
-    names = onboard_commands._ordered_channel_names()
+    names = onboard_channels._ordered_channel_names()
     # US/global-common lead the list, ahead of the China-common group.
     for overseas in ("telegram", "discord", "slack", "whatsapp"):
         for domestic in ("weixin", "wecom", "feishu", "dingtalk", "qq"):
@@ -1602,9 +1677,9 @@ def test_scancode_login_success_enables_channel(tmp_env: Path, monkeypatch: pyte
         _async_return(True),
     )
     # Guard: the reflected-schema prompt must NOT be used for scancode channels.
-    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
+    monkeypatch.setattr(onboard_channels, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
 
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["weixin"]["enabled"] is True
 
@@ -1623,7 +1698,7 @@ def test_scancode_login_retry_then_success(tmp_env: Path, monkeypatch: pytest.Mo
         "_failure_choice",
         lambda options, *, non_interactive: "retry",
     )
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["weixin"]["enabled"] is True
 
@@ -1640,7 +1715,7 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
         "_failure_choice",
         lambda options, *, non_interactive: "skip",
     )
-    onboard_commands._scancode_login("weixin")
+    onboard_channels._scancode_login("weixin")
     data = json.loads(tmp_env.read_text())
     # Not logged in → disabled, so it never falsely shows as connected.
     assert data["channels"]["weixin"]["enabled"] is False
@@ -1649,18 +1724,18 @@ def test_scancode_login_skip_reverts_enable(tmp_env: Path, monkeypatch: pytest.M
 def test_add_one_channel_routes_scancode(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_add_one_channel` sends a scancode channel to login, NOT schema prompts."""
     monkeypatch.setattr(onboard_commands, "_select_provider", lambda: "weixin")
-    monkeypatch.setattr(onboard_commands, "_select_channel", lambda: "weixin")
+    monkeypatch.setattr(onboard_channels, "_select_channel", lambda: "weixin")
     routed: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_scancode_login", lambda c, **kw: routed.append(c))
-    monkeypatch.setattr(onboard_commands, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
-    onboard_commands._add_one_channel()
+    monkeypatch.setattr(onboard_channels, "_scancode_login", lambda c, **kw: routed.append(c))
+    monkeypatch.setattr(onboard_channels, "_prompt_channel_fields", _must_not_call("_prompt_channel_fields"))
+    onboard_channels._add_one_channel()
     assert routed == ["weixin"]
 
 
 def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """WhatsApp with no Node/npm shows the install menu (NOT the QR menu); skip
     reverts the enable; the adapter's login is never called."""
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda c: True)
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda c: True)
     # The Node-missing menu is distinct from the QR menu — assert its options
     # (no 're-show QR') and that login is never reached.
     captured: dict[str, list] = {}
@@ -1674,7 +1749,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
         "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
         _must_not_call("WhatsAppChannel.login"),
     )
-    onboard_commands._scancode_login("whatsapp")
+    onboard_channels._scancode_login("whatsapp")
     data = json.loads(tmp_env.read_text())
     # Not logged in → reverted to disabled.
     assert data["channels"]["whatsapp"]["enabled"] is False
@@ -1686,7 +1761,7 @@ def test_scancode_login_node_missing_skip(tmp_env: Path, monkeypatch: pytest.Mon
 def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Node-missing → 'retry' re-checks; once npm appears, login runs."""
     missing = iter([True, False])  # first check missing, then present
-    monkeypatch.setattr(onboard_commands, "_node_runtime_missing", lambda c: next(missing))
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda c: next(missing))
     monkeypatch.setattr(
         onboard_commands,
         "_failure_choice",
@@ -1696,7 +1771,7 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
         "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
         _async_return(True),
     )
-    onboard_commands._scancode_login("whatsapp")
+    onboard_channels._scancode_login("whatsapp")
     data = json.loads(tmp_env.read_text())
     assert data["channels"]["whatsapp"]["enabled"] is True
 
@@ -1778,10 +1853,10 @@ def test_back_navigation_rewinds_one_screen(tmp_env: Path, monkeypatch: pytest.M
     monkeypatch.setattr(onboard_commands, "_bootstrap_empty_config", lambda: None)
     monkeypatch.setattr(onboard_commands, "_step1_provider", _s1)
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", _s2)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", _s3)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", _s3)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
     # s2 returns BACK once → s1 replays → s2 again → forward.
@@ -1807,10 +1882,10 @@ def test_first_screen_back_does_not_skip_step1(
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
     # Optional steps are no-ops here; we only assert Step 1 wasn't skipped.
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     onboard_commands.run_wizard(non_interactive=False)
 
@@ -1854,10 +1929,10 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     # On the failure submenu, choose "switch".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "switch")
     monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step3_channel", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
     monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
-    monkeypatch.setattr(onboard_commands, "_step5_import", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
 
     # Should complete (not raise typer.Exit) — steps 2/3/4 ran.
     onboard_commands.run_wizard(non_interactive=False)
@@ -1865,6 +1940,73 @@ def test_switch_provider_returns_to_picker_keeps_steps(
     # Switched to openai; its key written, default model is openai's.
     assert data["providers"]["openai"]["apiKey"] == "sk-openai"
     assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
+
+
+def test_step1_bare_key_refused_vendor_rewinds_to_picker(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3, capsys: pytest.CaptureFixture
+) -> None:
+    """Picking a vendor the refusal table marks unconfigurable by a bare key
+    (chatgpt: it authenticates through Raven's own OAuth path instead) prints
+    the reason and rewinds to the picker via the wizard's existing back
+    mechanism, the same one 'Switch provider' uses -- instead of prompting for
+    a key that would never authenticate.
+    """
+    picks = iter(["chatgpt", "openai"])
+    key_prompts: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_check_tty_or_die", lambda non_interactive: None)
+    monkeypatch.setattr(onboard_commands, "_pick_language", lambda: None)
+    monkeypatch.setattr(onboard_commands, "_select_provider", lambda: next(picks))
+
+    def _fake_prompt_api_key(provider, **kw):
+        key_prompts.append(provider)
+        return f"sk-{provider}"
+
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", _fake_prompt_api_key)
+    monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: spec.default_model)
+    monkeypatch.setattr(onboard_commands, "_step2_sandbox", lambda **_: None)
+    monkeypatch.setattr(onboard_channels, "_step3_channel", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_step4_memory", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step5_deep_research", lambda **_: None)
+    monkeypatch.setattr(onboard_commands, "_step6_import", lambda **_: None)
+
+    onboard_commands.run_wizard(non_interactive=False)
+
+    out = " ".join(capsys.readouterr().out.split())
+    from raven.providers.auth import key_refusal
+
+    assert " ".join(key_refusal("chatgpt").split()) in out
+    # The refused vendor never reached the key prompt at all.
+    assert key_prompts == ["openai"]
+    data = json.loads(tmp_env.read_text())
+    assert "chatgpt" not in data.get("providers", {})
+    assert data["providers"]["openai"]["apiKey"] == "sk-openai"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-5.5"
+
+
+def test_collect_credentials_gigachat_hints_key_shape_before_prompting(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """GigaChat *can* be configured by a bare key -- it's just an unusual one
+    (base64(client_id:client_secret)) -- so the wizard hints at its shape
+    instead of refusing it."""
+    monkeypatch.setattr(onboard_commands, "_prompt_api_key", lambda provider, **kw: "Z2lnYWNoYXQ6c2VjcmV0")
+
+    result = onboard_commands._collect_credentials(
+        "gigachat",
+        is_oauth=False,
+        is_custom=False,
+        is_local=False,
+        api_key=None,
+        base_url=None,
+        model=None,
+        non_interactive=False,
+    )
+
+    assert result is None
+    out = " ".join(capsys.readouterr().out.split())
+    assert "base64(client_id:client_secret)" in out
+    data = json.loads(tmp_env.read_text())
+    assert data["providers"]["gigachat"]["apiKey"] == "Z2lnYWNoYXQ6c2VjcmV0"
 
 
 def test_add_provider_keeps_existing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch, stub_verify, stub_step3) -> None:
@@ -1939,11 +2081,13 @@ def test_configure_existing_model_happy_path_persists_and_returns_true(
     )
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
     persisted: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: persisted.append((m, provider)))
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "ok")
 
     assert onboard_commands._configure_existing_provider_model(non_interactive=False) is True
-    assert persisted == ["minimax-global/MiniMax-M3"]
+    # The pin travels with the model: writing one without the other leaves the
+    # wizard's own choice routed to whatever was pinned before.
+    assert persisted == [("minimax-global/MiniMax-M3", "minimax_global")]
 
 
 def test_configure_existing_model_verify_failure_returns_false_without_persist(
@@ -1953,7 +2097,7 @@ def test_configure_existing_model_verify_failure_returns_false_without_persist(
     _patch_single_provider_pick(monkeypatch, "openai")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (False, "invalid_key", None))
     persisted: list[str] = []
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: persisted.append(m))
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: persisted.append((m, provider)))
 
     assert onboard_commands._configure_existing_provider_model(non_interactive=False) is False
     assert persisted == []
@@ -1964,7 +2108,7 @@ def test_configure_existing_model_reauth_delegates_to_oauth_login(monkeypatch: p
     _patch_single_provider_pick(monkeypatch, "minimax_global")
     monkeypatch.setattr(onboard_commands, "_verify_provider", lambda *a, **k: (True, "valid", []))
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: "minimax-global/MiniMax-M3")
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda m, provider: None)
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda *a, **k: "reauth")
     login_calls: list[str] = []
     monkeypatch.setattr(onboard_commands, "_run_oauth_login", lambda p: login_calls.append(p) or True)
@@ -2112,7 +2256,7 @@ def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.Monkey
     monkeypatch.setattr(questionary, "text", lambda label, **kw: _Prompt(label, **kw))
     monkeypatch.setattr(questionary, "password", lambda label, **kw: _Prompt(label, **kw))
 
-    onboard_commands._prompt_channel_fields("feishu")
+    onboard_channels._prompt_channel_fields("feishu")
 
     # promptable order: app_id, app_secret (both required), encrypt_key, verification_token (optional)
     def _ph_text(placeholder: Any) -> Any:
@@ -2296,7 +2440,7 @@ def _run_import_step(
     # whoever's machine runs the suite, not of the behaviour under test. Left
     # real, these tests pass on a developer box that has onboarded and fail
     # everywhere else, including CI.
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr(
         "raven.importer.scanners.scan_all",
@@ -2310,7 +2454,7 @@ def _run_import_step(
         "raven.cli.import_commands._build_and_run",
         AsyncMock(return_value=_no_op_import_result()),
     )
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
     return scripted
 
 
@@ -2348,12 +2492,12 @@ def test_import_step_installs_skills_when_the_scan_finds_nothing(
     already covers, on the entry point that matters more.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -2385,13 +2529,13 @@ def test_import_step_installs_skills_when_the_tier_keeps_nothing(
             ("Select import tier", Tier.MEMORY_FILES),
         ]
     )
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[conversation]))
     _patch_skill_count(monkeypatch, 12)
     _patch_skills_only_install(monkeypatch, tmp_path)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     out = " ".join(capsys.readouterr().out.split())
     assert "12 installed" in out, out
@@ -2407,12 +2551,12 @@ def test_the_wizard_asks_before_copying_a_skill_tree(
     directory copy nothing undoes.
     """
     scripted = _ScriptedSelect([("import conversation history", "yes")])
-    monkeypatch.setattr(onboard_commands, "_memory_enabled", lambda: True)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
     monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
     monkeypatch.setattr("raven.importer.scanners.scan_all", AsyncMock(return_value=[]))
     installer = _patch_skills_only_install(monkeypatch, tmp_path, confirm=False)
 
-    onboard_commands._step5_import(skip=False, non_interactive=False)
+    onboard_commands._step6_import(skip=False, non_interactive=False)
 
     installer.assert_not_awaited()
     out = " ".join(capsys.readouterr().out.split())
@@ -2610,9 +2754,13 @@ def test_the_wizard_offers_every_provider_the_registry_carries() -> None:
     from raven.cli.onboard_commands import _CURATED_PROVIDERS
     from raven.providers.registry import PROVIDERS
 
-    offered = {entry["name"] for entry in _CURATED_PROVIDERS}
+    names = [entry["name"] for entry in _CURATED_PROVIDERS]
+    offered = set(names)
     registered = {spec.name for spec in PROVIDERS}
     assert registered - offered == set(), f"registry providers missing from the wizard: {sorted(registered - offered)}"
+    # Once each, on top of the two directions already asserted: nothing stopped
+    # one provider appearing twice under two labels.
+    assert len(names) == len(offered), f"offered twice: {sorted({n for n in names if names.count(n) > 1})}"
     assert offered - registered == set(), f"wizard offers providers with no spec: {sorted(offered - registered)}"
 
 
@@ -2788,7 +2936,7 @@ def test_resolve_model_with_test_runs_for_a_provider_with_no_spec(monkeypatch, t
         "_verify_provider",
         lambda provider, skip_test=False: (True, "valid", ["mistral-large-latest"]),
     )
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model, provider: None)
 
     chosen = onboard_commands._resolve_model_with_test(
         "mistral",
@@ -3028,7 +3176,7 @@ def test_a_spec_less_provider_can_have_its_default_model_changed(monkeypatch, tm
         onboard_commands, "_verify_provider", lambda provider: (True, "valid", ["mistral-large-latest"])
     )
     monkeypatch.setattr(onboard_commands, "_pick_model", lambda provider, spec, **_: f"{provider}/probe")
-    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model: None)
+    monkeypatch.setattr(onboard_commands, "_persist_default_model", lambda model, provider: None)
     # Reaching this without an AttributeError is the second half of the fix: the
     # probe is told whether the provider is OAuth, read off a spec that is None.
     monkeypatch.setattr(onboard_commands, "_run_test_probe", lambda provider, **kw: "ok")
@@ -3532,7 +3680,8 @@ def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> N
         entry = _build_provider_entry(spec.name, current_provider=None)
         kind = credential_kind(spec.name)
         assert entry["auth_type"] == kind, spec.name
-        assert entry["needs_api_base"] is (kind in (CRED_ENDPOINT, CRED_LOCAL)), spec.name
+        expected_needs_base = kind == CRED_LOCAL or (kind == CRED_ENDPOINT and not spec.usable_default_api_base)
+        assert entry["needs_api_base"] is expected_needs_base, spec.name
 
 
 def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3582,7 +3731,7 @@ def test_the_wizard_says_which_roles_everos_could_build(
 ) -> None:
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=True)
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     assert "llm and embedding are available" in capsys.readouterr().out
 
@@ -3595,7 +3744,7 @@ def test_the_wizard_flags_a_role_everos_could_not_build(
     degrades to keyword-only search, so a tick there would be a lie."""
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"), llm=True, embed=False)
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     out = capsys.readouterr().out
     assert "embedding is configured but EverOS could not build it" in out
@@ -3609,7 +3758,7 @@ def test_the_wizard_stays_quiet_on_a_server_that_cannot_report(
     condemn a working install."""
     _stub_capabilities(monkeypatch, configured=("llm", "embedding"))
 
-    onboard_commands._report_everos_capabilities()
+    onboard_everos._report_everos_capabilities()
 
     assert capsys.readouterr().out.strip() == ""
 
@@ -3621,7 +3770,7 @@ def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
     """A recommended model id is only a recommendation if the user's key can
     reach it, and many keys cannot. Their main model is one they demonstrably
     have, and the routing prefix has to come off for EverOS's bare client."""
-    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
 
     assert got == "anthropic/claude-sonnet-4-5"
 
@@ -3629,14 +3778,14 @@ def test_the_llm_role_pre_fills_the_users_own_main_model() -> None:
 def test_no_pre_fill_when_the_picked_provider_is_not_the_main_models() -> None:
     """No other provider carries that model id; pre-filling one it cannot serve
     would turn Enter into a verification failure."""
-    got = onboard_commands._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
+    got = onboard_everos._preferred_memory_model("llm", "openrouter/anthropic/claude-sonnet-4-5", "deepseek")
 
     assert got is None
 
 
 def test_no_pre_fill_for_roles_that_do_not_serve_a_chat_model() -> None:
     for section in ("embedding", "rerank", "multimodal"):
-        got = onboard_commands._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
+        got = onboard_everos._preferred_memory_model(section, "openrouter/anthropic/claude-sonnet-4-5", "openrouter")
         assert got is None, section
 
 
@@ -3659,9 +3808,9 @@ def test_the_pre_filled_model_beats_the_recommended_one(monkeypatch: pytest.Monk
         return _FQ()
 
     monkeypatch.setattr(questionary, "autocomplete", _autocomplete)
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["a/b", "gpt-4.1-mini"])
 
-    onboard_commands._everos_pick_model(
+    onboard_everos._everos_pick_model(
         base_url="https://x/v1",
         api_key="k",
         example="gpt-4.1-mini",
@@ -3686,9 +3835,9 @@ def test_without_a_pre_fill_the_recommended_model_is_still_the_default(monkeypat
             return "chosen"
 
     monkeypatch.setattr(questionary, "autocomplete", lambda _m, **kw: (captured.update(kw), _FQ())[1])
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", lambda *a, **kw: ["x/gpt-4.1-mini"])
 
-    onboard_commands._everos_pick_model(
+    onboard_everos._everos_pick_model(
         base_url="https://x/v1",
         api_key="k",
         example="gpt-4.1-mini",
@@ -3730,7 +3879,7 @@ def test_the_memory_step_states_the_capability_tiers(
             return next(answers)
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
     out = " ".join(capsys.readouterr().out.split())
     for needle in needles:
@@ -3743,7 +3892,7 @@ def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch,
     altogether. The second cannot read like the first."""
     monkeypatch.setattr(onboard_commands, "_LANG", lang)
 
-    note = onboard_commands._t(*onboard_commands._EVEROS_ROLES["embedding"]["skip_note"])
+    note = onboard_commands._t(*onboard_everos._EVEROS_ROLES["embedding"]["skip_note"])
 
     assert "yellow" in note, "a degradation this large must not be dim"
     assert "cascade backfill" in note
@@ -3756,7 +3905,7 @@ def test_skipping_embedding_names_what_it_costs(monkeypatch: pytest.MonkeyPatch,
 def test_every_optional_role_carries_its_own_skip_note() -> None:
     """The renderer prints these verbatim now, so a note without its own markup
     would come out unstyled."""
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         if not role.get("optional"):
             continue
         note = role.get("skip_note")
@@ -3886,7 +4035,7 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
     from raven.config.update_providers import set_provider_fields
 
     set_provider_fields("mistral", {"api_key": "sk-mistral"})
-    onboard_commands._persist_default_model("mistral/mistral-large-latest")
+    onboard_commands._persist_default_model("mistral/mistral-large-latest", "mistral")
 
     asked: list[str] = []
 
@@ -3920,7 +4069,7 @@ def test_removing_a_spec_less_provider_warns_when_it_serves_the_default_model(
 def test_embedding_states_what_skipping_it_costs() -> None:
     """The one role whose absence changes how recall works at all -- searching
     lexically instead of semantically -- has to say so before it is skipped."""
-    en, zh = onboard_commands._EVEROS_ROLES["embedding"]["cost"]
+    en, zh = onboard_everos._EVEROS_ROLES["embedding"]["cost"]
 
     assert "keywords" in en, en
     assert "关键词" in zh, zh
@@ -3929,7 +4078,7 @@ def test_embedding_states_what_skipping_it_costs() -> None:
 def test_cost_lines_lead_with_the_consequence() -> None:
     """Whichever roles carry one, they read the same way, so a reader comparing
     two of them is comparing like with like."""
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         cost = role.get("cost")
         if not cost:
             continue
@@ -3943,7 +4092,7 @@ def test_the_roles_we_want_configured_say_so(name: str) -> None:
     """Calling all three merely "optional" flattens the difference between
     losing semantic recall and losing some ranking accuracy. These two carry the
     encouragement in their own tag."""
-    tag = onboard_commands._EVEROS_ROLES[name].get("tag")
+    tag = onboard_everos._EVEROS_ROLES[name].get("tag")
 
     assert tag, f"{name} should carry its own tag"
     en, zh = tag
@@ -3958,7 +4107,7 @@ def test_role_blocks_fit_eighty_columns(monkeypatch: pytest.MonkeyPatch, lang: s
     from rich.text import Text
 
     monkeypatch.setattr(onboard_commands, "_LANG", lang)
-    for name, role in onboard_commands._EVEROS_ROLES.items():
+    for name, role in onboard_everos._EVEROS_ROLES.items():
         parts = [onboard_commands._t(*role["label"]), onboard_commands._t(*role["purpose"])]
         for key in ("tag", "cost", "recommendation", "skip_note"):
             if role.get(key):
@@ -3992,7 +4141,7 @@ def test_the_cost_line_actually_reaches_the_screen(
             return "skip"
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
-    onboard_commands._config_everos_role(
+    onboard_everos._config_everos_role(
         section="embedding", main_model="openai/gpt-4o-mini", non_interactive=False, warnings=[]
     )
 
@@ -4215,6 +4364,46 @@ def test_pressing_enter_on_the_model_prompt_takes_the_first_one_offered(monkeypa
     assert chosen == "openai-codex/gpt-5.6-sol"
 
 
+def test_an_already_routing_current_model_stays_the_offered_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model already pointed at this provider must stay the prompt's default.
+
+    Every other ``_pick_model`` test in this file passes ``current_model=None``,
+    so the branch that seeds ``default_value`` from an already-configured model
+    had nothing asserting it: deleting it left every one of them green, and the
+    prompt would have silently fallen back to the newest account model instead
+    of what was already set.
+    """
+    import questionary
+
+    from raven.providers.registry import find_by_name
+
+    captured: dict = {}
+
+    class _FQ:
+        def ask(self):
+            return "openai-codex/gpt-5.4"
+
+    def fake_autocomplete(label, **kwargs):
+        captured.update(kwargs)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "autocomplete", fake_autocomplete)
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: questionary)
+
+    chosen = onboard_commands._pick_model(
+        "openai_codex",
+        find_by_name("openai_codex"),
+        current_model="openai-codex/gpt-5.4",
+        model_ids=["gpt-5.6-sol", "gpt-5.4"],
+        probe_status="valid",
+        user_provided_model=None,
+        non_interactive=False,
+    )
+
+    assert captured["default"] == "openai-codex/gpt-5.4", "the already-configured model was not offered as default"
+    assert chosen == "openai-codex/gpt-5.4"
+
+
 def test_a_cleared_model_prompt_says_which_one_it_fell_back_to(
     monkeypatch: pytest.MonkeyPatch,
     capsys,
@@ -4288,3 +4477,45 @@ def test_a_stale_default_model_does_not_restart_the_wizard(
         result = runner.invoke(app, ["tui"])
 
     assert "openai-codex/gpt-5.6-sol" in result.output, "the notice did not name the model to fix"
+
+
+# ---------------------------------------------------------------------------
+# The wizard's vendor list against the registry
+# ---------------------------------------------------------------------------
+
+
+def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
+    """A vendor filed under the wrong heading is asked for the wrong thing.
+
+    The group decides which prompt the wizard runs -- a key, a sign-in, or an
+    address -- so it has to follow the declared connection shape rather than
+    where a hand edit happened to put the row.
+    """
+    from raven.providers.auth import KIND_API_KEY, KIND_DEVICE_FLOW, KIND_NONE, credential_status
+
+    # Every kind maps to exactly one group. Defaulting the unlisted kinds to
+    # "whatever group this row is already in" made the check tautological for
+    # them: a key-based provider filed under "oauth" compared "oauth" against
+    # "oauth" and passed, so only one of the two directions was ever tested.
+    # No entry for `ambient`: no provider the wizard offers declares it (Bedrock,
+    # the only one, has no spec and is not offered). Mapping it anyway would be
+    # guessing at a group for a row that cannot appear -- and the assertion below
+    # turns its arrival into an explicit decision rather than a silent default.
+    group_for_kind = {
+        KIND_DEVICE_FLOW: "oauth",
+        KIND_NONE: "local",
+        KIND_API_KEY: "api_key",
+    }
+    misfiled = []
+    for group in onboard_commands._CURATED_GROUPS:
+        if group["kind"] == "fallback":
+            continue  # not a provider group: the vendor search and the generic endpoint
+        for entry in group["providers"]:
+            if entry["name"] == onboard_commands._PICK_LITELLM_VENDOR:
+                continue
+            kind = credential_status(entry["name"], None).kind
+            want = group_for_kind.get(kind)
+            assert want, f"{entry['name']}: credential kind {kind!r} maps to no group"
+            if group["kind"] != want:
+                misfiled.append(f"{entry['name']}: filed under {group['kind']!r}, credentials say {want!r}")
+    assert not misfiled, "; ".join(misfiled)

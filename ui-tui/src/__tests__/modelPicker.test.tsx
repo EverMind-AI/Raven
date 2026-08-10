@@ -641,6 +641,200 @@ describe('ModelPicker', () => {
     h.unmount()
   })
 
+  it('lists a provider endpoints, masked, on `e`', async () => {
+    const h = mount([anthropic], method => {
+      if (method === 'model.endpoints') {
+        return {
+          endpoints: [
+            { api_base: 'https://eu.example.test/v1', api_key: '****set****', label: 'eu' },
+            { api_base: null, api_key: '(empty)', label: 'spare' }
+          ]
+        }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    await h.type('e')
+    await waitForFrame(h, 'eu · ****set**** · https://eu.example.test/v1')
+
+    expect(h.gw.request).toHaveBeenCalledWith('model.endpoints', expect.objectContaining({ slug: 'anthropic' }))
+    // The second row proves the empty-key spelling renders as its own state
+    // rather than collapsing into a blank cell.
+    expect(h.frame()).toContain('spare · (empty)')
+
+    h.unmount()
+  })
+
+  it('adds an endpoint via model.add_endpoint with all three fields', async () => {
+    const h = mount([anthropic], (method, params) => {
+      if (method === 'model.endpoints') {
+        return { endpoints: [] }
+      }
+
+      if (method === 'model.add_endpoint') {
+        return { endpoints: [{ api_base: params.api_base, api_key: '****set****', label: params.label }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // label -> Enter -> key -> Enter -> base -> Enter submits.
+    await h.type('a')
+    await h.type('eu')
+    await h.type(ENTER)
+    await h.type('sk-eu')
+    await h.type(ENTER)
+    await h.type('https://eu.example.test/v1')
+    await h.type(ENTER)
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.add_endpoint',
+      expect.objectContaining({
+        api_base: 'https://eu.example.test/v1',
+        api_key: 'sk-eu',
+        label: 'eu',
+        slug: 'anthropic'
+      })
+    )
+    // The write answers with the refreshed list, and the screen shows it.
+    await waitForFrame(h, 'eu · ****set****')
+
+    h.unmount()
+  })
+
+  it('refuses to submit an endpoint with no key for a key-based provider', async () => {
+    // Mirrors the ops-layer rule the RPC/CLI both enforce: an endpoint with no
+    // key on a key-based provider is a request that will 401, so the picker
+    // should not even round-trip to the RPC to learn that.
+    const h = mount([anthropic], method => (method === 'model.endpoints' ? { endpoints: [] } : {}))
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // label -> Enter -> (blank key) -> Enter -> (blank base) -> Enter attempts submit.
+    await h.type('a')
+    await h.type('eu')
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await h.type(ENTER)
+
+    await waitForFrame(h, 'error: API key is required')
+    expect(h.gw.request).not.toHaveBeenCalledWith('model.add_endpoint', expect.anything())
+
+    h.unmount()
+  })
+
+  it('allows submitting an endpoint with no key for a local deployment', async () => {
+    const ollamaConfigured: ModelOptionProvider = { ...ollama, authenticated: true }
+    const h = mount([ollamaConfigured], (method, params) => {
+      if (method === 'model.endpoints') {
+        return { endpoints: [] }
+      }
+
+      if (method === 'model.add_endpoint') {
+        return { endpoints: [{ api_base: params.api_base, api_key: '(empty)', label: params.label }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    // Not `'no endpoints'`: the fake terminal's escape stripping mangles that
+    // exact run at this render depth (see the endpoints-list test above) --
+    // `'a adds one'` sits on the same line without falling in the mangled span.
+    await waitForFrame(h, 'a adds one')
+
+    // label -> Enter -> (blank key) -> Enter -> base -> Enter submits.
+    await h.type('a')
+    await h.type('local')
+    await h.type(ENTER)
+    await h.type(ENTER)
+    await h.type('http://10.0.0.5:8000/v1')
+    await h.type(ENTER)
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.add_endpoint',
+      expect.objectContaining({ label: 'local', slug: 'ollama_chat' })
+    )
+
+    h.unmount()
+  })
+
+  it('removes the selected endpoint via model.remove_endpoint', async () => {
+    const h = mount([anthropic], method => {
+      if (method === 'model.endpoints') {
+        return {
+          endpoints: [
+            { api_base: null, api_key: '****set****', label: 'eu' },
+            { api_base: null, api_key: '****set****', label: 'us' }
+          ]
+        }
+      }
+
+      if (method === 'model.remove_endpoint') {
+        return { endpoints: [{ api_base: null, api_key: '****set****', label: 'us' }] }
+      }
+
+      return {}
+    })
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'eu · ****set****')
+
+    await h.type(DOWN)
+    await h.type('d')
+
+    expect(h.gw.request).toHaveBeenCalledWith(
+      'model.remove_endpoint',
+      expect.objectContaining({ label: 'us', slug: 'anthropic' })
+    )
+
+    h.unmount()
+  })
+
+  it('returns from the endpoint list to the model list on Esc', async () => {
+    const h = mount([anthropic], method => (method === 'model.endpoints' ? { endpoints: [] } : {}))
+    await delay(60)
+
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+    await h.type('e')
+    await waitForFrame(h, 'no endpoints')
+
+    // Asserted by what the next Enter reaches rather than by screen text:
+    // `frame()` accumulates, so the model list is on screen either way.
+    await h.type(ESCAPE)
+    // Ink holds a lone ESC back to see whether it opens a sequence, so the next
+    // key has to arrive after that window or the two are read as one chord.
+    await delay(120)
+    await h.type(ENTER)
+    await delay(30)
+
+    expect(h.onSelect).toHaveBeenCalledWith('claude-sonnet-4-6', 'anthropic')
+
+    h.unmount()
+  })
+
   it('emits a structured model + provider selection on Enter', async () => {
     const h = mount([anthropic])
     await delay(60)
@@ -650,6 +844,47 @@ describe('ModelPicker', () => {
 
     expect(h.onSelect).toHaveBeenCalledWith('claude-sonnet-4-6', 'anthropic')
 
+    h.unmount()
+  })
+})
+
+describe('model labels', () => {
+  const described: ModelOptionProvider = {
+    ...anthropic,
+    model_labels: {
+      'claude-sonnet-4-6': {
+        context: 1000000,
+        description: 'Claude workhorse for coding agents',
+        label: 'Claude Sonnet 4.6'
+      }
+    },
+    models: ['claude-sonnet-4-6', 'some-unlisted-finetune'],
+    total_models: 2
+  }
+
+  it('shows a name and a description beside the id, and the id alone without one', async () => {
+    const h = mount([described])
+    await waitForFrame(h, 'Anthropic')
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    const frame = normalize(h.frame())
+    // The id stays: it is what gets stored, and it is what a vendor's docs name.
+    expect(frame).toContain('Claude Sonnet 4.6 · claude-sonnet-4-6')
+    expect(frame).toContain('Claude workhorse for coding agents')
+    // No catalogue knows a local finetune, and the row still has to render.
+    expect(frame).toContain('some-unlisted-finetune')
+
+    h.unmount()
+  })
+
+  it('renders ids unchanged for a provider the payload describes nothing for', async () => {
+    const h = mount([anthropic])
+    await waitForFrame(h, 'Anthropic')
+    await h.type(ENTER)
+    await waitForFrame(h, 'step 2/2')
+
+    expect(normalize(h.frame())).toContain('claude-sonnet-4-6')
     h.unmount()
   })
 })

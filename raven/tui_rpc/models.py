@@ -528,6 +528,18 @@ class SkillUnpinResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
+class ModelLabel(_Strict):
+    """How a model reads to a person, for the ids in ``models``.
+
+    Present only for models a catalogue describes; one released since the
+    bundled snapshot, or served by a local deployment, has no entry and the
+    picker shows its id.
+    """
+
+    label: str
+    description: str | None = None
+
+
 class ModelOptionProvider(_Strict):
     """One provider row in the ``/model`` picker."""
 
@@ -538,6 +550,7 @@ class ModelOptionProvider(_Strict):
     auth_type: str
     key_env: str | None = None
     models: list[str]
+    model_labels: dict[str, ModelLabel] | None = None
     total_models: int
     needs_api_base: bool
     warning: str
@@ -593,6 +606,46 @@ class ModelRemoveModelParams(_Strict):
 
 class ModelRemoveModelResult(_Strict):
     provider: ModelOptionProvider
+
+
+class ProviderEndpointInfo(_Strict):
+    """One of a provider section's endpoints, as the picker shows it."""
+
+    label: str
+    api_key: str = Field(..., description="Redacted for display: `****set****` or `(empty)`.")
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
+
+
+class ModelEndpointsParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelEndpointsResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelAddEndpointParams(_Strict):
+    slug: str
+    label: str = Field(..., description="Idempotency key: an existing entry with this label is replaced wholesale.")
+    api_key: str = ""
+    api_base: str | None = None
+    session_id: str | None = None
+
+
+class ModelAddEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
+
+
+class ModelRemoveEndpointParams(_Strict):
+    slug: str
+    label: str
+    session_id: str | None = None
+
+
+class ModelRemoveEndpointResult(_Strict):
+    endpoints: list[ProviderEndpointInfo]
 
 
 # ---------------------------------------------------------------------------
@@ -868,6 +921,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
+    "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),
+    "model.add_endpoint": (ModelAddEndpointParams, ModelAddEndpointResult),
+    "model.remove_endpoint": (ModelRemoveEndpointParams, ModelRemoveEndpointResult),
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
@@ -902,6 +958,7 @@ __all__ = [
     "McpToolInfo",
     "SkillInfo",
     "ModelOptionProvider",
+    "ProviderEndpointInfo",
     "UsageSnapshot",
     "CliResult",
     "StubResult",

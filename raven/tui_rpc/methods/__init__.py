@@ -126,7 +126,8 @@ def register_aligned_methods_except_system(
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
     register_stub_methods(dispatcher)
-    # model.{options,save_key,disconnect,add_model,remove_model}: real handlers
+    # model.{options,save_key,disconnect,add_model,remove_model,endpoints,
+    # add_endpoint,remove_endpoint}: real handlers
     # must come AFTER register_stub_methods (Dispatcher.register raises on
     # duplicate; the stub group no longer owns these names).
     register_model_methods(dispatcher)
