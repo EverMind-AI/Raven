@@ -206,7 +206,9 @@ def test_get_redacts_flat_extra_header_values_too(cfg_path: Path) -> None:
     """The section-level ``extra_headers`` (an AiHubMix APP-Code lives there)
     must follow the same per-value rule as the per-endpoint dict -- one table,
     one rule."""
-    set_provider_fields("aihubmix", {"api_key": "k", "extra_headers": {"APP-Code": "SECRET-VALUE"}}, config_path=cfg_path)
+    set_provider_fields(
+        "aihubmix", {"api_key": "k", "extra_headers": {"APP-Code": "SECRET-VALUE"}}, config_path=cfg_path
+    )
 
     cfg = get_provider_config("aihubmix", config_path=cfg_path)
 
