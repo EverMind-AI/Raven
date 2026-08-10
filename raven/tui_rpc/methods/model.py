@@ -335,10 +335,11 @@ async def model_save_key(params: dict) -> dict:
     submitted = {"api_key": parsed.api_key, "api_base": parsed.api_base}
     status = credential_status(parsed.slug, submitted)
     if not status.ok:
-        req = next(iter(status.missing), None)
+        labels = ", ".join(req.label for req in status.missing)
+        field = next((f for req in status.missing for f in req.fields), "api_key")
         raise ConfigValidationError(
-            f"{label} requires {req.label}" if req else f"{label} is missing credentials",
-            data={"slug": parsed.slug, "field": req.fields[0] if req else "api_key"},
+            f"{label} requires {labels}" if labels else f"{label} is missing credentials",
+            data={"slug": parsed.slug, "field": field},
         )
 
     # A local deployment is reached by address and has no key, said explicitly
