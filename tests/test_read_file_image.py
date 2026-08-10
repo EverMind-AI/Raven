@@ -1321,6 +1321,11 @@ def test_a_lazy_wrapped_azure_provider_still_reads_as_caller_chosen(monkeypatch)
         default_model="gpt-4",
         generation=GenerationSettings(),
     )
+    # Before the prewarm materializes anything there is no inner class to
+    # read, and the probe must answer what the proxy itself answered -- not
+    # crash and not guess Azure.
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), lazy) is False
+
     lazy._built()
 
     assert vision_verdict("gpt-4", find_by_model("gpt-4"), lazy) is None

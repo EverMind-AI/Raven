@@ -692,9 +692,7 @@ class AgentLoop:
         turn that spawned them -- so ``SubagentManager`` snapshots instead.
         """
         if self._turns_in_flight:
-            # Said out loud: the RPC has already answered applied=True and
-            # written the config, so without this line the window where
-            # replies still come from the old provider leaves no trace.
+            # The only trace of the window the docstring describes.
             logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
             self._pending_provider = (provider, model)
             return

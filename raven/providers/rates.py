@@ -211,9 +211,9 @@ def _cache_only_openrouter_models() -> dict[str, dict]:
 def _fetch_openrouter_models(*, allow_fetch: bool = True) -> dict[str, dict]:
     """Return OpenRouter's model table, fetched live and cached 1h in-process.
 
-    Each entry is ``{"pricing": ..., "context_length": ...}``, keyed by the full
-    id. On any network failure, returns the stale cache (or an empty dict) --
-    pricing must never raise into the cost path.
+    Each entry is ``{"pricing": ..., "context_length": ...}``, double-keyed by
+    the full id and the bare alias. On any network failure, returns the stale
+    cache (or an empty dict) -- pricing must never raise into the cost path.
 
     ``allow_fetch=False`` delegates to ``_cache_only_openrouter_models``; see
     there for what it changes. The per-call usage path is the place that still
@@ -342,11 +342,11 @@ def _cached_catalog_only() -> dict[str, dict]:
     # Re-checked after the read, not just before it: ``load()`` touches the
     # filesystem and releases the GIL, so a background warm can land in that
     # window with both a fresher table and a fresh ``_OPENROUTER_CACHE_TIME``.
-    # Overwriting it with this stale copy would leave that timestamp vouching for
-    # the wrong table. Narrows the window to the two lines below rather than
-    # eliminating it -- there is no lock, so a warm landing between this read
-    # and the assignment still loses -- accepted because the stale table is
-    # only ever one fetch TTL from correcting itself.
+    # Overwriting it with this stale copy would leave that timestamp vouching
+    # for the wrong table. Narrows the race without closing it -- there is no
+    # lock, so a warm landing between this read and the assignment still
+    # loses -- accepted because the stale table is only ever one fetch TTL
+    # from correcting itself.
     if _OPENROUTER_CACHE:
         return _OPENROUTER_CACHE
     # Kept so the next lookup does not re-read and re-parse the file.

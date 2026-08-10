@@ -280,11 +280,17 @@ def test_a_switch_during_a_turn_is_parked(tmp_path) -> None:
     assert loop._pending_provider == (switched, NEW_MODEL)
 
     loop._turns_in_flight = 0
+    # A sentinel the adopt must overwrite: the parked switch outlives the RPC
+    # call, and adopting the pair without re-resolving the window left the
+    # new model budgeting against the old one's for the rest of the process.
+    loop.context_window_tokens = -1
     loop._adopt_pending_provider()
 
     assert loop.provider is switched
     assert loop.subagents.provider is switched
     assert loop._pending_provider is None
+    assert loop.context_window_tokens > 0, "the adopt must re-resolve the context window"
+    assert loop.memory_consolidator.context_window_tokens == loop.context_window_tokens
 
 
 def test_a_switch_between_turns_applies_immediately(tmp_path) -> None:
