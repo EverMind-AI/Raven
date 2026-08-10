@@ -1304,6 +1304,49 @@ def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
     assert pricing._OPENROUTER_CACHE == {}
 
 
+def test_a_lazy_wrapped_azure_provider_still_reads_as_caller_chosen(monkeypatch) -> None:
+    """The TUI hands the loop a lazy proxy, and an isinstance probe against
+    the proxy answers about the proxy: a bare Azure deployment name then
+    joined the vendor catalog and silently lost its pictures. The probe reads
+    through ``unwrapped``."""
+    from raven.providers.azure_openai_provider import AzureOpenAIProvider
+    from raven.providers.base import GenerationSettings
+    from raven.providers.capabilities import vision_verdict
+    from raven.providers.lazy import LazyProvider
+    from raven.providers.registry import find_by_model
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"]})
+    lazy = LazyProvider(
+        factory=lambda: AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com", default_model="gpt-4"),
+        default_model="gpt-4",
+        generation=GenerationSettings(),
+    )
+    lazy._built()
+
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), lazy) is None
+
+
+def test_a_custom_gateways_served_name_never_joins_the_vendor_catalog(monkeypatch) -> None:
+    """A ``custom`` endpoint serves whatever its operator called the model; a
+    served ``gpt-4`` is not OpenAI's ``gpt-4``, and the vendor spec the bare
+    id resolves to can neither say so nor carry the override escape hatch --
+    only the configured provider knows which section built it."""
+    from raven.providers.capabilities import vision_verdict
+    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.registry import find_by_model
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"]})
+    provider = LiteLLMProvider(
+        api_key="sk-local", api_base="http://gw.example:8000/v1", default_model="gpt-4", provider_name="custom"
+    )
+
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), provider) is None
+    # An OpenRouter-built provider keeps consulting the catalog: it serves
+    # vendor ids, which is exactly what the catalog speaks for.
+    routed = LiteLLMProvider(api_key="sk-or", default_model="gpt-4", provider_name="openrouter")
+    assert vision_verdict("openai/gpt-4", find_by_model("openai/gpt-4"), routed) is False
+
+
 def test_a_stale_disk_table_does_not_suppress_the_warm(monkeypatch) -> None:
     """A long-lived session that boots on a days-old cache file must still
     warm: the reader adopts the disk table at any age (timestamp left at

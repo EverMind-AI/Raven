@@ -144,13 +144,29 @@ def _model_id_is_caller_chosen(model: str, provider: Any, spec: "ProviderSpec | 
     LiteLLM's ``azure/`` prefix, which the registry does not answer to and which
     always introduces a deployment name. And a local runtime is named by a spec
     that says so.
+
+    A fourth way for the same situation under another flag: an
+    explicit-selection gateway (``custom``) serves whatever its operator named
+    the model, which only the configured provider -- not the vendor spec the
+    bare id resolves to -- can reveal.
     """
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
-    from raven.providers.registry import split_model_id
+    from raven.providers.registry import find_by_name, split_model_id
 
-    if isinstance(provider, AzureOpenAIProvider):
+    # The live instance may be the lazy proxy the TUI builds; the transport
+    # class is on the provider it materialized (still unbuilt reads as "not
+    # Azure", the same answer the proxy itself gave).
+    inner = getattr(provider, "unwrapped", None) or provider
+    if isinstance(inner, AzureOpenAIProvider):
         return True
     if split_model_id(model)[0] in _DEPLOYMENT_NAME_PREFIXES:
+        return True
+    # A gateway matched only by explicit selection (`custom`: no keywords)
+    # serves whatever names its operator chose, the same situation as a
+    # deployment -- and ``spec`` cannot say so, because ``find_by_model``
+    # resolves those names to the *vendor's* spec, never the gateway's.
+    own = find_by_name(getattr(inner, "provider_name", "") or "")
+    if own is not None and own.is_gateway and not own.keywords:
         return True
     if spec is None:
         return False

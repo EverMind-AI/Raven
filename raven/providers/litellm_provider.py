@@ -773,6 +773,16 @@ class LiteLLMProvider(LLMProvider):
             thinking_blocks=thinking_blocks,
         )
 
+    @property
+    def provider_name(self) -> str:
+        """The config section this provider was built for, or ``""``.
+
+        Read by callers deciding whether the model string is the operator's
+        own naming (a ``custom`` gateway serves whatever its endpoint calls
+        the model) -- see ``capabilities._model_id_is_caller_chosen``.
+        """
+        return self._provider_name
+
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model

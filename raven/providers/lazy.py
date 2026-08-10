@@ -115,6 +115,18 @@ class LazyProvider(LLMProvider):
             return self._initial_endpoint_label
         return getattr(self._provider, "active_endpoint_label", None)
 
+    @property
+    def unwrapped(self) -> LLMProvider | None:
+        """The materialized inner provider, or None before the first build.
+
+        For callers that need the real class rather than this proxy -- an
+        ``isinstance`` probe against the proxy answers about the proxy
+        (``capabilities`` type-tests for the Azure transport this way).
+        Deliberately not a building accessor: a capability question must not
+        pay the multi-second import that materialization costs.
+        """
+        return self._provider
+
     async def chat(self, *args: Any, **kwargs: Any) -> LLMResponse:
         return await self._built().chat(*args, **kwargs)
 

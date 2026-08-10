@@ -360,5 +360,10 @@ class EndpointRotorProvider(LLMProvider):
         configs that had several endpoints to rotate."""
         return self._inners[0].model_overrides
 
+    @property
+    def provider_name(self) -> str:
+        """Same one-answer-per-section delegation as ``model_overrides``."""
+        return getattr(self._inners[0], "provider_name", "") or ""
+
     def get_default_model(self) -> str:
         return self._default_model
