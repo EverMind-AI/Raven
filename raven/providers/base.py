@@ -3,7 +3,6 @@
 import asyncio
 import json
 import random
-import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
@@ -18,11 +17,6 @@ from raven.tracing import semconv, trace
 # OpenRouter -> OpenAI, the rest are the set Hermes accumulated across vendors
 # (agent/error_classifier.py, MIT, see LICENSES/MIT-hermes-agent.txt).
 #
-#: 404 as its own token. A bare substring also matched the 404 inside
-#: "retry after 1404ms", a request id and a character offset -- see the
-#: model-unavailable bucket in ``_classify``.
-_STATUS_404 = re.compile(r"\b404\b")
-
 # Some are ambiguous alone -- "text is not set" says nothing about images -- and
 # that is safe here because the recovery is a no-op when no tool result actually
 # carries one, so a false match costs nothing and never retries blind.
@@ -461,17 +455,16 @@ class LLMProvider(ABC):
             return ErrorClassification("billing", should_fallback=True)
 
         # Model unavailable / not found → no point retrying it; try another model.
-        # The status is matched as its own token, not a substring: a provider
-        # that embeds it into a rendered string (azure's non-200 path) reaches
-        # here with no exception to read a code from, but the bare substring
-        # also matched the 404 inside "retry after 1404ms", a request id, and a
-        # character offset -- each one burning a fallback model and cooling a
-        # healthy endpoint for an error no swap can fix. Same hazard, same
-        # boundary fix as prompt_cache's _STATUS_400.
+        # No bare "404" substring here: it also matched the 404 inside "retry
+        # after 1404ms", a request id, and a character offset -- each one
+        # burning a fallback model and cooling a healthy endpoint for an error
+        # no swap can fix. A provider that renders its non-200 body into a
+        # plain string before it reaches this method (azure's path) attaches
+        # the classification at the source instead, where the real status
+        # code is still available -- see ``AzureOpenAIProvider.chat``.
         if (
             status == 404
             or "notfounderror" in names
-            or _STATUS_404.search(msg)
             or has(
                 "model not found",
                 "does not exist",

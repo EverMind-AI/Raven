@@ -97,13 +97,13 @@ def test_classify_follows_cause_chain():
         ("connection reset by peer", "network"),
         ("insufficient credit / billing", "billing"),
         ("model not found", "model_unavailable"),
-        # A rendered azure non-200 body: no exception, no status attribute,
-        # and a route-level 404 text that names none of the wordier markers.
-        ("Azure OpenAI API Error 404: Resource not found", "model_unavailable"),
-        # The status must match as its own token: each of these carries "404"
-        # inside a larger number or id, and classifying them model_unavailable
-        # burned a fallback model and cooled a healthy endpoint for an error
-        # no swap can fix.
+        # None of these carries any of the wordier model_unavailable markers,
+        # even though each one has "404" inside a larger number or id --
+        # matching it as a bare substring once burned a fallback model and
+        # cooled a healthy endpoint for an error no swap could fix. Azure's own
+        # rendered non-200 body no longer reaches this degraded path at all:
+        # see ``AzureOpenAIProvider.chat``, which classifies from the live
+        # status code before the response is turned into a string.
         ("Error: retry after 1404ms", "unknown"),
         ("upstream error id=req_a404bc7f", "unknown"),
         ("invalid JSON at char 4041", "unknown"),
