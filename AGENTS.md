@@ -140,8 +140,9 @@ self.logger = logger.bind(channel=self.name)
 **subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 
 **footer** (optional):
-- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public;
-- `Closes #123` — auto-closes the issue on merge.
+- `BREAKING CHANGE: <desc>` — triggers a MAJOR bump once public.
+
+A closing keyword does not belong here: squash-merge drops individual commit bodies, so only the PR description can close an issue (§3.3, §3.7).
 
 ### §3.1.1 Top rule: the whole message is English (subject + body + footer)
 
@@ -242,7 +243,7 @@ Filling rules:
 - `Type` — one box, mirroring the commit type (`feat`→Feature, `fix`→Fix, `docs`→Docs, `refactor`→Refactor, `ci`/`build`→CI / tooling, else Other). The checkbox is not a fresh judgement call;
 - `Verification` — the exact commands you ran and their result, not a claim that you ran them;
 - `Risk` — user-visible behaviour changes, and how to roll back;
-- `Related Issues` — `Fixes #NNN` for what this closes, a bare `#NNN` to reference without closing, `N/A` when there is none;
+- `Related Issues` — `Fixes #NNN` for what this closes (repeat the keyword per issue: `Fixes #NNN, fixes #MMM`), a bare `#NNN` to reference without closing, `N/A` when there is none;
 - check only the boxes you actually satisfied — leave the rest blank and explain in the description; never blanket-check;
 - anything the template has no section for but the reviewer needs (breaking change / cherry-pick option / mixed topics) → append to `Summary`.
 
