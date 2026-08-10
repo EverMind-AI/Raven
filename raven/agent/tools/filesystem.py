@@ -54,7 +54,7 @@ class ReadFileTool(_FsTool):
         return (
             "Read the contents of a file. Text files return numbered lines — use offset and limit to "
             "paginate through large ones. Image files (PNG, JPEG, GIF, WebP, and other common formats) "
-            "return the picture itself when the active model can see images, downscaled if needed."
+            "return the picture itself, downscaled if needed."
         )
 
     @property

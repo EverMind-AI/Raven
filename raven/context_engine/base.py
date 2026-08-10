@@ -80,6 +80,8 @@ class AssemblyContext:
     session_messages: list[dict[str, Any]]
     budget: TokenBudget
     prefix: AssembledPrefix | None = None
+    can_see_images: bool = True
+    describe_tool: str | None = None
 
 
 @dataclass

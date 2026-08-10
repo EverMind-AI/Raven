@@ -411,6 +411,11 @@
           "name": "sender_id",
           "required": false,
           "schema": { "type": "string" }
+        },
+        {
+          "name": "media",
+          "required": false,
+          "schema": { "type": "array", "items": { "type": "string" }, "maxItems": 64 }
         }
       ],
       "result": {

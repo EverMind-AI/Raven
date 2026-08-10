@@ -421,6 +421,14 @@ class TurnSendParams(_Strict):
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
+    # Attachment paths, workspace-relative or absolute. The same lane channels
+    # already use (``TurnRequest.media``): a vision-capable model gets the
+    # picture inlined in the user message, anything else gets a note naming it.
+    # Paths rather than bytes -- the caller has already put the file in the
+    # workspace, and every file tool is workspace-scoped. Bounded here so a
+    # malformed caller is refused at the schema rather than resolving thousands
+    # of paths; the renderer caps how many are inlined regardless.
+    media: list[str] | None = Field(default=None, max_length=64)
 
 
 class TurnSendResult(_Strict):
