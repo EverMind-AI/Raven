@@ -736,8 +736,10 @@ class AgentLoop:
         keeping the old one's.
 
         Also the callback ``LazyProvider.on_built`` fires from its prewarm
-        thread, i.e. off the event loop -- safe because the only write here is
-        one ``int`` attribute, and the GIL makes that assignment atomic.
+        thread, i.e. off the event loop -- safe because every write this
+        method triggers, here and in the builders it cascades into (the
+        Curator and its trimmer, the consolidator), is a plain ``int``
+        attribute assignment, and the GIL makes each one atomic.
         """
         if self._context_window_explicit:
             return
