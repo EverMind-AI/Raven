@@ -68,6 +68,22 @@ class ErrorClassification:
     refuses_prompt_cache: bool = False
 
 
+class ProviderHTTPError(RuntimeError):
+    """Carries a real HTTP status past the point where a provider renders its
+    non-200 response into a string.
+
+    ``classify_error`` reads a status code off a live exception; a provider
+    that speaks HTTP directly (azure, codex) has one on the response but loses
+    it the moment the error becomes ``str`` content -- raising or classifying
+    through this keeps the status attached, instead of regex-guessing it back
+    out of the rendered text.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""

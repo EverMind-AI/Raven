@@ -10,23 +10,9 @@ from urllib.parse import urljoin
 import httpx
 import json_repair
 
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
-
-
-class _AzureHTTPError(Exception):
-    """Carries the real status code past the point where it gets rendered into a string.
-
-    ``classify_error`` reads a status code off an exception; a non-200 response
-    handled here has one (``response.status_code``), but turning it into
-    ``LLMResponse.content`` loses it unless something exception-shaped carries
-    it back through, which is what this does.
-    """
-
-    def __init__(self, status_code: int, body: str):
-        super().__init__(f"Azure OpenAI API Error {status_code}: {body}")
-        self.status_code = status_code
 
 
 class AzureOpenAIProvider(LLMProvider):
@@ -182,7 +168,9 @@ class AzureOpenAIProvider(LLMProvider):
                     client.post(url, headers=headers, json=payload), self.generation.timeout
                 )
                 if response.status_code != 200:
-                    exc = _AzureHTTPError(response.status_code, response.text)
+                    exc = ProviderHTTPError(
+                        response.status_code, f"Azure OpenAI API Error {response.status_code}: {response.text}"
+                    )
                     return LLMResponse(
                         content=str(exc),
                         finish_reason="error",

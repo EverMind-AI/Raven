@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from raven.providers.base import ProviderHTTPError
 from raven.providers.openai_codex_provider import (
     DEFAULT_CODEX_URL,
     OpenAICodexProvider,
@@ -19,6 +20,7 @@ from raven.providers.openai_codex_provider import (
     _consume_sse,
     _convert_messages,
     _convert_tool_output,
+    _friendly_error,
     _iter_sse,
 )
 
@@ -129,6 +131,18 @@ def test_consume_sse_error_classifies_as_retryable_server_error():
 
     assert classification.category == "server"
     assert classification.retryable is True
+    assert classification.should_fallback is True
+
+
+def test_http_404_classifies_as_model_unavailable_via_the_live_status():
+    """The non-200 branch raises ProviderHTTPError so classify_error reads the
+    real status instead of guessing from the rendered text -- a plain 404 body
+    carrying none of the model-not-found phrases must still bucket correctly."""
+    exc = ProviderHTTPError(404, _friendly_error(404, "Resource not found"))
+
+    classification = OpenAICodexProvider.classify_error(exc)
+
+    assert classification.category == "model_unavailable"
     assert classification.should_fallback is True
 
 

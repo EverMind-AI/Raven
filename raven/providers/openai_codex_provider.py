@@ -22,7 +22,7 @@ from typing import Any, AsyncGenerator
 import httpx
 from loguru import logger
 
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -143,7 +143,9 @@ async def _request_codex(
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()
-                raise RuntimeError(_friendly_error(response.status_code, text.decode("utf-8", "ignore")))
+                raise ProviderHTTPError(
+                    response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
+                )
             return await _consume_sse(response, timeout)
 
 
