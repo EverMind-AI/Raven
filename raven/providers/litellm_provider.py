@@ -270,10 +270,19 @@ class LiteLLMProvider(LLMProvider):
         Decided by ``providers.prompt_cache``, which the token strategies ask too
         -- three copies of this question disagreed, and the one here could not
         have answered for the marks they place.
+
+        The address falls back to the auto-detected gateway when no
+        ``provider_name`` was given: several production constructors (the
+        evolver's launch models, the sentinel planner) pass only an
+        ``api_base``, and answering from the model id alone reads
+        ``anthropic/claude-...`` as Anthropic's wire while the request actually
+        travels through whatever gateway that base names -- a wire that may
+        have nowhere honest to put the field.
         """
         from raven.providers.prompt_cache import accepts_cache_control
 
-        return accepts_cache_control(model, addressed_to=self._provider_name)
+        addressed = self._provider_name or (self._gateway.name if self._gateway else "")
+        return accepts_cache_control(model, addressed_to=addressed)
 
     def _apply_cache_control(
         self,

@@ -410,6 +410,22 @@ def test_a_stored_id_round_trips_through_describe() -> None:
     assert describe("anthropic", "anthropic/claude-sonnet-4-6").label == "Claude Sonnet 4.6"
 
 
+def test_vendor_id_normalizes_provider_spelling_like_merge_key() -> None:
+    """``_vendor_id``'s fallback branch used to compare ``head == provider``
+    with ``head`` already normalized by ``split_model_id`` but ``provider``
+    passed through as-is -- unlike ``wire.merge_key``, which normalizes both
+    sides of the same comparison. A provider spelled with a hyphen against a
+    model prefix spelled with an underscore diverged: the strip was skipped
+    and the whole model string came back as if it named no vendor at all.
+    """
+    from raven.providers.catalog import _vendor_id
+    from raven.providers.wire import merge_key
+
+    provider, model = "nano-gpt", "nano_gpt/DeepSeek-V3"
+    assert _vendor_id(provider, model) == "DeepSeek-V3"
+    assert merge_key(provider, model) == "nano_gpt::deepseek-v3"
+
+
 def test_what_the_user_states_about_a_model_beats_the_catalogue() -> None:
     """The user naming their own deployment beats a catalogue that never heard of it.
 

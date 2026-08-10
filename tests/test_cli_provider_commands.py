@@ -938,6 +938,17 @@ def test_endpoint_list_renders_a_validation_error_not_a_traceback(tmp_config: Pa
     assert "Validation failed" in r.output
 
 
+def test_endpoint_add_on_an_oauth_provider_renders_the_refusal(tmp_config: Path) -> None:
+    """The write path shares the factory's refusal; the CLI must render it as
+    the same clean failure a bad provider name gets, not a bare traceback."""
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "github_copilot", "--label", "x", "--api-key", "k"],
+    )
+    assert r.exit_code == 1
+    assert "does not support multiple endpoints" in r.output
+
+
 def test_endpoint_add_unknown_provider_exits_1(tmp_config: Path) -> None:
     r = runner.invoke(
         app,

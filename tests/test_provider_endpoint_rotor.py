@@ -309,6 +309,39 @@ async def test_chat_attempt_with_retry_composes_with_base_model_chain_fallback(c
     assert (e0.chat_calls, e1.chat_calls) == (2, 1)
 
 
+async def test_all_endpoints_exhausted_logs_a_warning_naming_each_attempt(clock, caplog):
+    """Without this, exhausting every endpoint hands the caller only the last
+    endpoint's error -- no way to tell the others were tried and failed too,
+    rather than skipped."""
+    import logging
+
+    from loguru import logger
+
+    e0 = _StubInner(
+        "e0",
+        chat_script=[LLMResponse(content="down on e0", finish_reason="error", error_classification=_FALLBACK_FATAL)],
+    )
+    e1 = _StubInner(
+        "e1",
+        chat_script=[LLMResponse(content="down on e1", finish_reason="error", error_classification=_FALLBACK_FATAL)],
+    )
+    rotor = _make_rotor([e0, e1], strategy="sticky")
+
+    # Bridge loguru -> stdlib caplog (loguru doesn't write to logging by default)
+    handler_id = logger.add(lambda msg: logging.getLogger("loguru.bridge").warning(msg), level="WARNING")
+    try:
+        with caplog.at_level(logging.WARNING, logger="loguru.bridge"):
+            resp = await rotor.chat_with_retry(messages=[], model="m", fallback_models=[])
+    finally:
+        logger.remove(handler_id)
+
+    assert resp.content == "down on e1"
+    text = "\n".join(rec.message for rec in caplog.records)
+    assert "e0" in text
+    assert "e1" in text
+    assert _FALLBACK_FATAL.category in text
+
+
 async def test_generation_assigned_after_construction_propagates_to_every_inner(clock):
     """``make_provider`` builds the rotor, then assigns ``provider.generation =
     GenerationSettings(...)`` from config -- see ``raven/cli/_helpers.py``.

@@ -390,7 +390,7 @@ async def model_add_endpoint(params: dict) -> dict:
             api_key=parsed.api_key,
             api_base=parsed.api_base,
         )
-    except (KeyError, ValidationError) as exc:
+    except (KeyError, ValidationError, RuntimeError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     # Re-read rather than redacting what the write returned, so the one place
     # deciding how a key is masked stays ``list_provider_endpoints``.

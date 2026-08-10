@@ -620,6 +620,30 @@ def credential_kind(provider: str | None) -> str:
     return CRED_KEY
 
 
+def endpoints_unsupported_reason(provider_name: str | None) -> str | None:
+    """Why ``provider_name``'s config cannot carry an ``endpoints`` list, or None
+    if it can.
+
+    Shared by every path that could write one -- `make_provider` at build time,
+    `add_provider_endpoint`, and the TUI `/model` picker's ``model.add_endpoint``
+    -- so a section rejected at build time is rejected at write time too,
+    instead of being accepted by the write paths and only failing later when
+    something tries to build a provider from it. Codex, MiniMax OAuth and Azure
+    (``client`` set) each connect through one dedicated client and one account,
+    not several; an OAuth section reached through litellm instead (``is_oauth``,
+    e.g. github_copilot, which has no dedicated client) is the same shape.
+    ``endpoints`` is meaningful only for a plain API-key vendor reached through
+    litellm.
+    """
+    spec = find_by_name(provider_name) if provider_name else None
+    if spec is None or not (spec.client or spec.is_oauth):
+        return None
+    return (
+        f"{provider_name} does not support multiple endpoints -- remove the `endpoints` "
+        "field from its config; this provider connects through a single account, not several"
+    )
+
+
 def litellm_spelling(name: str | None) -> str:
     """How LiteLLM spells this vendor, which is the only form usable as a prefix.
 

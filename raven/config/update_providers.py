@@ -34,6 +34,7 @@ from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
     ProviderSpec,
     canonical_provider_name,
+    endpoints_unsupported_reason,
     find_by_name,
     names_same_provider,
     normalize_provider_name,
@@ -900,9 +901,16 @@ def add_provider_endpoint(
     field, so re-running this with a rotated ``api_key`` is how the rotation
     gets written. A new label appends.
 
-    Returns the new endpoint list. Raises KeyError for an unknown provider.
+    Returns the new endpoint list. Raises KeyError for an unknown provider,
+    RuntimeError for one that ``endpoints_unsupported_reason`` rejects (Codex,
+    MiniMax OAuth, Azure, or any OAuth section) -- the same rejection
+    ``make_provider`` applies at build time, applied here before the write
+    rather than left for that later failure to catch.
     """
     name = canonical_provider_name(name)
+    reason = endpoints_unsupported_reason(name)
+    if reason:
+        raise RuntimeError(reason)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, endpoints = _load_provider_endpoints(name, data)

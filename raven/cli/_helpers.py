@@ -114,25 +114,15 @@ def make_provider(config: Config):
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import endpoints_unsupported_reason, find_by_name
 
     spec = find_by_name(provider_name) if provider_name else None
     client = spec.client if spec else ""
 
-    # codex / minimax_oauth / azure each need more than a key and an address
-    # (a device-flow token, a deployment path, ...), and an OAuth section
-    # (spec.is_oauth, e.g. github_copilot -- which has no dedicated client and
-    # falls to the litellm branch below) connects through one signed-in
-    # account, not several. `endpoints` is meaningful only for a plain
-    # API-key vendor reached through litellm, so a section combining it with
-    # any of these is rejected here rather than silently using just the first
-    # entry.
-    if p and p.endpoints and (client in {"codex", "minimax_oauth", "azure"} or (spec is not None and spec.is_oauth)):
-        raise MissingCredentialsError(
-            f"{provider_name} does not support multiple endpoints -- remove the `endpoints` "
-            "field from its config; this provider connects through a single account, not several",
-            provider=provider_name or "",
-        )
+    if p and p.endpoints:
+        reason = endpoints_unsupported_reason(provider_name)
+        if reason:
+            raise MissingCredentialsError(reason, provider=provider_name or "")
 
     if client == "codex":
         provider = OpenAICodexProvider(default_model=model)

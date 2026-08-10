@@ -383,6 +383,18 @@ class AgentLoop:
         # real window. ("Explicit", not "pinned" -- Provider Pin is a different
         # registered term, see CONTEXT.md.)
         self._context_window_explicit = bool(context_window_tokens)
+        if context_window_tokens == 65536:
+            # The retired schema default, which the old bootstrap wrote to
+            # disk verbatim -- so on upgraded installs this exact value is
+            # more often a fossil than a choice. The config is deliberately
+            # not rewritten (a value the user can see in their own file stays
+            # theirs); this line is what keeps that stance from failing
+            # silently.
+            logger.warning(
+                "contextWindowTokens: 65536 is pinning the context window (the old default, "
+                "written out by earlier versions); remove the line from config.json to size "
+                "it from each model's real window"
+            )
         # allow_fetch=False: construction must not block on a synchronous
         # network call for an OpenRouter model's window -- whatever is already
         # cached (in-process or on disk, any age) answers instead. See

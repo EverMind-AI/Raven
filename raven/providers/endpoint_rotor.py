@@ -29,6 +29,8 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 from raven.providers.base import ErrorClassification, GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.endpoints import ResolvedEndpoint
 
@@ -230,6 +232,7 @@ class EndpointRotorProvider(LLMProvider):
         """
         order = self._healthy_order()
         last_response: LLMResponse | None = None
+        tried: list[tuple[str, str]] = []
         for i in order:
             response = await self._inners[i]._chat_attempt_with_retry(
                 messages=messages,
@@ -246,11 +249,19 @@ class EndpointRotorProvider(LLMProvider):
 
             classification = response.error_classification or self.classify_error(content=response.content)
             response.error_classification = classification
+            tried.append((self._endpoints[i].label, classification.category))
             last_response = response
             if not _rotates(classification):
                 return response
             self._mark_failure(i)
 
+        # Every endpoint was tried and every one failed -- the caller only sees
+        # the last error otherwise, with no way to tell that the others were
+        # tried too rather than skipped.
+        logger.warning(
+            "All endpoints exhausted, returning the last error. Tried: {}",
+            ", ".join(f"{label} [{category}]" for label, category in tried),
+        )
         return last_response  # type: ignore[return-value]  # order always non-empty
 
     async def chat(

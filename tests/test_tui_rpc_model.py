@@ -329,6 +329,15 @@ async def test_endpoint_handlers_reject_an_unknown_provider(fake_home: Path, cal
         await call()
 
 
+@pytest.mark.parametrize("slug", ["azure_openai", "github_copilot"])
+async def test_add_endpoint_rejects_providers_that_cannot_rotate(slug: str, fake_home: Path) -> None:
+    """Mirrors ``make_provider``'s build-time rejection: a provider that
+    connects through one dedicated client/account, not several, must be
+    rejected here too, with a readable message rather than a bare traceback."""
+    with pytest.raises(ConfigValidationError, match="does not support multiple endpoints"):
+        await model_add_endpoint({"slug": slug, "label": "x", "api_key": "k"})
+
+
 async def test_endpoint_handlers_accept_session_id(fake_home: Path) -> None:
     # The picker passes its session down like it does for every other model.*
     # call; a strict param model would reject the key otherwise.

@@ -753,7 +753,7 @@ def endpoint_add_cmd(
             api_base=api_base or None,
             extra_headers=headers,
         )
-    except KeyError as exc:
+    except (KeyError, RuntimeError) as exc:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1)
     except ValidationError as exc:

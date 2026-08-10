@@ -186,3 +186,33 @@ def test_parse_response_leaves_bare_close_tag_alone_behind_a_gateway():
 
     assert result.reasoning_content is None
     assert result.content == "discussing the </think> tag in my answer"
+
+# --- cache-control gate: the address is the wire, not the model id ---
+
+
+def _make_base_only_provider(api_base: str | None) -> LiteLLMProvider:
+    """A constructor shape several production callers use: api_base, no name.
+
+    The evolver's launch models and the sentinel planner both build this way,
+    so the gate must answer from the auto-detected gateway, not the model id.
+    """
+    with (
+        patch("raven.providers.litellm_provider.litellm"),
+        patch("raven.providers.litellm_provider.LiteLLMProvider._setup_env"),
+    ):
+        return LiteLLMProvider(api_key="sk-test", api_base=api_base)
+
+
+def test_cache_gate_asks_the_detected_gateway_when_no_name_was_given():
+    """An anthropic model id through a caching-less gateway must not carry
+    cache_control: the id alone reads as Anthropic's wire, but the request
+    travels on whatever the api_base names."""
+    p = _make_base_only_provider("https://aihubmix.com/v1")
+    assert p._supports_cache_control("anthropic/claude-sonnet-4-20250514") is False
+
+
+def test_cache_gate_still_allows_a_caching_gateway_and_direct_anthropic():
+    direct = _make_base_only_provider(None)
+    routed = _make_base_only_provider("https://openrouter.ai/api/v1")
+    assert direct._supports_cache_control("anthropic/claude-sonnet-4-20250514") is True
+    assert routed._supports_cache_control("anthropic/claude-sonnet-4-20250514") is True

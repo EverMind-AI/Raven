@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
 
@@ -105,13 +107,28 @@ class PerModelProvider(LLMProvider):
         Continuation between hops mirrors ``LLMProvider.chat_with_retry``:
         move to the next hop only on an error classified ``should_fallback``
         with a hop remaining; otherwise the response is returned as-is.
+
+        The ``can_serve`` skip and the cache_control strip also mirror that
+        loop (see ``LLMProvider.chat_with_retry``): a per-model sub-provider
+        picked for a later hop can be just as unable to serve it, or just as
+        unable to read a cache marker set for the primary model's vendor, as
+        the single-instance case those guards were written for.
         """
+        from raven.providers import prompt_cache
+
         model_chain = [model, *(fallback_models or [])]
         response: LLMResponse | None = None
         for idx, current_model in enumerate(model_chain):
-            response = await self._pick(current_model).chat_with_retry(
-                messages, tools, model=current_model, fallback_models=[], **kwargs
-            )
+            sub = self._pick(current_model)
+            if idx and not sub.can_serve(current_model or ""):
+                logger.warning(
+                    "Skipping fallback model={} - this provider instance cannot serve it (wrong vendor)",
+                    current_model,
+                )
+                continue
+            if idx and not prompt_cache.accepts_cache_control(current_model or ""):
+                messages, tools = prompt_cache.strip(messages, tools)
+            response = await sub.chat_with_retry(messages, tools, model=current_model, fallback_models=[], **kwargs)
             if response.finish_reason != "error":
                 return response
 

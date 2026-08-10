@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.schema import ModelEndpoint
-from raven.providers.base import GenerationSettings, LLMResponse
+from raven.providers.base import ErrorClassification, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.per_model_provider import PerModelProvider
+from raven.providers.prompt_cache import CACHE_CONTROL
 
 
 def _fallback():
@@ -127,6 +128,61 @@ async def test_chat_with_retry_dispatches_each_hop_to_its_own_endpoint(monkeypat
     # entirely against its own endpoint before the chain moves on.
     calls = [(c["model"], c["api_base"], c["api_key"]) for c in seen]
     assert calls == [("openai/small", "http://a/v1", "KA")] * 4 + [("openai/large", "http://b/v1", "KB")]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_strips_cache_control_on_a_fallback_hop_that_cannot_read_it():
+    """Mirrors ``LLMProvider.chat_with_retry``'s own guard: a breakpoint placed
+    for the primary model's vendor must not reach a fallback hop whose vendor
+    cannot read it -- here, a hop that resolves to ``fallback`` (e.g. Azure,
+    which does not strip cache_control itself). Without this guard the marker
+    is billed as an unrecognized block or refused outright by the second hop's
+    wire."""
+    p = _provider()
+    error_resp = LLMResponse(
+        content="boom",
+        finish_reason="error",
+        error_classification=ErrorClassification(category="server_error", should_fallback=True),
+    )
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=error_resp)
+
+    seen: list[dict] = []
+
+    async def fake_fallback_chat_with_retry(messages, tools=None, **kwargs):
+        seen.append({"messages": messages, "tools": tools})
+        return LLMResponse(content="FB_RESP", finish_reason="stop")
+
+    p._fallback.chat_with_retry = AsyncMock(side_effect=fake_fallback_chat_with_retry)
+
+    messages = [{"role": "system", "content": "sys", "cache_control": CACHE_CONTROL}]
+    out = await p.chat_with_retry(messages=messages, model="small", fallback_models=["unrecognized-fallback-model"])
+
+    assert out.content == "FB_RESP"
+    assert seen[0]["messages"] == [{"role": "system", "content": "sys"}]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_skips_a_fallback_hop_its_sub_provider_cannot_serve():
+    """Mirrors ``LLMProvider.chat_with_retry``'s ``can_serve`` guard: a
+    per-model sub-provider picked for a later hop can be just as unable to
+    serve it as the single-instance case that guard exists for -- e.g. the
+    hop resolves to a vendor this sub-provider's credentials do not reach."""
+    p = _provider()
+    error_resp = LLMResponse(
+        content="boom",
+        finish_reason="error",
+        error_classification=ErrorClassification(category="server_error", should_fallback=True),
+    )
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=error_resp)
+    p._by_model["large"].can_serve = MagicMock(return_value=False)
+    p._by_model["large"].chat_with_retry = AsyncMock()
+
+    out = await p.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="small", fallback_models=["large"]
+    )
+
+    p._by_model["large"].chat_with_retry.assert_not_awaited()
+    assert out is error_resp
 
 
 def test_sub_providers_inherit_configured_model_overrides():

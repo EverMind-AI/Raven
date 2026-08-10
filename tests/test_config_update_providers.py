@@ -812,6 +812,26 @@ def test_add_provider_endpoint_unknown_provider_raises(cfg_path: Path) -> None:
         add_provider_endpoint("nonexistent_provider", label="x", api_key="k", config_path=cfg_path)
 
 
+@pytest.mark.parametrize("provider", ["azure_openai", "github_copilot"])
+def test_add_provider_endpoint_rejects_providers_that_cannot_rotate(provider: str, cfg_path: Path) -> None:
+    """Azure connects through a dedicated client, github_copilot through OAuth --
+    neither takes an ``endpoints`` list. ``make_provider`` already refused this
+    at build time; the write path must refuse it before ever touching disk,
+    not accept a section that starts up broken."""
+    with pytest.raises(RuntimeError, match="does not support multiple endpoints"):
+        add_provider_endpoint(provider, label="x", api_key="k", config_path=cfg_path)
+
+    assert not cfg_path.exists()
+
+
+def test_add_provider_endpoint_still_accepts_a_plain_api_key_provider(cfg_path: Path) -> None:
+    """openrouter is a plain API-key vendor reached through litellm -- the one
+    shape ``endpoints`` is meaningful for -- and must be unaffected by the
+    guard above."""
+    endpoints = add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
+    assert [e.label for e in endpoints] == ["primary"]
+
+
 def test_remove_provider_endpoint(cfg_path: Path) -> None:
     add_provider_endpoint("openrouter", label="primary", api_key="k1", config_path=cfg_path)
     add_provider_endpoint("openrouter", label="backup", api_key="k2", config_path=cfg_path)

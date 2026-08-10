@@ -166,14 +166,21 @@ def _vendor_id(provider: str, model: str) -> str:
     A stored id names its provider and the snapshot does not repeat that, so the
     prefix comes off before the lookup -- including a gateway's, whose rows are
     filed under the upstream vendor's id.
+
+    ``head`` is always normalized (``split_model_id`` runs it through
+    ``normalize_provider_name``), so ``provider`` must be too before the
+    fallback comparison -- the same normalization ``wire.merge_key`` applies to
+    both sides of its own identity check. Comparing raw missed a provider
+    Raven carries no spec for whenever it was spelled differently from its
+    model prefix, e.g. hyphenated ``provider`` against an underscored prefix.
     """
-    from raven.providers.registry import find_by_name
+    from raven.providers.registry import find_by_name, normalize_provider_name
     from raven.providers.wire import split_model_id
 
     spec = find_by_name(provider)
     head, rest = split_model_id(model or "")
     if head and spec and head in spec.route_names:
         return rest
-    if head and head == provider:
+    if head and head == normalize_provider_name(provider):
         return rest
     return model or ""
