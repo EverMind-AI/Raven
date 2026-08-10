@@ -352,6 +352,12 @@ class CuratorAssembler:
         # CuratorSegmentBuilder before any build/validate call.
         self.prefix: "AssembledPrefix | None" = None
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built."""
+        self.provider = provider
+        self.model = model
+        self.trimmer.set_provider(provider, model)
+
     @staticmethod
     def working_state_segment(working_state: str | None) -> str:
         """Render segment 6 text (``# Curator Working State``) or ``""``."""

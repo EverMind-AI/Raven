@@ -80,6 +80,12 @@ class HistoryTrimmer:
         self.get_tool_definitions = get_tool_definitions
         self.context_window_tokens = context_window_tokens
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built, so token
+        estimates keep matching the model actually being called."""
+        self.provider = provider
+        self.model = model
+
     # ------------------------------------------------------------------
     # Pure history-shaping helpers (no token estimation / no I/O)
     # ------------------------------------------------------------------

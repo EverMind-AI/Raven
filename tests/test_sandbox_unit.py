@@ -1168,12 +1168,17 @@ class TestSubagentSandboxLifecycle:
         subagent_mod.build_executor = _patched_build
         try:
             # Patch the inner method so the agent loop completes quickly
-            async def _fast_inner(task_id, task, label, origin, executor):
+            async def _fast_inner(task_id, task, label, origin, executor, provider, model):
                 await manager._announce_result(task_id, label, task, "done", origin, "ok")
 
             manager._run_subagent_inner = _fast_inner
             await manager._run_subagent(
-                "t1", "test task", "test", {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"}
+                "t1",
+                "test task",
+                "test",
+                {"channel": "cli", "chat_id": "direct", "session_key": "cli:direct"},
+                manager.provider,
+                manager.model,
             )
         finally:
             subagent_mod.build_executor = original
