@@ -24,6 +24,7 @@ Non-Anthropic providers (no cache support) pass ``cache_read_tokens=0``,
 from __future__ import annotations
 
 import pathlib
+import threading
 import time
 from functools import lru_cache
 
@@ -50,6 +51,11 @@ _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 _OPENROUTER_CACHE_TTL = 3600
 _OPENROUTER_CACHE: dict[str, dict] = {}
 _OPENROUTER_CACHE_TIME: float = 0.0
+# Monotonic stamp of the last background warm attempt (0 = never), and how
+# long a failed one waits before another is allowed. See
+# warm_catalog_in_background.
+_WARM_AT: float = 0.0
+_WARM_RETRY_SECONDS = 300.0
 
 
 def _litellm_price_table() -> dict:
@@ -247,9 +253,17 @@ def _fetch_openrouter_models() -> dict[str, dict]:
         model_id = model.get("id", "")
         if not model_id:
             continue
+        arch = model.get("architecture") or {}
+        mods = arch.get("input_modalities")
         entry = {
             "pricing": model.get("pricing") or {},
             "context_length": model.get("context_length"),
+            # What the model accepts as input ("text" / "image" / "audio" /
+            # "file" / "video"). The catalog is fetched for prices, and it is
+            # also the only published answer to "can this model see" that
+            # states itself for every model it lists -- see
+            # ``capabilities.supports_vision``.
+            "input_modalities": list(mods) if isinstance(mods, list) and mods else None,
         }
         cache[model_id] = entry
         if "/" in model_id:
@@ -259,6 +273,115 @@ def _fetch_openrouter_models() -> dict[str, dict]:
     _OPENROUTER_CACHE_TIME = time.time()
     model_catalog_cache.save(cache)
     return cache
+
+
+def warm_catalog_in_background() -> None:
+    """Start filling the catalog off the request path, without blocking a turn.
+
+    The pricing path cannot be relied on to do it. It asks LiteLLM's static
+    table first and only reaches this catalog when that table *misses*, so for
+    every model LiteLLM does carry -- which is every model Raven ships a default
+    for -- the catalog is never fetched and a reader like
+    :func:`openrouter_input_modalities` has nothing to read, forever.
+
+    Called instead of fetching inline because the fetch is synchronous with a
+    10s timeout: on a machine that cannot reach the host, doing it in the turn
+    would stall the turn. A cold caller therefore degrades until the fetch lands.
+
+    Retried on a cooldown rather than attempted once. An attempt that fails
+    proves nothing about the next one -- the first turn of a session routinely
+    runs before a VPN is up or a proxy has authenticated -- and a single latched
+    attempt would leave the reader answering from an empty catalog for the whole
+    process. A success needs no cooldown: the filled cache is itself the guard.
+    """
+    global _WARM_AT
+
+    if _OPENROUTER_CACHE:
+        return
+    now = time.monotonic()
+    if _WARM_AT and now - _WARM_AT < _WARM_RETRY_SECONDS:
+        return
+    _WARM_AT = now
+
+    # Resolved here rather than inside the thread. A thread body that looks the
+    # name up on entry can lose a race with whoever patched it -- a test seam
+    # restored between ``start()`` and the thread's first bytecode would send a
+    # real request from inside the suite and write the real cache file.
+    fetch = _fetch_openrouter_models
+
+    def _run() -> None:
+        try:
+            fetch()
+        except Exception as exc:  # the fetch degrades internally; a thread must not die loudly
+            logger.debug("pricing: background catalog warm failed ({})", exc)
+
+    threading.Thread(target=_run, name="raven-model-catalog-warm", daemon=True).start()
+
+
+def _cached_catalog_only() -> dict[str, dict]:
+    """Whatever catalog is already in hand, at any age, without fetching.
+
+    ``_fetch_openrouter_models`` is synchronous with a one-hour TTL, so calling
+    it from a request path would hand one turn a stall whenever the hour rolls
+    over. Prices are why that TTL is short; a model's input modalities are not,
+    so this reader takes a stale table happily and an absent one as "no answer".
+    Filling an absent one is :func:`warm_catalog_in_background`'s job.
+    """
+    global _OPENROUTER_CACHE
+
+    if _OPENROUTER_CACHE:
+        return _OPENROUTER_CACHE
+    disk = model_catalog_cache.load()
+    if disk is None:
+        return {}
+    # Re-checked after the read, not just before it: ``load()`` touches the
+    # filesystem and releases the GIL, so a background warm can land in that
+    # window with both a fresher table and a fresh ``_OPENROUTER_CACHE_TIME``.
+    # Overwriting it with this stale copy would leave that timestamp vouching for
+    # the wrong table, and the fetch's TTL check would then skip the refetch.
+    if _OPENROUTER_CACHE:
+        return _OPENROUTER_CACHE
+    # Kept so the next lookup does not re-read and re-parse the file.
+    # ``_OPENROUTER_CACHE_TIME`` is deliberately left alone: the fetch reads it
+    # to decide freshness, and this table is of unknown age -- good enough for a
+    # modality question, not to be mistaken for fresh pricing.
+    _OPENROUTER_CACHE = disk[0]
+    return _OPENROUTER_CACHE
+
+
+def openrouter_input_modalities(model: str) -> tuple[str, ...] | None:
+    """What the catalog says ``model`` accepts as input, or ``None``.
+
+    ``None`` means the catalog has no entry (or one written before this field
+    was kept), never "text only": this source states itself for every model it
+    lists, so silence is absence rather than a denial.
+
+    Matched on the full id and then the bare alias, case-folded -- the catalog
+    spells every id it publishes in lower case, while a routed id need not
+    (``minimax/MiniMax-M2``). Punctuation is *not* normalized away, and that
+    restraint is the point: an id that survives only a fuzzier match is an id
+    this catalog does not actually list, and the only thing a wrong match can do
+    here is deny vision to a model that has it. ``azure/`` and the local
+    runtimes take a user-chosen deployment or tag name where every other
+    provider takes a model id, so ``azure/gpt4`` and ``ollama/phi4`` would join
+    against ``openai/gpt-4`` and ``microsoft/phi-4`` on a punctuation-stripping
+    key and lose every picture, silently, on a deployment that may well serve a
+    vision model. Losing the fuzzy tier costs nothing measurable: on the live
+    catalog every model it additionally matched either already answers "can see"
+    (the default when there is no answer at all) or is one of these false
+    denials.
+
+    Reads only what is already cached -- see :func:`_cached_catalog_only`.
+    """
+    key = model.removeprefix("openrouter/").lower()
+    table = _cached_catalog_only()
+    entry = table.get(key)
+    if entry is None and "/" in key:
+        entry = table.get(key.split("/", 1)[1])
+    if not entry:
+        return None
+    mods = entry.get("input_modalities")
+    return tuple(mods) if isinstance(mods, list) and mods else None
 
 
 def _lookup_openrouter_entry(model: str) -> dict | None:
@@ -397,6 +520,9 @@ def reset_openrouter_cache() -> None:
     Only useful for tests — pair it with the ``model_catalog_cache._CACHE_PATH``
     seam to exercise the disk tiers without touching the real ~/.raven/cache/.
     """
-    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME
+    global _OPENROUTER_CACHE, _OPENROUTER_CACHE_TIME, _WARM_AT
     _OPENROUTER_CACHE = {}
     _OPENROUTER_CACHE_TIME = 0.0
+    # Reset too, or a warm attempt from an earlier test leaves this one on a
+    # cooldown it never asked for.
+    _WARM_AT = 0.0

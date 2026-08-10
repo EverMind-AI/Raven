@@ -98,6 +98,15 @@ class ProviderSpec:
     # attach the picture to a following user message.
     image_tool_result_override: bool | None = None
 
+    # Whether the models behind this provider can see images at all. None = ask
+    # the gateway catalogue per model (see supports_vision), which answers "yes"
+    # whenever it has no entry -- so a provider it does not carry needs nothing
+    # set here. Set it to False for a provider whose models the catalogue lists
+    # as vision-capable but this route does not serve that way, and to True to
+    # overrule a listing that is wrong in the other direction. Source-level, like
+    # image_tool_result_override: there is no config surface for either.
+    vision_override: bool | None = None
+
     # Onboard wizard fallback for agents.defaults.model when /v1/models is empty
     default_model: str = ""
 

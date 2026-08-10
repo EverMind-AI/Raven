@@ -76,6 +76,8 @@ class ContextAssembler(ContextEngine):
             session_key=session_key,
             current_message=turn.current_message,
             media=turn.media,
+            can_see_images=turn.can_see_images,
+            describe_tool=turn.describe_tool,
             channel=turn.channel,
             chat_id=turn.chat_id,
             session_messages=session_messages,
@@ -144,7 +146,12 @@ class ContextAssembler(ContextEngine):
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
         """The single structural user message: runtime context + content."""
         runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id)
-        user_content = render.build_user_content(ctx.current_message, ctx.media)
+        user_content = render.build_user_content(
+            ctx.current_message,
+            ctx.media,
+            can_see_images=ctx.can_see_images,
+            describe_tool=ctx.describe_tool,
+        )
         if isinstance(user_content, str):
             merged: Any = f"{runtime_ctx}\n\n{user_content}"
         else:

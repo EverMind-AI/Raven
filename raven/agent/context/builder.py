@@ -1,7 +1,5 @@
 """Context builder for assembling agent prompts."""
 
-import base64
-import mimetypes
 import platform
 import time
 from datetime import datetime
@@ -12,7 +10,7 @@ from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
-from raven.utils.helpers import build_assistant_message, detect_image_mime, image_block
+from raven.utils.helpers import build_assistant_message
 
 if TYPE_CHECKING:
     from raven.providers.base import LLMProvider
@@ -280,35 +278,26 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             {"role": "user", "content": merged},
         ]
 
-    def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images.
+    def _build_user_content(
+        self,
+        text: str,
+        media: list[str] | None,
+        *,
+        can_see_images: bool = True,
+        describe_tool: str | None = None,
+    ) -> str | list[dict[str, Any]]:
+        """Build user message content with optional attachments.
 
-        Every image's path is named in the text as well: the base64 survives only
-        this turn (the session stores a placeholder), so the path is what lets a
-        later turn re-read the picture instead of only learning one existed.
+        Delegates to the one implementation rather than keeping a second: this
+        builder only feeds MemoryConsolidator's token estimation today, so a
+        divergence here would be invisible until someone routed a real turn
+        through it, and by then the two would have drifted. The vision-aware
+        arguments are carried for that day rather than used now -- the estimator
+        passes no media at all, so nothing reaches the attachment path yet.
         """
-        if not media:
-            return text
+        from raven.context_engine.segments import render
 
-        images = []
-        notes = []
-        for path in media:
-            p = Path(path)
-            if not p.is_file():
-                continue
-            raw = p.read_bytes()
-            # Detect real MIME type from magic bytes; fallback to filename guess
-            mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
-            if not mime or not mime.startswith("image/"):
-                continue
-            b64 = base64.b64encode(raw).decode()
-            images.append(image_block(f"data:{mime};base64,{b64}"))
-            notes.append(f"[Image: {p.name} (path: {p}) — re-read it with read_file if you need another look]")
-
-        if not images:
-            return text
-        body = (f"{text}\n\n" if text else "") + "\n".join(notes)
-        return images + [{"type": "text", "text": body}]
+        return render.build_user_content(text, media, can_see_images=can_see_images, describe_tool=describe_tool)
 
     def add_tool_result(
         self,

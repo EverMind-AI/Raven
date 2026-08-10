@@ -7,7 +7,10 @@ model for exactly one turn and never reaches disk.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,11 +21,23 @@ from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers.base import LLMProvider
-from raven.providers.capabilities import (
+from raven.token_wise import pricing as _pricing
+
+# Captured before the autouse _no_openrouter_network fixture swaps it out.
+_REAL_FETCH = _pricing._fetch_openrouter_models
+
+from raven.providers.capabilities import (  # noqa: E402
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
     supports_image_tool_result,
 )
+
+
+def _join_warm() -> None:
+    """Wait out any background catalog warm this test started."""
+    for thread in threading.enumerate():
+        if thread.name == "raven-model-catalog-warm":
+            thread.join(timeout=10)
 
 
 def _write_image(path: Path, size: tuple[int, int], fmt: str = "PNG") -> Path:
@@ -268,6 +283,41 @@ def test_image_placeholder_text_keeps_the_path_and_never_leaks_base64() -> None:
     assert "/tmp/x.png" in out
     assert "1 image attached" in out
     assert "AAAA" not in out and len(out) < 300
+
+
+def test_blind_placeholder_does_not_promise_a_picture_that_never_arrives() -> None:
+    """Two reasons for the same substitution, and they must not share wording.
+
+    The transport case attaches the picture to the next message, so the note
+    says so. A model with no vision gets nothing afterwards -- telling it to
+    expect an attachment leaves it waiting, and the useful thing to say instead
+    is which tool can read the file for it.
+    """
+    blocks = [
+        {"type": "text", "text": "[image: /tmp/x.png] | 300x200px | ~88 tokens"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 5000}},
+    ]
+    out = image_placeholder_text(blocks, blind=True, describe_tool="understand_media")
+
+    assert "/tmp/x.png" in out
+    assert "attached to the following message" not in out
+    assert "understand_media" in out
+    assert "AAAA" not in out and len(out) < 300
+
+
+def test_the_blind_placeholder_names_no_tool_when_none_is_registered() -> None:
+    """The description tool ships with the EverOS plugin and is absent on a
+    default install. Naming it anyway is an instruction the model cannot follow,
+    so the note then says only that a picture exists and stops."""
+    blocks = [
+        {"type": "text", "text": "[image: /tmp/x.png] | 300x200px"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+    out = image_placeholder_text(blocks, blind=True)
+
+    assert "you cannot see images directly" in out
+    assert "tool" not in out
+    assert "/tmp/x.png" in out
 
 
 # --------------------------------------------------------------------------
@@ -1080,3 +1130,773 @@ async def test_the_attachment_message_never_reaches_extraction(tmp_path: Path) -
     seen = captured[-1]["messages"]
     assert not any(m.get("_attached_image") for m in seen)
     assert "base64" not in json.dumps(seen)
+
+
+# --------------------------------------------------------------------------
+# vision capability — can the model see a picture at all
+# --------------------------------------------------------------------------
+
+
+def _catalog(monkeypatch, models: dict[str, list[str] | None]) -> None:
+    """Install a catalog table directly, keyed the way the fetch keys it.
+
+    Never the live one: LiteLLM and the gateway catalog are both fetched over
+    the network at import/first-use, and the gateway's file changes several
+    times a day, so an assertion against it is an assertion about someone
+    else's deploy.
+    """
+    from raven.token_wise import pricing
+
+    built: dict[str, dict] = {}
+    for model_id, mods in models.items():
+        entry = {"pricing": {}, "context_length": 1, "input_modalities": mods}
+        built[model_id] = entry
+        if "/" in model_id:
+            built.setdefault(model_id.split("/", 1)[1], entry)
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", built)
+
+
+def test_a_routed_id_matches_the_catalog_across_case(monkeypatch) -> None:
+    """The catalog spells every id it publishes in lower case; a routed id need
+    not. Case is the only spelling difference normalized away."""
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"minimax/minimax-m2": ["text"]})
+    assert supports_vision("minimax/MiniMax-M2") is False
+    assert supports_vision("minimax-global/MiniMax-M2") is False
+
+
+def test_a_deployment_name_is_never_matched_by_stripping_punctuation(monkeypatch) -> None:
+    """Azure and the local runtimes take a user-chosen deployment or tag name
+    where every other provider takes a model id, so a fuzzier join would answer
+    for a model the caller never named.
+
+    ``azure/gpt4`` may well serve gpt-4o. A key that dropped the hyphen would
+    join it to text-only ``openai/gpt-4`` and lose every picture with no error
+    anywhere -- the one failure this module is built to avoid. Punctuation
+    therefore stays significant: the fuzzy tier can only ever manufacture a
+    denial, since a match that grants vision is what absence already gives.
+    """
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"], "microsoft/phi-4": ["text"]})
+    assert supports_vision("azure/gpt4") is True
+    assert supports_vision("azure/GPT4") is True
+    assert supports_vision("ollama/phi4") is True
+    # The real vendor spelling still resolves, and still denies.
+    assert supports_vision("openai/gpt-4") is False
+
+
+def test_the_catalog_is_warmed_in_the_background_when_it_has_no_answer(monkeypatch) -> None:
+    """The pricing path asks LiteLLM's static table first and only reaches this
+    catalog when that misses, so for every model Raven ships a default for it
+    would never be fetched at all and this probe would answer optimistically
+    forever. Warmed off the request path because the fetch takes a 10s timeout.
+    """
+    from raven.providers.capabilities import supports_vision
+    from raven.token_wise import pricing
+
+    calls: list[str] = []
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: calls.append("fetch") or {})
+    monkeypatch.setattr(pricing.model_catalog_cache, "load", lambda: None)
+
+    assert supports_vision("deepseek/deepseek-v4-pro") is True
+    _join_warm()
+    assert calls == ["fetch"]
+
+    # A second cold answer inside the cooldown must not start a second fetch.
+    assert supports_vision("some-other/model") is True
+    _join_warm()
+    assert calls == ["fetch"]
+
+
+def test_a_failed_warm_is_retried_once_the_cooldown_passes(monkeypatch) -> None:
+    """A machine whose first turn runs before the VPN is up must not be left
+    answering from an empty catalog for the rest of the process -- an attempt
+    that failed says nothing about the next one."""
+    from raven.providers.capabilities import supports_vision
+    from raven.token_wise import pricing
+
+    calls: list[str] = []
+
+    def _fail() -> dict:
+        calls.append("fetch")
+        return {}
+
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", _fail)
+    monkeypatch.setattr(pricing.model_catalog_cache, "load", lambda: None)
+
+    assert supports_vision("deepseek/deepseek-v4-pro") is True
+    _join_warm()
+    assert calls == ["fetch"]
+
+    # Still on cooldown.
+    assert supports_vision("deepseek/deepseek-v4-pro") is True
+    _join_warm()
+    assert calls == ["fetch"]
+
+    # Cooldown elapsed -> tried again.
+    monkeypatch.setattr(pricing, "_WARM_AT", time.monotonic() - pricing._WARM_RETRY_SECONDS - 1)
+    assert supports_vision("deepseek/deepseek-v4-pro") is True
+    _join_warm()
+    assert calls == ["fetch", "fetch"]
+
+
+def test_the_warm_resolves_its_fetch_before_the_thread_starts(monkeypatch) -> None:
+    """``Thread.start()`` returns before the thread runs its first bytecode. A
+    body that looked the fetch up on entry could therefore lose a race with
+    whoever patched it -- a restored test seam would send a real request from
+    inside the suite and write the real cache file."""
+    from raven.token_wise import pricing
+
+    calls: list[str] = []
+    captured: dict[str, object] = {}
+
+    class _CapturedThread:
+        """Holds the body at the starting line so the window can be closed by
+        hand. Racing a real thread would make the assertion depend on which side
+        of the window the scheduler happened to land on."""
+
+        def __init__(self, target=None, name=None, daemon=None) -> None:
+            captured["target"] = target
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: calls.append("stub") or {})
+    monkeypatch.setattr(threading, "Thread", _CapturedThread)
+
+    pricing.warm_catalog_in_background()
+    # Exactly the window: start() has returned, the body has not run.
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: calls.append("REAL") or {})
+    captured["target"]()
+
+    assert calls == ["stub"]
+
+
+def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
+    """The fetch degrades internally, but a thread that dies loudly writes a
+    traceback into a user's terminal for a probe that has already answered."""
+    from raven.token_wise import pricing
+
+    def _boom() -> dict:
+        raise RuntimeError("no route to host")
+
+    seen: list[BaseException] = []
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", _boom)
+    monkeypatch.setattr(threading, "excepthook", lambda args: seen.append(args.exc_value))
+
+    pricing.warm_catalog_in_background()
+    _join_warm()
+
+    # Asserted, not merely "did not blow up in the caller": the raise happens on
+    # another thread, where pytest downgrades an escape to a warning and a test
+    # with no assertion passes either way.
+    assert seen == []
+    assert pricing._OPENROUTER_CACHE == {}
+
+
+def test_a_model_the_catalog_calls_text_only_is_blind(monkeypatch) -> None:
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"deepseek/deepseek-v4-pro": ["text"]})
+    assert supports_vision("deepseek/deepseek-v4-pro") is False
+    # The gateway spelling of the same model resolves to the same entry -- the
+    # case this whole lookup exists for.
+    assert supports_vision("openrouter/deepseek/deepseek-v4-pro") is False
+
+
+def test_a_provider_prefix_the_catalog_never_uses_still_resolves(monkeypatch) -> None:
+    """dashscope/ and gemini/ are routing names; the catalog files the same
+    models under qwen/ and google/."""
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"qwen/qwen-plus": ["text"], "google/gemini-2.5-flash": ["text", "image"]})
+    assert supports_vision("dashscope/qwen-plus") is False
+    assert supports_vision("gemini/gemini-2.5-flash") is True
+
+
+def test_a_model_the_catalog_never_heard_of_keeps_its_pictures(monkeypatch) -> None:
+    """Absent is not declared blind. An unlisted model is left exactly where it
+    was before this check existed -- being wrong this way fails loudly at the
+    endpoint, while being wrong the other way silently turns images into prose
+    with nothing to notice."""
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"google/gemini-2.5-flash": ["text", "image"]})
+    assert supports_vision("no-such-vendor/no-such-model-9000") is True
+
+
+def test_an_entry_written_before_modalities_were_kept_is_not_a_denial(monkeypatch) -> None:
+    """A cache file from an older Raven carries no modality data. Reading that
+    silence as "no modalities" would read as "cannot see"."""
+    from raven.providers.capabilities import supports_vision
+
+    _catalog(monkeypatch, {"some/model": None})
+    assert supports_vision("some/model") is True
+
+
+def test_a_catalog_that_blows_up_does_not_break_the_probe(monkeypatch) -> None:
+    """A capability probe must never be the thing that fails a turn."""
+    from raven.providers import capabilities
+    from raven.token_wise import pricing
+
+    def _boom(model):
+        raise RuntimeError("catalog on fire")
+
+    monkeypatch.setattr(pricing, "openrouter_input_modalities", _boom)
+    assert capabilities.supports_vision("gpt-4o") is True
+
+
+def test_provider_spec_override_beats_the_catalogue(monkeypatch) -> None:
+    """The escape hatch, both directions: a model the catalog gets wrong, and
+    one it never lists."""
+    from raven.providers.capabilities import supports_vision
+    from raven.providers.registry import ProviderSpec
+
+    _catalog(monkeypatch, {"openai/gpt-4o": ["text", "image"], "some/text-model": ["text"]})
+
+    seeing = ProviderSpec(name="selfhost", keywords=("selfhost",), env_key="", vision_override=True)
+    assert supports_vision("some/text-model", seeing) is True
+
+    blind = ProviderSpec(name="textonly", keywords=("textonly",), env_key="", vision_override=False)
+    assert supports_vision("gpt-4o", blind) is False
+
+
+# --------------------------------------------------------------------------
+# wiring — one-line hand-offs a refactor can drop with every other test green
+# --------------------------------------------------------------------------
+
+
+def test_the_loop_hands_the_verdict_to_the_context_engine(monkeypatch) -> None:
+    """`can_see_images` is decided in the loop and consumed three layers down.
+    Nothing else asserts the hand-off, so dropping it would be silent."""
+    from raven.agent.loop.main import AgentLoop
+
+    loop = object.__new__(AgentLoop)
+    loop._vision_ok = {}
+    loop.model = "some/model"
+    monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: False)
+    monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: "understand_media")
+
+    seen = {}
+
+    class _Engine:
+        owns_compaction = True
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            seen["can_see_images"] = turn.can_see_images
+            seen["describe_tool"] = turn.describe_tool
+            raise _Stop
+
+    class _Stop(Exception):
+        pass
+
+    loop.context_engine = _Engine()
+    monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
+    monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
+    loop._last_injected_skill_ids = None
+
+    with pytest.raises(_Stop):
+        asyncio.run(
+            loop._assemble_context_messages(session=object(), session_key="s", current_message="hi", media=["/x.png"])
+        )
+    assert seen == {"can_see_images": False, "describe_tool": "understand_media"}
+
+
+def test_the_verdict_is_asked_of_the_routed_model_not_the_configured_one(monkeypatch) -> None:
+    """Assembly is handed the model the request will actually reach.
+
+    The router can send the turn somewhere other than ``self.model``, and the
+    tool-result probe already asks about the routed id -- so asking about the
+    configured one here would let a blind primary's verdict shape a message a
+    vision model receives, or the reverse. Asserted because the argument is the
+    whole fix: without it the two halves of one turn disagree and nothing fails.
+    """
+    from raven.agent.loop.main import AgentLoop
+
+    asked: list[str | None] = []
+    loop = object.__new__(AgentLoop)
+    loop._vision_ok = {}
+    loop.model = "configured/model"
+    monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: asked.append(m) or True)
+    monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: None)
+
+    class _Stop(Exception):
+        pass
+
+    class _Engine:
+        owns_compaction = True
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            raise _Stop
+
+    loop.context_engine = _Engine()
+    monkeypatch.setattr(AgentLoop, "_context_messages_for_session", lambda self, s: [])
+    monkeypatch.setattr(AgentLoop, "_make_token_budget", lambda self, s=None: None)
+    loop._last_injected_skill_ids = None
+
+    with pytest.raises(_Stop):
+        asyncio.run(
+            loop._assemble_context_messages(
+                session=object(),
+                session_key="s",
+                current_message="hi",
+                media=["/x.png"],
+                model="routed/vision-model",
+            )
+        )
+    assert asked == ["routed/vision-model"]
+
+
+def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None:
+    from raven.context_engine.assembler import ContextAssembler
+    from raven.context_engine.base import AssemblyContext
+
+    seen = {}
+
+    def _spy(text, media, *, can_see_images=True, describe_tool=None):
+        seen.update(can_see_images=can_see_images, describe_tool=describe_tool)
+        return text
+
+    from raven.context_engine.segments import render as render_mod
+
+    monkeypatch.setattr(render_mod, "build_user_content", _spy)
+    engine = ContextAssembler([], lambda: [])
+    engine._build_user(
+        AssemblyContext(
+            session_key="s",
+            current_message="hi",
+            media=["/x.png"],
+            channel=None,
+            chat_id=None,
+            session_messages=[],
+            budget=None,
+            can_see_images=False,
+            describe_tool="understand_media",
+        )
+    )
+    assert seen == {"can_see_images": False, "describe_tool": "understand_media"}
+
+
+def test_an_unregistered_describe_tool_is_not_named(monkeypatch) -> None:
+    """Pointing a model at a tool it was never given is an instruction it cannot
+    follow. The tool ships with an optional plugin, so absence is the default."""
+    from raven.agent.loop.main import AgentLoop
+
+    loop = object.__new__(AgentLoop)
+
+    class _Registry:
+        def __init__(self, has):
+            self._has = has
+
+        def get(self, name):
+            return object() if self._has else None
+
+    loop.tools = _Registry(False)
+    assert loop._describe_tool_name() is None
+    loop.tools = _Registry(True)
+    assert loop._describe_tool_name() == "understand_media"
+
+
+# --------------------------------------------------------------------------
+# attachment preprocessing — the inline path used to skip it entirely
+# --------------------------------------------------------------------------
+
+
+def test_an_attachment_is_downscaled_before_it_is_inlined(tmp_path: Path) -> None:
+    """A phone photo is several megabytes and thousands of patch tokens. Inlined
+    raw it is refused, or downsized server-side and billed at full size."""
+    from raven.context_engine.segments import render
+
+    big = _write_image(tmp_path / "photo.jpg", (4032, 3024), fmt="JPEG")
+    out = render.build_user_content("look", [str(big)], can_see_images=True)
+
+    b64 = out[0]["image_url"]["url"].split(",", 1)[1]
+    raw_b64 = len(base64.b64encode(big.read_bytes()))
+    assert len(b64) < raw_b64 / 4
+    note = out[-1]["text"]
+    assert "downscaled from 4032x3024" in note
+    assert "px" in note
+
+
+def test_an_attachment_that_cannot_be_prepared_is_named_not_dropped(tmp_path: Path) -> None:
+    """The user chose this file. A silent drop leaves them believing the model
+    saw something it never received."""
+    from raven.context_engine.segments import render
+
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\n" + b"garbage")
+    out = render.build_user_content("look", [str(broken)], can_see_images=True)
+
+    assert isinstance(out, str)
+    assert "broken.png" in out
+    assert "could not be prepared" in out
+
+
+def test_an_attachment_that_cannot_be_read_costs_a_note_not_the_turn(tmp_path: Path) -> None:
+    """Resolution only proved the path pointed at a file. Permissions can change
+    between then and the read, and the file can be gone -- and this renderer runs
+    deep inside turn assembly, where an ``OSError`` reaches the caller as a failed
+    turn rather than as a message about one attachment.
+    """
+    import os
+
+    from raven.context_engine.segments import render
+
+    locked = _write_image(tmp_path / "locked.png", (60, 40))
+    os.chmod(locked, 0o000)
+    try:
+        out = render.build_user_content("look", [str(locked)], can_see_images=True)
+    finally:
+        os.chmod(locked, 0o644)
+
+    assert isinstance(out, str)
+    assert "locked.png" in out
+    assert "could not be read" in out
+
+
+def test_a_media_list_cannot_inline_an_unbounded_number_of_images(tmp_path: Path) -> None:
+    """``prepare_image`` caps each picture; nothing capped the count. A caller is
+    free to hand over any number of paths, and each survivor still costs its own
+    patch tokens -- so the overflow is named in the text instead of inlined."""
+    from raven.context_engine.segments import render
+
+    paths = [str(_write_image(tmp_path / f"p{i}.png", (40, 30))) for i in range(render._MAX_INLINE_IMAGES + 3)]
+    out = render.build_user_content("look", paths, can_see_images=True)
+
+    blocks = [b for b in out if b["type"] == "image_url"]
+    assert len(blocks) == render._MAX_INLINE_IMAGES
+    note = out[-1]["text"]
+    assert note.count("not shown, this message is already carrying") == 3
+    # read_file, not the description tool: this model can see, so the useful
+    # next step is fetching the picture itself.
+    assert "read_file" in note and "understand_media" not in note
+
+
+def test_an_image_too_large_is_refused_instead_of_read_whole(tmp_path: Path, monkeypatch) -> None:
+    """A caller may name a file of any size, and the bytes are only needed to
+    inline a picture -- so the ceiling is checked from ``stat`` and the file is
+    never read past its header."""
+    from raven.context_engine.segments import render
+
+    monkeypatch.setattr(render, "_MAX_IMAGE_BYTES", 16)
+    fat = _write_image(tmp_path / "fat.png", (200, 200))
+    assert fat.stat().st_size > 16
+
+    out = render.build_user_content("look", [str(fat)], can_see_images=True)
+
+    assert isinstance(out, str)
+    assert "too large" in out and "fat.png" in out
+
+
+def test_a_non_image_attachment_is_never_read_past_its_header(tmp_path: Path) -> None:
+    """The bytes exist only to sniff the magic number. Reading a 60MB PDF in full
+    to look at its first 8 bytes is pure waste, and with a media list of 64 it is
+    gigabytes of it per turn."""
+    from raven.context_engine.segments import render
+
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4" + b"\0" * (4 * 1024 * 1024))
+
+    reads: list[int | None] = []
+    real_read = render.Path.open
+
+    class _CountingHandle:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def read(self, n=None):
+            reads.append(n)
+            return self._inner.read(n) if n is not None else self._inner.read()
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+    def _open(self, *a, **k):
+        return _CountingHandle(real_read(self, *a, **k))
+
+    render.Path.open = _open
+    try:
+        out = render.build_user_content("summarize", [str(doc)])
+    finally:
+        render.Path.open = real_read
+
+    assert "report.pdf" in out
+    # Exactly one bounded read: the header. No unbounded read() followed.
+    assert reads == [render._SNIFF_BYTES]
+
+
+def test_the_inlined_payload_is_bounded_in_bytes_not_only_in_count(tmp_path: Path, monkeypatch) -> None:
+    """The count ceiling alone permits 16 images at the per-image byte cap, which
+    is a request body every major provider refuses -- so a legitimate batch would
+    fail the turn rather than degrade."""
+    from raven.context_engine.segments import render
+
+    monkeypatch.setattr(render, "_MAX_INLINE_BASE64_BYTES", 4000)
+    paths = [str(_write_image(tmp_path / f"p{i}.png", (300, 300))) for i in range(6)]
+    out = render.build_user_content("look", paths, can_see_images=True)
+
+    blocks = [b for b in out if b["type"] == "image_url"]
+    assert 0 < len(blocks) < 6
+    total = sum(len(b["image_url"]["url"]) for b in blocks)
+    # Stops at the first image that crosses the budget, so the overshoot is
+    # bounded by one image rather than by the list length.
+    assert total < 4000 + len(blocks[-1]["image_url"]["url"])
+    assert "not shown, this message is already carrying" in out[-1]["text"]
+
+
+def test_the_attachment_note_names_no_tool_when_none_is_registered(tmp_path: Path) -> None:
+    """Mirror of the tool-result placeholder: ``describe_tool=None`` means the
+    default install has no such tool, and the note must not invent one."""
+    from raven.context_engine.segments import render
+
+    pic = _write_image(tmp_path / "chart.png", (60, 40))
+    with_tool = render.build_user_content("look", [str(pic)], can_see_images=False, describe_tool="understand_media")
+    without = render.build_user_content("look", [str(pic)], can_see_images=False, describe_tool=None)
+
+    assert "understand_media" in with_tool
+    assert "tool" not in without
+    assert "chart.png" in without and "you cannot see images directly" in without
+
+
+def test_a_blind_model_gets_no_image_in_a_tool_result(tmp_path: Path) -> None:
+    """The third branch at the routing point, and the only one with no picture
+    anywhere afterwards -- so its wording must not promise one.
+
+    The transport branch says "attached to the following message" because the
+    image really does follow. Saying that here would leave the model waiting for
+    something that was never sent.
+    """
+    _write_image(tmp_path / "chart.png", (300, 200))
+    result = _read(tmp_path, "chart.png")
+
+    blind = image_placeholder_text(result.blocks, blind=True, describe_tool="understand_media")
+    transport = image_placeholder_text(result.blocks)
+
+    assert "attached to the following message" in transport
+    assert "attached to the following message" not in blind
+    assert "understand_media" in blind
+    # Both keep the tool's own text, which is the only thing naming the file.
+    assert str(tmp_path / "chart.png") in blind
+    assert "base64" not in blind and "iVBOR" not in blind
+
+
+# --------------------------------------------------------------------------
+# round-3: the branches and constraints a mutation test found unguarded
+# --------------------------------------------------------------------------
+
+
+def _loop_for_routing(monkeypatch, *, sees: bool, tool_result_ok: bool, describe: str | None):
+    from raven.agent.loop.main import AgentLoop
+
+    loop = object.__new__(AgentLoop)
+    monkeypatch.setattr(AgentLoop, "_supports_vision", lambda self, m=None: sees)
+    monkeypatch.setattr(AgentLoop, "_supports_image_tool_result", lambda self, m=None: tool_result_ok)
+    monkeypatch.setattr(AgentLoop, "_describe_tool_name", lambda self: describe)
+    return loop
+
+
+_ROUTING_BLOCKS = [
+    {"type": "text", "text": "[image: /w/shot.png] | 300x200px"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 500}},
+]
+
+
+def test_a_blind_model_is_told_the_picture_is_not_coming(monkeypatch) -> None:
+    """The one branch with no picture anywhere afterwards. Saying "attached to
+    the following message" here leaves the model waiting for something that is
+    never sent, and nothing downstream can notice."""
+    loop = _loop_for_routing(monkeypatch, sees=False, tool_result_ok=True, describe="understand_media")
+    text, blocks, attach = loop._route_result_images("orig", list(_ROUTING_BLOCKS), "some/blind-model")
+
+    assert blocks is None and attach is None
+    assert "attached to the following message" not in text
+    assert "you cannot see images directly" in text
+    assert "understand_media" in text
+    assert "AAAA" not in text
+
+
+def test_a_blind_model_with_no_description_tool_is_promised_nothing(monkeypatch) -> None:
+    loop = _loop_for_routing(monkeypatch, sees=False, tool_result_ok=True, describe=None)
+    text, _, _ = loop._route_result_images("orig", list(_ROUTING_BLOCKS), "some/blind-model")
+
+    assert "you cannot see images directly" in text
+    assert "tool" not in text
+
+
+def test_a_transport_that_carries_images_keeps_them_in_the_tool_result(monkeypatch) -> None:
+    loop = _loop_for_routing(monkeypatch, sees=True, tool_result_ok=True, describe=None)
+    text, blocks, attach = loop._route_result_images("orig", list(_ROUTING_BLOCKS), "anthropic/claude")
+
+    assert text == "orig"
+    assert blocks == _ROUTING_BLOCKS and attach is None
+
+
+def test_a_transport_that_cannot_carry_images_attaches_them_after(monkeypatch) -> None:
+    loop = _loop_for_routing(monkeypatch, sees=True, tool_result_ok=False, describe=None)
+    text, blocks, attach = loop._route_result_images("orig", list(_ROUTING_BLOCKS), "openai/gpt-4o")
+
+    assert blocks is None
+    assert attach == [_ROUTING_BLOCKS[1]]
+    assert "attached to the following message" in text
+    assert "AAAA" not in text
+
+
+def test_a_text_result_is_passed_through_untouched(monkeypatch) -> None:
+    loop = _loop_for_routing(monkeypatch, sees=False, tool_result_ok=False, describe=None)
+    assert loop._route_result_images("plain", None, "m") == ("plain", None, None)
+
+
+def test_the_fetch_files_no_normalized_join_key_in_the_shared_table(monkeypatch) -> None:
+    """Regression on the write side, which is where the defect lived.
+
+    v2 filed a punctuation-stripped key beside each id. That key is reachable by
+    an exact lookup, so ``ollama/phi4`` (bare alias ``phi4``) joined
+    ``microsoft/phi-4`` and inherited its prices, its context window and its
+    text-only verdict. Asserted through the real fetch: a hand-built table cannot
+    see this, which is exactly why the mutation went unnoticed.
+    """
+    from raven.providers.capabilities import supports_vision
+    from raven.token_wise import model_catalog_cache, pricing
+
+    payload = {
+        "data": [
+            {
+                "id": "openai/gpt-4",
+                "pricing": {"prompt": "0.00003", "completion": "0.00006"},
+                "context_length": 8192,
+                "architecture": {"input_modalities": ["text"]},
+            },
+            {
+                "id": "microsoft/phi-4",
+                "pricing": {"prompt": "0.00000007", "completion": "0.00000014"},
+                "context_length": 16384,
+                "architecture": {"input_modalities": ["text"]},
+            },
+        ]
+    }
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return payload
+
+    class _Client:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(pricing.httpx, "Client", _Client)
+    monkeypatch.setattr(model_catalog_cache, "save", lambda models: None)
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", 0.0)
+
+    table = _REAL_FETCH()
+
+    assert set(table) == {"openai/gpt-4", "gpt-4", "microsoft/phi-4", "phi-4"}
+    assert "gpt4" not in table and "phi4" not in table
+
+    # And the consequence the key set exists to prevent.
+    assert supports_vision("ollama/phi4") is True
+    assert supports_vision("azure/gpt4") is True
+    assert pricing.resolve_context_window("ollama/phi4") is None
+
+
+def test_a_deployment_name_is_never_answered_from_the_vendor_catalog(monkeypatch) -> None:
+    """Azure takes the name of a deployment the user created and a local runtime
+    takes whatever tag they pulled, either of which can be spelled exactly like a
+    vendor id it does not serve -- ``gpt-4`` is the name Azure's own quickstarts
+    use, and a team keeps the name while repointing the deployment at gpt-4o.
+
+    Only a denial does damage here (a grant is what absence already gives), and a
+    denial is the silent failure this module exists to avoid, so these providers
+    do not consult the catalog at all.
+    """
+    from raven.providers.azure_openai_provider import AzureOpenAIProvider
+    from raven.providers.capabilities import supports_vision, vision_verdict
+    from raven.providers.registry import find_by_model
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"], "qwen/qwen-plus": ["text"]})
+    azure = object.__new__(AzureOpenAIProvider)
+
+    # Azure takes a bare deployment name, so no prefix resolves it to a spec --
+    # the live provider is the only thing that knows. The alias matches the
+    # catalog verbatim, so this is not about punctuation either.
+    assert find_by_model("gpt-4") is not None, "resolves to OpenAI's spec, which is the trap"
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), azure) is None
+    assert supports_vision("gpt-4", find_by_model("gpt-4"), azure) is True
+
+    # Routed through LiteLLM instead, Azure carries a prefix the registry does
+    # not answer to, so neither the spec nor the provider identifies it.
+    assert find_by_model("azure/gpt-4") is None
+    assert supports_vision("azure/gpt-4", find_by_model("azure/gpt-4")) is True
+    assert supports_vision("azure_ai/gpt-4", find_by_model("azure_ai/gpt-4")) is True
+
+    # A local runtime does carry a resolvable prefix.
+    assert supports_vision("ollama/qwen-plus", find_by_model("ollama/qwen-plus")) is True
+
+    # The same id routed to the vendor itself is still answered, and denied.
+    assert supports_vision("gpt-4", find_by_model("gpt-4")) is False
+
+
+def test_a_cold_verdict_is_not_cached_for_the_life_of_the_loop(monkeypatch) -> None:
+    """``AgentLoop`` is built once per process. Caching the optimistic answer the
+    catalog gives before it is warm would freeze that guess forever and leave the
+    background warm filling a table nothing re-reads -- so only a real verdict is
+    remembered."""
+    from raven.agent.loop.main import AgentLoop
+    from raven.token_wise import pricing
+
+    loop = object.__new__(AgentLoop)
+    loop._vision_ok = {}
+    loop.model = "deepseek/deepseek-v4-pro"
+    loop.provider = None
+
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: {})
+    monkeypatch.setattr(pricing.model_catalog_cache, "load", lambda: None)
+
+    assert loop._supports_vision() is True
+    assert loop._vision_ok == {}, "a cold guess must not be remembered"
+    _join_warm()
+
+    _catalog(monkeypatch, {"deepseek/deepseek-v4-pro": ["text"]})
+    assert loop._supports_vision() is False
+    assert loop._vision_ok == {"deepseek/deepseek-v4-pro": False}
+
+
+def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
+    """Nothing downstream counts the list, and each survivor costs its own patch
+    tokens, so the schema is where an absurd one is refused."""
+    import pydantic
+
+    from raven.tui_rpc.models import TurnSendParams
+
+    ok = TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 64)
+    assert len(ok.media) == 64
+    with pytest.raises(pydantic.ValidationError, match="at most 64"):
+        TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 65)
