@@ -120,6 +120,8 @@ def test_set_provider_reaches_every_holder() -> None:
     loop._turns_in_flight = 0
     loop._pending_provider = None
     loop._image_tool_result_ok = {"old-model": True}
+    refreshed: list[bool] = []
+    loop.refresh_context_window = lambda: refreshed.append(True)
 
     new_provider = SimpleNamespace(name="new-provider")
     loop.set_provider(new_provider, NEW_MODEL)
@@ -132,6 +134,9 @@ def test_set_provider_reaches_every_holder() -> None:
     # Cached per model id but computed from the provider: a swap keeping the
     # model id must not keep serving the old transport's verdict.
     assert loop._image_tool_result_ok == {}
+    # The window follows the adopted pair -- re-resolved here rather than at
+    # the RPC call site, which a parked switch outlives.
+    assert refreshed == [True]
 
 
 def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:

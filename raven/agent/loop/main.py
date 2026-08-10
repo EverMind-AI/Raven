@@ -711,6 +711,10 @@ class AgentLoop:
         self.subagents.set_provider(provider, model)
         self.context_engine.set_provider(provider, model)
         self.memory_consolidator.set_provider(provider, model)
+        # Here rather than at the RPC call site: a parked switch adopts long
+        # after that call returns, and the window must follow the pair that
+        # was actually adopted, not the model the RPC saw.
+        self.refresh_context_window()
 
     def _adopt_pending_provider(self) -> None:
         """Apply a parked switch. Callers must check that no turn is running."""

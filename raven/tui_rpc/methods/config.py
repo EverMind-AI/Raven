@@ -358,9 +358,10 @@ def _set_model(
     if loop is not None:
         # Not a two-attribute assignment: the loop hands its provider to the
         # subagent manager, the context engine and the consolidator at build
-        # time, and each keeps it. set_provider is what reaches them.
+        # time, and each keeps it. set_provider is what reaches them (and
+        # re-resolves the context window at adoption -- which for a parked
+        # switch happens long after this call returns).
         loop.set_provider(built_provider, raw_value)
-        loop.refresh_context_window()
 
     return {"applied": True, "previous": previous, "value": raw_value}
 
