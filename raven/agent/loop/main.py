@@ -692,14 +692,22 @@ class AgentLoop:
         turn that spawned them -- so ``SubagentManager`` snapshots instead.
         """
         if self._turns_in_flight:
+            # Said out loud: the RPC has already answered applied=True and
+            # written the config, so without this line the window where
+            # replies still come from the old provider leaves no trace.
+            logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
             self._pending_provider = (provider, model)
             return
         self._adopt_provider(provider, model)
 
     def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
         """Hand a provider to the loop and every subsystem holding the old one."""
+        logger.info("adopting provider switch: model={}", model)
         self.provider = provider
         self.model = model
+        # Cached per model id but computed from the provider, so a swap that
+        # keeps the model id would keep serving the old transport's verdict.
+        self._image_tool_result_ok.clear()
         self.subagents.set_provider(provider, model)
         self.context_engine.set_provider(provider, model)
         self.memory_consolidator.set_provider(provider, model)

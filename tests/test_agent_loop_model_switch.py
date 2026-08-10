@@ -119,6 +119,7 @@ def test_set_provider_reaches_every_holder() -> None:
     loop.memory_consolidator = _Recorder()
     loop._turns_in_flight = 0
     loop._pending_provider = None
+    loop._image_tool_result_ok = {"old-model": True}
 
     new_provider = SimpleNamespace(name="new-provider")
     loop.set_provider(new_provider, NEW_MODEL)
@@ -128,6 +129,9 @@ def test_set_provider_reaches_every_holder() -> None:
     for holder in (loop.subagents, loop.context_engine, loop.memory_consolidator):
         assert holder.provider is new_provider
         assert holder.model == NEW_MODEL
+    # Cached per model id but computed from the provider: a swap keeping the
+    # model id must not keep serving the old transport's verdict.
+    assert loop._image_tool_result_ok == {}
 
 
 def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:
