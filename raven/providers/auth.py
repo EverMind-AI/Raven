@@ -164,8 +164,6 @@ def _present(section: Any, name: str) -> bool:
     # arbitrary duck-typed objects (test doubles included), and only a real
     # list is the endpoints shape provider_endpoints reads.
     if isinstance(endpoints, (list, tuple)) and endpoints:
-        if name not in ("api_key", "api_base"):
-            return False
         return any(bool(getattr(ep, name, None)) for ep in provider_endpoints(section))
     value = section.get(name) if isinstance(section, dict) else getattr(section, name, None)
     if isinstance(value, (list, tuple)):
