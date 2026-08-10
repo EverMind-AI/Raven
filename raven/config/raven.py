@@ -964,8 +964,8 @@ class SkillForgeConfig(_Base):
     with RRF output size (local_pool_top_k + mass_pool_top_k dedupe)."""
 
     llm_gate_model: str | None = None
-    """Optional model override for gate calls. ``None`` → use the
-    provider's default chat model (typically the agent's main model)."""
+    """Optional model override for gate calls. ``None`` uses the active
+    agent model."""
 
     llm_gate_temperature: float = 0.0
     """Sampling temperature for gate calls. 0.0 for deterministic

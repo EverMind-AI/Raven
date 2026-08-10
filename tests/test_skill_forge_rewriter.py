@@ -64,6 +64,13 @@ async def test_analyze_returns_rewritten_query() -> None:
     assert result.rewritten_query == "generate pdf reports"
 
 
+async def test_analyze_forwards_configured_model() -> None:
+    provider = _StubProvider(json.dumps({"need_retrieval": False}))
+    rewriter = QueryRewriter(provider, model="minimax/minimax-m3")
+    await rewriter.analyze("hello there")
+    assert provider.calls[0]["model"] == "minimax/minimax-m3"
+
+
 async def test_analyze_handles_code_fence_wrapping() -> None:
     provider = _StubProvider('```json\n{"need_retrieval": true, "rewritten_query": "trim"}\n```')
     result = await QueryRewriter(provider).analyze("verbose query")
