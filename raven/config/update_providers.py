@@ -997,12 +997,19 @@ def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> li
     Returns one dict per endpoint: ``label``, ``api_key`` (``****set****`` /
     ``(empty)``, same rule as every other secret field), ``api_base``,
     ``extra_headers`` (values redacted the same way, keys left visible -- see
-    ``_redact_headers``). Raises KeyError for an unknown provider.
+    ``_redact_headers``). ``api_base``/``extra_headers`` are the resolved
+    values each request would actually use -- an entry that names none of its
+    own shows the section's flat value it inherits (see
+    ``provider_endpoints``), not an empty field the user reads as "did not
+    take". Raises KeyError for an unknown provider.
     """
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
-    _, endpoints = _load_provider_endpoints(name, data)
+    cls, endpoints = _load_provider_endpoints(name, data)
+    if not endpoints:
+        return []
+    section = cls.model_validate(_raw_section(data, name))
     return [
         {
             "label": ep.label,
@@ -1010,7 +1017,7 @@ def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> li
             "api_base": ep.api_base,
             "extra_headers": _redact_headers(ep.extra_headers),
         }
-        for ep in endpoints
+        for ep in provider_endpoints(section)
     ]
 
 

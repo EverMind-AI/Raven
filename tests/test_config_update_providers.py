@@ -963,6 +963,25 @@ def test_list_provider_endpoints_redacts_extra_header_values(cfg_path: Path) -> 
     assert out[0]["extra_headers"] == {"X-Region": "****set****"}
 
 
+def test_list_provider_endpoints_shows_the_inherited_flat_address(cfg_path: Path) -> None:
+    """An entry written with only ``--label``/``--api-key`` runs against the
+    section's flat address (see ``provider_endpoints``); the display face must
+    show that resolved address, not an empty field the user reads as "the
+    config did not take"."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(
+        "openrouter", {"api_key": "flat-key", "api_base": "https://shared.example/v1"}, config_path=cfg_path
+    )
+    add_provider_endpoint("openrouter", label="a", api_key="k1", config_path=cfg_path)
+
+    out = list_provider_endpoints("openrouter", config_path=cfg_path)
+
+    assert out == [
+        {"label": "a", "api_key": "****set****", "api_base": "https://shared.example/v1", "extra_headers": None}
+    ]
+
+
 def test_list_provider_endpoints_default_when_none_configured(cfg_path: Path) -> None:
     assert list_provider_endpoints("openrouter", config_path=cfg_path) == []
 
