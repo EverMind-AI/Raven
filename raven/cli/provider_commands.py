@@ -740,6 +740,8 @@ def endpoint_add_cmd(
     client -- a provider using OAuth, or Azure OpenAI / OpenAI Codex, refuses
     to start with any endpoints configured.
     """
+    from pydantic import ValidationError
+
     from raven.config.update_providers import add_provider_endpoint
 
     headers = _parse_extra_headers(extra_headers)
@@ -754,6 +756,9 @@ def endpoint_add_cmd(
     except KeyError as exc:
         console.print(f"[red]✗[/red] {exc}")
         raise typer.Exit(1)
+    except ValidationError as exc:
+        console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
+        raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] {name} endpoint {label!r} saved ({len(endpoints)} total)")
 
@@ -764,12 +769,17 @@ def endpoint_remove_cmd(
     label: str = typer.Option(..., "--label", help="Label of the endpoint to remove"),
 ):
     """Remove one endpoint by ``--label`` (no-op if the label is not present)."""
+    from pydantic import ValidationError
+
     from raven.config.update_providers import remove_provider_endpoint
 
     try:
         endpoints = remove_provider_endpoint(name, label)
     except KeyError as exc:
         console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+    except ValidationError as exc:
+        console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
         raise typer.Exit(1)
 
     console.print(f"[green]✓[/green] {name} endpoint {label!r} removed ({len(endpoints)} remaining)")
@@ -780,12 +790,17 @@ def endpoint_list_cmd(
     name: str = typer.Argument(..., help="Provider name"),
 ):
     """List a provider's endpoints. API keys redacted."""
+    from pydantic import ValidationError
+
     from raven.config.update_providers import list_provider_endpoints
 
     try:
         endpoints = list_provider_endpoints(name)
     except KeyError as exc:
         console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(1)
+    except ValidationError as exc:
+        console.print(f"[red]✗ Validation failed:[/red]\n{exc}")
         raise typer.Exit(1)
 
     table = Table(title=f"Provider endpoints: {name}")

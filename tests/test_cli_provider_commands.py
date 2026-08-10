@@ -924,6 +924,20 @@ def test_endpoint_add_same_label_replaces(tmp_config: Path) -> None:
     assert section["endpoints"][0]["apiKey"] == "k2"
 
 
+def test_endpoint_list_renders_a_validation_error_not_a_traceback(tmp_config: Path) -> None:
+    """A hand-edited invalid section (duplicate label) must come back as the
+    same rendered failure `provider set` settled on, not a bare traceback."""
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "a", "--api-key", "k1"])
+    data = json.loads(tmp_config.read_text(encoding="utf-8"))
+    data["providers"]["openrouter"]["endpoints"].append({"label": "a", "apiKey": "dup"})
+    tmp_config.write_text(json.dumps(data), encoding="utf-8")
+
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+
+    assert r.exit_code == 1
+    assert "Validation failed" in r.output
+
+
 def test_endpoint_add_unknown_provider_exits_1(tmp_config: Path) -> None:
     r = runner.invoke(
         app,

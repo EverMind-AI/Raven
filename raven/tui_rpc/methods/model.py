@@ -368,7 +368,7 @@ async def _endpoints_off_loop(slug: str) -> list[dict[str, Any]]:
     """The provider's endpoint list, api_key redacted, off the event loop."""
     try:
         return await asyncio.to_thread(list_provider_endpoints, slug)
-    except KeyError as exc:
+    except (KeyError, ValidationError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": slug}) from exc
 
 
@@ -390,7 +390,7 @@ async def model_add_endpoint(params: dict) -> dict:
             api_key=parsed.api_key,
             api_base=parsed.api_base,
         )
-    except KeyError as exc:
+    except (KeyError, ValidationError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     # Re-read rather than redacting what the write returned, so the one place
     # deciding how a key is masked stays ``list_provider_endpoints``.
@@ -401,7 +401,7 @@ async def model_remove_endpoint(params: dict) -> dict:
     parsed = _parse(ModelRemoveEndpointParams, params)
     try:
         await asyncio.to_thread(remove_provider_endpoint, parsed.slug, parsed.label)
-    except KeyError as exc:
+    except (KeyError, ValidationError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
