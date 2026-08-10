@@ -1304,6 +1304,31 @@ def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
     assert pricing._OPENROUTER_CACHE == {}
 
 
+def test_a_stale_disk_table_does_not_suppress_the_warm(monkeypatch) -> None:
+    """A long-lived session that boots on a days-old cache file must still
+    warm: the reader adopts the disk table at any age (timestamp left at
+    zero), and a warm gate that only checked non-emptiness never ran again
+    for the life of the process."""
+    from raven.providers import rates as pricing
+
+    calls: list[str] = []
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {"old/model": {"input_modalities": ["text"]}})
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", 0.0)
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: calls.append("fetch") or {})
+
+    pricing.warm_catalog_in_background()
+    _join_warm()
+
+    assert calls == ["fetch"]
+
+    # A fresh in-process table is still the guard: no second thread.
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", time.time())
+    pricing.warm_catalog_in_background()
+    _join_warm()
+    assert calls == ["fetch"]
+
+
 def test_a_model_the_catalog_calls_text_only_is_blind(monkeypatch) -> None:
     from raven.providers.capabilities import supports_vision
 

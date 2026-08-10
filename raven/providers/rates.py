@@ -294,11 +294,14 @@ def warm_catalog_in_background() -> None:
     proves nothing about the next one -- the first turn of a session routinely
     runs before a VPN is up or a proxy has authenticated -- and a single latched
     attempt would leave the reader answering from an empty catalog for the whole
-    process. A success needs no cooldown: the filled cache is itself the guard.
+    process. A success needs no cooldown: a *fresh* cache is itself the guard --
+    fresh, not merely non-empty, because ``_cached_catalog_only`` adopts a disk
+    table of any age (leaving its timestamp at zero), and a days-old table must
+    not suppress the warm for the life of the process.
     """
     global _WARM_AT
 
-    if _OPENROUTER_CACHE:
+    if _OPENROUTER_CACHE and _OPENROUTER_CACHE_TIME and time.time() - _OPENROUTER_CACHE_TIME < _OPENROUTER_CACHE_TTL:
         return
     now = time.monotonic()
     if _WARM_AT and now - _WARM_AT < _WARM_RETRY_SECONDS:
@@ -340,7 +343,10 @@ def _cached_catalog_only() -> dict[str, dict]:
     # filesystem and releases the GIL, so a background warm can land in that
     # window with both a fresher table and a fresh ``_OPENROUTER_CACHE_TIME``.
     # Overwriting it with this stale copy would leave that timestamp vouching for
-    # the wrong table, and the fetch's TTL check would then skip the refetch.
+    # the wrong table. Narrows the window to the two lines below rather than
+    # eliminating it -- there is no lock, so a warm landing between this read
+    # and the assignment still loses -- accepted because the stale table is
+    # only ever one fetch TTL from correcting itself.
     if _OPENROUTER_CACHE:
         return _OPENROUTER_CACHE
     # Kept so the next lookup does not re-read and re-parse the file.
