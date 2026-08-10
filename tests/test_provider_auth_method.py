@@ -298,6 +298,23 @@ def test_a_spec_shipped_default_address_satisfies_the_address_requirement() -> N
     assert not credential_status("ollama_chat", ProviderConfig()).ok
 
 
+def test_the_gate_never_accepts_a_default_address_the_reader_will_not_serve() -> None:
+    """Closed loop over every spec: whenever the gate passes a bare-key config
+    because of a shipped default, `Config.get_api_base` must serve that same
+    default -- both read `usable_default_api_base`, and this pins that they
+    keep doing so."""
+    from raven.config.schema import Config
+    from raven.providers.auth import credential_status
+    from raven.providers.registry import PROVIDERS
+
+    for spec in PROVIDERS:
+        if not spec.requires_api_base or spec.is_oauth:
+            continue
+        cfg = Config.model_validate({"providers": {spec.name: {"apiKey": "sk-x"}}})
+        if credential_status(spec.name, cfg.providers.get(spec.name)).ok:
+            assert cfg.get_api_base(f"{spec.name}/some-model") == spec.usable_default_api_base != "", spec.name
+
+
 def test_credential_status_false_for_flat_key_and_keyless_endpoint() -> None:
     from raven.config.schema import ProviderConfig
     from raven.providers.auth import credential_status

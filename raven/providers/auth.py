@@ -55,8 +55,8 @@ class Requirement:
     hint: str = ""
     #: A ``ProviderSpec`` attribute that also satisfies this requirement when
     #: truthy, even though the config carries nothing for it -- e.g. custom's
-    #: ``default_api_base``, a working address the user may still override.
-    #: Empty for every requirement but ``_ADDRESS``.
+    #: shipped localhost address, a working default the user may still
+    #: override. Empty for every requirement but ``_ADDRESS_OR_SPEC_DEFAULT``.
     spec_fallback: str = ""
 
     def satisfied_by(self, section: Any, spec: "ProviderSpec | None" = None) -> bool:
@@ -224,19 +224,20 @@ _KEY_OR_LIST = Requirement(
     "an API key -- run `raven provider set {public} --api-key <key>` (or --api-key-list k1,k2)",
 )
 _ADDRESS = Requirement(("api_base",), "an address", "an address -- run `raven provider set {public} --api-base <url>`")
-#: Same requirement, plus the spec's own working default. Only for
-#: `requires_api_base`: that flag means the *user's* address is mandatory
-#: (Azure, a bespoke endpoint) with no config-independent fallback of its own
-#: to fall back to -- unless the spec ships one anyway (`custom`'s
-#: localhost gateway). `is_local` keeps the plain `_ADDRESS`: a local
-#: deployment's spec default (Ollama's standard port) must not make it look
-#: configured before the user has pointed it anywhere, which is the bug
-#: `_has_credentials`'s docstring already names.
+#: Same requirement, plus the spec's own working default -- read through
+#: `usable_default_api_base`, the same property `Config.get_api_base` serves
+#: from, so the gate can never accept a default the reader then refuses to
+#: hand out. Only for `requires_api_base`: that flag means the *user's*
+#: address is mandatory (Azure, a bespoke endpoint) -- unless the spec ships
+#: one anyway (`custom`'s localhost gateway). `is_local` keeps the plain
+#: `_ADDRESS`: a local deployment's spec default (Ollama's standard port)
+#: must not make it look configured before the user has pointed it anywhere,
+#: which is the bug `_has_credentials`'s docstring already names.
 _ADDRESS_OR_SPEC_DEFAULT = Requirement(
     ("api_base",),
     "an address",
     "an address -- run `raven provider set {public} --api-base <url>`",
-    spec_fallback="default_api_base",
+    spec_fallback="usable_default_api_base",
 )
 
 

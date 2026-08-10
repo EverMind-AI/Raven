@@ -966,8 +966,8 @@ class Config(BaseSettings):
         # (like Moonshot) set their base URL via env vars in _setup_env.
         if name:
             spec = find_by_name(name)
-            if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:
-                return spec.default_api_base
+            if spec and spec.usable_default_api_base:
+                return spec.usable_default_api_base
         return None
 
     @property

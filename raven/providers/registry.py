@@ -131,6 +131,17 @@ class ProviderSpec:
         return self.display_name or self.name.title()
 
     @property
+    def usable_default_api_base(self) -> str:
+        """The shipped default address ``Config.get_api_base`` would actually serve.
+
+        Non-empty only for a gateway or local deployment -- a direct vendor's
+        ``default_api_base`` travels via env vars instead and the reader never
+        hands it out. Stated once so the credential gate cannot accept a
+        default the reader then refuses to serve (see ``providers.auth``).
+        """
+        return self.default_api_base if (self.is_gateway or self.is_local) else ""
+
+    @property
     def model_prefix(self) -> str:
         """Route prefix LiteLLM needs on this provider's model ids.
 
