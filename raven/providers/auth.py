@@ -142,7 +142,10 @@ def _present(section: Any, name: str) -> bool:
     if section is None:
         return False
     endpoints = section.get("endpoints") if isinstance(section, dict) else getattr(section, "endpoints", None)
-    if endpoints:
+    # isinstance, not truthiness: sections reach here as raw mappings and as
+    # arbitrary duck-typed objects (test doubles included), and only a real
+    # list is the endpoints shape provider_endpoints reads.
+    if isinstance(endpoints, (list, tuple)) and endpoints:
         return any(_present(endpoint, name) for endpoint in endpoints)
     value = section.get(name) if isinstance(section, dict) else getattr(section, name, None)
     if isinstance(value, (list, tuple)):
