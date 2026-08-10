@@ -170,6 +170,13 @@ async def connect_mcp_servers(
                 logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
 
             logger.info("MCP server '{}': connected, {} tools registered", name, len(tools.tools))
+        except asyncio.CancelledError:
+            # MCP SDK cancel scopes can leak CancelledError when a transport fails.
+            # Preserve cancellation only when Raven's own task was cancelled.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling() > 0:
+                raise
+            logger.error("MCP server '{}': connection cancelled by server/SDK", name)
         except (Exception, BaseExceptionGroup) as e:
             # BaseExceptionGroup is raised by anyio task groups (e.g. streamableHttp cancel
             # scope failures) and is not a subclass of Exception in Python 3.11+.
