@@ -628,6 +628,10 @@ export interface TurnSendParams {
   channel?: string;
   chat_id?: string;
   sender_id?: string;
+  /**
+   * @maxItems 64
+   */
+  media?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

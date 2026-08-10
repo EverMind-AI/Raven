@@ -38,8 +38,8 @@ class UnderstandMediaTool(Tool):
             "text: PDFs, audio (transcription), Office documents "
             "(docx/xlsx/pptx), and http(s) URLs (fetched and parsed by "
             "content type). Pass the file path(s) shown in the "
-            "'[Attachment: ...]' notes of the user message, and/or http(s) "
-            "URLs. For an image prefer read_file, which hands you the picture "
+            "'[Attachment: ...]' or '[Image: ...]' notes of the user message, "
+            "and/or http(s) URLs. For an image prefer read_file, which hands you the picture "
             "itself; reach for this tool on an image only when you cannot see "
             "images or when a scan needs OCR — it returns another model's "
             "transcription, not the original. Video is not supported."
@@ -55,7 +55,8 @@ class UnderstandMediaTool(Tool):
                     "items": {"type": "string"},
                     "description": (
                         "File path(s) to understand, exactly as shown in the "
-                        "'[Attachment: <name> (path: <path>)]' notes, and/or "
+                        "'[Attachment: <name> (path: <path>)]' or "
+                        "'[Image: <name> (path: <path>)]' notes, and/or "
                         "http(s) URL(s) to fetch and read."
                     ),
                 },

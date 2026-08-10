@@ -24,7 +24,12 @@ from loguru import logger
 from raven.config.paths import get_cache_dir
 
 # Bump to force-invalidate every on-disk file after a schema change.
-CACHE_VERSION = 1
+# v2 added input_modalities to each entry: a v1 file carries no modality data,
+# and reading its silence as "no modalities" would read as "cannot see images".
+# v3 dropped the punctuation-stripped join keys v2 also filed, which a
+# case-folded lookup can now match against a deployment name -- exactly the
+# false "cannot see images" the key was removed to prevent.
+CACHE_VERSION = 3
 CACHE_FILENAME = "model-catalog.json"
 
 # Test seam: when set, overrides the on-disk location so tests never touch the

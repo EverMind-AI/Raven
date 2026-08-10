@@ -109,6 +109,8 @@ class CuratorSegmentBuilder:
         turn = TurnContext(
             current_message=ctx.current_message,
             media=ctx.media,
+            can_see_images=ctx.can_see_images,
+            describe_tool=ctx.describe_tool,
             channel=ctx.channel,
             chat_id=ctx.chat_id,
         )

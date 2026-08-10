@@ -44,7 +44,7 @@ from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -373,6 +373,7 @@ class AgentLoop:
         # takes a per-call model (strategies rewrite it, and the model chain
         # falls back), so one model's verdict must not answer for another's.
         self._image_tool_result_ok: dict[str, bool] = {}
+        self._vision_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
@@ -870,6 +871,94 @@ class AgentLoop:
             )
         return self._image_tool_result_ok[key]
 
+    # The tool that can read an attachment for a model that cannot see it.
+    # Contributed by the EverOS plugin, so absent on a default install.
+    _DESCRIBE_TOOL = "understand_media"
+
+    def _describe_tool_name(self) -> str | None:
+        """The description tool's name if it is registered, else ``None``.
+
+        Checked rather than assumed: the note that replaces a picture points at
+        this tool, and pointing at one the model was never given is an
+        instruction it cannot follow.
+        """
+        return self._DESCRIBE_TOOL if self.tools.get(self._DESCRIBE_TOOL) else None
+
+    def _route_result_images(
+        self,
+        model_text: str,
+        blocks: list[dict[str, Any]] | None,
+        model: str,
+    ) -> tuple[str, list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+        """Decide how a tool result's pictures reach ``model``.
+
+        Returns the text the tool result carries, the blocks to put *in* it, and
+        the blocks to attach to a following user message. Exactly one of the last
+        two is ever populated.
+
+        Three outcomes, and the wording differs because the model's next move
+        differs. No vision at all: nothing follows, so the note must not promise
+        an attachment, and it names the description tool when one is registered.
+        Vision and a transport that carries images in a ``role="tool"`` message:
+        the blocks ride along untouched. Vision but a transport that cannot (every
+        OpenAI-style Chat Completions endpoint -- image is excluded from the tool
+        role at the schema level): the result carries text and the picture follows
+        in a user message, the shape OpenClaw uses.
+
+        A method rather than a branch inside the loop so it can be tested at all:
+        the loop reaches this point only through a live provider and a real tool
+        call, and the wrong choice here is silent -- the model answers about a
+        picture it never received.
+        """
+        if not blocks:
+            return model_text, blocks, None
+        if not self._supports_vision(model):
+            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
+        if self._supports_image_tool_result(model):
+            return model_text, blocks, None
+        attach = [b for b in blocks if b.get("type") == "image_url"]
+        return image_placeholder_text(blocks), None, attach
+
+    def _supports_vision(self, model: str | None = None) -> bool:
+        """Cached per model: whether this model can see a picture at all.
+
+        Asked once per turn and once per tool result that returns an image, and
+        the lookup joins the model string against the gateway catalogue -- same
+        reason the sibling probe above is cached.
+
+        Only a real verdict is cached. ``vision_verdict`` returns ``None`` while
+        the catalog has no answer -- a cold install, before the background warm
+        lands -- and that is optimism rather than knowledge: caching it would
+        freeze the guess for the life of this loop, which is the life of the
+        process, and the warm would then fill a table nothing re-reads. An
+        unknown model is re-asked each turn, which costs a dict lookup.
+
+        The verdict is the routed primary's. A fallback further down the chain is
+        sent the same message list, so a vision-capable primary with a blind
+        fallback hands the blind endpoint an image block it will refuse; that
+        refusal classifies as fatal and stops the chain rather than answering
+        blind. Pre-existing in the sibling probe too, and it needs the fallback
+        chain to be assembled per candidate to fix properly.
+        """
+        key = model or self.model
+        cached = self._vision_ok.get(key)
+        if cached is not None:
+            return cached
+
+        spec = None
+        try:
+            from raven.providers.registry import find_by_model
+
+            spec = find_by_model(key)
+        except Exception:
+            pass
+        verdict = vision_verdict(key, spec, self.provider)
+        logger.debug("vision support for {}: {}", key, verdict)
+        if verdict is None:
+            return True
+        self._vision_ok[key] = verdict
+        return verdict
+
     # ── Context engine helpers ──────────────────────────────────────────
 
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
@@ -936,8 +1025,15 @@ class AgentLoop:
         channel: str | None = None,
         chat_id: str | None = None,
         selected_skills: list[Any] | None = None,
+        model: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Ask the active context engine for the main-agent message window."""
+        """Ask the active context engine for the main-agent message window.
+
+        ``model`` is the id the request will actually reach (the router's pick,
+        when there is one). It decides whether an attachment is inlined as a
+        picture, so defaulting it to ``self.model`` would let the configured
+        model answer for a routed one.
+        """
         from raven.context_engine import TurnContext  # deferred — see module note
 
         # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
@@ -954,6 +1050,8 @@ class AgentLoop:
             turn=TurnContext(
                 current_message=current_message,
                 media=media,
+                can_see_images=self._supports_vision(model),
+                describe_tool=self._describe_tool_name(),
                 channel=channel,
                 chat_id=chat_id,
                 selected_skills=selected_skills,
@@ -1934,19 +2032,9 @@ class AgentLoop:
                                 "truncated": len(display_src) > 200,
                             },
                         )
-                    blocks = getattr(result, "blocks", None)
-                    attach_blocks: list[dict[str, Any]] | None = None
-                    if blocks:
-                        if self._supports_image_tool_result(call_model or effective_model):
-                            pass  # blocks ride in the tool result itself
-                        else:
-                            # This transport cannot put an image in a tool result,
-                            # so the tool result carries text naming the image and
-                            # the picture follows in a user message. Same shape
-                            # OpenClaw uses against Chat Completions endpoints.
-                            model_text = image_placeholder_text(blocks)
-                            attach_blocks = [b for b in blocks if b.get("type") == "image_url"]
-                            blocks = None
+                    model_text, blocks, attach_blocks = self._route_result_images(
+                        model_text, getattr(result, "blocks", None), call_model or effective_model
+                    )
                     if blocks:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, tool_call.name, model_text, blocks
@@ -2451,17 +2539,12 @@ class AgentLoop:
             content,
             context_messages,
         )
-        initial_messages = await self._assemble_context_messages(
-            session=session,
-            session_key=key,
-            current_message=content,
-            media=media_paths if media_paths else None,
-            channel=channel,
-            chat_id=chat_id,
-            selected_skills=selected_skills or None,
-        )
-
         # ── Model routing (EcoClaw-style) ────────────────────────────────────
+        # Ahead of assembly, not after it: assembly decides whether an
+        # attachment is inlined as a picture or described in text, and that
+        # question is about the model the request will actually reach. Routing
+        # needs only ``content``, so asking first costs nothing and stops one
+        # model's verdict from shaping a message another model receives.
         routed_model: str | None = None
         fallback_models: list[str] = []
         if self.router is not None:
@@ -2470,6 +2553,17 @@ class AgentLoop:
                 logger.info("Router: {} → {}", self.model, routed_model)
             if fallback_models:
                 logger.info("Router fallback chain: {}", fallback_models)
+
+        initial_messages = await self._assemble_context_messages(
+            session=session,
+            session_key=key,
+            current_message=content,
+            media=media_paths if media_paths else None,
+            channel=channel,
+            chat_id=chat_id,
+            selected_skills=selected_skills or None,
+            model=routed_model,
+        )
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
