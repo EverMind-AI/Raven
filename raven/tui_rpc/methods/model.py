@@ -132,7 +132,12 @@ def _account_models(slug: str, *, configured: bool) -> tuple[str, ...]:
     return tuple(_stored_spelling(slug, model) for model in account_models())
 
 
-def _model_labels(slug: str, models: "list[str]") -> dict[str, dict[str, Any]]:
+#: "No section was passed in" marker for the helpers below -- distinct from
+#: ``None``, which is what a provider absent from the config resolves to.
+_UNLOADED: Any = object()
+
+
+def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -> dict[str, dict[str, Any]]:
     """Display facts for each offered id, skipping the ones nothing describes.
 
     What the user wrote under ``model_overlay`` wins: they are describing their
@@ -141,7 +146,7 @@ def _model_labels(slug: str, models: "list[str]") -> dict[str, dict[str, Any]]:
     """
     from raven.providers.catalog import describe
 
-    overlays = _configured_overlays(slug)
+    overlays = _configured_overlays(slug, section=section)
     out: dict[str, dict[str, Any]] = {}
     for model in models:
         row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
@@ -154,19 +159,25 @@ def _model_labels(slug: str, models: "list[str]") -> dict[str, dict[str, Any]]:
     return out
 
 
-def _configured_overlays(slug: str) -> dict[str, Any]:
+def _configured_overlays(slug: str, *, section: Any = _UNLOADED) -> dict[str, Any]:
     """This provider's user-written model descriptions, keyed by merge key.
 
     Keyed by identity rather than by the string the user typed, so an overlay
     written against a bare id still matches the qualified id the picker offers.
+
+    ``section`` lets a caller that already loaded the config hand the
+    provider's section in (the all-rows path loads once instead of once per
+    row); left unset, the config is read here.
     """
-    from raven.config.loader import load_config
     from raven.providers.wire import merge_key
 
-    try:
-        section = load_config().providers.get(slug)
-    except Exception:
-        return {}
+    if section is _UNLOADED:
+        from raven.config.loader import load_config
+
+        try:
+            section = load_config().providers.get(slug)
+        except Exception:
+            return {}
     overlay = getattr(section, "model_overlay", None) or {}
     return {merge_key(slug, model): value for model, value in overlay.items()}
 
@@ -177,9 +188,16 @@ def _overlay_for(overlays: dict[str, Any], slug: str, model: str) -> Any:
     return overlays.get(merge_key(slug, model))
 
 
-def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[str, Any]:
+def _build_provider_entry(
+    slug: str,
+    *,
+    current_provider: str | None,
+    providers: dict[str, dict[str, Any]] | None = None,
+    section: Any = _UNLOADED,
+) -> dict[str, Any]:
     spec = find_by_name(slug)
-    providers = {p["name"]: p for p in list_providers()}
+    if providers is None:
+        providers = {p["name"]: p for p in list_providers()}
     info = providers.get(slug, {})
 
     kind = credential_kind(slug)
@@ -195,7 +213,7 @@ def _build_provider_entry(slug: str, *, current_provider: str | None) -> dict[st
         # model is rather than only what it is called on the wire. Omitted for
         # ids no catalogue carries -- a local finetune, or a release newer than
         # the bundled snapshot -- and the picker falls back to the id for those.
-        "model_labels": _model_labels(slug, models),
+        "model_labels": _model_labels(slug, models, section=section),
         "slug": slug,
         "name": info.get("display_name") or (spec.label if spec else slug),
         "authenticated": configured,
@@ -222,10 +240,32 @@ async def _entry_off_loop(slug: str, current_provider: str | None) -> dict[str, 
 
 
 async def _entries_off_loop(current_provider: str | None) -> list[dict[str, Any]]:
-    """Build every picker row in one thread hop rather than one hop per row."""
+    """Build every picker row in one thread hop rather than one hop per row.
+
+    The config is also read once for all rows rather than once per row:
+    ``_build_provider_entry`` re-derives the ``list_providers`` mapping and
+    the provider's own section when called for a single row, and both are
+    hoisted here for the all-rows case.
+    """
 
     def _build() -> list[dict[str, Any]]:
-        return [_build_provider_entry(p["name"], current_provider=current_provider) for p in list_providers()]
+        from raven.config.loader import load_config
+
+        rows = list_providers()
+        providers = {p["name"]: p for p in rows}
+        try:
+            sections = load_config().providers
+        except Exception:
+            sections = None
+        return [
+            _build_provider_entry(
+                p["name"],
+                current_provider=current_provider,
+                providers=providers,
+                section=sections.get(p["name"]) if sections is not None else _UNLOADED,
+            )
+            for p in rows
+        ]
 
     return await asyncio.to_thread(_build)
 

@@ -797,3 +797,31 @@ async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> Non
     entry = _entry(await model_options({}), "hosted_vllm")
     label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
     assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+
+
+async def test_options_config_reads_do_not_scale_with_the_row_count(
+    fake_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_entries_off_loop` hoists the config read: one parse for all rows plus
+    one for the current selection. Without the hoist every row re-parsed the
+    config from disk (`_configured_overlays`, plus the `list_providers` mapping
+    in `_build_provider_entry`), so this count sat above the row count instead.
+    An absolute bound because the row count itself never varies -- the picker
+    lists every registry provider whether or not it is configured."""
+    import raven.config.loader as loader
+
+    _write_config(fake_home, {"providers": {"anthropic": {"api_key": "sk-1"}}})
+    real = loader.load_config
+    calls = 0
+
+    def counting(*args: object, **kwargs: object):
+        nonlocal calls
+        calls += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(loader, "load_config", counting)
+    result = await model_options({})
+
+    assert len(result["providers"]) > 2, "too few rows for the bound to mean anything"
+    assert calls <= 2, f"{calls} config parses for {len(result['providers'])} rows"
