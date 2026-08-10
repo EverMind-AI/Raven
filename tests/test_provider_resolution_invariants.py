@@ -189,15 +189,38 @@ def test_match_provider_decides_by_asking_the_spec_not_by_re_deriving_the_rule(m
     assert ("anthropic", "anthropic/claude-opus-4-5") in observed
 
 
+#: Everything a section can hold. Filling all of it is what makes the probe
+#: independent: built from `providers.auth` instead, it asks the declaration what
+#: this provider needs and then asserts routing agrees -- but routing asks the
+#: same declaration, so the two agree by construction and a wrong declaration is
+#: green. A section with every field set is configured under any declaration
+#: this grammar can express, so "filled means routable" is a claim about routing.
+_EVERY_CREDENTIAL_FIELD: dict[str, object] = {
+    "apiKey": "sk-probe",
+    "apiBase": "http://localhost:8000/v1",
+    "apiKeyList": ["sk-probe"],
+}
+
+
+def _fully_configured_section() -> dict[str, object]:
+    """A section holding every credential field, whatever this provider needs.
+
+    Deliberately not derived from the provider's own declaration. An earlier
+    version read `auth_methods(spec)` to decide what to fill, which made the
+    probe and the thing it probes read the same source: declare that Anthropic
+    needs a field that does not exist and the section would grow that field, the
+    route would be found, and the test would pass.
+    """
+    return dict(_EVERY_CREDENTIAL_FIELD)
+
+
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
 def test_a_configured_provider_answers_for_every_prefix_it_owns(spec: ProviderSpec) -> None:
     """Outcome check: whatever prefix a provider answers to must reach it."""
     assert spec.route_names, f"{spec.name}: answers to no prefix at all"
     for prefix in spec.route_names:
         model = f"{prefix}/probe-model"
-        raw = {"apiKey": "sk-probe"} if not spec.is_oauth else {}
-        if spec.is_local:
-            raw = {"apiBase": "http://localhost:8000/v1"}
+        raw = _fully_configured_section()
         config = Config.model_validate({"providers": {spec.name: raw}})
         _, matched = config._match_provider(model)
         assert matched == spec.name, f"{model!r} -> {matched}, registry says {spec.name}"
@@ -267,6 +290,47 @@ def test_only_the_registry_reads_the_raw_via_driver_field() -> None:
     assert not offenders, "read spec.model_prefix instead of the raw field: " + ", ".join(offenders)
 
 
+def test_the_wire_form_of_a_model_id_is_built_in_one_module() -> None:
+    """`providers.wire` owns the storage-form to wire-form conversion.
+
+    The rule used to be spelled at each client, and the spellings drifted: the
+    standard path grew a canonicalizer for prefixes written in a former or
+    hyphenated spelling and the gateway path never did, so a local deployment
+    addressed as "hosted-vllm/..." came out double-prefixed. Collapsing it left
+    one place to fix that -- and it is fixed; this keeps a second place from
+    appearing.
+
+    Matched on attribute access and on `getattr` by name, because the second is
+    how the wizard reads these today -- a bare identifier is not matched, so a
+    local named `model_prefix` (the head of a split id) does not trip it.
+
+    The inbound family that used to sit in this list -- the code deciding what to
+    *store* rather than what to send -- has since been collapsed into the same
+    module, so only two readers remain and neither builds a wire id.
+    """
+    owner = "raven/providers/wire.py"
+    allowed = {
+        owner,
+        # Decomposition, not construction: asks which upstream vendor a gateway
+        # id names, to look up what that vendor's model can do.
+        "raven/providers/litellm_provider.py",
+        # Strips a known prefix off a model id to recover the vendor's own id for
+        # a connectivity probe. Also decomposition.
+        "raven/cli/onboard_commands.py",
+        # Carries the wizard's EverOS cluster split out of onboard_commands --
+        # the same prefix-stripping read, same argument, new file name.
+        "raven/cli/onboard_everos.py",
+    }
+    needles = (".model_prefix", ".skip_prefixes", '"model_prefix"', '"skip_prefixes"')
+    offenders = {
+        _rel(path)
+        for path in _production_files()
+        for line in path.read_text().splitlines()
+        if not line.lstrip().startswith("#") and any(n in line for n in needles)
+    }
+    assert offenders <= allowed, f"build the wire form in {owner}: {sorted(offenders - allowed)}"
+
+
 def test_no_module_outside_the_registry_splits_a_model_id_by_hand() -> None:
     """Prefix parsing lives in `split_model_id`.
 
@@ -309,9 +373,12 @@ def test_find_by_keywords_is_imported_only_where_it_cannot_place_credentials() -
     the new caller does not place credentials.
     """
     allowed = {
-        "raven/providers/litellm_provider.py",  # caching + param quirks, after routing is settled
-        "raven/token_wise/cache_optimizer.py",
-        "raven/token_wise/system_and_tail_cache.py",
+        "raven/providers/litellm_provider.py",  # param quirks, after routing is settled
+        # Asks which vendor's dialect a request speaks, never where its key goes.
+        # The two token_wise strategies used to be on this list with the same
+        # argument; they now ask this module instead of the registry, so the
+        # question is answered once rather than in three places.
+        "raven/providers/prompt_cache.py",
         "raven/config/schema.py",  # asks only whether an id names a vendor at all
     }
     importers = {

@@ -29,10 +29,14 @@ from pydantic.alias_generators import to_camel
 from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
-from raven.config.schema import ProviderConfig, ProvidersConfig
+from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
+from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
+    CRED_LOCAL,
     ProviderSpec,
     canonical_provider_name,
+    credential_kind,
+    endpoints_unsupported_reason,
     find_by_name,
     names_same_provider,
     normalize_provider_name,
@@ -414,12 +418,50 @@ def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
 
 
 def _redact(value: Any) -> Any:
-    """Redact a single value or list of values."""
+    """Redact a single value, list of values, or dict of values (per value,
+    keys left visible -- see ``_redact_headers``)."""
     if value in (None, "", [], {}):
         return "(empty)"
     if isinstance(value, list):
         return ["****set****" for _ in value]
+    if isinstance(value, dict):
+        return _redact_headers(value)
     return "****set****"
+
+
+def _redact_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    """Redact each header's value, keeping the key names visible.
+
+    ``extra_headers`` can carry a secret (an auth header some gateways need
+    alongside the key) -- masking the whole dict as one ``****set****`` string
+    would also hide which headers are configured, so each value is redacted on
+    its own, the same rule every other secret field follows.
+    """
+    if headers is None:
+        return None
+    return {key: _redact(value) for key, value in headers.items()}
+
+
+def _redact_nested_model(instance: BaseModel) -> BaseModel:
+    """Redact this model's own secret fields, by the same rule as the flat ones.
+
+    ``_flatten_instance`` only recurses into ``BaseModel`` fields, not into a
+    ``list[BaseModel]`` field like ``ProviderConfig.endpoints`` -- so a caller
+    that walks ``specs`` (field-name keyed) never sees a per-endpoint field and
+    can't redact it. This is applied to each list element instead.
+
+    ``extra_headers`` gets its own rule rather than ``_is_secret_field``'s: it
+    is a dict of values, not one, and masking the whole thing would also hide
+    which headers are configured -- see ``_redact_headers``.
+    """
+    updates = {
+        fname: _redact(getattr(instance, fname))
+        for fname, finfo in type(instance).model_fields.items()
+        if _is_secret_field(fname, finfo)
+    }
+    if "extra_headers" in type(instance).model_fields:
+        updates["extra_headers"] = _redact_headers(getattr(instance, "extra_headers", None))
+    return instance.model_copy(update=updates) if updates else instance
 
 
 #: Copilot's credentials are two files LiteLLM owns, not one: the device-flow
@@ -436,22 +478,9 @@ def _oauth_token_path(provider_name: str) -> Path:
     has a way to override its directory, so a second derivation is wrong exactly
     when a user has taken one.
     """
-    from raven.config.paths import get_oauth_dir
+    from raven.providers.auth import credential_files
 
-    if provider_name == "github_copilot":
-        return _copilot_token_dir() / _COPILOT_TOKEN_FILES[0]
-
-    if provider_name == "openai_codex":
-        from raven.providers.chatgpt_token import auth_file
-
-        return auth_file()
-
-    if provider_name in {"minimax_global", "minimax_cn"}:
-        from raven.providers.minimax_oauth import token_path
-
-        return token_path("global" if provider_name == "minimax_global" else "cn")
-
-    return get_oauth_dir() / f"{provider_name}.json"
+    return credential_files(provider_name)[0]
 
 
 def _copilot_token_dir() -> Path:
@@ -506,11 +535,9 @@ def oauth_credential_files(provider_name: str) -> list[Path]:
     working credential -- and a sign-in has to restrict all of them, for the same
     reason in the other direction.
     """
-    if provider_name == "github_copilot":
-        token_dir = _copilot_token_dir()
-        return [token_dir / filename for filename in _COPILOT_TOKEN_FILES]
+    from raven.providers.auth import credential_files
 
-    return [_oauth_token_path(provider_name)]
+    return credential_files(provider_name)
 
 
 # ---------------------------------------------------------------------------
@@ -582,16 +609,38 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         api_key = getattr(instance, "api_key", "") or ""
         api_base = getattr(instance, "api_base", None)
         api_key_list = list(getattr(instance, "api_key_list", []) or [])
+        endpoints = list(getattr(instance, "endpoints", []) or [])
 
+        # One rule for every gate: this used to accept a Gemini section holding
+        # only `api_key_list` that routing then skipped and startup refused.
+        from raven.providers.auth import credential_status
+
+        configured = credential_status(fname, instance, spec=spec, include_external=True).ok
         if is_oauth:
-            configured = _oauth_credentials_present(fname)
             api_key_redacted = "OAuth token" if configured else "(empty)"
+        # Mirrors the reader's own precedence (endpoints > api_key_list > flat,
+        # see `provider_endpoints`): a stale flat key left behind by an
+        # `endpoints` migration must not display as "****set****" while
+        # `configured` -- decided the same way `credential_status` decides it,
+        # off the endpoints list -- says otherwise. Checked before the flat/list
+        # branch below, which used to run first and made this branch, and the
+        # "(N endpoints)" it reports, unreachable whenever a flat key lingered.
+        # Local deployments reach here too: keyless endpoints are their normal
+        # shape, so the count must not read as a misconfiguration.
+        elif endpoints:
+            suffix = f"({len(endpoints)} endpoints)"
+            if is_local:
+                api_key_redacted = f"(not needed for local) {suffix}"
+            elif any(ep.api_key for ep in endpoints):
+                api_key_redacted = f"****set**** {suffix}"
+            else:
+                api_key_redacted = f"(empty) {suffix}"
         elif is_local:
-            configured = bool(api_base) or bool(api_key)
             api_key_redacted = "(not needed for local)" if not api_key else "****set****"
+        elif api_key or api_key_list:
+            api_key_redacted = "****set****"
         else:
-            configured = bool(api_key) or bool(api_key_list)
-            api_key_redacted = "****set****" if configured else "(empty)"
+            api_key_redacted = "(empty)"
 
         out.append(
             {
@@ -638,6 +687,8 @@ def get_provider_config(
         val = flat.get(path_key)
         if redact_secrets and spec["is_secret"]:
             out[path_key] = _redact(val)
+        elif redact_secrets and isinstance(val, list) and val and isinstance(val[0], BaseModel):
+            out[path_key] = [_redact_nested_model(item) for item in val]
         else:
             out[path_key] = val
     return out
@@ -677,7 +728,10 @@ def set_provider_fields(
         )
 
     if spec and spec.is_oauth:
-        forbidden = [k for k in fields if field_specs[k]["is_secret"]]
+        # Credential fields only, per the docstring above -- not everything the
+        # display faces redact: extra_headers is secret to *show* but is no
+        # credential, and `provider login` would not write it anyway.
+        forbidden = [k for k in fields if k in ("api_key", "api_key_list")]
         if forbidden:
             raise RuntimeError(
                 f"Provider '{name}' uses OAuth — cannot set credential fields "
@@ -701,6 +755,16 @@ def set_provider_fields(
         leaf_cls, leaf_field = _walk_nested_path(cls, path_key)
         leaf_info = leaf_cls.model_fields[leaf_field]
         coerced = _coerce_value(raw_val, leaf_info.annotation)
+        if path_key == "models" and isinstance(coerced, list):
+            # The third way a model id gets written down, and the one that used
+            # to skip the contract: `provider set --models x` stored a bare id
+            # while the picker and the wizard stored a qualified one. Identity
+            # still matched, so nothing broke -- which is exactly how the two
+            # spellings coexisted last time, until a delete silently matched
+            # neither.
+            from raven.providers.wire import stored_model_id
+
+            coerced = [stored_model_id(name, str(m)) for m in coerced]
         prev[path_key] = _set_nested(path_key, coerced, working)
 
     validated = cls.model_validate(working)
@@ -740,8 +804,8 @@ def reset_provider(
     Two cleanup paths run automatically, dispatched on ``ProviderSpec.is_oauth``:
 
     1. **Config fields** — always rewritten to whatever a fresh Pydantic
-       instance produces (``api_key=""``, ``api_base=None``, ``vertex=False``
-       for Gemini, ``api_key_list=[]`` etc.). For OAuth providers those are
+       instance produces (``api_key=""``, ``api_base=None``,
+       ``api_key_list=[]`` for Gemini, etc.). For OAuth providers those are
        already at defaults, so the write is a no-op for them but harmless.
 
     2. **OAuth credential files** (``is_oauth=True``) — unlinked from disk so the
@@ -800,11 +864,16 @@ def add_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    from raven.providers.wire import merge_key
+
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
-    if model not in models:
+    # By identity, not by string: the same model written two ways used to land
+    # in the list twice, and neither entry could then be removed by the other's
+    # spelling.
+    if merge_key(name, model) not in {merge_key(name, m) for m in models}:
         models.append(model)
         section = _raw_section(data, name)
         section["models"] = models
@@ -824,18 +893,145 @@ def remove_provider_model(
 
     Returns the new model list. Raises KeyError for an unknown provider.
     """
+    from raven.providers.wire import merge_key
+
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     cls, models = _load_provider_models(name, data)
-    if model in models:
-        models = [m for m in models if m != model]
+    # Whatever spelling the caller holds removes every spelling of that model:
+    # the write paths used to disagree, so a list could hold one model twice.
+    target = merge_key(name, model)
+    if target in {merge_key(name, m) for m in models}:
+        models = [m for m in models if merge_key(name, m) != target]
         section = _raw_section(data, name)
         section["models"] = models
         validated = cls.model_validate(section)
         _write_raw_section(data, name, validated.model_dump(by_alias=True))
         _write_atomic(path, data)
     return models
+
+
+def _load_provider_endpoints(name: str, data: dict[str, Any]) -> tuple[type, list[ProviderEndpoint]]:
+    """Deliberately lets ValidationError out instead of falling back to ``cls()``.
+
+    A section that no longer validates (say, a hand-edited duplicate label)
+    already stops ``Config.model_validate`` -- Raven will not start on it. The
+    endpoint commands are the user's likeliest self-rescue there, and a swallow
+    here made them see an empty list and then *write it back*, wiping every
+    real endpoint in the section. A loud error names the problem instead.
+    """
+    cls = _provider_schema_cls(name)
+    section = _raw_section(data, name)
+    instance = cls.model_validate(section)
+    return cls, list(getattr(instance, "endpoints", []) or [])
+
+
+def add_provider_endpoint(
+    name: str,
+    *,
+    label: str,
+    api_key: str = "",
+    api_base: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    config_path: Path | None = None,
+) -> list[ProviderEndpoint]:
+    """Add or replace one entry in a provider's ``endpoints`` list, keyed by ``label``.
+
+    ``label`` is the idempotency key ``ProviderEndpoint`` declares it as: an
+    existing entry with that label is replaced wholesale, not merged field by
+    field, so re-running this with a rotated ``api_key`` is how the rotation
+    gets written. A new label appends.
+
+    Returns the new endpoint list. Raises KeyError for an unknown provider,
+    RuntimeError for one that ``endpoints_unsupported_reason`` rejects (Codex,
+    MiniMax OAuth, Azure, or any OAuth section) -- the same rejection
+    ``make_provider`` applies at build time, applied here before the write
+    rather than left for that later failure to catch. Also RuntimeError for an
+    empty ``api_key`` on a provider whose credential shape needs one --
+    derived from the registry (``credential_kind``), not a hardcoded vendor
+    list, so a local/keyless deployment (``hosted_vllm``, ``ollama_chat``, ...)
+    keeps writing a keyless endpoint while every key-based provider gets the
+    same rejection the CLI and the TUI picker both need.
+    """
+    name = canonical_provider_name(name)
+    reason = endpoints_unsupported_reason(name)
+    if reason:
+        raise RuntimeError(reason)
+    if not api_key and credential_kind(name) != CRED_LOCAL:
+        raise RuntimeError(
+            f"{name} needs an api_key -- only a local, keyless deployment can add an endpoint without one"
+        )
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    cls, endpoints = _load_provider_endpoints(name, data)
+
+    new_endpoint = ProviderEndpoint(label=label, api_key=api_key, api_base=api_base, extra_headers=extra_headers)
+    updated = [new_endpoint if ep.label == label else ep for ep in endpoints]
+    if not any(ep.label == label for ep in endpoints):
+        updated.append(new_endpoint)
+
+    section = _raw_section(data, name)
+    section["endpoints"] = [ep.model_dump(by_alias=True) for ep in updated]
+    validated = cls.model_validate(section)
+    _write_raw_section(data, name, validated.model_dump(by_alias=True))
+    _write_atomic(path, data)
+    return updated
+
+
+def remove_provider_endpoint(
+    name: str,
+    label: str,
+    *,
+    config_path: Path | None = None,
+) -> list[ProviderEndpoint]:
+    """Remove one endpoint by ``label`` (no-op if absent, mirrors ``remove_provider_model``).
+
+    Returns the new endpoint list. Raises KeyError for an unknown provider.
+    """
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    cls, endpoints = _load_provider_endpoints(name, data)
+
+    remaining = [ep for ep in endpoints if ep.label != label]
+    if len(remaining) != len(endpoints):
+        section = _raw_section(data, name)
+        section["endpoints"] = [ep.model_dump(by_alias=True) for ep in remaining]
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        _write_atomic(path, data)
+    return remaining
+
+
+def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> list[dict[str, Any]]:
+    """List a provider's ``endpoints``, secrets redacted for display.
+
+    Returns one dict per endpoint: ``label``, ``api_key`` (``****set****`` /
+    ``(empty)``, same rule as every other secret field), ``api_base``,
+    ``extra_headers`` (values redacted the same way, keys left visible -- see
+    ``_redact_headers``). ``api_base``/``extra_headers`` are the resolved
+    values each request would actually use -- an entry that names none of its
+    own shows the section's flat value it inherits (see
+    ``provider_endpoints``), not an empty field the user reads as "did not
+    take". Raises KeyError for an unknown provider.
+    """
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    cls, endpoints = _load_provider_endpoints(name, data)
+    if not endpoints:
+        return []
+    section = cls.model_validate(_raw_section(data, name))
+    return [
+        {
+            "label": ep.label,
+            "api_key": _redact(ep.api_key),
+            "api_base": ep.api_base,
+            "extra_headers": _redact_headers(ep.extra_headers),
+        }
+        for ep in provider_endpoints(section)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +1083,7 @@ def test_provider(
 
     try:
         spec = _provider_spec(name)
-        cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
+        cls = _provider_schema_cls(name)
     except KeyError as exc:
         return {
             "ok": False,
@@ -899,8 +1095,27 @@ def test_provider(
             "error": str(exc),
         }
 
-    api_key = cfg.get("api_key") or ""
-    api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    raw_section = _raw_section(data, name)
+    try:
+        instance = cls.model_validate(raw_section)
+    except ValidationError:
+        instance = cls()
+
+    # Same source as the request path (`provider_endpoints`), not a second
+    # read of the flat fields -- an endpoints-only or `api_key_list` section
+    # has no usable flat `api_key`, and reading that field here reported
+    # `not_configured` on a section the runtime could already serve. The first
+    # endpoint that actually holds a key is the one a request would use; none
+    # holding one falls back to the first endpoint's address, matching what a
+    # section with no endpoints at all (a single resolved entry echoing the
+    # flat fields) already gave local/keyless providers.
+    endpoints = provider_endpoints(instance)
+    endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
+    api_key = endpoint.api_key if endpoint else ""
+    api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not
     # answer: its catalogue is the credential check.
@@ -966,14 +1181,37 @@ def test_provider(
         }
 
     if not api_base:
+        # Asked here and not above: the branches in between return for the
+        # families whose credential check is not an HTTP ping, and one of them
+        # is Copilot -- whose driver starts a GitHub device flow when LiteLLM is
+        # asked to resolve it. Deriving eagerly put that flow before the branch
+        # that avoids it and hung `provider test github-copilot` on that login.
+        # Derived rather than declared, and tracked as such: a 404 from an
+        # address we guessed says the vendor has no models route there, while a
+        # 404 from one the user typed is a typo they need to see.
+        api_base = _litellm_api_base(spec)
+        derived_api_base = bool(api_base)
+
+    if not api_base:
+        # No address, and for most of these there is nothing the user could have
+        # supplied: the endpoint is compiled into the vendor's SDK, so there is
+        # no `/models` to ping. Reporting `not_configured` told seven correctly
+        # configured providers they were not set up, and pointed at a key they
+        # had already set. Say what is true instead -- the credential is present
+        # and this probe cannot reach the vendor.
+        needs_user_address = bool(spec and (spec.is_local or spec.name == "azure_openai"))
         return {
             "ok": False,
-            "status": "not_configured",
+            "status": "not_configured" if needs_user_address else "no_probe_endpoint",
             "elapsed_ms": 0,
             "http_status": None,
             "models_count": None,
             "model_ids": None,
-            "error": "api_base is empty and provider has no default",
+            "error": (
+                "api_base is empty and provider has no default"
+                if needs_user_address
+                else "credential present; this vendor publishes no models endpoint to ping"
+            ),
         }
 
     url = api_base.rstrip("/") + "/models"
@@ -984,7 +1222,57 @@ def test_provider(
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
-    return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
+    result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport)
+    if derived_api_base and result.get("status") == "http_404":
+        # The address LiteLLM sends completions to is not always where the
+        # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
+        # never says anything about the credential, so reporting a failure here
+        # would be the same lie in a new spelling.
+        return {
+            **result,
+            "ok": False,
+            "status": "no_probe_endpoint",
+            "error": "credential present; this vendor publishes no models endpoint to ping",
+        }
+    return result
+
+
+def _litellm_api_base(spec: Any) -> str:
+    """The endpoint LiteLLM would send this vendor's request to, or "".
+
+    Asked rather than tabulated: LiteLLM already knows, because it is the thing
+    that does the sending, and a second copy of these addresses is a second thing
+    to keep current. It answers for four of the ten providers that ship no
+    default; the rest compile the address into the vendor SDK and there is
+    nothing to return.
+    """
+    if spec is None:
+        return ""
+    if spec.is_oauth:
+        # Asked before the id is built, because building it can hide the answer:
+        # `wire_model` strips the provider name entirely for the codex and azure
+        # shapes, so the guard below would be handed a bare "probe-model" and see
+        # nothing to object to. An OAuth provider's credential check is its own
+        # flow, never a models ping, so there is nothing here for it either way.
+        return ""
+
+    from raven.providers.rates import _may_prompt
+    from raven.providers.wire import stored_model_id, wire_model
+
+    # Asked of the stored form, not the wire form, for the same reason.
+    stored = stored_model_id(spec.name, "probe-model")
+    if _may_prompt(stored):
+        # Resolving one of these resolves its credentials on the way, and with no
+        # token file that prints a device code and blocks. One answer to "can this
+        # be handed to LiteLLM" for every caller -- see providers.rates.
+        return ""
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        _, _, _, base = import_litellm().get_llm_provider(model=wire_model(stored, spec=spec))
+    except Exception:
+        return ""
+    return base or ""
 
 
 def _probe_models_endpoint(
@@ -1235,5 +1523,8 @@ __all__ = [
     "get_provider_config",
     "set_provider_fields",
     "reset_provider",
+    "add_provider_endpoint",
+    "remove_provider_endpoint",
+    "list_provider_endpoints",
     "test_provider",
 ]

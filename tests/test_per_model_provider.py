@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from raven.config.schema import ModelEndpoint
-from raven.providers.base import GenerationSettings
+from raven.providers.base import ErrorClassification, GenerationSettings, LLMResponse
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.per_model_provider import PerModelProvider
+from raven.providers.prompt_cache import CACHE_CONTROL
 
 
 def _fallback():
@@ -65,27 +66,123 @@ def test_generation_propagates_to_sub_providers():
 @pytest.mark.asyncio
 async def test_chat_with_retry_dispatches_by_model():
     p = _provider()
-    p._by_model["large"].chat_with_retry = AsyncMock(return_value="LARGE_RESP")
-    p._by_model["small"].chat_with_retry = AsyncMock(return_value="SMALL_RESP")
+    large_resp = LLMResponse(content="LARGE_RESP", finish_reason="stop")
+    small_resp = LLMResponse(content="SMALL_RESP", finish_reason="stop")
+    p._by_model["large"].chat_with_retry = AsyncMock(return_value=large_resp)
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=small_resp)
 
     out = await p.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="large")
 
-    assert out == "LARGE_RESP"
+    assert out.content == "LARGE_RESP"
     p._by_model["large"].chat_with_retry.assert_awaited_once()
     assert p._by_model["large"].chat_with_retry.call_args.kwargs["model"] == "large"
+    # fallback_models=[] so the sub-provider's own chain never re-tries a
+    # *different* hop's endpoint on top of its own retry ladder.
+    assert p._by_model["large"].chat_with_retry.call_args.kwargs["fallback_models"] == []
     p._by_model["small"].chat_with_retry.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_chat_with_retry_unknown_model_uses_fallback():
     fb = _fallback()
-    fb.chat_with_retry = AsyncMock(return_value="FB_RESP")
+    fb.chat_with_retry = AsyncMock(return_value=LLMResponse(content="FB_RESP", finish_reason="stop"))
     p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=fb)
 
     out = await p.chat_with_retry(messages=[], model="other")
 
-    assert out == "FB_RESP"
+    assert out.content == "FB_RESP"
     fb.chat_with_retry.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_dispatches_each_hop_to_its_own_endpoint(monkeypatch):
+    # The whole point of per-model routing: a fallback hop has its own
+    # endpoint (see _endpoint_provider), not the primary model's. Sending the
+    # entire chain to one sub-provider (the old behavior) would mean every
+    # fallback silently reused the primary's endpoint instead of its own.
+    seen: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        seen.append(kwargs)
+        if kwargs["model"] == "openai/small":
+            raise RuntimeError("503 service unavailable")
+        message = MagicMock(content="ok-from-large", tool_calls=None)
+        return MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    # Zero the primary hop's own retry ladder so its exhaustion (a retryable
+    # classification) stays fast, while still exercising that it retries on
+    # its own endpoint before the chain moves to the next hop's.
+    p._by_model["small"]._CHAT_RETRY_DELAYS = (0, 0, 0)
+
+    resp = await p.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="small",
+        fallback_models=["large"],
+    )
+
+    assert resp.content == "ok-from-large"
+    # The primary hop exhausts its own retry ladder (3 sleeping + 1 final)
+    # entirely against its own endpoint before the chain moves on.
+    calls = [(c["model"], c["api_base"], c["api_key"]) for c in seen]
+    assert calls == [("openai/small", "http://a/v1", "KA")] * 4 + [("openai/large", "http://b/v1", "KB")]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_strips_cache_control_on_a_fallback_hop_that_cannot_read_it():
+    """Mirrors ``LLMProvider.chat_with_retry``'s own guard: a breakpoint placed
+    for the primary model's vendor must not reach a fallback hop whose vendor
+    cannot read it -- here, a hop that resolves to ``fallback`` (e.g. Azure,
+    which does not strip cache_control itself). Without this guard the marker
+    is billed as an unrecognized block or refused outright by the second hop's
+    wire."""
+    p = _provider()
+    error_resp = LLMResponse(
+        content="boom",
+        finish_reason="error",
+        error_classification=ErrorClassification(category="server_error", should_fallback=True),
+    )
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=error_resp)
+
+    seen: list[dict] = []
+
+    async def fake_fallback_chat_with_retry(messages, tools=None, **kwargs):
+        seen.append({"messages": messages, "tools": tools})
+        return LLMResponse(content="FB_RESP", finish_reason="stop")
+
+    p._fallback.chat_with_retry = AsyncMock(side_effect=fake_fallback_chat_with_retry)
+
+    messages = [{"role": "system", "content": "sys", "cache_control": CACHE_CONTROL}]
+    out = await p.chat_with_retry(messages=messages, model="small", fallback_models=["unrecognized-fallback-model"])
+
+    assert out.content == "FB_RESP"
+    assert seen[0]["messages"] == [{"role": "system", "content": "sys"}]
+
+
+@pytest.mark.asyncio
+async def test_chat_with_retry_skips_a_fallback_hop_its_sub_provider_cannot_serve():
+    """Mirrors ``LLMProvider.chat_with_retry``'s ``can_serve`` guard: a
+    per-model sub-provider picked for a later hop can be just as unable to
+    serve it as the single-instance case that guard exists for -- e.g. the
+    hop resolves to a vendor this sub-provider's credentials do not reach."""
+    p = _provider()
+    error_resp = LLMResponse(
+        content="boom",
+        finish_reason="error",
+        error_classification=ErrorClassification(category="server_error", should_fallback=True),
+    )
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=error_resp)
+    p._by_model["large"].can_serve = MagicMock(return_value=False)
+    p._by_model["large"].chat_with_retry = AsyncMock()
+
+    out = await p.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}], model="small", fallback_models=["large"]
+    )
+
+    p._by_model["large"].chat_with_retry.assert_not_awaited()
+    assert out is error_resp
 
 
 def test_sub_providers_inherit_configured_model_overrides():
@@ -95,6 +192,38 @@ def test_sub_providers_inherit_configured_model_overrides():
     fb = _fallback()
     fb.model_overrides = {"small": {"top_p": 0.3}}
     p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=fb)
+
+    assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
+
+
+def test_sub_providers_inherit_overrides_from_a_rotor_fallback():
+    """``fallback`` in production is whatever ``make_provider`` built, and a
+    multi-endpoint section builds an ``EndpointRotorProvider`` there, not a
+    ``LiteLLMProvider`` -- the only class every other test in this module
+    exercises. ``getattr(fallback, "model_overrides", None)`` silently read
+    nothing back off a rotor before it gained the delegating property, and a
+    routed model's overrides went missing on exactly the configs with several
+    endpoints to rotate.
+    """
+    from raven.providers.endpoint_rotor import EndpointRotorProvider
+    from raven.providers.endpoints import ResolvedEndpoint
+
+    def make_inner(ep):
+        return LiteLLMProvider(
+            api_key=ep.api_key,
+            api_base=ep.api_base,
+            default_model="fb",
+            provider_name="openrouter",
+            model_overrides={"small": {"top_p": 0.3}},
+        )
+
+    rotor = EndpointRotorProvider(
+        [ResolvedEndpoint(label="a", api_key="k1", api_base="http://a/v1", extra_headers=None)],
+        make_inner,
+        default_model="fb",
+    )
+
+    p = PerModelProvider([ModelEndpoint(model="small", api_base="http://a/v1")], fallback=rotor)
 
     assert p._by_model["small"].model_overrides == {"small": {"top_p": 0.3}}
 
@@ -228,6 +357,45 @@ def test_building_knn_endpoints_leaves_the_process_environment_alone(monkeypatch
     # process -- which is what made one process able to hold several at all.
     assert provider._by_model["small"].api_key == "KEY-SMALL"
     assert provider._by_model["large"].api_key == "KEY-LARGE"
+
+
+def test_endpoint_providers_are_built_with_unparsed_reasoning_disabled():
+    """Should-fix 9 repro: ``_endpoint_provider`` builds every knn-routed
+    endpoint with ``provider_name="custom"`` for its api_base/api_key shape
+    alone -- not as a claim that the backend behind it is a self-hosted
+    inference server without a reasoning parser. Without the explicit
+    override, a front-loaded big vendor routed this way would have its
+    ordinary content clipped at a stray ``</think>``.
+    """
+    p = _provider()
+    assert p._by_model["small"].emits_unparsed_reasoning() is False
+    assert p._by_model["large"].emits_unparsed_reasoning() is False
+
+
+@pytest.mark.asyncio
+async def test_routed_endpoint_does_not_cut_ordinary_content_at_a_stray_think_tag(monkeypatch):
+    """The evaluator's repro: a knn-routed endpoint's ordinary reply happened
+    to contain a bare ``</think>``, and the ``provider_name="custom"``-derived
+    guess (before ``unparsed_reasoning=False`` was wired in) read that as an
+    unparsed reasoning leak and cut the reply in half.
+    """
+
+    async def fake_acompletion(**kwargs):
+        message = MagicMock(
+            content="the widget's </think> hinge broke",
+            tool_calls=None,
+            reasoning_content=None,
+            thinking_blocks=None,
+        )
+        return MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    resp = await p.chat(messages=[{"role": "user", "content": "hi"}], model="small")
+
+    assert resp.content == "the widget's </think> hinge broke"
+    assert resp.reasoning_content is None
 
 
 def test_the_custom_spec_declares_no_env_var_to_write() -> None:

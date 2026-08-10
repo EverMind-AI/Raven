@@ -131,6 +131,17 @@ class ProviderSpec:
         return self.display_name or self.name.title()
 
     @property
+    def usable_default_api_base(self) -> str:
+        """The shipped default address ``Config.get_api_base`` would actually serve.
+
+        Non-empty only for a gateway or local deployment -- a direct vendor's
+        ``default_api_base`` travels via env vars instead and the reader never
+        hands it out. Stated once so the credential gate cannot accept a
+        default the reader then refuses to serve (see ``providers.auth``).
+        """
+        return self.default_api_base if (self.is_gateway or self.is_local) else ""
+
+    @property
     def model_prefix(self) -> str:
         """Route prefix LiteLLM needs on this provider's model ids.
 
@@ -620,6 +631,30 @@ def credential_kind(provider: str | None) -> str:
     return CRED_KEY
 
 
+def endpoints_unsupported_reason(provider_name: str | None) -> str | None:
+    """Why ``provider_name``'s config cannot carry an ``endpoints`` list, or None
+    if it can.
+
+    Shared by every path that could write one -- `make_provider` at build time,
+    `add_provider_endpoint`, and the TUI `/model` picker's ``model.add_endpoint``
+    -- so a section rejected at build time is rejected at write time too,
+    instead of being accepted by the write paths and only failing later when
+    something tries to build a provider from it. Codex, MiniMax OAuth and Azure
+    (``client`` set) each connect through one dedicated client and one account,
+    not several; an OAuth section reached through litellm instead (``is_oauth``,
+    e.g. github_copilot, which has no dedicated client) is the same shape.
+    ``endpoints`` is meaningful only for a plain API-key vendor reached through
+    litellm.
+    """
+    spec = find_by_name(provider_name) if provider_name else None
+    if spec is None or not (spec.client or spec.is_oauth):
+        return None
+    return (
+        f"{provider_name} does not support multiple endpoints -- remove the `endpoints` "
+        "field from its config; this provider connects through a single account, not several"
+    )
+
+
 def litellm_spelling(name: str | None) -> str:
     """How LiteLLM spells this vendor, which is the only form usable as a prefix.
 
@@ -636,24 +671,6 @@ def litellm_spelling(name: str | None) -> str:
         if normalize_provider_name(candidate) == wanted:
             return candidate
     return wanted
-
-
-#: Providers whose own client strips the prefix back off before use, so a model id
-#: may -- and must -- carry the name that resolves to them. Everyone else either
-#: routes on it (LiteLLM does the stripping) or uses the id verbatim: Azure puts it
-#: in a URL path as a deployment name, where a prefix would become part of the path.
-_PREFIX_IS_PUBLIC_ONLY = frozenset({"minimax_global", "minimax_cn", "openai_codex"})
-
-
-def needs_public_model_prefix(spec: "ProviderSpec | None") -> bool:
-    """Must a model id for this provider be written with its own name in front?
-
-    Written bare it is claimed by keyword matching instead -- "gpt-5.6-sol"
-    resolves to OpenAI -- and the request goes to a provider that does not serve
-    it. Every surface that stores a model id asks this, so the answer is here
-    rather than in each of them.
-    """
-    return spec is not None and spec.name in _PREFIX_IS_PUBLIC_ONLY
 
 
 def public_model_prefix(spec: "ProviderSpec") -> str:

@@ -20,8 +20,8 @@ from raven.agent.tools import media
 from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.providers import rates as _pricing
 from raven.providers.base import LLMProvider
-from raven.token_wise import pricing as _pricing
 
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
@@ -1145,7 +1145,7 @@ def _catalog(monkeypatch, models: dict[str, list[str] | None]) -> None:
     times a day, so an assertion against it is an assertion about someone
     else's deploy.
     """
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     built: dict[str, dict] = {}
     for model_id, mods in models.items():
@@ -1193,8 +1193,8 @@ def test_the_catalog_is_warmed_in_the_background_when_it_has_no_answer(monkeypat
     would never be fetched at all and this probe would answer optimistically
     forever. Warmed off the request path because the fetch takes a 10s timeout.
     """
+    from raven.providers import rates as pricing
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import pricing
 
     calls: list[str] = []
     monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
@@ -1216,8 +1216,8 @@ def test_a_failed_warm_is_retried_once_the_cooldown_passes(monkeypatch) -> None:
     """A machine whose first turn runs before the VPN is up must not be left
     answering from an empty catalog for the rest of the process -- an attempt
     that failed says nothing about the next one."""
+    from raven.providers import rates as pricing
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import pricing
 
     calls: list[str] = []
 
@@ -1251,7 +1251,7 @@ def test_the_warm_resolves_its_fetch_before_the_thread_starts(monkeypatch) -> No
     body that looked the fetch up on entry could therefore lose a race with
     whoever patched it -- a restored test seam would send a real request from
     inside the suite and write the real cache file."""
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     calls: list[str] = []
     captured: dict[str, object] = {}
@@ -1283,7 +1283,7 @@ def test_the_warm_resolves_its_fetch_before_the_thread_starts(monkeypatch) -> No
 def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
     """The fetch degrades internally, but a thread that dies loudly writes a
     traceback into a user's terminal for a probe that has already answered."""
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     def _boom() -> dict:
         raise RuntimeError("no route to host")
@@ -1302,6 +1302,79 @@ def test_a_warm_that_cannot_reach_the_host_does_not_raise(monkeypatch) -> None:
     # with no assertion passes either way.
     assert seen == []
     assert pricing._OPENROUTER_CACHE == {}
+
+
+def test_a_lazy_wrapped_azure_provider_still_reads_as_caller_chosen(monkeypatch) -> None:
+    """The TUI hands the loop a lazy proxy, and an isinstance probe against
+    the proxy answers about the proxy: a bare Azure deployment name then
+    joined the vendor catalog and silently lost its pictures. The probe reads
+    through ``unwrapped``."""
+    from raven.providers.azure_openai_provider import AzureOpenAIProvider
+    from raven.providers.base import GenerationSettings
+    from raven.providers.capabilities import vision_verdict
+    from raven.providers.lazy import LazyProvider
+    from raven.providers.registry import find_by_model
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"]})
+    lazy = LazyProvider(
+        factory=lambda: AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com", default_model="gpt-4"),
+        default_model="gpt-4",
+        generation=GenerationSettings(),
+    )
+    # Before the prewarm materializes anything there is no inner class to
+    # read, and the probe must answer what the proxy itself answered -- not
+    # crash and not guess Azure.
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), lazy) is False
+
+    lazy._built()
+
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), lazy) is None
+
+
+def test_a_custom_gateways_served_name_never_joins_the_vendor_catalog(monkeypatch) -> None:
+    """A ``custom`` endpoint serves whatever its operator called the model; a
+    served ``gpt-4`` is not OpenAI's ``gpt-4``, and the vendor spec the bare
+    id resolves to can neither say so nor carry the override escape hatch --
+    only the configured provider knows which section built it."""
+    from raven.providers.capabilities import vision_verdict
+    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.registry import find_by_model
+
+    _catalog(monkeypatch, {"openai/gpt-4": ["text"]})
+    provider = LiteLLMProvider(
+        api_key="sk-local", api_base="http://gw.example:8000/v1", default_model="gpt-4", provider_name="custom"
+    )
+
+    assert vision_verdict("gpt-4", find_by_model("gpt-4"), provider) is None
+    # An OpenRouter-built provider keeps consulting the catalog: it serves
+    # vendor ids, which is exactly what the catalog speaks for.
+    routed = LiteLLMProvider(api_key="sk-or", default_model="gpt-4", provider_name="openrouter")
+    assert vision_verdict("openai/gpt-4", find_by_model("openai/gpt-4"), routed) is False
+
+
+def test_a_stale_disk_table_does_not_suppress_the_warm(monkeypatch) -> None:
+    """A long-lived session that boots on a days-old cache file must still
+    warm: the reader adopts the disk table at any age (timestamp left at
+    zero), and a warm gate that only checked non-emptiness never ran again
+    for the life of the process."""
+    from raven.providers import rates as pricing
+
+    calls: list[str] = []
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {"old/model": {"input_modalities": ["text"]}})
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", 0.0)
+    monkeypatch.setattr(pricing, "_WARM_AT", 0.0)
+    monkeypatch.setattr(pricing, "_fetch_openrouter_models", lambda: calls.append("fetch") or {})
+
+    pricing.warm_catalog_in_background()
+    _join_warm()
+
+    assert calls == ["fetch"]
+
+    # A fresh in-process table is still the guard: no second thread.
+    monkeypatch.setattr(pricing, "_OPENROUTER_CACHE_TIME", time.time())
+    pricing.warm_catalog_in_background()
+    _join_warm()
+    assert calls == ["fetch"]
 
 
 def test_a_model_the_catalog_calls_text_only_is_blind(monkeypatch) -> None:
@@ -1347,7 +1420,7 @@ def test_an_entry_written_before_modalities_were_kept_is_not_a_denial(monkeypatc
 def test_a_catalog_that_blows_up_does_not_break_the_probe(monkeypatch) -> None:
     """A capability probe must never be the thing that fails a turn."""
     from raven.providers import capabilities
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     def _boom(model):
         raise RuntimeError("catalog on fire")
@@ -1769,8 +1842,9 @@ def test_the_fetch_files_no_normalized_join_key_in_the_shared_table(monkeypatch)
     text-only verdict. Asserted through the real fetch: a hand-built table cannot
     see this, which is exactly why the mutation went unnoticed.
     """
+    from raven.providers import model_catalog_cache
+    from raven.providers import rates as pricing
     from raven.providers.capabilities import supports_vision
-    from raven.token_wise import model_catalog_cache, pricing
 
     payload = {
         "data": [
@@ -1868,7 +1942,7 @@ def test_a_cold_verdict_is_not_cached_for_the_life_of_the_loop(monkeypatch) -> N
     background warm filling a table nothing re-reads -- so only a real verdict is
     remembered."""
     from raven.agent.loop.main import AgentLoop
-    from raven.token_wise import pricing
+    from raven.providers import rates as pricing
 
     loop = object.__new__(AgentLoop)
     loop._vision_ok = {}

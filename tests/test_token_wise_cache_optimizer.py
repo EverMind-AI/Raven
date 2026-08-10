@@ -10,7 +10,7 @@ from raven.token_wise.cache_optimizer import CacheOptimizer
 
 # Anthropic models support cache_control per the provider registry.
 ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-5"
-# A model that does NOT support prompt caching → strategy must be a no-op.
+# A provider that does NOT accept `cache_control` blocks → strategy must be a no-op.
 NON_CACHE_MODEL = "deepseek/deepseek-chat"
 
 
@@ -215,3 +215,53 @@ async def test_idempotent_repeated_application():
     twice_m, _, _ = await opt.before_llm_call(once_m, None, ANTHROPIC_MODEL)
     # Same cache count; the marker is overwritten not duplicated.
     assert _count_breakpoints(once_m, None) == _count_breakpoints(twice_m, None)
+
+
+def test_cache_control_follows_the_wire_format_not_the_model_catalogue():
+    """`cache_control` is Anthropic-shaped; the question is who accepts one.
+
+    LiteLLM's table carries a per-model `supports_prompt_caching`, and reading it
+    here looks like an upgrade: it says DeepSeek's and OpenAI's models cache,
+    which they do. But their caching is automatic and takes no breakpoints, so
+    acting on that flag stamped `cache_control` onto requests to APIs with
+    nowhere to put it -- and `ProviderSpec.supports_prompt_caching` already says
+    what it means, "this provider accepts the block".
+
+    The lesson is the naming: two flags spelled the same answer different
+    questions, and the more precise-looking one was the wrong one.
+    """
+    from pathlib import Path
+
+    from raven.providers import capabilities
+    from raven.providers.registry import PROVIDERS
+    from raven.token_wise import cache_optimizer, system_and_tail_cache
+
+    lying = [s.name for s in PROVIDERS if s.supports_prompt_caching and s.via_driver == "openai"]
+    assert not lying, f"marked as accepting cache_control while speaking OpenAI's API: {lying}"
+
+    for module in (cache_optimizer, system_and_tail_cache):
+        source = Path(module.__file__).read_text(encoding="utf-8")
+        assert "capabilities import supports_prompt_caching" not in source, module.__name__
+    assert not hasattr(capabilities, "supports_prompt_caching"), "the misfounded lookup is back"
+
+
+def test_a_gateway_alone_does_not_decide_caching_for_what_it_fronts():
+    """Both halves are required: the wire has somewhere to put the field, and the
+    model's vendor is the one that reads it.
+
+    aihubmix / siliconflow / volcengine / custom speak an API with nowhere to
+    carry it, so nothing they front is marked. OpenRouter has somewhere to put
+    it and accepts it on every model it fronts -- and forwards it to vendors
+    that do not read it, which is what billed Gemini twice. So it is marked for
+    the Anthropic family and for nothing else.
+    """
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    for slug in ("siliconflow", "aihubmix", "volcengine", "custom"):
+        provider = LiteLLMProvider(api_key="", default_model="x", provider_name=slug)
+        assert provider._supports_cache_control("anthropic/claude-fable-5") is False, slug
+
+    openrouter = LiteLLMProvider(api_key="", default_model="x", provider_name="openrouter")
+    assert openrouter._supports_cache_control("openrouter/anthropic/claude-fable-5") is True
+    for other in ("openrouter/google/gemini-3.5-flash", "openrouter/qwen/qwen3.7-max", "openrouter/anything"):
+        assert openrouter._supports_cache_control(other) is False, other

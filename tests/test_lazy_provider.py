@@ -11,11 +11,17 @@ from raven.providers.lazy import LazyProvider
 
 
 class _FakeProvider:
-    def __init__(self) -> None:
+    def __init__(self, *, emits_unparsed_reasoning: bool = False, active_endpoint_label: str | None = None) -> None:
         self.generation = GenerationSettings()
+        self._emits_unparsed_reasoning = emits_unparsed_reasoning
+        if active_endpoint_label is not None:
+            self.active_endpoint_label = active_endpoint_label
 
     def get_default_model(self) -> str:
         return "built-model"
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return self._emits_unparsed_reasoning
 
     async def chat(self, *args, **kwargs) -> str:
         return "chat"
@@ -98,6 +104,68 @@ def test_prewarm_builds_in_background() -> None:
     assert built.wait(timeout=2.0), "prewarm did not build the provider in the background"
 
 
+def test_emits_unparsed_reasoning_defaults_false_before_materialization() -> None:
+    """The stream collation that asks this only runs after a call, and the
+    first call is what builds the inner provider -- before that there is
+    nothing to normalize anyway, so the answer must be False without ever
+    invoking the factory."""
+    calls: list = []
+
+    def factory() -> _FakeProvider:
+        calls.append(1)
+        return _FakeProvider(emits_unparsed_reasoning=True)
+
+    lp = LazyProvider(factory, "cfg-model", GenerationSettings())
+
+    assert lp.emits_unparsed_reasoning() is False
+    assert calls == []  # asking did not build the provider
+
+
+def test_emits_unparsed_reasoning_forwards_after_materialization() -> None:
+    """Once built, the answer is the real provider's -- not the pre-build
+    default -- so the TUI's think-tag normalization (which reads this) keeps
+    working on the primary path through ``make_lazy_provider``."""
+
+    def factory() -> _FakeProvider:
+        return _FakeProvider(emits_unparsed_reasoning=True)
+
+    lp = LazyProvider(factory, "cfg-model", GenerationSettings())
+    asyncio.run(lp.chat([]))  # materializes _provider
+
+    assert lp.emits_unparsed_reasoning() is True
+
+
+def test_active_endpoint_label_is_the_initial_label_before_materialization() -> None:
+    lp = LazyProvider(
+        lambda: _FakeProvider(),
+        "cfg-model",
+        GenerationSettings(),
+        initial_endpoint_label="first",
+    )
+
+    assert lp.active_endpoint_label == "first"
+
+
+def test_active_endpoint_label_is_none_when_no_initial_label_was_given() -> None:
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+
+    assert lp.active_endpoint_label is None
+
+
+def test_active_endpoint_label_forwards_to_the_real_provider_after_materialization() -> None:
+    """After the first call, the rotor behind the real provider may have
+    rotated -- the footer must reflect that, not stay pinned to the initial
+    label forever."""
+
+    def factory() -> _FakeProvider:
+        return _FakeProvider(active_endpoint_label="second")
+
+    lp = LazyProvider(factory, "cfg-model", GenerationSettings(), initial_endpoint_label="first")
+    asyncio.run(lp.chat([]))
+
+    assert lp.active_endpoint_label == "second"
+
+
 def test_prewarm_swallows_build_error() -> None:
     def factory():
         raise RuntimeError("boom")
@@ -108,3 +176,78 @@ def test_prewarm_swallows_build_error() -> None:
     # the error surfaces on a real call instead
     with pytest.raises(RuntimeError, match="boom"):
         asyncio.run(lp.chat([]))
+
+
+# --------------------------------------------------------------------------- #
+# on_built -- SF11's fix-up hook: a caller that answered a context-window     #
+# question cheaply (no import) before the real provider existed gets one     #
+# chance to correct it once the real provider is on hand.                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_on_built_defaults_to_none() -> None:
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    assert lp.on_built is None
+
+
+def test_on_built_fires_once_after_the_first_real_call_builds_it() -> None:
+    calls: list = []
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = lambda: calls.append("fired")
+
+    assert calls == []  # setting it does not itself build
+    asyncio.run(lp.chat([]))
+
+    assert calls == ["fired"]
+
+
+def test_on_built_fires_immediately_when_set_after_the_build_already_happened() -> None:
+    """prewarm can finish importing before the constructor gets around to
+    wiring the callback -- the setter must not miss the one build event
+    there is just because it arrived late."""
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    asyncio.run(lp.chat([]))  # materializes _provider before on_built is set
+
+    calls: list = []
+    lp.on_built = lambda: calls.append("fired")
+
+    assert calls == ["fired"]
+
+
+def test_on_built_does_not_fire_twice_for_one_build() -> None:
+    calls: list = []
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = lambda: calls.append("fired")
+
+    asyncio.run(lp.chat([]))
+    asyncio.run(lp.chat([]))  # second call reuses the memoized provider
+
+    assert calls == ["fired"]
+
+
+def test_on_built_exception_is_swallowed_and_does_not_break_the_build() -> None:
+    def bad_callback() -> None:
+        raise RuntimeError("callback boom")
+
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = bad_callback
+
+    # must not raise, and the build result must still be usable
+    assert asyncio.run(lp.chat([])) == "chat"
+
+
+def test_on_built_fires_from_the_prewarm_thread_not_the_caller() -> None:
+    fired = threading.Event()
+    seen: dict[str, threading.Thread] = {}
+
+    def on_built() -> None:
+        seen["thread"] = threading.current_thread()
+        fired.set()
+
+    lp = LazyProvider(lambda: _FakeProvider(), "cfg-model", GenerationSettings())
+    lp.on_built = on_built
+    lp.prewarm()
+
+    assert fired.wait(timeout=2.0), "on_built did not fire after prewarm built the provider"
+    assert seen["thread"] is not threading.current_thread()
+    assert seen["thread"].name == "litellm-prewarm"

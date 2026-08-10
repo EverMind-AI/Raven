@@ -59,4 +59,91 @@ describe('deferSignalExit', () => {
 
     exit.mockRestore()
   })
+
+  it('replays a signal that arrived during a deferral once the deferral clears', async () => {
+    vi.resetModules()
+    const fresh = await import('../lib/gracefulExit.js')
+
+    const cleanup = vi.fn()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    fresh.setupGracefulExit({ cleanups: [cleanup], failsafeMs: 5 })
+
+    const restore = fresh.deferSignalExit()
+    process.emit('SIGHUP')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).not.toHaveBeenCalled()
+
+    restore()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).toHaveBeenCalled()
+
+    exit.mockRestore()
+  })
+
+  it('only replays once the outermost deferral of a nested handoff clears', async () => {
+    vi.resetModules()
+    const fresh = await import('../lib/gracefulExit.js')
+
+    const cleanup = vi.fn()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    fresh.setupGracefulExit({ cleanups: [cleanup], failsafeMs: 5 })
+
+    const outer = fresh.deferSignalExit()
+    const inner = fresh.deferSignalExit()
+
+    process.emit('SIGHUP')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).not.toHaveBeenCalled()
+
+    inner()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).not.toHaveBeenCalled()
+
+    outer()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(cleanup).toHaveBeenCalled()
+
+    exit.mockRestore()
+  })
+
+  it('does not replay when no signal arrived during the deferral', async () => {
+    vi.resetModules()
+    const fresh = await import('../lib/gracefulExit.js')
+
+    const cleanup = vi.fn()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    fresh.setupGracefulExit({ cleanups: [cleanup], failsafeMs: 5 })
+
+    const restore = fresh.deferSignalExit()
+    restore()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(cleanup).not.toHaveBeenCalled()
+    expect(exit).not.toHaveBeenCalled()
+
+    exit.mockRestore()
+  })
+
+  it('keeps only the first signal when two arrive during the same deferral', async () => {
+    vi.resetModules()
+    const fresh = await import('../lib/gracefulExit.js')
+
+    const onSignal = vi.fn()
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    fresh.setupGracefulExit({ failsafeMs: 5, onSignal })
+
+    const restore = fresh.deferSignalExit()
+    process.emit('SIGHUP')
+    process.emit('SIGTERM')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(onSignal).not.toHaveBeenCalled()
+
+    restore()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    expect(onSignal).toHaveBeenCalledTimes(1)
+    expect(onSignal).toHaveBeenCalledWith('SIGHUP')
+
+    exit.mockRestore()
+  })
 })

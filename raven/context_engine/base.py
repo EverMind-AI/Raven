@@ -184,6 +184,13 @@ class ContextEngine(ABC):
         """
         return None
 
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch: re-budget whichever builders sized
+        themselves against the window at construction. Default is no-op so
+        an engine with no such builder need not override it.
+        """
+        return None
+
 
 __all__ = [
     "AssembledPrefix",

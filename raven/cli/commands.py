@@ -150,9 +150,20 @@ app.add_typer(import_app, name="import")
 def run() -> None:
     """Console-script entry point."""
     from raven.config.loader import ConfigReadError
+    from raven.providers.auth import MissingCredentialsError
 
     try:
         app()
+    except MissingCredentialsError as exc:
+        # The gate is decided in `providers.auth` because three entry points ask
+        # it; printing and exiting is this one's idiom, so it happens here rather
+        # than there. Rendered once for every command, like ConfigReadError.
+        from raven.cli._helpers import console
+
+        console.print(f"[red]Error: {exc.summary}.[/red]")
+        if exc.remedy:
+            console.print(exc.remedy)
+        raise SystemExit(1) from exc
     except ConfigReadError as exc:
         # A config-write command (channels/provider/deep-research/onboard) hit an
         # unparseable config. The write layer already refused (file untouched);

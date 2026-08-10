@@ -119,6 +119,9 @@ def test_set_provider_reaches_every_holder() -> None:
     loop.memory_consolidator = _Recorder()
     loop._turns_in_flight = 0
     loop._pending_provider = None
+    loop._image_tool_result_ok = {"old-model": True}
+    refreshed: list[bool] = []
+    loop.refresh_context_window = lambda: refreshed.append(True)
 
     new_provider = SimpleNamespace(name="new-provider")
     loop.set_provider(new_provider, NEW_MODEL)
@@ -128,6 +131,12 @@ def test_set_provider_reaches_every_holder() -> None:
     for holder in (loop.subagents, loop.context_engine, loop.memory_consolidator):
         assert holder.provider is new_provider
         assert holder.model == NEW_MODEL
+    # Cached per model id but computed from the provider: a swap keeping the
+    # model id must not keep serving the old transport's verdict.
+    assert loop._image_tool_result_ok == {}
+    # The window follows the adopted pair -- re-resolved here rather than at
+    # the RPC call site, which a parked switch outlives.
+    assert refreshed == [True]
 
 
 def test_switch_reaches_the_real_holders_a_loop_builds(tmp_path) -> None:
@@ -271,11 +280,17 @@ def test_a_switch_during_a_turn_is_parked(tmp_path) -> None:
     assert loop._pending_provider == (switched, NEW_MODEL)
 
     loop._turns_in_flight = 0
+    # A sentinel the adopt must overwrite: the parked switch outlives the RPC
+    # call, and adopting the pair without re-resolving the window left the
+    # new model budgeting against the old one's for the rest of the process.
+    loop.context_window_tokens = -1
     loop._adopt_pending_provider()
 
     assert loop.provider is switched
     assert loop.subagents.provider is switched
     assert loop._pending_provider is None
+    assert loop.context_window_tokens > 0, "the adopt must re-resolve the context window"
+    assert loop.memory_consolidator.context_window_tokens == loop.context_window_tokens
 
 
 def test_a_switch_between_turns_applies_immediately(tmp_path) -> None:

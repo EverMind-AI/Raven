@@ -377,7 +377,6 @@ def test_show_lists_all_flags(tmp_config: Path) -> None:
 def test_show_gemini_includes_extra_flags(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "show", "gemini"])
     assert r.exit_code == 0
-    assert "--vertex" in r.stdout
     assert "--api-key-list" in r.stdout
 
 
@@ -465,12 +464,27 @@ def test_set_with_equals_form(tmp_config: Path) -> None:
     assert data["providers"]["openrouter"]["apiKey"] == "sk-equals"
 
 
-def test_set_with_no_vertex_bool_negative(tmp_config: Path) -> None:
-    runner.invoke(app, ["provider", "set", "gemini", "--vertex", "true"])
-    r = runner.invoke(app, ["provider", "set", "gemini", "--no-vertex"])
-    assert r.exit_code == 0, r.output
-    data = json.loads(tmp_config.read_text(encoding="utf-8"))
-    assert data["providers"]["gemini"]["vertex"] is False
+def test_the_three_bool_flag_forms_are_parsed(monkeypatch) -> None:
+    """Tested against the parser rather than a provider, because none declares a bool.
+
+    Gemini's ``vertex`` was the only one and it has been removed. The parser
+    keeps the forms -- it mirrors ``_parse_channel_flags``, where bool fields are
+    common -- so this exercises them directly instead of asserting through a
+    field that would have to be invented to keep the test alive.
+    """
+    from raven.cli import provider_commands
+
+    # Patched where it is looked up: the parser imports it inside the function,
+    # so the name on `provider_commands` is never the one that gets called.
+    monkeypatch.setattr(
+        "raven.config.update_providers.provider_field_specs",
+        lambda name: {"dry_run": {"type": "bool", "default": False, "is_secret": False, "description": ""}},
+    )
+    parse = provider_commands._parse_provider_flags
+    # A written value comes back as written; the schema coerces it later.
+    assert parse(["--dry-run", "true"], "gemini") == {"dry_run": "true"}
+    assert parse(["--dry-run"], "gemini") == {"dry_run": True}
+    assert parse(["--no-dry-run"], "gemini") == {"dry_run": False}
 
 
 def test_reset_without_yes_aborts_on_no(tmp_config: Path) -> None:
@@ -675,3 +689,342 @@ def test_resetting_the_provider_behind_the_default_model_names_the_way_back(
     flat = " ".join(r.stdout.split())
     assert "no longer works" in flat, flat
     assert expected in flat, flat
+
+
+# ---------------------------------------------------------------------------
+# `provider use`: the third surface that can change the model
+# ---------------------------------------------------------------------------
+
+
+def test_use_sets_the_default_model_in_the_shared_spelling(tmp_config: Path) -> None:
+    """The CLI writes what the wizard and the picker write.
+
+    Three surfaces choose models and only two could; the third had to re-run the
+    whole wizard. Now that all three write, they have to write the same string --
+    that is the contract the storage step established.
+    """
+    from raven.providers.wire import stored_model_id
+
+    r = runner.invoke(app, ["provider", "use", "claude-sonnet-5", "--provider", "anthropic"])
+    assert r.exit_code == 0, r.output
+
+    data = json.loads(tmp_config.read_text(encoding="utf-8"))
+    stored = data["agents"]["defaults"]["model"]
+    assert stored == stored_model_id("anthropic", "claude-sonnet-5") == "anthropic/claude-sonnet-5"
+
+
+def test_use_infers_the_provider_from_a_qualified_id(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat"])
+    assert r.exit_code == 0, r.output
+    data = json.loads(tmp_config.read_text(encoding="utf-8"))
+    assert data["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
+
+
+def test_use_warns_but_does_not_refuse_when_the_provider_has_no_credentials(tmp_config: Path) -> None:
+    """Picking a model before configuring its provider is a normal order.
+
+    Refusing would force the two steps into one sequence; the startup gate says
+    the same thing again if the key is still missing by the time it matters.
+    """
+    r = runner.invoke(app, ["provider", "use", "deepseek/deepseek-chat"])
+    assert r.exit_code == 0, r.output
+    assert "API key" in r.output
+
+
+def test_use_accepts_a_bare_id_when_nothing_is_pinned(tmp_config: Path) -> None:
+    """With no pin there is no key to mis-route, so auto-detection is the answer.
+
+    This is where the CLI and the picker used to disagree: the CLI refused any id
+    that named nobody, the picker stored it against ``auto``. Refusing is for the
+    case where a pin exists and does *not* serve the model -- there, keeping it
+    would send one vendor's key to another and dropping it silently would discard
+    something the user set on purpose, so the only honest move is to ask.
+    """
+    r = runner.invoke(app, ["provider", "use", "some-unqualified-model"])
+
+    assert r.exit_code == 0, r.output
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "auto"
+    assert defaults["model"] == "some-unqualified-model"
+
+
+def test_use_moves_the_pin_instead_of_reporting_that_it_is_stuck(tmp_config: Path) -> None:
+    """A write that changes nothing must not report success and stop there.
+
+    `agents.defaults.provider` overrides what a model id names, so `provider use`
+    wrote the model, printed a tick, and requests kept going to the pinned
+    provider. It used to say so and tell the user to set the field to 'auto' --
+    advice no command could follow, because none wrote that field. It writes it
+    now, by the same rule the picker uses.
+    """
+    tmp_config.write_text(json.dumps({"agents": {"defaults": {"provider": "openai"}}}), encoding="utf-8")
+    # Configured, because an unconfigured vendor is deliberately left on `auto`
+    # so a gateway can serve it -- see test_use_does_not_pin_a_vendor_that_has_no_configuration.
+    runner.invoke(app, ["provider", "set", "anthropic", "--api-key", "sk-ant"])
+
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-5"])
+
+    assert r.exit_code == 0, r.output
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "anthropic"
+    assert defaults["model"] == "anthropic/claude-sonnet-5"
+    assert "pinned" not in r.output, "the note is about a state that can no longer happen"
+
+
+def test_use_hands_routing_back_to_auto_for_a_vendor_with_no_spec(tmp_config: Path) -> None:
+    """Keeping the old pin would send its key to a vendor it does not belong to."""
+    tmp_config.write_text(json.dumps({"agents": {"defaults": {"provider": "openai"}}}), encoding="utf-8")
+
+    r = runner.invoke(app, ["provider", "use", "mistral/mistral-large"])
+
+    assert r.exit_code == 0, r.output
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "auto"
+    assert defaults["model"] == "mistral/mistral-large"
+
+
+def test_use_keeps_a_pin_that_serves_the_bare_id(tmp_config: Path) -> None:
+    """A bare id names nobody, so the pin is the only evidence -- and it is kept
+    only when the pinned provider actually serves the model."""
+    tmp_config.write_text(json.dumps({"agents": {"defaults": {"provider": "deepseek"}}}), encoding="utf-8")
+    runner.invoke(app, ["provider", "set", "deepseek", "--api-key", "sk-ds"])
+
+    r = runner.invoke(app, ["provider", "use", "deepseek-chat"])
+
+    assert r.exit_code == 0, r.output
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "deepseek"
+    assert defaults["model"] == "deepseek/deepseek-chat"
+
+
+def test_use_leaves_the_config_alone_when_it_cannot_tell(tmp_config: Path) -> None:
+    """Refusing is the point: writing a guess would route one vendor's key to
+    another, which is what the prefix rules exist to prevent."""
+    before = json.dumps({"agents": {"defaults": {"provider": "deepseek", "model": "deepseek/deepseek-chat"}}})
+    tmp_config.write_text(before, encoding="utf-8")
+
+    r = runner.invoke(app, ["provider", "use", "some-model-nobody-serves"])
+
+    assert r.exit_code == 1
+    assert json.loads(tmp_config.read_text(encoding="utf-8")) == json.loads(before)
+
+
+def test_use_says_so_when_an_azure_deployment_overrides_the_model_id(tmp_config: Path) -> None:
+    """Azure's deployment decides the deployment; the model id then does nothing."""
+    runner.invoke(app, ["provider", "set", "azure-openai", "--api-key", "k", "--api-base", "https://x/"])
+    runner.invoke(app, ["provider", "set", "azure-openai", "--deployment", "prod-gpt4"])
+
+    r = runner.invoke(app, ["provider", "use", "azure-openai/some-model"])
+    assert r.exit_code == 0, r.output
+    assert "deployment" in r.output and "prod-gpt4" in r.output
+
+
+def test_use_does_not_pin_a_vendor_that_has_no_configuration(tmp_config: Path) -> None:
+    """Pinning an unconfigured vendor makes the install unroutable.
+
+    A pin is consulted before anything else and is answered with that vendor's
+    section whether or not it holds credentials, so pinning an unconfigured one
+    fails every request on a missing key -- never reaching the fallback written
+    for exactly this shape, a gateway serving a model whose id names the vendor
+    behind it. An OpenRouter-only install that ran `provider use anthropic/...`
+    could then reach nothing at all.
+    """
+    from raven.config.loader import load_config
+
+    runner.invoke(app, ["provider", "set", "openrouter", "--api-key", "sk-or"])
+
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5"])
+    assert r.exit_code == 0, r.output
+
+    defaults = json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]
+    assert defaults["provider"] == "auto", "an unconfigured vendor must not be pinned"
+
+    section, name = load_config()._match_provider(defaults["model"])
+    assert (section, name) != (None, None), "the config was left unable to route"
+    assert name == "openrouter"
+    assert "<gateway>/" in r.output, "the advice must not be 'buy a key from that vendor'"
+
+
+def test_use_still_pins_a_vendor_that_is_configured(tmp_config: Path) -> None:
+    """The fallback is for the unconfigured case only -- a vendor the user has
+    set up is still named outright, so its own key is the one used."""
+    runner.invoke(app, ["provider", "set", "anthropic", "--api-key", "sk-ant"])
+
+    r = runner.invoke(app, ["provider", "use", "anthropic/claude-sonnet-4-5"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(tmp_config.read_text(encoding="utf-8"))["agents"]["defaults"]["provider"] == "anthropic"
+
+
+# ---------------------------------------------------------------------------
+# provider endpoint add / remove / list
+# ---------------------------------------------------------------------------
+
+
+def test_endpoint_help_lists_subcommands() -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "--help"])
+    assert r.exit_code == 0
+    assert "add" in r.stdout
+    assert "remove" in r.stdout
+    assert "list" in r.stdout
+
+
+def test_endpoint_add_writes_the_section(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"],
+    )
+    assert r.exit_code == 0, r.output
+    assert "primary" in r.stdout
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert section["endpoints"] == [{"label": "primary", "apiKey": "k1", "apiBase": None, "extraHeaders": None}]
+
+
+def test_endpoint_add_with_api_base_and_headers(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        [
+            "provider",
+            "endpoint",
+            "add",
+            "openrouter",
+            "--label",
+            "eu",
+            "--api-key",
+            "k1",
+            "--api-base",
+            "https://eu.example.com",
+            "--extra-headers",
+            '{"X-Region": "eu"}',
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert section["endpoints"][0]["apiBase"] == "https://eu.example.com"
+    assert section["endpoints"][0]["extraHeaders"] == {"X-Region": "eu"}
+
+
+def test_endpoint_add_rejects_malformed_headers_json(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "x", "--api-key", "k", "--extra-headers", "{not-json"],
+    )
+    assert r.exit_code != 0
+    assert "JSON" in r.output
+
+
+def test_endpoint_add_same_label_replaces(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+    r = runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k2"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert len(section["endpoints"]) == 1
+    assert section["endpoints"][0]["apiKey"] == "k2"
+
+
+def test_endpoint_list_renders_a_validation_error_not_a_traceback(tmp_config: Path) -> None:
+    """A hand-edited invalid section (duplicate label) must come back as the
+    same rendered failure `provider set` settled on, not a bare traceback."""
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "a", "--api-key", "k1"])
+    data = json.loads(tmp_config.read_text(encoding="utf-8"))
+    data["providers"]["openrouter"]["endpoints"].append({"label": "a", "apiKey": "dup"})
+    tmp_config.write_text(json.dumps(data), encoding="utf-8")
+
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+
+    assert r.exit_code == 1
+    assert "Validation failed" in r.output
+
+
+def test_endpoint_add_on_an_oauth_provider_renders_the_refusal(tmp_config: Path) -> None:
+    """The write path shares the factory's refusal; the CLI must render it as
+    the same clean failure a bad provider name gets, not a bare traceback."""
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "github_copilot", "--label", "x", "--api-key", "k"],
+    )
+    assert r.exit_code == 1
+    assert "does not support multiple endpoints" in r.output
+
+
+def test_endpoint_add_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "no-such-provider", "--label", "x", "--api-key", "k"],
+    )
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output
+
+
+def test_endpoint_add_without_a_key_is_refused_for_a_key_based_provider(tmp_config: Path) -> None:
+    """``--api-key`` is no longer required at the flag level -- the shape-aware
+    refusal lives in the ops layer, shared with the RPC picker, so this must
+    still exit non-zero with a readable reason rather than silently persist a
+    keyless endpoint into the rotation."""
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "openrouter", "--label", "x", "--api-base", "https://a.example/v1"],
+    )
+    assert r.exit_code == 1
+    assert "api_key" in r.output
+
+
+def test_endpoint_add_without_a_key_is_allowed_for_a_local_deployment(tmp_config: Path) -> None:
+    r = runner.invoke(
+        app,
+        ["provider", "endpoint", "add", "hosted_vllm", "--label", "x", "--api-base", "http://10.0.0.5:8000/v1"],
+    )
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["hosted_vllm"]
+    assert section["endpoints"][0]["apiKey"] == ""
+
+
+def test_endpoint_remove_drops_the_label(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "backup", "--api-key", "k2"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "openrouter", "--label", "primary"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["backup"]
+
+
+def test_endpoint_remove_absent_label_is_noop(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "openrouter", "--label", "not-there"])
+    assert r.exit_code == 0, r.output
+
+    section = json.loads(tmp_config.read_text(encoding="utf-8"))["providers"]["openrouter"]
+    assert [e["label"] for e in section["endpoints"]] == ["primary"]
+
+
+def test_endpoint_remove_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "remove", "no-such-provider", "--label", "x"])
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output
+
+
+def test_endpoint_list_redacts_api_key(tmp_config: Path) -> None:
+    runner.invoke(app, ["provider", "endpoint", "add", "openrouter", "--label", "primary", "--api-key", "k1"])
+
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+    assert r.exit_code == 0, r.output
+    assert "primary" in r.stdout
+    assert "****set****" in r.stdout
+    assert "k1" not in r.stdout
+
+
+def test_endpoint_list_empty_when_none_configured(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "list", "openrouter"])
+    assert r.exit_code == 0, r.output
+
+
+def test_endpoint_list_unknown_provider_exits_1(tmp_config: Path) -> None:
+    r = runner.invoke(app, ["provider", "endpoint", "list", "no-such-provider"])
+    assert r.exit_code == 1
+    assert "Unknown provider" in r.output

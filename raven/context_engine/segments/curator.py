@@ -96,6 +96,11 @@ class CuratorSegmentBuilder:
         self.curator_model = self.config.curator_model or model
         self.assembler.set_provider(provider, model)
 
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch down into the assembler it owns."""
+        self.context_window_tokens = tokens
+        self.assembler.set_context_window(tokens)
+
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if ctx.prefix is None:
             raise RuntimeError("CuratorSegmentBuilder requires ctx.prefix (phase B)")
