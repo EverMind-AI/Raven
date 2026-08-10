@@ -459,6 +459,18 @@ def test_list_does_not_call_keyless_endpoints_set(cfg_path: Path) -> None:
     assert row["api_key_redacted"] == "(empty) (1 endpoints)"
 
 
+def test_list_shows_the_endpoint_count_for_a_local_deployment(cfg_path: Path) -> None:
+    """Keyless endpoints are a local deployment's normal shape (several vLLM
+    instances behind one section); the key column must surface the count
+    instead of hiding it behind the local wording."""
+    add_provider_endpoint("hosted_vllm", label="a", api_base="http://10.0.0.5:8000/v1", config_path=cfg_path)
+    add_provider_endpoint("hosted_vllm", label="b", api_base="http://10.0.0.6:8000/v1", config_path=cfg_path)
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["hosted_vllm"]
+
+    assert row["api_key_redacted"] == "(not needed for local) (2 endpoints)"
+
+
 def test_list_flat_key_residue_does_not_paper_over_keyless_endpoints(cfg_path: Path) -> None:
     """A stale flat ``api_key`` left behind by an ``endpoints`` migration must
     not display as set while ``configured`` -- decided off the endpoints list,

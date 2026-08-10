@@ -618,8 +618,6 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         configured = credential_status(fname, instance, spec=spec, include_external=True).ok
         if is_oauth:
             api_key_redacted = "OAuth token" if configured else "(empty)"
-        elif is_local:
-            api_key_redacted = "(not needed for local)" if not api_key else "****set****"
         # Mirrors the reader's own precedence (endpoints > api_key_list > flat,
         # see `provider_endpoints`): a stale flat key left behind by an
         # `endpoints` migration must not display as "****set****" while
@@ -627,9 +625,18 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
         # off the endpoints list -- says otherwise. Checked before the flat/list
         # branch below, which used to run first and made this branch, and the
         # "(N endpoints)" it reports, unreachable whenever a flat key lingered.
+        # Local deployments reach here too: keyless endpoints are their normal
+        # shape, so the count must not read as a misconfiguration.
         elif endpoints:
             suffix = f"({len(endpoints)} endpoints)"
-            api_key_redacted = f"****set**** {suffix}" if any(ep.api_key for ep in endpoints) else f"(empty) {suffix}"
+            if is_local:
+                api_key_redacted = f"(not needed for local) {suffix}"
+            elif any(ep.api_key for ep in endpoints):
+                api_key_redacted = f"****set**** {suffix}"
+            else:
+                api_key_redacted = f"(empty) {suffix}"
+        elif is_local:
+            api_key_redacted = "(not needed for local)" if not api_key else "****set****"
         elif api_key or api_key_list:
             api_key_redacted = "****set****"
         else:
