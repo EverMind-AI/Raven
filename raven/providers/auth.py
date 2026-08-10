@@ -131,24 +131,23 @@ def _present(section: Any, name: str) -> bool:
     Sections reach here as both: the schema object on the routing path, a raw
     mapping on the display path.
 
-    A section holding ``endpoints`` instead of the flat fields is checked the
-    same way, one level down: if the flat field is unset, any endpoint that has
-    ``name`` set also counts. A section with several endpoints and a key on
-    only one of them is exactly as usable as one with a single flat key --
-    routing and startup both read the resolved list (``provider_endpoints``),
-    not the flat field, so a gate that only looked at the flat field would
-    reject a section its own request path can serve.
+    Mirrors the precedence ``provider_endpoints`` reads by: ``endpoints`` set
+    means the flat fields are ignored outright, not merged with them, so a flat
+    key alongside a keyless endpoint must not count as present -- that flat key
+    is never the one a request actually sends. Only when ``endpoints`` is empty
+    does the flat field (and, for a list field like ``api_key_list``, any
+    element of it) decide the answer. The gate and the reader must agree on
+    which shape is in effect; see the ``endpoints`` module docstring.
     """
     if section is None:
         return False
+    endpoints = section.get("endpoints") if isinstance(section, dict) else getattr(section, "endpoints", None)
+    if endpoints:
+        return any(_present(endpoint, name) for endpoint in endpoints)
     value = section.get(name) if isinstance(section, dict) else getattr(section, name, None)
     if isinstance(value, (list, tuple)):
-        if any(bool(v) for v in value):
-            return True
-    elif value:
-        return True
-    endpoints = section.get("endpoints") if isinstance(section, dict) else getattr(section, "endpoints", None)
-    return any(_present(endpoint, name) for endpoint in endpoints or [])
+        return any(bool(v) for v in value)
+    return bool(value)
 
 
 def _token_present(provider: str) -> bool:

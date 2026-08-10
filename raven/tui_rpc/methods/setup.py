@@ -92,7 +92,16 @@ def _detect_provider_configured(payload: dict) -> bool:
         except Exception:
             sections = None
         if sections is not None:
-            for name in providers:
+            # Iterate the validated instance's own field names, not the raw
+            # payload's keys: `canonical_provider_name` does not decompose
+            # camelCase, so a camelCase key like "azureOpenai" -- the shape
+            # `ProvidersConfig` serializes to -- fails to resolve back to the
+            # `azure_openai` field it validated into, and `sections.get` on it
+            # returns None. The declared fields are always snake_case, so
+            # asking for those by name always resolves. Extra (unspecced)
+            # sections keep their original payload spelling.
+            names = set(type(sections).model_fields) | set(sections.model_extra or {})
+            for name in names:
                 section = sections.get(name)
                 if section is not None and credential_status(name, section, include_external=True).ok:
                     return True

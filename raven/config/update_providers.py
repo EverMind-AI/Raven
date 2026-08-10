@@ -30,6 +30,7 @@ from pydantic_core import PydanticUndefined
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import ProviderConfig, ProviderEndpoint, ProvidersConfig
+from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
     ProviderSpec,
     canonical_provider_name,
@@ -1015,7 +1016,7 @@ def test_provider(
 
     try:
         spec = _provider_spec(name)
-        cfg = get_provider_config(name, redact_secrets=False, config_path=config_path)
+        cls = _provider_schema_cls(name)
     except KeyError as exc:
         return {
             "ok": False,
@@ -1027,8 +1028,26 @@ def test_provider(
             "error": str(exc),
         }
 
-    api_key = cfg.get("api_key") or ""
-    api_base = cfg.get("api_base") or (spec.default_api_base if spec else "") or ""
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    raw_section = _raw_section(data, name)
+    try:
+        instance = cls.model_validate(raw_section)
+    except ValidationError:
+        instance = cls()
+
+    # Same source as the request path (`provider_endpoints`), not a second
+    # read of the flat fields -- an endpoints-only or `api_key_list` section
+    # has no usable flat `api_key`, and reading that field here reported
+    # `not_configured` on a section the runtime could already serve. The first
+    # endpoint that actually holds a key is the one a request would use; none
+    # holding one falls back to the first endpoint's address, matching what a
+    # section with no endpoints at all (a single resolved entry echoing the
+    # flat fields) already gave local/keyless providers.
+    endpoints = provider_endpoints(instance)
+    endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
+    api_key = endpoint.api_key if endpoint else ""
+    api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
     derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not

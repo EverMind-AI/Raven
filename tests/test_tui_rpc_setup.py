@@ -160,6 +160,27 @@ async def test_setup_status_registered_via_helper(fake_home: Path) -> None:
     assert resp["result"]["provider_configured"] is True
 
 
+def test_camel_case_provider_key_is_recognized_as_configured() -> None:
+    """A multi-word provider key arrives as the camelCase ``ProvidersConfig``
+    serializes to, and the gate must still see it.
+
+    ``canonical_provider_name`` does not split camelCase (it cannot tell
+    "azureOpenai" from "OpenRouter" by capitals alone), so iterating the raw
+    payload's keys and asking ``sections.get`` about each one misses a
+    declared field spelled this way: it validates into ``azure_openai`` fine,
+    but ``sections.get("azureOpenai")`` then re-derives a mismatched lookup key
+    and returns None. A configured Azure or Copilot install used to park on
+    the setup panel for exactly this reason.
+    """
+    import raven.tui_rpc.methods.setup as setup
+
+    payload = {
+        "agents": {"defaults": {"model": "azure_openai/my-deployment"}},
+        "providers": {"azureOpenai": {"apiKey": "az-TEST", "apiBase": "https://x.openai.azure.com"}},
+    }
+    assert setup._detect_provider_configured(payload) is True
+
+
 def test_minimax_oauth_is_detected_from_either_spelling_of_the_prefix(monkeypatch) -> None:
     """The region is read off the model-id prefix, which arrives underscored.
 

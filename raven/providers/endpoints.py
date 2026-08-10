@@ -25,6 +25,13 @@ endpoint holding the empty flat values rather than an empty list. That is what
 every existing caller already got from reading the flat fields directly before
 this module existed, so returning nothing here would just move the "now what"
 onto each of them instead of answering it once.
+
+The gate and the reader must answer the same question the same way:
+``raven.providers.auth._present``, which decides whether a section is usable
+at all, has to mirror this precedence exactly -- ``endpoints`` non-empty means
+only the endpoints count, flat fields included, or a section with a healthy
+flat key and a keyless endpoint would pass the gate while this function hands
+the empty key to every actual request.
 """
 
 from __future__ import annotations

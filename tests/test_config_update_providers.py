@@ -603,6 +603,59 @@ def test_test_provider_not_configured_when_api_key_empty(cfg_path: Path) -> None
     assert result["status"] == "not_configured"
 
 
+def test_test_provider_endpoints_only_section_probes_the_endpoints_key(cfg_path: Path) -> None:
+    """No flat ``api_key`` at all -- the credential lives only in ``endpoints``.
+
+    The probe used to read ``cfg.get("api_key")`` directly, which is empty for
+    an endpoints-only section, and reported ``not_configured`` on a section the
+    runtime could already serve. It must read the same resolved list
+    (``provider_endpoints``) that a real request does -- including that
+    request's own ``api_base``, not the vendor default.
+    """
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="sk-or-endpoint-test",
+        api_base="https://example-endpoint.test/v1",
+        config_path=cfg_path,
+    )
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert seen["auth"] == "Bearer sk-or-endpoint-test"
+    assert seen["url"].startswith("https://example-endpoint.test/v1")
+
+
+def test_test_provider_gemini_api_key_list_section_probes_the_first_key(cfg_path: Path) -> None:
+    """Same gap, Gemini's shape: a plural ``api_key_list`` and no flat ``api_key``."""
+    set_provider_fields(
+        "gemini",
+        {"api_key_list": "AIzaTEST1,AIzaTEST2", "api_base": "https://example-gemini.test/v1"},
+        config_path=cfg_path,
+    )
+
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"data": []})
+
+    result = probe_provider("gemini", config_path=cfg_path, transport=_mock_transport(handler))
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+    assert seen["auth"] == "Bearer AIzaTEST1"
+
+
 def test_test_provider_oauth_sends_the_stored_token(
     cfg_path: Path,
     monkeypatch: pytest.MonkeyPatch,
