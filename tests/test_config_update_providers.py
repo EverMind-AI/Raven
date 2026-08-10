@@ -202,6 +202,21 @@ def test_get_redacts_api_key_nested_inside_endpoints(cfg_path: Path) -> None:
     assert [ep.label for ep in cfg["endpoints"]] == ["a", "b"]
 
 
+def test_get_redacts_extra_header_values_keeping_keys_visible(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="a",
+        api_key="k1",
+        extra_headers={"X-Region": "eu-secret"},
+        config_path=cfg_path,
+    )
+
+    cfg = get_provider_config("openrouter", config_path=cfg_path)
+
+    assert cfg["endpoints"][0].extra_headers == {"X-Region": "****set****"}
+    assert "eu-secret" not in repr(cfg)
+
+
 def test_get_endpoints_plaintext_with_redact_false(cfg_path: Path) -> None:
     add_provider_endpoint("openrouter", label="a", api_key="sk-SUPER-SECRET-A", config_path=cfg_path)
 
@@ -925,11 +940,27 @@ def test_list_provider_endpoints_redacts_api_key(cfg_path: Path) -> None:
 
 
 def test_list_provider_endpoints_reports_empty_key(cfg_path: Path) -> None:
-    add_provider_endpoint("openrouter", label="primary", api_key="", config_path=cfg_path)
+    # hosted_vllm: a key-based provider (openrouter) now refuses to persist a
+    # keyless endpoint -- see the write-time tests above.
+    add_provider_endpoint("hosted_vllm", label="primary", api_base="http://localhost:8000/v1", config_path=cfg_path)
+
+    out = list_provider_endpoints("hosted_vllm", config_path=cfg_path)
+
+    assert out[0]["api_key"] == "(empty)"
+
+
+def test_list_provider_endpoints_redacts_extra_header_values(cfg_path: Path) -> None:
+    add_provider_endpoint(
+        "openrouter",
+        label="primary",
+        api_key="k1",
+        extra_headers={"X-Region": "eu-secret"},
+        config_path=cfg_path,
+    )
 
     out = list_provider_endpoints("openrouter", config_path=cfg_path)
 
-    assert out[0]["api_key"] == "(empty)"
+    assert out[0]["extra_headers"] == {"X-Region": "****set****"}
 
 
 def test_list_provider_endpoints_default_when_none_configured(cfg_path: Path) -> None:

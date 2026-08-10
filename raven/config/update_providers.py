@@ -426,6 +426,19 @@ def _redact(value: Any) -> Any:
     return "****set****"
 
 
+def _redact_headers(headers: dict[str, str] | None) -> dict[str, str] | None:
+    """Redact each header's value, keeping the key names visible.
+
+    ``extra_headers`` can carry a secret (an auth header some gateways need
+    alongside the key) -- masking the whole dict as one ``****set****`` string
+    would also hide which headers are configured, so each value is redacted on
+    its own, the same rule every other secret field follows.
+    """
+    if headers is None:
+        return None
+    return {key: _redact(value) for key, value in headers.items()}
+
+
 def _redact_nested_model(instance: BaseModel) -> BaseModel:
     """Redact this model's own secret fields, by the same rule as the flat ones.
 
@@ -433,12 +446,18 @@ def _redact_nested_model(instance: BaseModel) -> BaseModel:
     ``list[BaseModel]`` field like ``ProviderConfig.endpoints`` -- so a caller
     that walks ``specs`` (field-name keyed) never sees a per-endpoint field and
     can't redact it. This is applied to each list element instead.
+
+    ``extra_headers`` gets its own rule rather than ``_is_secret_field``'s: it
+    is a dict of values, not one, and masking the whole thing would also hide
+    which headers are configured -- see ``_redact_headers``.
     """
     updates = {
         fname: _redact(getattr(instance, fname))
         for fname, finfo in type(instance).model_fields.items()
         if _is_secret_field(fname, finfo)
     }
+    if "extra_headers" in type(instance).model_fields:
+        updates["extra_headers"] = _redact_headers(getattr(instance, "extra_headers", None))
     return instance.model_copy(update=updates) if updates else instance
 
 
@@ -973,11 +992,12 @@ def remove_provider_endpoint(
 
 
 def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> list[dict[str, Any]]:
-    """List a provider's ``endpoints``, ``api_key`` redacted for display.
+    """List a provider's ``endpoints``, secrets redacted for display.
 
     Returns one dict per endpoint: ``label``, ``api_key`` (``****set****`` /
     ``(empty)``, same rule as every other secret field), ``api_base``,
-    ``extra_headers``. Raises KeyError for an unknown provider.
+    ``extra_headers`` (values redacted the same way, keys left visible -- see
+    ``_redact_headers``). Raises KeyError for an unknown provider.
     """
     name = canonical_provider_name(name)
     path = config_path or get_config_path()
@@ -988,7 +1008,7 @@ def list_provider_endpoints(name: str, *, config_path: Path | None = None) -> li
             "label": ep.label,
             "api_key": _redact(ep.api_key),
             "api_base": ep.api_base,
-            "extra_headers": ep.extra_headers,
+            "extra_headers": _redact_headers(ep.extra_headers),
         }
         for ep in endpoints
     ]
