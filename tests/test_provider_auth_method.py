@@ -331,6 +331,22 @@ def test_the_gate_never_accepts_a_default_address_the_reader_will_not_serve() ->
             assert cfg.get_api_base(f"{spec.name}/some-model") == spec.usable_default_api_base != "", spec.name
 
 
+def test_the_hint_ignores_a_duck_typed_endpoints_attribute_like_the_gate() -> None:
+    """A section whose ``endpoints`` is truthy but not a real list (test
+    doubles reach the gate this way) is judged by its flat fields; the hint
+    must not send its owner to ``endpoint add`` while the gate reads flat."""
+    from types import SimpleNamespace
+
+    from raven.providers.auth import credential_status
+
+    section = SimpleNamespace(endpoints=object(), api_key="", api_base=None, api_key_list=None)
+    status = credential_status("openrouter", section)
+
+    assert not status.ok
+    assert "endpoint add" not in status.summary
+    assert "provider set" in status.summary
+
+
 def test_a_default_the_reader_never_serves_does_not_satisfy_the_gate() -> None:
     """The every-spec invariant above is vacuous while the registry happens to
     contain no spec whose default_api_base differs from its usable one; this
