@@ -23,7 +23,14 @@ def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
 
     ``provider_name="custom"`` selects the generic OpenAI-compatible gateway
     spec, so the endpoint's own ``api_base`` / ``api_key`` are carried per call
-    and several endpoints coexist in one process.
+    and several endpoints coexist in one process. That name is borrowed for its
+    api_base/api_key shape only, not as a claim about what is behind it -- a
+    ``knn``-routed endpoint's backend is whatever the routing config points at,
+    unknowable here, so ``unparsed_reasoning=False`` keeps this endpoint from
+    being read as the self-hosted inference server ``custom`` also denotes: a
+    front-loaded big vendor routed this way would otherwise have its ordinary
+    content cut at a stray ``</think>``, and that cost is worse than the rare
+    miss on a routing target that genuinely emits unparsed reasoning.
     """
     if not endpoint.api_base:
         # Without an explicit base LiteLLM falls back to OPENAI_BASE_URL (or
@@ -36,6 +43,7 @@ def _endpoint_provider(endpoint: "ModelEndpoint") -> LiteLLMProvider:
         default_model=endpoint.model,
         provider_name="custom",
         extra_headers=session_affinity_headers(),
+        unparsed_reasoning=False,
     )
 
 

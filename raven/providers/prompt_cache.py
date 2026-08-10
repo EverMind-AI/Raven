@@ -52,6 +52,22 @@ def accepts_cache_control(model: str, *, addressed_to: str = "") -> bool:
     SiliconFlow client reads as Anthropic's wire from the id alone, and that wire
     has nowhere to put the field. Passing it keeps the answer about the request
     rather than about the string.
+
+    A ``addressed_to`` naming a provider Raven carries no spec for (Bedrock,
+    Vertex, a bare LiteLLM passthrough) resolves to nothing, and so does
+    ``find_by_model`` on an id whose prefix nobody claims -- in both cases there
+    is no spec to ask, not a spec that said no. Falling through to
+    ``find_by_keywords`` there guesses the wire's dialect from the model's own
+    name instead of giving up: Bedrock speaks Anthropic's ``cache_control``
+    natively (translated to ``cachePoint`` on the way out) for exactly the ids
+    that mention "claude", so the guess is right far more often than a blanket
+    False would be. A guess is what it is, though -- wrong for a model renamed
+    away from its vendor's naming, or a passthrough that fronts a wire this
+    guess did not anticipate -- which is why ``suppress`` exists: an upstream
+    rejection is learned at runtime and this guess never gets a second try for
+    that model. Resolving *to* a spec, by contrast, is left exactly as strict as
+    before -- that path is what stopped a gateway forwarding the field to a
+    vendor that bills it as an unrecognized block instead of refusing it.
     """
     if not model or model in _SUPPRESSED:
         return False
@@ -59,6 +75,8 @@ def accepts_cache_control(model: str, *, addressed_to: str = "") -> bool:
     from raven.providers.registry import find_by_keywords, find_by_model, find_by_name
 
     addressed = find_by_name(addressed_to) if addressed_to else find_by_model(model)
+    if addressed is None:
+        addressed = find_by_keywords(model)
     if addressed is None or not addressed.supports_prompt_caching:
         return False
 

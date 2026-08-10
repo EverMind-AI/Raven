@@ -42,6 +42,30 @@ def test_the_answer_is_the_wire_and_the_family_together(model, expected, why):
     assert prompt_cache.accepts_cache_control(model) is expected, why
 
 
+def test_bedrock_model_with_no_registry_spec_keeps_its_caching():
+    """Blocker 4 repro: Bedrock carries no ProviderSpec at all, so
+    ``find_by_name("bedrock")`` resolved to nothing and the strict check
+    returned False outright -- without ever asking whether the model's own
+    family reads the field. Bedrock translates ``cache_control`` to its own
+    ``cachePoint`` natively for exactly the ids that mention "claude", so
+    falling back to ``find_by_keywords`` here is what the pre-refactor
+    ``find_by_model(model) or find_by_keywords(model)`` expression covered.
+    """
+    model = "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert prompt_cache.accepts_cache_control(model, addressed_to="bedrock") is True
+
+
+def test_a_custom_endpoint_still_refuses_despite_an_anthropic_shaped_id():
+    """The keyword fallback only fires when ``addressed_to`` resolves to
+    nothing. ``custom`` resolves to a real spec (``supports_prompt_caching``
+    is False), so the fallback must not override that strict answer just
+    because the model id happens to say "claude" -- that strict path is what
+    stopped a gateway forwarding the field to a vendor that bills it as an
+    unrecognized block instead of refusing it.
+    """
+    assert prompt_cache.accepts_cache_control("claude-3-opus", addressed_to="custom") is False
+
+
 def test_the_measured_regression_is_the_one_that_changed():
     """The three answers this rule was measured against on a real machine.
 

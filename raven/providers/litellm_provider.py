@@ -114,8 +114,17 @@ class LiteLLMProvider(LLMProvider):
         disable_auto_cache_control: bool = False,
         extra_body: dict[str, Any] | None = None,
         model_overrides: dict[str, dict[str, Any]] | None = None,
+        *,
+        unparsed_reasoning: bool | None = None,
     ):
         super().__init__(api_key, api_base)
+        # None: derive from the resolved spec, as emits_unparsed_reasoning always
+        # did. An explicit bool overrides that derivation outright -- for a
+        # caller that already knows the answer and for which the spec would
+        # guess wrong, e.g. a per-model routing endpoint built with
+        # provider_name="custom" for its api_base/api_key shape alone, not
+        # because the backend behind it is a self-hosted inference server.
+        self._unparsed_reasoning = unparsed_reasoning
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         # When a TokenStrategy (e.g. CacheOptimizer) handles cache_control
@@ -223,7 +232,15 @@ class LiteLLMProvider(LLMProvider):
     def emits_unparsed_reasoning(self) -> bool:
         """See ``LLMProvider.emits_unparsed_reasoning``.
 
-        ``self._gateway``, when set, already answers this for both shapes it
+        ``self._unparsed_reasoning``, when set explicitly at construction, wins
+        outright: it exists for a caller that already knows the answer and for
+        which the spec-based guess below is wrong -- a per-model routing
+        endpoint is built with ``provider_name="custom"`` for its api_base /
+        api_key shape alone, not because the backend behind it is known to be a
+        self-hosted inference server, so ``custom`` there would falsely claim
+        every one of its responses.
+
+        Otherwise, ``self._gateway`` already answers this for both shapes it
         can hold: a real network gateway (OpenRouter, AiHubMix) fronts one of
         the large hosted vendors below it, so a bare ``</think>`` in content
         is just content; the generic ``custom`` endpoint and a local spec
@@ -242,6 +259,8 @@ class LiteLLMProvider(LLMProvider):
         from; a resolved direct big vendor (anthropic, openai, ...) never
         produces it behind its own API.
         """
+        if self._unparsed_reasoning is not None:
+            return self._unparsed_reasoning
         spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
         return spec is not None and (spec.is_local or spec.name == "custom")
 

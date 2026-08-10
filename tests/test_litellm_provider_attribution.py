@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 from raven.providers.litellm_provider import _ANTHROPIC_EXTRA_KEYS, LiteLLMProvider
 
 
-def _make_provider(provider_name: str, extra_headers: dict | None = None) -> LiteLLMProvider:
+def _make_provider(
+    provider_name: str,
+    extra_headers: dict | None = None,
+    unparsed_reasoning: bool | None = None,
+) -> LiteLLMProvider:
     with (
         patch("raven.providers.litellm_provider.litellm"),
         patch("raven.providers.litellm_provider.LiteLLMProvider._setup_env"),
@@ -16,6 +20,7 @@ def _make_provider(provider_name: str, extra_headers: dict | None = None) -> Lit
             api_key="sk-test",
             provider_name=provider_name,
             extra_headers=extra_headers,
+            unparsed_reasoning=unparsed_reasoning,
         )
 
 
@@ -121,6 +126,40 @@ def test_parse_response_leaves_bare_close_tag_alone_for_an_unresolved_identity()
     can_serve's.
     """
     provider = _make_provider("fireworks")
+    response = _fake_response("discussing the </think> tag in my answer")
+
+    result = provider._parse_response(response)
+
+    assert result.reasoning_content is None
+    assert result.content == "discussing the </think> tag in my answer"
+
+
+# --- explicit unparsed_reasoning override (Should-fix 9) ---
+# "custom" is one name for two things: the generic self-hosted inference server
+# this normalization exists for, and (per_model_provider._endpoint_provider) the
+# api_base/api_key shape a knn-routed endpoint borrows without any claim about
+# what backend sits behind it. `unparsed_reasoning=None` (the default) keeps
+# deriving the answer from the spec exactly as before; an explicit bool wins
+# outright, which is the seam that lets the two meanings of "custom" diverge.
+
+
+def test_unparsed_reasoning_defaults_to_the_spec_derived_guess():
+    provider = _make_provider("custom")
+    assert provider.emits_unparsed_reasoning() is True
+
+
+def test_unparsed_reasoning_explicit_false_overrides_a_true_guess():
+    provider = _make_provider("custom", unparsed_reasoning=False)
+    assert provider.emits_unparsed_reasoning() is False
+
+
+def test_unparsed_reasoning_explicit_true_overrides_a_false_guess():
+    provider = _make_provider("anthropic", unparsed_reasoning=True)
+    assert provider.emits_unparsed_reasoning() is True
+
+
+def test_parse_response_respects_an_explicit_false_override():
+    provider = _make_provider("custom", unparsed_reasoning=False)
     response = _fake_response("discussing the </think> tag in my answer")
 
     result = provider._parse_response(response)

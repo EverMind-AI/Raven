@@ -271,6 +271,45 @@ def test_building_knn_endpoints_leaves_the_process_environment_alone(monkeypatch
     assert provider._by_model["large"].api_key == "KEY-LARGE"
 
 
+def test_endpoint_providers_are_built_with_unparsed_reasoning_disabled():
+    """Should-fix 9 repro: ``_endpoint_provider`` builds every knn-routed
+    endpoint with ``provider_name="custom"`` for its api_base/api_key shape
+    alone -- not as a claim that the backend behind it is a self-hosted
+    inference server without a reasoning parser. Without the explicit
+    override, a front-loaded big vendor routed this way would have its
+    ordinary content clipped at a stray ``</think>``.
+    """
+    p = _provider()
+    assert p._by_model["small"].emits_unparsed_reasoning() is False
+    assert p._by_model["large"].emits_unparsed_reasoning() is False
+
+
+@pytest.mark.asyncio
+async def test_routed_endpoint_does_not_cut_ordinary_content_at_a_stray_think_tag(monkeypatch):
+    """The evaluator's repro: a knn-routed endpoint's ordinary reply happened
+    to contain a bare ``</think>``, and the ``provider_name="custom"``-derived
+    guess (before ``unparsed_reasoning=False`` was wired in) read that as an
+    unparsed reasoning leak and cut the reply in half.
+    """
+
+    async def fake_acompletion(**kwargs):
+        message = MagicMock(
+            content="the widget's </think> hinge broke",
+            tool_calls=None,
+            reasoning_content=None,
+            thinking_blocks=None,
+        )
+        return MagicMock(choices=[MagicMock(message=message, finish_reason="stop")], usage=None)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    p = _provider()
+    resp = await p.chat(messages=[{"role": "user", "content": "hi"}], model="small")
+
+    assert resp.content == "the widget's </think> hinge broke"
+    assert resp.reasoning_content is None
+
+
 def test_the_custom_spec_declares_no_env_var_to_write() -> None:
     """States the field the test above depends on, so a change to it fails here
     with the reason rather than somewhere unrelated."""
