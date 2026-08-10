@@ -728,7 +728,10 @@ def set_provider_fields(
         )
 
     if spec and spec.is_oauth:
-        forbidden = [k for k in fields if field_specs[k]["is_secret"]]
+        # Credential fields only, per the docstring above -- not everything the
+        # display faces redact: extra_headers is secret to *show* but is no
+        # credential, and `provider login` would not write it anyway.
+        forbidden = [k for k in fields if k in ("api_key", "api_key_list")]
         if forbidden:
             raise RuntimeError(
                 f"Provider '{name}' uses OAuth — cannot set credential fields "

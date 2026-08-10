@@ -108,6 +108,17 @@ def test_set_api_key_for_oauth_provider_raises(cfg_path: Path) -> None:
         )
 
 
+def test_set_extra_headers_for_oauth_provider_is_allowed(cfg_path: Path) -> None:
+    """The OAuth guard forbids credential fields, not everything the display
+    faces redact: extra_headers is secret to show but no credential, and
+    `provider login` would never write it -- refusing it here sent the user
+    to a command that changes nothing."""
+    set_provider_fields("github_copilot", {"extra_headers": {"X-Trace": "on"}}, config_path=cfg_path)
+
+    section = _read(cfg_path)["providers"]["github_copilot"]
+    assert section["extraHeaders"] == {"X-Trace": "on"}
+
+
 def test_set_unknown_provider_raises_with_helpful_message(cfg_path: Path) -> None:
     with pytest.raises(KeyError, match="Unknown provider 'foo'"):
         set_provider_fields("foo", {"api_key": "X"}, config_path=cfg_path)
