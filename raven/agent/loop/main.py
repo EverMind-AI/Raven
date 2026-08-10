@@ -553,6 +553,21 @@ class AgentLoop:
 
         self._consolidation_tasks: set[asyncio.Task] = set()
 
+        # A switch that arrives mid-turn is parked here until no turn is
+        # running, so a turn in flight finishes on the provider it started
+        # with. A depth counter, not a flag: OriginPools gates USER and
+        # system origins on independent semaphores with no global cap
+        # (spine/scheduler.py), so a user turn and a cron turn overlap on
+        # this loop under the TUI defaults.
+        self._pending_provider: tuple[LLMProvider, str] | None = None
+        self._turns_in_flight = 0
+
+        # ``self.subagents``, ``self.context_engine`` and
+        # ``self.memory_consolidator`` were each handed ``provider`` earlier in
+        # this constructor and hold their own reference; ``_adopt_provider`` is
+        # what keeps them from outliving a live model switch. Add the call
+        # there when adding another holder.
+
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
         # the underlying subsystems directly:
@@ -606,6 +621,62 @@ class AgentLoop:
         for name in list(self._disabled_tools):
             if self.tools.has(name):
                 self.tools.unregister(name)
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Point the loop and everything it built at a new provider/model.
+
+        ``config.set model`` builds a provider from the prospective config
+        and hands it here. Assigning ``self.provider`` alone is not enough:
+        the subagent manager, the context engine's LLM-backed segments and
+        the consolidator each captured the provider handed to them in
+        ``__init__``. Left behind, they keep calling the old endpoint for
+        the rest of the process -- which is how switching away from a dead
+        credential fixed the main loop while subagents and the skill
+        rewriter/gate went on failing to authenticate.
+
+        A switch that lands while any turn is running is parked rather than
+        applied: the loop reads ``self.provider`` at call time (eight sites
+        in this module, plus the context engine and consolidator
+        underneath), so adopting mid-turn would relay one conversation
+        across two vendors. How that surfaces depends on the path: the
+        ``chat_with_retry`` sites turn a rejected request into
+        ``finish_reason="error"`` content, so the turn reports a failure
+        with no sign that its endpoint moved, while ``_llm_call_stream``
+        (which a TUI turn takes) catches only ``TimeoutError`` and lets the
+        rejection propagate. Neither is a diagnosis the user can act on.
+
+        The park is the second line of defence, not the first: the RPC
+        rejects a switch outright when the caller's own session has a turn
+        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
+        covers what that guard cannot see -- a caller that passes no
+        ``session_id``, and the proactive turns that run in their own lanes.
+        Note the RPC still answers ``applied: True`` and the config file is
+        already written, so a parked switch is applied on disk while the
+        loop reports the old model until the last turn drains.
+
+        Detached subagents are not covered by that park -- they outlive the
+        turn that spawned them -- so ``SubagentManager`` snapshots instead.
+        """
+        if self._turns_in_flight:
+            self._pending_provider = (provider, model)
+            return
+        self._adopt_provider(provider, model)
+
+    def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
+        """Hand a provider to the loop and every subsystem holding the old one."""
+        self.provider = provider
+        self.model = model
+        self.subagents.set_provider(provider, model)
+        self.context_engine.set_provider(provider, model)
+        self.memory_consolidator.set_provider(provider, model)
+
+    def _adopt_pending_provider(self) -> None:
+        """Apply a parked switch. Callers must check that no turn is running."""
+        pending = self._pending_provider
+        if pending is None:
+            return
+        self._pending_provider = None
+        self._adopt_provider(*pending)
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
@@ -2559,13 +2630,59 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
+        """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
+
+        A parked switch is adopted here, before the turn reads
+        ``self.provider`` for the first time, and the count kept for the
+        duration is what parks the next one. Wrapping rather than
+        snapshotting because the provider is read from ``self`` at eight
+        sites in this module and by the context engine and consolidator
+        underneath them -- one boundary covers all of them, a snapshot
+        would have to be threaded through each.
+
+        Both ends gate on zero, because turns overlap: a user turn and a
+        proactive turn hold slots in separate pools. Adopting on the way in
+        would otherwise land a switch parked for a turn that is still
+        running, and clearing a flag on the way out would unpark it just as
+        wrongly. Adopting again on the last exit is what keeps a park from
+        outliving the turns it was waiting on.
+        """
+        if self._turns_in_flight == 0:
+            self._adopt_pending_provider()
+        self._turns_in_flight += 1
+        try:
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
+        finally:
+            self._turns_in_flight -= 1
+            if self._turns_in_flight == 0:
+                self._adopt_pending_provider()
+
+    async def _run_turn(
+        self,
+        req: TurnRequest,
+        emit: Emit,
+        drain: Drain,
+        *,
+        stream: bool = True,
+        inline_tool_stream: bool = False,
+        usage_sink: dict[str, Any] | None = None,
+        text_sink: dict[str, Any] | None = None,
+    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
-        (executor / debug server / MCP up, then idle). A spine runner wraps this
-        method to satisfy the TurnRunner protocol.
+        (executor / debug server / MCP up, then idle). A spine runner calls the
+        public ``run_turn`` to satisfy the TurnRunner protocol.
 
         ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
         wires it True so the reply goes out as StreamDelta and dissolves (b2 — no

@@ -37,6 +37,7 @@ from raven.memory_engine.base import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
     from raven.context_engine.curator import TurnContext
+    from raven.providers.base import LLMProvider
 
 
 class ContextAssembler(ContextEngine):
@@ -63,6 +64,15 @@ class ContextAssembler(ContextEngine):
         # The Curator lane archives history itself, so AgentLoop hands it
         # the full append-only log and skips the host MemoryConsolidator.
         return True
+
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        # Duck-typed on purpose: only the builders that actually call an LLM
+        # implement it, and putting it on the SegmentBuilder protocol would
+        # force an empty override onto every purely textual builder.
+        for builder in self._builders:
+            setter = getattr(builder, "set_provider", None)
+            if callable(setter):
+                setter(provider, model)
 
     async def assemble(
         self,

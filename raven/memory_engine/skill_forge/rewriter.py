@@ -74,6 +74,17 @@ class QueryRewriter:
         self._max_tokens = max_tokens
         self._temperature = temperature
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Held rather than looked up per call, so without this the rewriter
+        keeps calling the provider captured at construction after the loop
+        has moved on -- a switch away from an unusable credential fixes the
+        main path and leaves this one failing.
+        """
+        del model  # the rewriter runs on the provider's default model
+        self._provider = provider
+
     @trace.instrument("skill.rewrite", kind="skill", extract=semconv.skill_rewrite)
     async def analyze(self, query: str) -> RewriteResult:
         truncated = (query or "").strip()[:_QUERY_MAX_LENGTH]

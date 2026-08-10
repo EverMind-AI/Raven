@@ -94,7 +94,7 @@ async def _drive(monkeypatch, *, max_concurrent: int, spawn_n: int) -> int:
     state = {"current": 0, "peak": 0}
     release = asyncio.Event()
 
-    async def _stub_inner(task_id, task, label, origin, executor) -> None:
+    async def _stub_inner(task_id, task, label, origin, executor, provider, model) -> None:
         state["current"] += 1
         state["peak"] = max(state["peak"], state["current"])
         await release.wait()
@@ -146,6 +146,8 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
         "delete",
         {"channel": "tui", "chat_id": "default", "session_key": "tui:session-a"},
         executor,
+        manager.provider,
+        manager.model,
     )
 
     assert executor.commands == []
@@ -247,7 +249,7 @@ async def test_cancel_by_session_cancels_live_task(monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def _blocking_inner(task_id, task, label, origin, executor) -> None:
+    async def _blocking_inner(task_id, task, label, origin, executor, provider, model) -> None:
         entered.set()
         await release.wait()  # never set — keeps the task live until cancelled
 

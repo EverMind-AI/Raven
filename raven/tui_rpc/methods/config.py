@@ -389,8 +389,10 @@ def _set_model(
     _save_config(payload)
 
     if loop is not None:
-        loop.provider = built_provider
-        loop.model = raw_value
+        # Not a two-attribute assignment: the loop hands its provider to the
+        # subagent manager, the context engine and the consolidator at build
+        # time, and each keeps it. set_provider is what reaches them.
+        loop.set_provider(built_provider, raw_value)
 
     return {"applied": True, "previous": previous, "value": raw_value}
 
