@@ -1,9 +1,10 @@
 """Structured parsing of third-party CLI agent transcripts.
 
-Both formats are newline-delimited JSON emitted by an agent CLI in headless
-mode. Parsing is not cosmetic: a Claude Code run wraps its answer in tens of
-kilobytes of hook and init events, so without extraction the reply is lost to
-``max_output_chars`` truncation.
+``codex_jsonl``, ``claude_stream_json`` and ``opencode_json`` are newline-delimited
+JSON emitted by an agent CLI in headless mode; ``openclaw_json`` is a single JSON
+document instead. Parsing is not cosmetic: a Claude Code run wraps its answer in
+tens of kilobytes of hook and init events, so without extraction the reply is lost
+to ``max_output_chars`` truncation.
 """
 
 from __future__ import annotations
@@ -71,4 +72,75 @@ def parse_claude_stream_json(stdout: str) -> tuple[str | None, str | None, bool]
     return session_id, reply, is_error
 
 
-__all__ = ["parse_codex_jsonl", "parse_claude_stream_json"]
+def parse_openclaw_json(stdout: str) -> tuple[str | None, str | None]:
+    """Parse an ``openclaw agent --json`` result.
+
+    Unlike the other two formats this is one JSON document, not JSONL: the reply
+    is the first ``payloads[]`` entry carrying text, falling back to
+    ``meta.finalAssistantVisibleText`` for a run that produced no payload, and the
+    session id is ``meta.agentMeta.sessionId``.
+    """
+    try:
+        obj = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None, None
+    if not isinstance(obj, dict):
+        return None, None
+
+    meta = obj.get("meta")
+    meta = meta if isinstance(meta, dict) else {}
+    agent_meta = meta.get("agentMeta")
+    agent_meta = agent_meta if isinstance(agent_meta, dict) else {}
+    session_id = agent_meta.get("sessionId")
+    if not isinstance(session_id, str):
+        session_id = None
+
+    reply: str | None = None
+    payloads = obj.get("payloads")
+    if isinstance(payloads, list):
+        for payload in payloads:
+            if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+                reply = payload["text"]
+                break
+    if reply is None and isinstance(meta.get("finalAssistantVisibleText"), str):
+        reply = meta["finalAssistantVisibleText"]
+    return session_id, reply
+
+
+def parse_opencode_json(stdout: str) -> tuple[str | None, str | None]:
+    """Parse an ``opencode run --format json`` transcript.
+
+    Every event carries a top-level ``sessionID``; the reply is the ``part.text``
+    of the ``type == "text"`` events. Text is collected per ``part.messageID``
+    and only the last message's text is returned, because opencode opens a new
+    message per step: a run that calls a tool emits ``tool_use`` under one
+    messageID and the answer under the next, so returning every text part would
+    prepend the model's intermediate narration to the answer.
+    """
+    session_id: str | None = None
+    texts: dict[str, list[str]] = {}
+    last_message: str | None = None
+    for obj in _iter_json_objects(stdout):
+        part = obj.get("part")
+        part = part if isinstance(part, dict) else {}
+        if session_id is None:
+            candidate = obj.get("sessionID") or part.get("sessionID")
+            if isinstance(candidate, str):
+                session_id = candidate
+        if obj.get("type") != "text" or not isinstance(part.get("text"), str):
+            continue
+        # A text part with no messageID still has to land somewhere, or a
+        # transcript that omits the field would parse to an empty reply.
+        message_id = part["messageID"] if isinstance(part.get("messageID"), str) else ""
+        texts.setdefault(message_id, []).append(part["text"])
+        last_message = message_id
+    reply = "\n".join(texts[last_message]) if last_message is not None else None
+    return session_id, reply
+
+
+__all__ = [
+    "parse_codex_jsonl",
+    "parse_claude_stream_json",
+    "parse_openclaw_json",
+    "parse_opencode_json",
+]

@@ -78,6 +78,34 @@ class _FakeExec:
 # --- runner --------------------------------------------------------------
 
 
+async def test_run_dag_runs_a_sub_agent_whose_name_has_a_space() -> None:
+    # The roster key travels from the node spec through the capability check,
+    # the backend lookup and the status records. A name `spawn` accepts must
+    # work here too, so the whole path is exercised rather than only parsing.
+    spec = parse_dag_spec(
+        {
+            "nodes": [
+                {"id": "a", "subagent": "General Audit", "prompt_template": "hello"},
+                {
+                    "id": "b",
+                    "subagent": "General Audit",
+                    "prompt_template": "{{ a.output }}",
+                    "depends_on": ["a"],
+                },
+            ]
+        }
+    )
+    result = await run_dag(
+        spec,
+        subagents={"General Audit": _FakeExec()},
+        backend=_InMemBackend(),
+        workdir="/w",
+    )
+    assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0}
+    # The name survives into the per-node records the UI and the resume path read.
+    assert {f["subagent"] for f in result.files} == {"General Audit"}
+
+
 async def test_run_dag_passes_output_downstream_and_emits_progress() -> None:
     spec = parse_dag_spec(
         {
@@ -353,6 +381,21 @@ async def test_run_subagent_dag_tool_end_to_end(tmp_path: Path) -> None:
     )
     assert "2 completed" in out.model_text
     assert "hello world" in out.model_text  # a's output flowed to b (the sink) and back
+
+
+async def test_run_subagent_dag_tool_dispatches_to_a_name_with_a_space(tmp_path: Path) -> None:
+    # The whole user-facing path for a config the web UI already allows: the
+    # roster advertises "General Audit", so a node naming it must reach it.
+    # Previously the node was refused by the name charset before anything ran.
+    tool = SubAgentDagTool(
+        workspace=tmp_path,
+        third_party_subagents=[ThirdPartyCliSubagentConfig(name="General Audit", command="cat")],
+    )
+    assert "General Audit" in tool.description
+
+    out = await tool.execute(nodes=[{"id": "a", "subagent": "General Audit", "prompt_template": "hello world"}])
+    assert "1 completed" in out.model_text
+    assert "hello world" in out.model_text
 
 
 class TestSubagentRoster:

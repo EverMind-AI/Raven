@@ -22,6 +22,7 @@ from raven.agent.loop.recovery import (
     classify_empty_response,
 )
 from raven.agent.subagent import SubagentManager
+from raven.agent.subagent.backends import enabled_third_party
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
@@ -698,9 +699,10 @@ class AgentLoop:
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
         # Sub-agent DAG orchestration (req4): a decoupled, optional tool,
-        # registered only when third-party sub-agents are configured (its nodes
-        # dispatch to them). Runs its own scheduler off the spine.
-        if self._third_party_subagents:
+        # registered only when there is an enabled third-party sub-agent to
+        # dispatch to -- a config whose only entry is disabled must not register
+        # a tool with an empty roster.
+        if enabled_third_party(self._third_party_subagents):
             from raven.agent.subagent_dag.tool import SubAgentDagTool
 
             self.tools.register(
@@ -1379,7 +1381,7 @@ class AgentLoop:
         tool = self.tools.get("run_subagent_dag")
         if tool is not None and hasattr(tool, "set_third_party_subagents"):
             tool.set_third_party_subagents(configs)
-        elif tool is None and configs:
+        elif tool is None and enabled_third_party(configs):
             from raven.agent.subagent_dag.tool import SubAgentDagTool
 
             new_tool = SubAgentDagTool(

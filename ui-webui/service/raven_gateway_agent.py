@@ -166,7 +166,7 @@ class GatewayClient:
             for q in self._queues.values():
                 q.put_nowait({"type": "__disconnected__", "payload": {}})
 
-    async def call(self, method: str, params: dict) -> dict:
+    async def call(self, method: str, params: dict, *, timeout: float = 30) -> dict:
         # Reachable after close() nulls the socket: without this the caller gets
         # an AttributeError on None.send_str instead of the actual cause.
         if self._ws is None:
@@ -176,7 +176,13 @@ class GatewayClient:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         await self._ws.send_str(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
-        frame = await asyncio.wait_for(fut, timeout=30)
+        try:
+            frame = await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            # The reader loop already pops on delivery; this is only reached
+            # when wait_for raises, where nothing would otherwise remove the
+            # future and every timed-out call would leak one forever.
+            self._pending.pop(rid, None)
         if "error" in frame:
             raise RuntimeError(f"gateway rpc {method} error: {frame['error']}")
         return frame.get("result", {})

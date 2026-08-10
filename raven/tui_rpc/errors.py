@@ -19,6 +19,7 @@ Code table — frozen in `specs/tui-ipc.md` §4 (server-defined range -32000..-3
 | -32013 | cli_command_failed            | cli.dispatch exit_code != 0      |
 | -32014 | cli_command_timeout           | cli.dispatch 30s timeout         |
 | -32015 | not_dispatch_compatible       | interactive Rich widget rejected |
+| -32017 | subagent_not_found            | subagent name unknown            |
 
 JSON-RPC pre-defined codes (-32700/-32600/-32601/-32602) are emitted directly
 by the dispatcher and have no dedicated exception class.
@@ -144,6 +145,11 @@ class SubscriptionCapacityExceededError(RpcError):
     MESSAGE = "subscription_capacity_exceeded"
 
 
+class SubagentNotFoundError(RpcError):
+    CODE = -32017
+    MESSAGE = "subagent_not_found"
+
+
 # JSON-RPC pre-defined ``internal_error`` (-32603). Class added so non-dispatcher
 # code-paths can raise typed -32603 cross-module — see ``_build_tui_agent_loop``
 # which runs outside any handler context yet needs to surface init crashes
@@ -182,6 +188,7 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         CliCommandTimeoutError,
         NotDispatchCompatibleError,
         SubscriptionCapacityExceededError,
+        SubagentNotFoundError,
         InternalError,
     )
 }
@@ -205,6 +212,7 @@ __all__ = [
     "CliCommandTimeoutError",
     "NotDispatchCompatibleError",
     "SubscriptionCapacityExceededError",
+    "SubagentNotFoundError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",
     "PARSE_ERROR",

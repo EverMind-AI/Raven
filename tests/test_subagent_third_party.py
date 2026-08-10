@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import socket
+import subprocess
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 
+import raven.agent.subagent.backends.env as env_mod
 from raven.agent.subagent import instances as instances_mod
 from raven.agent.subagent.backends import (
     AgentMeta,
@@ -23,8 +25,9 @@ from raven.agent.subagent.backends import (
     format_agent_listing,
     third_party_agent_meta,
 )
+from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.presets import third_party_subagent_presets
+from raven.agent.subagent.presets import third_party_subagent_preset, third_party_subagent_presets
 from raven.agent.tools.spawn import SpawnTool
 from raven.config.schema import (
     SubagentsConfig,
@@ -50,6 +53,231 @@ def _isolated_instance_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 # --- CLI backend ---------------------------------------------------------
+
+
+@pytest.fixture
+def _clear_login_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The capture is cached per process, so each test needs a cold cache.
+
+    `SHELL` is pinned too: the capture now runs the user's own login shell, so
+    without this every test in this group would depend on the shell of whoever
+    (or whatever CI runner) started pytest.
+    """
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+
+def test_login_shell_env_parses_nul_separated_output(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/usr/local/bin:/usr/bin\0HOME=/root\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    assert login_shell_env() == {"PATH": "/usr/local/bin:/usr/bin", "HOME": "/root"}
+    # Cached: a second call must not shell out again.
+    login_shell_env()
+    assert len(calls) == 1
+    assert calls[0][:2] == ["/bin/bash", "-lic"]
+
+
+def test_login_shell_env_captures_from_the_users_own_shell(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # Hardcoding bash on a zsh host walks ~/.bash_profile and never reads the
+    # ~/.zshrc the user's PATH additions live in -- and because bash exists and
+    # exits 0, that wrong PATH is cached as a success rather than falling back.
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/opt/homebrew/bin\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    assert login_shell_env() == {"PATH": "/opt/homebrew/bin"}
+    assert calls[0][:2] == ["/bin/zsh", "-lic"]
+
+
+def test_login_shell_env_keeps_a_shell_path_that_is_not_in_bin(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # A homebrew or nix shell is matched on its basename but run by its path.
+    monkeypatch.setenv("SHELL", "/opt/homebrew/bin/zsh")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/x\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    login_shell_env()
+    assert calls[0][0] == "/opt/homebrew/bin/zsh"
+
+
+@pytest.mark.parametrize("shell", ["/usr/bin/fish", "/bin/sh", "", "/usr/bin/nu"])
+def test_login_shell_env_refuses_to_stand_in_for_an_undrivable_shell(
+    shell: str, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # Substituting bash for a shell we cannot drive would produce a confidently
+    # wrong PATH (and fish prints a greeting under -i that corrupts the parse).
+    # Raven's own environment is the honest answer: no better than not
+    # capturing, but never wrong about a shell the user does not use.
+    monkeypatch.setenv("SHELL", shell)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    called = False
+
+    def fake_run(argv, **kwargs):  # pragma: no cover - must not run
+        nonlocal called
+        called = True
+        raise AssertionError(f"no shell should have been started, got {argv}")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+    assert called is False
+
+
+def test_login_shell_env_falls_back_when_capture_fails(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    def boom(argv, **kwargs):
+        raise OSError("no bash")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", boom)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+
+
+def test_login_shell_env_falls_back_when_capture_is_empty(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, b"", b""),
+    )
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+
+
+def test_login_shell_env_falls_back_on_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # A profile error can still print something to stdout before failing; a
+    # nonzero exit must not be masked by a non-empty capture.
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 1, b"PATH=/usr/bin\0", b"profile.sh: command not found"
+        ),
+    )
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+
+
+def test_login_shell_env_cache_hit_returns_a_copy(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin\0", b""),
+    )
+    first = login_shell_env()
+    first["PATH"] = "poisoned"
+    second = login_shell_env()
+    assert second["PATH"] == "/usr/bin"
+
+
+def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # Inheriting raven's own environment for the `bash -ic` capture would only
+    # overlay the profile on top, leaving an editor/launcher-injected variable
+    # in place. The capture's own `env=` must exclude it.
+    monkeypatch.setenv("RAVEN_ONLY_VAR", "should-not-reach-bash")
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    login_shell_env()
+    assert "RAVEN_ONLY_VAR" not in captured_kwargs["env"]
+
+
+def test_login_shell_env_capture_runs_in_its_own_session(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # `-i` makes bash set up job control, which it does through /dev/tty even
+    # with every stdio stream redirected. Sharing raven's session lets it
+    # tcsetpgrp the terminal to itself and exit without restoring it, which
+    # leaves `raven tui` in a background process group -- the next keystroke
+    # then raises SIGTTIN and stops the whole job.
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    login_shell_env()
+    assert captured_kwargs["start_new_session"] is True
+
+
+async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # The login shell's value is the base; the per-agent `env` still overrides it,
+    # which is the escape hatch for a machine whose login shell resolves the
+    # wrong interpreter.
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv, 0, b"FROM_LOGIN=yes\0OVERRIDE_ME=login\0PATH=/usr/bin:/bin\0", b""
+        ),
+    )
+    script = tmp_path / "show_env.sh"
+    script.write_text('printf "%s/%s" "$FROM_LOGIN" "$OVERRIDE_ME"\n', encoding="utf-8")
+    be = CliAgentBackend(
+        name="envcheck",
+        command=f"sh {script}",
+        env={"OVERRIDE_ME": "agent"},
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "yes/agent"
+
+
+async def test_cli_backend_does_not_leak_ravens_own_env_into_the_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    # Pins the regression this task fixes: restoring `{**os.environ, **self.env}`
+    # as the base would leak RAVEN_ONLY_VAR into the child, since it lives only
+    # in raven's own process environment and is deliberately absent from the
+    # mocked login-shell capture below.
+    monkeypatch.setenv("RAVEN_ONLY_VAR", "leaked")
+    monkeypatch.setattr(
+        env_mod.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin:/bin\0", b""),
+    )
+    script = tmp_path / "check_no_leak.sh"
+    script.write_text('printf "%s" "${RAVEN_ONLY_VAR:-absent}"\n', encoding="utf-8")
+    be = CliAgentBackend(
+        name="noleak",
+        command=f"sh {script}",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "absent"
 
 
 async def test_cli_backend_stdin_delivery(tmp_path: Path) -> None:
@@ -264,6 +492,129 @@ class TestSharedRosterHelpers:
         assert format_agent_listing([]) == ""
 
 
+def test_enabled_defaults_to_true_on_both_kinds() -> None:
+    # The default is what keeps an existing config.json working untouched: every
+    # entry already on disk predates this field.
+    cli = ThirdPartyCliSubagentConfig(name="c", command="echo {prompt}")
+    api = ThirdPartyOpenAISubagentConfig(name="a", base_url="http://x/v1", model="m")
+    assert cli.enabled is True
+    assert api.enabled is True
+
+
+def test_enabled_third_party_filters_only_disabled() -> None:
+    from raven.agent.subagent.backends import enabled_third_party
+
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    assert [c.name for c in enabled_third_party([on, off])] == ["on"]
+    assert enabled_third_party([]) == []
+
+    # An object with no `enabled` attribute counts as enabled, so a caller passing
+    # something other than a validated config cannot silently lose agents.
+    class _Bare:
+        name = "bare"
+
+    bare = _Bare()
+    assert enabled_third_party([bare]) == [bare]
+
+
+def test_manager_roster_omits_a_disabled_agent(tmp_path: Path) -> None:
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    mgr = _mgr(tmp_path, [on, off])
+    assert [m.name for m in mgr.list_third_party_agents()] == ["on"]
+
+
+def test_spawn_tool_listing_omits_a_disabled_agent(tmp_path: Path) -> None:
+    # This is the assertion that actually protects the tool description the model
+    # reads: a disabled agent must not appear in the roster it chooses from.
+    on = ThirdPartyCliSubagentConfig(name="on", description="stays", command="echo {prompt}")
+    off = ThirdPartyCliSubagentConfig(name="off", description="goes", command="echo {prompt}", enabled=False)
+    mgr = _mgr(tmp_path, [on, off])
+    listing = format_agent_listing(mgr.list_third_party_agents())
+    assert "on" in listing
+    assert "off" not in listing
+
+
+def test_dag_tool_roster_omits_a_disabled_agent(tmp_path: Path) -> None:
+    from raven.agent.subagent_dag.tool import SubAgentDagTool
+
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[on, off])
+    assert [m.name for m in tool._subagent_meta] == ["on"]
+    assert set(tool._subagents) == {"on"}
+
+
+def test_dag_tool_with_everything_disabled_has_an_empty_roster(tmp_path: Path) -> None:
+    # Reachable by switch now, not only by deleting entries, so it must degrade to
+    # "no agents" rather than raise.
+    from raven.agent.subagent_dag.tool import SubAgentDagTool
+
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    tool = SubAgentDagTool(workspace=tmp_path, third_party_subagents=[off])
+    assert tool._subagent_meta == []
+    assert tool._subagents == {}
+
+
+# --- AgentLoop's run_subagent_dag registration gate -----------------------
+
+
+class _StubLoopProvider:
+    """The bare surface AgentLoop touches during construction; chat is never
+    invoked by these registration-gate tests."""
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+def _make_agent_loop(tmp_path: Path, third_party: list | None = None):
+    from raven.agent.loop import AgentLoop
+
+    return AgentLoop(
+        provider=_StubLoopProvider(),
+        workspace=tmp_path,
+        model="stub",
+        max_iterations=2,
+        restrict_to_workspace=True,
+        third_party_subagents=third_party,
+    )
+
+
+def test_dag_tool_not_registered_when_the_only_agent_is_disabled(tmp_path: Path) -> None:
+    # A raw config list is non-empty here, but every entry is disabled: the
+    # roster the tool would advertise is empty, so it must not register at all
+    # -- matching the empty-config case rather than diverging from it.
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    loop = _make_agent_loop(tmp_path, [off])
+    assert loop.tools.get("run_subagent_dag") is None
+
+
+def test_dag_tool_registered_when_at_least_one_agent_is_enabled(tmp_path: Path) -> None:
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    loop = _make_agent_loop(tmp_path, [on, off])
+    assert loop.tools.get("run_subagent_dag") is not None
+
+
+def test_apply_third_party_subagents_does_not_register_dag_tool_for_disabled_only(
+    tmp_path: Path,
+) -> None:
+    # Hot-apply hits the same gate as construction: going from no config to a
+    # disabled-only config must not register the tool either.
+    loop = _make_agent_loop(tmp_path, [])
+    off = ThirdPartyCliSubagentConfig(name="off", command="echo {prompt}", enabled=False)
+    loop.apply_third_party_subagents([off])
+    assert loop.tools.get("run_subagent_dag") is None
+
+
+def test_apply_third_party_subagents_registers_dag_tool_once_enabled(tmp_path: Path) -> None:
+    loop = _make_agent_loop(tmp_path, [])
+    on = ThirdPartyCliSubagentConfig(name="on", command="echo {prompt}")
+    loop.apply_third_party_subagents([on])
+    assert loop.tools.get("run_subagent_dag") is not None
+
+
 # --- spawn tool ----------------------------------------------------------
 
 
@@ -408,7 +759,12 @@ async def test_manager_forwards_instance_to_backend(tmp_path: Path) -> None:
 
 # --- transcript parsing --------------------------------------------------
 
-from raven.agent.subagent.backends.transcript import parse_claude_stream_json, parse_codex_jsonl
+from raven.agent.subagent.backends.transcript import (
+    parse_claude_stream_json,
+    parse_codex_jsonl,
+    parse_openclaw_json,
+    parse_opencode_json,
+)
 
 
 def test_parse_codex_jsonl_extracts_thread_and_last_reply() -> None:
@@ -448,6 +804,122 @@ def test_parse_claude_stream_json_without_result_event() -> None:
     # Session id still recoverable; no reply means the caller falls back to raw stdout.
     stdout = '{"type":"system","subtype":"init","session_id":"sess-2"}'
     assert parse_claude_stream_json(stdout) == ("sess-2", None, False)
+
+
+def test_parse_openclaw_json_extracts_reply_and_session_id() -> None:
+    stdout = json.dumps(
+        {
+            "payloads": [{"text": "the answer", "mediaUrl": None}],
+            "meta": {
+                "agentMeta": {"sessionId": "86287eee-186d-498f-82b5-27875a25ee42"},
+                "finalAssistantVisibleText": "the answer",
+            },
+        }
+    )
+    assert parse_openclaw_json(stdout) == ("86287eee-186d-498f-82b5-27875a25ee42", "the answer")
+
+
+def test_parse_openclaw_json_falls_back_to_final_visible_text() -> None:
+    # A delivery-only run can come back with no payload; the reply is still in meta.
+    stdout = json.dumps({"payloads": [], "meta": {"finalAssistantVisibleText": "delivered"}})
+    assert parse_openclaw_json(stdout) == (None, "delivered")
+
+
+def test_parse_openclaw_json_survives_non_json() -> None:
+    # Never raise into the run path: a diagnostic-only stdout yields no reply,
+    # and _attempt then falls back to the raw combined output.
+    assert parse_openclaw_json("openclaw: something went wrong") == (None, None)
+
+
+def test_parse_opencode_json_returns_only_the_last_messages_text() -> None:
+    # Shape captured from opencode 1.18.4 `run --format json`: every event carries
+    # a top-level sessionID, and a run that calls a tool puts the tool under one
+    # messageID and the answer under the next. Returning every text part would
+    # prepend the earlier message's narration to the answer.
+    stdout = "\n".join(
+        [
+            '{"type":"step_start","sessionID":"ses_1","part":{"messageID":"msg_a","type":"step-start"}}',
+            '{"type":"text","sessionID":"ses_1","part":{"messageID":"msg_a","type":"text","text":"let me look"}}',
+            '{"type":"tool_use","sessionID":"ses_1","part":{"messageID":"msg_a","type":"tool"}}',
+            "not json at all",
+            '{"type":"step_start","sessionID":"ses_1","part":{"messageID":"msg_b","type":"step-start"}}',
+            '{"type":"text","sessionID":"ses_1","part":{"messageID":"msg_b","type":"text","text":"the answer"}}',
+            '{"type":"step_finish","sessionID":"ses_1","part":{"messageID":"msg_b","type":"step-finish"}}',
+        ]
+    )
+    assert parse_opencode_json(stdout) == ("ses_1", "the answer")
+
+
+def test_parse_opencode_json_joins_text_parts_within_one_message() -> None:
+    stdout = "\n".join(
+        [
+            '{"type":"text","sessionID":"ses_2","part":{"messageID":"m","type":"text","text":"first"}}',
+            '{"type":"text","sessionID":"ses_2","part":{"messageID":"m","type":"text","text":"second"}}',
+        ]
+    )
+    assert parse_opencode_json(stdout) == ("ses_2", "first\nsecond")
+
+
+def test_parse_opencode_json_reads_session_id_off_the_part_too() -> None:
+    stdout = '{"type":"text","part":{"sessionID":"ses_3","messageID":"m","type":"text","text":"hi"}}'
+    assert parse_opencode_json(stdout) == ("ses_3", "hi")
+
+
+def test_parse_opencode_json_survives_a_transcript_with_no_text() -> None:
+    # A run killed before the model answered: the id is still worth recovering,
+    # so the caller can resume rather than orphan the session.
+    stdout = '{"type":"step_start","sessionID":"ses_4","part":{"messageID":"m","type":"step-start"}}'
+    assert parse_opencode_json(stdout) == ("ses_4", None)
+
+
+def test_parse_opencode_json_survives_non_json() -> None:
+    assert parse_opencode_json("Error: Session not found") == (None, None)
+
+
+async def test_cli_backend_derived_id_from_opencode_json(tmp_path: Path) -> None:
+    cmd = _fixture_cmd(
+        tmp_path,
+        "opencode.jsonl",
+        [
+            '{"type":"step_start","sessionID":"ses_9","part":{"messageID":"m1","type":"step-start"}}',
+            '{"type":"text","sessionID":"ses_9","part":{"messageID":"m1","type":"text","text":"done"}}',
+        ],
+    )
+    be = CliAgentBackend(
+        name="opencodefake",
+        command=cmd,
+        resume_command="printf resumed-%s {agent_id}",
+        id_source="derived",
+        transcript_format="opencode_json",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    first = await be.run("task", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    assert first == "done"  # reply extracted, not the raw JSONL
+    second = await be.run("task", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    assert second == "resumed-ses_9"  # id was derived from the transcript and reused
+
+
+async def test_cli_backend_openclaw_json_provisioned_round_trip(tmp_path: Path) -> None:
+    # openclaw takes the caller's id, so create and resume are the same command
+    # and the reply must come out of the JSON rather than the raw document.
+    payload = json.dumps({"payloads": [{"text": "hello"}], "meta": {"agentMeta": {"sessionId": "ignored"}}})
+    path = tmp_path / "openclaw.json"
+    path.write_text(payload, encoding="utf-8")
+    # `sh -c <script> -- {agent_id}` keeps {agent_id} literally in the command,
+    # which `provisioned` requires, while making it an inert positional the
+    # script never reads. Appending it to `cat` instead would name a second file
+    # that does not exist, and cat exits 1 on that.
+    cmd = f"sh -c 'cat {path}' -- " + "{agent_id}"
+    be = CliAgentBackend(
+        name="openclawfake",
+        command=cmd,
+        resume_command=cmd,
+        id_source="provisioned",
+        transcript_format="openclaw_json",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    assert out == "hello"
 
 
 # --- stateful CLI schema validation ----------
@@ -766,6 +1238,54 @@ def _fixture_cmd(tmp_path: Path, name: str, lines: list[str]) -> str:
     return f"cat {path}"
 
 
+def _split_stream_cmd(tmp_path: Path, stdout_text: str, stderr_text: str) -> str:
+    """A script that writes the reply to stdout and the session id to stderr.
+
+    A script file, not an inline command: `command` goes through shlex.split,
+    which would eat the redirection and the quoting.
+    """
+    path = tmp_path / "split_stream.sh"
+    path.write_text(f"printf %s {stdout_text!r}\nprintf %s {stderr_text!r} >&2\n", encoding="utf-8")
+    return f"sh {path}"
+
+
+async def test_cli_backend_derived_id_from_stderr(tmp_path: Path) -> None:
+    # hermes prints the reply on stdout and `session_id: <id>` on stderr, so the
+    # transcript for id recovery has to be both streams.
+    be = CliAgentBackend(
+        name="hermesfake",
+        command=_split_stream_cmd(tmp_path, "the answer", "session_id: 20260805_093449_6486bf"),
+        resume_command="printf resumed-%s {agent_id}",
+        id_source="derived",
+        transcript_format="text",
+        session_id_pattern=r"session_id:\s*(\S+)",
+        output_pattern=r"(?s)\A(.*?)\s*\Z",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    first = await be.run("task", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    # output_pattern selects stdout, so the stderr id line stays out of the reply.
+    assert first == "the answer"
+    second = await be.run("task", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    assert second == "resumed-20260805_093449_6486bf"
+
+
+async def test_cli_backend_prefers_stdout_id_over_stderr(tmp_path: Path) -> None:
+    # stdout stays authoritative: a CLI that prints the id on both streams must
+    # not have the stderr copy win.
+    be = CliAgentBackend(
+        name="bothstreams",
+        command=_split_stream_cmd(tmp_path, "session_id: from-stdout", "session_id: from-stderr"),
+        resume_command="printf resumed-%s {agent_id}",
+        id_source="derived",
+        transcript_format="text",
+        session_id_pattern=r"session_id:\s*(\S+)",
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+    await be.run("task", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    second = await be.run("task", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h")
+    assert second == "resumed-from-stdout"
+
+
 async def test_cli_backend_derived_id_from_codex_jsonl(tmp_path: Path) -> None:
     cmd = _fixture_cmd(
         tmp_path,
@@ -962,7 +1482,8 @@ async def test_cli_backend_create_after_failed_resume_also_fails_leaves_no_recor
 
 def test_presets_are_valid_and_complete() -> None:
     presets = {p["name"]: p for p in third_party_subagent_presets()}
-    assert set(presets) == {"claude_code", "codex", "mirothinker"}
+    assert set(presets) == {"claude_code", "codex", "mirothinker", "openclaw", "hermes", "opencode"}
+    assert {p["preset"] for p in presets.values()} == set(presets)
     # Every preset validates against the schema (discriminated union), so "Add
     # from preset" can never produce a config the write path would reject ...
     cfg = SubagentsConfig(third_party=list(presets.values()))
@@ -997,6 +1518,120 @@ def test_presets_are_valid_and_complete() -> None:
     assert codex["resumeCommand"].index("--json") < codex["resumeCommand"].index("resume {agent_id}")
 
     assert presets["mirothinker"]["baseUrl"] == "https://api.miromind.ai/v1"
+
+    openclaw = presets["openclaw"]
+    # Create and resume are intentionally identical: an openclaw session is
+    # addressed by the id the caller supplies, so re-passing it continues that
+    # session. Verified against openclaw 2026.7.1-2.
+    assert openclaw["command"] == openclaw["resumeCommand"]
+    assert "--session-id {agent_id}" in openclaw["command"]
+    assert openclaw["idSource"] == "provisioned"
+    # --json is required, not cosmetic: plain output interleaves ANSI-coloured
+    # plugin and transport diagnostics on stdout and --verbose off keeps them.
+    assert "--json" in openclaw["command"]
+    assert openclaw["transcriptFormat"] == "openclaw_json"
+
+    opencode = presets["opencode"]
+    # Verified against opencode 1.18.4. --format json is the only output carrying
+    # the session id: the default format prints the reply on stdout and an
+    # agent/model header on stderr, with no id anywhere, so a text transcript
+    # could only ever produce a non-resumable run. --session resumes an existing
+    # session and exits 1 with "Session not found" on an unknown id, so it cannot
+    # double as create -- hence derived, with opencode minting its own id.
+    assert opencode["command"].startswith("opencode run --format json --auto")
+    assert opencode["idSource"] == "derived"
+    assert opencode["transcriptFormat"] == "opencode_json"
+    assert "{agent_id}" not in opencode["command"]
+    assert "--session {agent_id}" in opencode["resumeCommand"]
+    assert "--format json" in opencode["resumeCommand"]
+
+    hermes = presets["hermes"]
+    # The global -z flag does not join a session: `-z --resume <id>` answers with
+    # no prior context and opens a new session, in either flag order. So a
+    # stateful hermes has to go through the `chat` subcommand, whose -Q keeps
+    # stdout to the final answer and puts the session id on stderr.
+    assert hermes["command"].startswith("hermes --yolo chat ")
+    assert "-z" not in hermes["command"]
+    assert "-Q" in hermes["command"]
+    assert hermes["idSource"] == "derived"
+    assert hermes["transcriptFormat"] == "text"
+    assert "--resume {agent_id}" in hermes["resumeCommand"]
+    assert "{agent_id}" not in hermes["command"]
+    assert hermes["sessionIdPattern"] == r"session_id:\s*(\S+)"
+    # Keeps the stderr session-id line out of the reply.
+    assert hermes["outputPattern"] == r"(?s)\A(.*?)\s*\Z"
+
+
+def test_presets_declare_their_own_provenance() -> None:
+    # The UI groups by provenance rather than by name, because a configured
+    # preset's name is user-editable. A preset that shipped without this would
+    # reappear as unconfigured the moment the user renamed it.
+    for preset in third_party_subagent_presets():
+        assert preset["preset"] == preset["name"], preset["name"]
+
+
+def test_provenance_survives_a_rename() -> None:
+    entry = dict(third_party_subagent_preset("claude_code"))
+    entry["name"] = "frontend_reviewer"
+    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    assert cfg.name == "frontend_reviewer"
+    assert cfg.preset == "claude_code"
+    # Round-trips under the wire alias, which is what the gateway persists.
+    assert cfg.model_dump(by_alias=True)["preset"] == "claude_code"
+
+
+def test_hand_written_entry_has_no_provenance() -> None:
+    cfg = SubagentsConfig(third_party=[{"name": "mine", "kind": "cli", "command": "echo hi"}])
+    assert cfg.third_party[0].preset is None
+
+
+def test_provenance_backfilled_when_name_matches_a_preset_cli() -> None:
+    # A preset entry written by an earlier build has no `preset` field yet, so
+    # backfilling by name is what lets it be edited and saved again.
+    cfg = SubagentsConfig(
+        third_party=[{"name": "claude_code", "kind": "cli", "command": "claude -p {prompt}"}]
+    ).third_party[0]
+    assert cfg.preset == "claude_code"
+
+
+def test_provenance_backfilled_when_name_matches_a_preset_openai() -> None:
+    cfg = SubagentsConfig(
+        third_party=[
+            {
+                "name": "mirothinker",
+                "kind": "openai",
+                "baseUrl": "https://api.miromind.ai/v1",
+                "model": "mirothinker-1-7-deepresearch",
+            }
+        ]
+    ).third_party[0]
+    assert cfg.preset == "mirothinker"
+
+
+def test_provenance_not_guessed_for_a_renamed_hand_written_entry() -> None:
+    # `Coder` is evidently a renamed preset on this machine, but its origin is
+    # genuinely unknowable from `command` alone and must not be guessed.
+    cfg = SubagentsConfig(third_party=[{"name": "Coder", "kind": "cli", "command": "echo hi"}]).third_party[0]
+    assert cfg.preset is None
+
+
+def test_explicit_provenance_is_left_untouched() -> None:
+    entry = {
+        "name": "frontend_reviewer",
+        "kind": "cli",
+        "command": "echo hi",
+        "preset": "claude_code",
+    }
+    cfg = SubagentsConfig(third_party=[entry]).third_party[0]
+    assert cfg.preset == "claude_code"
+
+
+def test_unknown_preset_value_is_rejected() -> None:
+    from pydantic import ValidationError
+
+    entry = {"name": "mine", "kind": "cli", "command": "echo hi", "preset": "not-a-real-preset"}
+    with pytest.raises(ValidationError, match="not-a-real-preset"):
+        SubagentsConfig(third_party=[entry])
 
 
 # --- manager: instance registry + one-instance cancellation --------------

@@ -91,6 +91,30 @@ class SkillInfo(_Strict):
     tags: list[str]
 
 
+class SubagentRow(_Strict):
+    """One row of the /subagents overlay.
+
+    `api_key` is deliberately absent: `has_api_key` is the only thing the UI
+    needs, and returning the value - even masked - would put a secret on the
+    wire for a screen that never displays it.
+    """
+
+    name: str
+    preset: str | None
+    kind: Literal["cli", "openai"]
+    description: str
+    enabled: bool
+    configured: bool
+    group: Literal["installed", "uninstalled"]
+    probe_status: Literal["ready", "attention", "missing", "unknown"]
+    probe_detail: str
+    has_api_key: bool
+    last_test_ok: bool | None = None
+    last_test_detail: str | None = None
+    last_test_at_ms: int | None = None
+    test_running: bool
+
+
 class UsageSnapshot(_Strict):
     """Token / cost usage reported at the end of a turn."""
 
@@ -957,6 +981,92 @@ ToolsConfigureResult = StubResult
 
 
 # ---------------------------------------------------------------------------
+# subagents.* methods
+# ---------------------------------------------------------------------------
+
+
+class SubagentsListParams(_Strict):
+    probe: bool = Field(
+        default=True,
+        description="False skips the network availability probe; rows report probe_status='unknown'.",
+    )
+
+
+class SubagentsListResult(_Strict):
+    rows: list[SubagentRow]
+
+
+class SubagentsAddParams(_Strict):
+    preset: str
+    name: str | None = None
+    description: str | None = None
+    api_key: str | None = None
+
+
+class SubagentsAddResult(_Strict):
+    added: bool
+    name: str
+
+
+class SubagentsUpdateParams(_Strict):
+    name: str
+    new_name: str | None = None
+    description: str | None = None
+    api_key: str | None = None
+
+
+class SubagentsUpdateResult(_Strict):
+    updated: bool
+    name: str
+
+
+class SubagentsRemoveParams(_Strict):
+    name: str
+
+
+class SubagentsRemoveResult(_Strict):
+    removed: bool
+
+
+class SubagentsToggleParams(_Strict):
+    name: str
+    enabled: bool
+
+
+class SubagentsToggleResult(_Strict):
+    enabled: bool
+
+
+class SubagentsProbeParams(_Strict):
+    pass
+
+
+class SubagentsProbeResult(_Strict):
+    rows: list[SubagentRow]
+
+
+class SubagentsTestParams(_Strict):
+    name: str
+    source: Literal["config", "preset"] = "config"
+
+
+class SubagentsTestResult(_Strict):
+    ok: bool
+    detail: str
+    elapsed_ms: int
+    reply: str | None = None
+    cancelled: bool = False
+
+
+class SubagentsTestCancelParams(_Strict):
+    name: str
+
+
+class SubagentsTestCancelResult(_Strict):
+    cancelled: bool
+
+
+# ---------------------------------------------------------------------------
 # Method registry — used by tests/test_rpc_schema_match.py to walk every
 # method and compare its Pydantic Params/Result models against the OpenRPC
 # schema.  Keys MUST match the ``method.name`` strings in openrpc.json.
@@ -997,6 +1107,15 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # config.*
     "config.get": (ConfigGetParams, ConfigGetResult),
     "config.set": (ConfigSetParams, ConfigSetResult),
+    # subagents.*
+    "subagents.list": (SubagentsListParams, SubagentsListResult),
+    "subagents.add": (SubagentsAddParams, SubagentsAddResult),
+    "subagents.update": (SubagentsUpdateParams, SubagentsUpdateResult),
+    "subagents.remove": (SubagentsRemoveParams, SubagentsRemoveResult),
+    "subagents.toggle": (SubagentsToggleParams, SubagentsToggleResult),
+    "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
+    "subagents.test": (SubagentsTestParams, SubagentsTestResult),
+    "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),
@@ -1030,6 +1149,7 @@ __all__ = [
     "McpServerInfo",
     "McpToolInfo",
     "SkillInfo",
+    "SubagentRow",
     "ModelOptionProvider",
     "UsageSnapshot",
     "CliResult",

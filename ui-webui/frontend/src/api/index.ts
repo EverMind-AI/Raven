@@ -15,6 +15,8 @@ export type {
 	RavenThirdPartySubagent,
 	RavenCliSubagent,
 	RavenOpenAISubagent,
+	RavenSubagentProbe,
+	RavenSubagentTest,
 	RavenSubagentInstance,
 	RavenDagRun,
 	RavenDagRunFile,

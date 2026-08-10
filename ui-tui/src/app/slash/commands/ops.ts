@@ -67,6 +67,20 @@ interface SkillsReloadResponse {
   output?: string
 }
 
+interface SubagentsAddResponse {
+  added?: boolean
+  name?: string
+}
+
+interface SubagentsToggleResponse {
+  enabled?: boolean
+}
+
+interface SubagentsTestResponse {
+  detail?: string
+  ok?: boolean
+}
+
 export const opsCommands: SlashCommand[] = [
   {
     help: 'open the tracing dashboard (LLM/tool/memory spans)',
@@ -687,6 +701,84 @@ export const opsCommands: SlashCommand[] = [
       }
 
       runViaSlashWorker()
+    }
+  },
+
+  {
+    help: 'configure third-party sub-agents (presets, enable/disable, test)',
+    name: 'subagents',
+    run: (arg, ctx) => {
+      const text = arg.trim()
+
+      if (!text) {
+        return patchOverlayState({ subagentsHub: true })
+      }
+
+      // Only the first token is the subcommand: an agent name may contain
+      // spaces, so the remainder is taken verbatim as the name. The
+      // subcommand itself is matched case-insensitively, but the name is
+      // never lowercased -- agent names are case-sensitive.
+      const [rawSub, ...rest] = text.split(/\s+/)
+      const sub = rawSub?.toLowerCase()
+      const name = rest.join(' ').trim()
+      const { rpc } = ctx.gateway
+      const { sys } = ctx.transcript
+
+      switch (sub) {
+        case 'add': {
+          const [preset, ...nameParts] = rest
+
+          if (!preset) {
+            return sys('usage: /subagents add <preset> [name]')
+          }
+
+          const chosen = nameParts.join(' ').trim()
+
+          rpc<SubagentsAddResponse>('subagents.add', chosen ? { name: chosen, preset } : { preset })
+            .then(
+              ctx.guarded<SubagentsAddResponse>(r =>
+                sys(r.added ? `added subagent: ${r.name ?? chosen ?? preset}` : 'add failed')
+              )
+            )
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        case 'off':
+        case 'on': {
+          if (!name) {
+            return sys(`usage: /subagents ${sub} <name>`)
+          }
+
+          const enabled = sub === 'on'
+
+          rpc<SubagentsToggleResponse>('subagents.toggle', { enabled, name })
+            .then(ctx.guarded<SubagentsToggleResponse>(r => sys(`${name}: ${r.enabled ? 'enabled' : 'disabled'}`)))
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        case 'test': {
+          if (!name) {
+            return sys('usage: /subagents test <name>')
+          }
+
+          rpc<SubagentsTestResponse>('subagents.test', { name, source: 'config' })
+            .then(
+              ctx.guarded<SubagentsTestResponse>(r =>
+                sys(`${name}: ${r.ok ? 'test ok' : 'test failed'}${r.detail ? ` · ${r.detail}` : ''}`)
+              )
+            )
+            .catch(ctx.guardedErr)
+
+          return
+        }
+
+        default:
+          return sys('usage: /subagents [add <preset> [name] | on <name> | off <name> | test <name>]')
+      }
     }
   },
 

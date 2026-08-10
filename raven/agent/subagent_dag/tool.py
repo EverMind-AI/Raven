@@ -27,6 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import (
     AgentMeta,
     build_third_party_backend,
+    enabled_third_party,
     format_agent_listing,
     third_party_agent_meta,
 )
@@ -128,7 +129,7 @@ class SubAgentDagTool(Tool):
         built: dict[str, Any] = {}
         meta: list[AgentMeta] = []
         capabilities: dict[str, AgentCapabilities] = {}
-        for cfg in configs or []:
+        for cfg in enabled_third_party(configs):
             name = getattr(cfg, "name", None)
             try:
                 built[name] = build_third_party_backend(cfg)

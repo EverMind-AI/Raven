@@ -41,6 +41,33 @@ def test_topo_order_and_parse() -> None:
     assert validate_and_order(spec) == ["a", "b"]
 
 
+@pytest.mark.parametrize("name", ["General Audit", "MiniMax M2.5", "研究员", "claude_code", "a"])
+def test_subagent_name_takes_any_name_the_config_layer_accepts(name: str) -> None:
+    # A sub-agent name is a roster key, never a path: `spawn` dispatches to
+    # "General Audit" happily, so a DAG node naming the same agent must not be
+    # refused for the name alone. Only the node `id` stays charset-restricted,
+    # because it becomes `<id>.prompt.md`.
+    spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
+    assert spec.nodes[0].subagent == name
+
+
+@pytest.mark.parametrize("name", ["", " ", " coder", "coder ", "\tcoder", "two\nlines"])
+def test_subagent_name_rejects_blank_and_edge_whitespace(name: str) -> None:
+    # Edge whitespace is invisible, so " coder" would fail the roster lookup
+    # against a name that looks identical to the configured one -- refused here
+    # where the error can name the field instead.
+    with pytest.raises(DagValidationError):
+        parse_dag_spec({"nodes": [{"id": "a", "subagent": name, "prompt_template": "hi"}]})
+
+
+@pytest.mark.parametrize("node_id", ["has space", "a/b", "..", "a.out", ""])
+def test_node_id_keeps_its_closed_charset(node_id: str) -> None:
+    # The id is a path component; widening the sub-agent charset must not have
+    # widened this one with it.
+    with pytest.raises(DagValidationError):
+        parse_dag_spec({"nodes": [{"id": node_id, "subagent": "x", "prompt_template": "hi"}]})
+
+
 def test_cycle_rejected() -> None:
     spec = parse_dag_spec(
         {

@@ -7,7 +7,19 @@ from ._errors import DagValidationError
 from ._paths import check_confined
 from ._placeholders import parse_placeholders
 
-_NAME_PATTERN = r"^[A-Za-z0-9_-]+$"
+# A node id becomes a path component (``<id>.prompt.md``; ``_reader.py`` re-checks
+# it with its own copy of this charset before joining a web-supplied id into a
+# path), so it stays a closed set.
+_ID_PATTERN = r"^[A-Za-z0-9_-]+$"
+# A sub-agent name, by contrast, is only ever a roster key: looked up in the
+# name->backend map, grouped for the capability check, and echoed into status
+# JSON. It reaches no path and no shell, so it accepts any name the config layer
+# accepts. Holding it to the id charset meant a DAG could not name an agent that
+# `spawn` dispatches to happily -- "General Audit" and 研究员 are legal agent
+# names, and the node was rejected for the name alone. Edge whitespace is still
+# refused because it is invisible: " coder" would fail the roster lookup against
+# a name that looks identical to the configured one.
+_SUBAGENT_PATTERN = r"^\S(?:.*\S)?$"
 
 
 class DagNodeSpec(BaseModel):
@@ -17,7 +29,8 @@ class DagNodeSpec(BaseModel):
         id (`str`):
             Unique node id within the graph.
         subagent (`str`):
-            Name of the ``CliSubAgentTool`` that runs this node.
+            Name of the configured third-party sub-agent that runs this
+            node, exactly as the roster advertises it.
         prompt_template (`str`):
             Template rendered into the node's prompt file.
         depends_on (`list[str]`):
@@ -33,8 +46,8 @@ class DagNodeSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(pattern=_NAME_PATTERN)
-    subagent: str = Field(pattern=_NAME_PATTERN)
+    id: str = Field(pattern=_ID_PATTERN)
+    subagent: str = Field(pattern=_SUBAGENT_PATTERN)
     prompt_template: str
     depends_on: list[str] = Field(default_factory=list)
     inputs: dict[str, object] = Field(default_factory=dict)

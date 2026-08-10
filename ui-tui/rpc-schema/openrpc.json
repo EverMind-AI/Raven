@@ -901,6 +901,254 @@
       ]
     },
     {
+      "name": "subagents.list",
+      "summary": "List every configured and preset-installable sub-agent as one overlay row set.",
+      "params": [
+        {
+          "name": "probe",
+          "required": false,
+          "schema": { "type": "boolean" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows"],
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SubagentRow" }
+            }
+          }
+        }
+      },
+      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+    },
+    {
+      "name": "subagents.add",
+      "summary": "Install a sub-agent from a preset into the running config.",
+      "params": [
+        {
+          "name": "preset",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "description",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "api_key",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsAddResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["added", "name"],
+          "properties": {
+            "added": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SubagentNotFound" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "subagents.update",
+      "summary": "Rename / redescribe / re-key an already-configured sub-agent.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "new_name",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "description",
+          "required": false,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "api_key",
+          "required": false,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsUpdateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["updated", "name"],
+          "properties": {
+            "updated": { "type": "boolean" },
+            "name": { "type": "string" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SubagentNotFound" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "subagents.remove",
+      "summary": "Remove a configured sub-agent.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsRemoveResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["removed"],
+          "properties": {
+            "removed": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SubagentNotFound" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "subagents.toggle",
+      "summary": "Enable or disable a configured sub-agent.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": { "type": "boolean" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsToggleResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SubagentNotFound" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "subagents.probe",
+      "summary": "Re-run availability probes for every row and return the refreshed set.",
+      "params": [],
+      "result": {
+        "name": "SubagentsProbeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rows"],
+          "properties": {
+            "rows": {
+              "type": "array",
+              "items": { "$ref": "#/components/schemas/SubagentRow" }
+            }
+          }
+        }
+      },
+      "errors": [{ "$ref": "#/components/errors/ConfigValidationError" }]
+    },
+    {
+      "name": "subagents.test",
+      "summary": "Send a one-off probe message through a sub-agent and report the reply.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "source",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": ["config", "preset"]
+          }
+        }
+      ],
+      "result": {
+        "name": "SubagentsTestResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ok", "detail", "elapsed_ms"],
+          "properties": {
+            "ok": { "type": "boolean" },
+            "detail": { "type": "string" },
+            "elapsed_ms": { "type": "integer" },
+            "reply": { "type": "string" },
+            "cancelled": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": [
+        { "$ref": "#/components/errors/SubagentNotFound" },
+        { "$ref": "#/components/errors/ConfigValidationError" }
+      ]
+    },
+    {
+      "name": "subagents.test_cancel",
+      "summary": "Cancel an in-flight subagents.test call for the named sub-agent.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": { "type": "string" }
+        }
+      ],
+      "result": {
+        "name": "SubagentsTestCancelResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cancelled"],
+          "properties": {
+            "cancelled": { "type": "boolean" }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "system.hello",
       "summary": "Initial handshake (must be the first RPC call from client).",
       "params": [
@@ -1430,6 +1678,47 @@
             "type": "array",
             "items": { "type": "string" }
           }
+        }
+      },
+      "SubagentRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "description",
+          "enabled",
+          "configured",
+          "group",
+          "probe_status",
+          "probe_detail",
+          "has_api_key",
+          "test_running"
+        ],
+        "properties": {
+          "name": { "type": "string" },
+          "preset": { "type": "string" },
+          "kind": {
+            "type": "string",
+            "enum": ["cli", "openai"]
+          },
+          "description": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "configured": { "type": "boolean" },
+          "group": {
+            "type": "string",
+            "enum": ["installed", "uninstalled"]
+          },
+          "probe_status": {
+            "type": "string",
+            "enum": ["ready", "attention", "missing", "unknown"]
+          },
+          "probe_detail": { "type": "string" },
+          "has_api_key": { "type": "boolean" },
+          "last_test_ok": { "type": "boolean" },
+          "last_test_detail": { "type": "string" },
+          "last_test_at_ms": { "type": "integer" },
+          "test_running": { "type": "boolean" }
         }
       },
       "ModelOptionProvider": {
@@ -2022,6 +2311,10 @@
       "NotDispatchCompatible": {
         "code": -32015,
         "message": "not_dispatch_compatible"
+      },
+      "SubagentNotFound": {
+        "code": -32017,
+        "message": "subagent_not_found"
       }
     }
   }

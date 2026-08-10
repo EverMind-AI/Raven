@@ -28,6 +28,13 @@ _Avoid_: "StatusRulePane" — the exported component is `StatusRule`, there is n
 The overlay showing the subagent tree (`SubagentNode` hierarchy with subtree
 token/cost aggregates); opened with `/agents`, including for past turns by history index.
 
+**Subagents Overlay**:
+The overlay for configuring third-party sub-agents - listing them by whether they can
+actually run, adding one from a preset, enabling, testing and deleting; opened with
+`/subagents`. It edits `~/.raven/config.json` and hot-applies the result, so it changes
+what the model may dispatch to. Not to be confused with the Agents Overlay, which shows
+live delegation state and writes nothing.
+
 **Confirm Overlay**:
 The countdown overlay a destructive Confirm Round-Trip presents; the answer resolves
 the paused turn.

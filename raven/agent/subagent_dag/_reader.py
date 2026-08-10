@@ -24,7 +24,7 @@ from typing import Any
 _DAG_DIR = ".ravenx_dag"
 
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
-# ``_NAME_PATTERN``), but they arrive here straight off a web request, so they
+# ``_ID_PATTERN``), but they arrive here straight off a web request, so they
 # are re-checked before being joined into a path. Without this a crafted id
 # would walk out of the run dir and read arbitrary files.
 _RUN_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")

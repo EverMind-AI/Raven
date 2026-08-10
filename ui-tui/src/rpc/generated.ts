@@ -156,6 +156,26 @@ export interface SkillInfo {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentRow".
+ */
+export interface SubagentRow {
+  name: string;
+  preset?: string;
+  kind: 'cli' | 'openai';
+  description: string;
+  enabled: boolean;
+  configured: boolean;
+  group: 'installed' | 'uninstalled';
+  probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
+  probe_detail: string;
+  has_api_key: boolean;
+  last_test_ok?: boolean;
+  last_test_detail?: string;
+  last_test_at_ms?: number;
+  test_running: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ModelOptionProvider".
  */
 export interface ModelOptionProvider {
@@ -1023,6 +1043,130 @@ export interface ConfigSetParams {
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsListParams".
+ */
+export interface SubagentsListParams {
+  probe?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsListResult".
+ */
+export interface SubagentsListResult {
+  rows: SubagentRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsAddParams".
+ */
+export interface SubagentsAddParams {
+  preset: string;
+  name?: string;
+  description?: string;
+  api_key?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsAddResult".
+ */
+export interface SubagentsAddResult {
+  added: boolean;
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsUpdateParams".
+ */
+export interface SubagentsUpdateParams {
+  name: string;
+  new_name?: string;
+  description?: string;
+  api_key?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsUpdateResult".
+ */
+export interface SubagentsUpdateResult {
+  updated: boolean;
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRemoveParams".
+ */
+export interface SubagentsRemoveParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRemoveResult".
+ */
+export interface SubagentsRemoveResult {
+  removed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsToggleParams".
+ */
+export interface SubagentsToggleParams {
+  name: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsToggleResult".
+ */
+export interface SubagentsToggleResult {
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsProbeParams".
+ */
+export interface SubagentsProbeParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsProbeResult".
+ */
+export interface SubagentsProbeResult {
+  rows: SubagentRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsTestParams".
+ */
+export interface SubagentsTestParams {
+  name: string;
+  source?: 'config' | 'preset';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsTestResult".
+ */
+export interface SubagentsTestResult {
+  ok: boolean;
+  detail: string;
+  elapsed_ms: number;
+  reply?: string;
+  cancelled?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsTestCancelParams".
+ */
+export interface SubagentsTestCancelParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsTestCancelResult".
+ */
+export interface SubagentsTestCancelResult {
+  cancelled: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
