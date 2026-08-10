@@ -596,10 +596,18 @@ def list_providers(*, config_path: Path | None = None) -> list[dict[str, Any]]:
             api_key_redacted = "OAuth token" if configured else "(empty)"
         elif is_local:
             api_key_redacted = "(not needed for local)" if not api_key else "****set****"
+        # Mirrors the reader's own precedence (endpoints > api_key_list > flat,
+        # see `provider_endpoints`): a stale flat key left behind by an
+        # `endpoints` migration must not display as "****set****" while
+        # `configured` -- decided the same way `credential_status` decides it,
+        # off the endpoints list -- says otherwise. Checked before the flat/list
+        # branch below, which used to run first and made this branch, and the
+        # "(N endpoints)" it reports, unreachable whenever a flat key lingered.
+        elif endpoints:
+            suffix = f"({len(endpoints)} endpoints)"
+            api_key_redacted = f"****set**** {suffix}" if any(ep.api_key for ep in endpoints) else f"(empty) {suffix}"
         elif api_key or api_key_list:
             api_key_redacted = "****set****"
-        elif endpoints and any(ep.api_key for ep in endpoints):
-            api_key_redacted = f"****set**** ({len(endpoints)} endpoints)"
         else:
             api_key_redacted = "(empty)"
 

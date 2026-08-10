@@ -407,12 +407,40 @@ def test_list_reports_endpoints_only_provider_key_state_consistently(cfg_path: P
 def test_list_does_not_call_keyless_endpoints_set(cfg_path: Path) -> None:
     """The mirror direction of the consistency rule: endpoints whose keys are
     all empty hold no credential, so the key column must not say set while
-    credential_status says the section is unconfigured."""
-    add_provider_endpoint("openrouter", label="a", api_base="https://a.example/v1", config_path=cfg_path)
+    credential_status says the section is unconfigured.
+
+    Blanked out by hand after the write rather than passed to
+    ``add_provider_endpoint`` directly: that function now refuses to persist a
+    keyless endpoint for a key-based provider like openrouter, so a section
+    shaped like this can only exist from a config written before that rule, or
+    hand-edited -- ``list_providers`` still has to describe it accurately.
+    """
+    add_provider_endpoint("openrouter", label="a", api_key="k1", api_base="https://a.example/v1", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["endpoints"][0]["apiKey"] = ""
+    cfg_path.write_text(json.dumps(data))
 
     row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
 
-    assert row["api_key_redacted"] == "(empty)"
+    assert row["configured"] is False
+    assert row["api_key_redacted"] == "(empty) (1 endpoints)"
+
+
+def test_list_flat_key_residue_does_not_paper_over_keyless_endpoints(cfg_path: Path) -> None:
+    """A stale flat ``api_key`` left behind by an ``endpoints`` migration must
+    not display as set while ``configured`` -- decided off the endpoints list,
+    same as every other gate -- says the section is not usable.
+    """
+    add_provider_endpoint("openrouter", label="a", api_key="k1", api_base="https://a.example/v1", config_path=cfg_path)
+    data = json.loads(cfg_path.read_text())
+    data["providers"]["openrouter"]["apiKey"] = "stale-flat-key"
+    data["providers"]["openrouter"]["endpoints"][0]["apiKey"] = ""
+    cfg_path.write_text(json.dumps(data))
+
+    row = {p["name"]: p for p in list_providers(config_path=cfg_path)}["openrouter"]
+
+    assert row["configured"] is False
+    assert row["api_key_redacted"] == "(empty) (1 endpoints)"
 
 
 def test_endpoint_ops_refuse_an_invalid_section_instead_of_wiping_it(cfg_path: Path) -> None:
