@@ -32,6 +32,34 @@ def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def reject_unsupported_openai_fields(entries: list[dict]) -> None:
+    """Raise on an incoming openai entry that declares ``readsLocalFiles``.
+
+    The schema coerces this field away on load, because rejecting there would
+    stop raven starting for anyone whose stored config the older web form wrote
+    (see ``_drop_declared_local_file_access``). Coercing silently on a *write* is
+    a different matter: the caller is holding the value and can be told.
+
+    Deliberately not called from ``set_third_party_subagents``. That function is
+    also how ``add_`` / ``remove_third_party_subagent`` re-write entries they
+    read back raw from disk, so a legacy ``true`` sitting in an unrelated entry
+    would make every later add or remove fail -- the same trap, one layer down.
+    Callers that own an incoming payload (the RPC handlers) call this first.
+    """
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("kind") != "openai":
+            continue
+        # Either spelling reaches here: the schema accepts both, so a payload
+        # that skipped the camel alias must not skip the check with it.
+        if entry.get("readsLocalFiles") or entry.get("reads_local_files"):
+            name = entry.get("name") or "<unnamed>"
+            raise ValueError(
+                f"readsLocalFiles is not supported for kind 'openai' (sub-agent {name!r}): the "
+                "backend posts one chat message, so nothing can open a path on this machine; "
+                "remove the field or set it false"
+            )
+
+
 def _raw_config(path: Path) -> dict[str, Any]:
     return read_raw_or_raise(path) if path.exists() else {}
 
@@ -99,4 +127,5 @@ __all__ = [
     "set_third_party_subagents",
     "add_third_party_subagent",
     "remove_third_party_subagent",
+    "reject_unsupported_openai_fields",
 ]

@@ -83,10 +83,39 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
     return "; ".join(parts)
 
 
-def build_third_party_backend(cfg: Any) -> SubagentBackend:
+def enabled_third_party(configs: Sequence[Any]) -> list[Any]:
+    """The subset of third-party configs the model may dispatch to.
+
+    Lives here beside ``third_party_agent_meta`` and ``format_agent_listing``
+    because this module owns how a config is presented to the model, and it is
+    applied inside the two consumers rather than at their call sites: five paths
+    hand a config list to those setters (three CLI entry points, the AgentLoop's
+    construction, and its hot-apply), so filtering at the boundary would be five
+    places to keep in step and the sixth would be written without it.
+
+    ``enabled`` is the user's intent and is deliberately not derived from a probe.
+    A roster that depended on a PATH lookup or a network call would let an agent
+    vanish from the model's options mid-session, and the model would then plan
+    around a roster that shrank underneath it -- worse than a spawn that fails
+    with a clear error. Missing attribute counts as enabled, so a duck-typed
+    caller cannot silently lose agents.
+    """
+    return [cfg for cfg in configs or [] if getattr(cfg, "enabled", True)]
+
+
+def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | None = None) -> SubagentBackend:
     """Build a third-party backend from a config object (duck-typed on ``kind``).
 
     Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig.
+
+    ``registry`` and ``timeout`` override the config for one call and exist for
+    the availability test in :mod:`raven.agent.subagent.probe`, which has to
+    bound a run whose config declares no timeout and has to keep a stateful
+    create's handle binding out of the user's real instance file. Building the
+    backend here rather than in the probe keeps one field list: a duplicated one
+    would drift the moment a field is added, and the test would then silently
+    exercise a different command than a real spawn. ``registry`` is ignored for
+    kind ``openai``, which has no session store.
     """
     kind = getattr(cfg, "kind", None)
     if kind == "cli":
@@ -100,8 +129,9 @@ def build_third_party_backend(cfg: Any) -> SubagentBackend:
             transcript_format=cfg.transcript_format,
             cwd=cfg.cwd,
             env=dict(cfg.env),
-            timeout=cfg.timeout,
+            timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
+            registry=registry,
         )
     if kind == "openai":
         return OpenAIApiBackend(
@@ -112,7 +142,7 @@ def build_third_party_backend(cfg: Any) -> SubagentBackend:
             system_prompt=cfg.system_prompt,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
-            timeout=cfg.timeout,
+            timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
         )
     raise ValueError(f"unknown third-party subagent kind: {kind!r}")
@@ -124,6 +154,7 @@ __all__ = [
     "AgentMeta",
     "SubagentActionAbortedError",
     "SubagentBackend",
+    "enabled_third_party",
     "format_agent_listing",
     "third_party_agent_meta",
     "RavenLoopBackend",

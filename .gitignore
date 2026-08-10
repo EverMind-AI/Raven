@@ -45,6 +45,7 @@ tmp.sh
 .work_context/
 # Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
+.hermes/
 
 # SkillForge dense retrieval cache (auto-built per-deployment, never tracked)
 .skill_index/
@@ -90,3 +91,4 @@ benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
 /tmp/
 .omo/*
 .ruff_cache/
+subagents/

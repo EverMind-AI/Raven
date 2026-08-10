@@ -214,6 +214,11 @@ ignore = ["E501"]
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
 "raven/tracing/instrument.py" = ["N803"]
 
+# The login shell has to be resolved through PATH rather than pinned to an
+# absolute path: a fixed /bin/bash would defeat capturing a login shell that
+# may live elsewhere on a given host.
+"raven/agent/subagent/backends/env.py" = ["S607"]
+
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
 "raven/cli/cron_commands.py" = ["E402"]

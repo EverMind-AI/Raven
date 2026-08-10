@@ -12,6 +12,7 @@ the ui-tui frontend currently calls:
 * ``setup.status`` (1) — provider detect
 * ``reload.mcp`` (1) — hermes 5s poll no-op
 * ``config.get`` / ``config.set`` (2) — hot-changeable config
+* ``subagents.list`` / ``subagents.probe`` (2) — third-party sub-agent roster
 * ``session.{create, close, resume}`` (3) — Wave 6.5 lifecycle return-shape
   stubs (real SessionManager wiring deferred)
 * ``terminal.resize`` (1) — Wave 6.5 SIGWINCH no-op + cols record
@@ -41,6 +42,7 @@ from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods
 from raven.tui_rpc.methods.slash_routing import register_slash_routing_methods
+from raven.tui_rpc.methods.subagents import register_subagents_methods
 from raven.tui_rpc.methods.system import register_system_methods
 from raven.tui_rpc.methods.terminal import register_terminal_methods
 from raven.tui_rpc.methods.turn import register_turn_methods
@@ -124,6 +126,7 @@ def register_aligned_methods_except_system(
     register_setup_methods(dispatcher)
     register_reload_methods(dispatcher)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
@@ -182,6 +185,7 @@ __all__ = [
     "register_setup_methods",
     "register_reload_methods",
     "register_config_methods",
+    "register_subagents_methods",
     "register_dag_methods",
     "register_session_methods",
     "register_terminal_methods",

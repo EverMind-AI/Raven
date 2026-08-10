@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
@@ -743,6 +744,34 @@ class ToolsConfig(Base):
     so a change needs a restart."""
 
 
+def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
+    """Backfill or validate a third-party subagent's ``preset`` provenance.
+
+    Backfills ``preset`` to ``name`` only when the entry still carries a
+    preset's own default name -- an entry that was renamed (this machine's
+    config holds ``Coder``, ``Writer``, ``DeepResearcher``) has a genuinely
+    unknowable origin and must not be guessed from other fields such as
+    ``command`` or ``model``. An explicit, non-``None`` value is left alone
+    unless it names no built-in preset, in which case it is rejected -- a
+    hand-edited ``preset: "hermes"`` on an unrelated entry would otherwise
+    both dodge the reserved-name guard and hide the real Hermes preset from
+    the Presets group.
+
+    The preset name set is imported inside this function, not at module
+    level: ``raven.agent.subagent.presets`` imports ``SubagentsConfig`` from
+    this module (deferred inside ``_normalized``), and importing back here at
+    module level would put both sides of that cycle at module-init time.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    preset_names = THIRD_PARTY_SUBAGENT_PRESETS.keys()
+    if preset is None:
+        return name if name in preset_names else None
+    if preset not in preset_names:
+        raise ValueError(f"preset {preset!r} is not a known built-in preset name")
+    return preset
+
+
 class ThirdPartyCliSubagentConfig(Base):
     """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
 
@@ -765,6 +794,23 @@ class ThirdPartyCliSubagentConfig(Base):
     name: str
     kind: Literal["cli"] = "cli"
     description: str = ""
+    preset: str | None = None
+    """Which built-in preset this entry was created from, or ``None`` for a
+    hand-written one.
+
+    Provenance only - nothing in the runtime reads it. The web UI needs it
+    because ``name`` is user-editable: without it a renamed entry is
+    indistinguishable from a hand-written agent, so its preset would wrongly
+    reappear as unconfigured and could then be configured twice.
+    """
+    enabled: bool = True
+    """Whether the dispatching model is offered this agent at all.
+
+    Read only where the roster is built (see ``enabled_third_party``), never
+    derived from a probe: this records what the user wants, not whether the agent
+    currently works. Defaults to ``true`` so an entry written before this field
+    existed keeps being advertised exactly as it was.
+    """
     command: str
     resume_command: str | None = None
     stateful: bool | None = None
@@ -781,7 +827,7 @@ class ThirdPartyCliSubagentConfig(Base):
     id_source: Literal["provisioned", "derived"] = "provisioned"
     session_id_pattern: str | None = None
     output_pattern: str | None = None
-    transcript_format: Literal["text", "codex_jsonl", "claude_stream_json"] = "text"
+    transcript_format: Literal["text", "codex_jsonl", "claude_stream_json", "openclaw_json", "opencode_json"] = "text"
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
     timeout: int | None = None
@@ -814,6 +860,11 @@ class ThirdPartyCliSubagentConfig(Base):
             raise ValueError("command must not contain {agent_id} when idSource is 'derived'")
         return self
 
+    @model_validator(mode="after")
+    def _resolve_preset(self) -> "ThirdPartyCliSubagentConfig":
+        self.preset = _resolve_preset_provenance(self.name, self.preset)
+        return self
+
 
 class ThirdPartyOpenAISubagentConfig(Base):
     """A third-party OpenAI-compatible HTTP agent (mirothinker, …) as a subagent.
@@ -826,6 +877,23 @@ class ThirdPartyOpenAISubagentConfig(Base):
     name: str
     kind: Literal["openai"] = "openai"
     description: str = ""
+    preset: str | None = None
+    """Which built-in preset this entry was created from, or ``None`` for a
+    hand-written one.
+
+    Provenance only - nothing in the runtime reads it. The web UI needs it
+    because ``name`` is user-editable: without it a renamed entry is
+    indistinguishable from a hand-written agent, so its preset would wrongly
+    reappear as unconfigured and could then be configured twice.
+    """
+    enabled: bool = True
+    """Whether the dispatching model is offered this agent at all.
+
+    Read only where the roster is built (see ``enabled_third_party``), never
+    derived from a probe: this records what the user wants, not whether the agent
+    currently works. Defaults to ``true`` so an entry written before this field
+    existed keeps being advertised exactly as it was.
+    """
     base_url: str
     model: str
     api_key: str = ""
@@ -834,9 +902,13 @@ class ThirdPartyOpenAISubagentConfig(Base):
     ``false``; ``true`` is rejected rather than advertised, since no resume
     mechanism exists for a DAG node to reuse."""
     reads_local_files: bool = False
-    """Whether this agent can open paths on this machine. Defaults to ``false``
-    because the endpoint is normally remote; set ``true`` for one served from
-    this host, which can therefore read the run directory."""
+    """Always ``false`` for this kind; ``true`` is coerced away below.
+
+    ``OpenAIApiBackend.run`` posts a single chat message, so no channel exists
+    through which the endpoint could open a path -- being served from this host
+    does not change that. The value is not inert: ``format_agent_listing``
+    renders it into the spawn / DAG tool descriptions as a ``local-files`` tag,
+    which is the dispatching model's licence to hand this agent a path."""
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -847,6 +919,37 @@ class ThirdPartyOpenAISubagentConfig(Base):
     def _reject_declared_stateful(self) -> "ThirdPartyOpenAISubagentConfig":
         if self.stateful:
             raise ValueError("stateful is not supported for kind 'openai' (an HTTP agent has no resumable session)")
+        return self
+
+    @model_validator(mode="after")
+    def _drop_declared_local_file_access(self) -> "ThirdPartyOpenAISubagentConfig":
+        """Coerce rather than reject: this field is one an older form wrote.
+
+        The web form used to default ``readsLocalFiles`` to true and render its
+        checkbox for both kinds, so a user who created an openai sub-agent and
+        did not untick it has ``true`` on disk today. Raising here would surface
+        as a ``ValidationError`` on the whole top-level ``Config``: raven would
+        stop starting, and the UI that could fix the field is behind the config
+        that no longer loads. There is no way out of that from inside the
+        product.
+
+        A hard reject is still right where the caller can act on it -- see
+        ``reject_unsupported_openai_fields``, which the write path calls on an
+        incoming payload. The neighbouring ``_reject_declared_stateful`` stays a
+        reject because no shipped form ever wrote ``stateful`` on this kind.
+        """
+        if self.reads_local_files:
+            logger.warning(
+                "readsLocalFiles is not supported for kind 'openai' (sub-agent {!r}); treating it "
+                "as false -- the backend posts one chat message, so nothing can open a path here",
+                self.name,
+            )
+            self.reads_local_files = False
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_preset(self) -> "ThirdPartyOpenAISubagentConfig":
+        self.preset = _resolve_preset_provenance(self.name, self.preset)
         return self
 
 

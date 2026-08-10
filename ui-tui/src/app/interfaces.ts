@@ -92,6 +92,7 @@ export interface OverlayState {
   picker: boolean
   secret: null | SecretReq
   skillsHub: boolean
+  subagentsHub: boolean
   sudo: null | SudoReq
 }
 

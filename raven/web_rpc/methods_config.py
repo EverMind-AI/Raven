@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -74,7 +75,11 @@ def register_config_methods(
 ) -> None:
     """Register Raven config-admin methods on the dispatcher.
 
-    - ``raven.subagents.{list,set,presets,instances}`` — third-party sub-agents; ``set``
+    - ``raven.subagents.{list,set,presets,instances,probe,test}`` — third-party
+      sub-agents. ``probe`` is the free availability check over every configured
+      agent and every preset (no subprocess, no chat completion); ``test``
+      reaches a real verdict for one entry **by name** — it never accepts a
+      command, which would be executed with nothing persisted. ``set``
       validates, writes, and (with ``agent``) hot-applies to the live AgentLoop.
       ``instances.delete`` drops a deleted chat session's instance records
       (their lifetime is the session's, with no time-based expiry). ``instances``
@@ -99,15 +104,26 @@ def register_config_methods(
     """
     from raven.agent.subagent.instances import get_registry
     from raven.agent.subagent.presets import third_party_subagent_presets
+    from raven.agent.subagent.probe import TestResult, probe_all, run_test
+    from raven.agent.subagent.test_state import TestStateStore
     from raven.agent.subagent_dag._resume import read_run_reconciled
     from raven.config.schema import SubagentsConfig
-    from raven.config.update_subagents import get_third_party_subagents, set_third_party_subagents
+    from raven.config.update_subagents import (
+        get_third_party_subagents,
+        reject_unsupported_openai_fields,
+        set_third_party_subagents,
+    )
 
     async def _list(params: dict) -> dict:
         return {"agents": get_third_party_subagents()}
 
     async def _set(params: dict) -> dict:
         agents = params.get("agents") or []
+        # The schema coerces an openai `readsLocalFiles` away on load, so a
+        # client that read its list from here never round-trips one. A payload
+        # that still carries it was authored by the caller, who can act on the
+        # error -- unlike on load, where raising would stop raven starting.
+        reject_unsupported_openai_fields(agents)
         # Validate + write atomically (raises on bad schema / duplicate names;
         # the dispatcher surfaces the error to the client, nothing is applied).
         set_third_party_subagents(agents)
@@ -117,6 +133,36 @@ def register_config_methods(
 
     async def _presets(params: dict) -> dict:
         return {"presets": third_party_subagent_presets()}
+
+    def _as_configs(entries: list[dict]) -> list[Any]:
+        return list(SubagentsConfig(third_party=entries).third_party)
+
+    async def _probe(params: dict) -> dict:
+        # Read config from disk rather than from the live AgentLoop: a save lands
+        # there, so the next probe reflects it with nothing to invalidate.
+        entries = [(cfg, "config") for cfg in _as_configs(get_third_party_subagents())]
+        entries += [(cfg, "preset") for cfg in _as_configs(third_party_subagent_presets())]
+        verdicts = TestStateStore().load(entries)
+        return {"results": [r.to_wire() for r in await probe_all(entries, verdicts=verdicts)]}
+
+    async def _test(params: dict) -> dict:
+        name = params.get("name") or ""
+        source = params.get("source") or "config"
+        if source not in ("config", "preset"):
+            raise ValueError("source must be 'config' or 'preset'")
+        # By name only, never a command from the params: a command here would be
+        # executed immediately with nothing persisted, which is a wider surface
+        # than the config plane that at least leaves a record of what can run.
+        pool = third_party_subagent_presets() if source == "preset" else get_third_party_subagents()
+        match = next((e for e in pool if e.get("name") == name), None)
+        if match is None:
+            return {"result": TestResult(name, source, None, False, "no such subagent", None, 0).to_wire()}
+        cfg = _as_configs([match])[0]
+        result = await run_test(cfg, source=source)
+        # Recorded here rather than inside run_test so probe.py stays free of file
+        # I/O and the store stays the single owner of persistence.
+        TestStateStore().record(cfg, source, ok=result.ok, detail=result.detail, tested_at_ms=int(time.time() * 1000))
+        return {"result": result.to_wire()}
 
     def _dag_tool() -> Any:
         tools = getattr(agent, "tools", None) if agent is not None else None
@@ -191,6 +237,8 @@ def register_config_methods(
     dispatcher.register("raven.subagents.list", _list)
     dispatcher.register("raven.subagents.set", _set)
     dispatcher.register("raven.subagents.presets", _presets)
+    dispatcher.register("raven.subagents.probe", _probe)
+    dispatcher.register("raven.subagents.test", _test)
     dispatcher.register("raven.subagents.instances", _instances)
     dispatcher.register("raven.subagents.instances.delete", _instances_delete)
     dispatcher.register("raven.subagents.dag.cancel", _dag_cancel)

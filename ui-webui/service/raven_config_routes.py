@@ -89,6 +89,26 @@ def build_raven_config_router() -> APIRouter:
         client = await GatewayClient.shared()
         return await client.call("raven.subagents.presets", {})
 
+    @router.get("/subagents/probe")
+    async def probe_subagents() -> dict:
+        client = await GatewayClient.shared()
+        # Worst case is partly sequential: PATH capture up to 15s (login_shell_env's
+        # first bash -lic), then concurrent HTTP probes up to 10s -- longer than the
+        # 30s default is comfortable with on a slow profile.
+        return await client.call("raven.subagents.probe", {}, timeout=60)
+
+    @router.post("/subagents/test")
+    async def test_subagent(body: dict = Body(...)) -> dict:
+        client = await GatewayClient.shared()
+        # probe.py's TEST_TIMEOUT_SECONDS (120) caps the run itself; add room for
+        # spawn and transport so that cap is actually reachable over this hop
+        # rather than being cut off by the 30s default first.
+        return await client.call(
+            "raven.subagents.test",
+            {"name": body.get("name") or "", "source": body.get("source") or "config"},
+            timeout=150,
+        )
+
     @router.get("/subagents/instances")
     async def list_subagent_instances(session_key: str | None = None) -> dict:
         client = await GatewayClient.shared()

@@ -427,6 +427,7 @@ EXPECTED_ERROR_CODES = {
     -32013: "cli_command_failed",
     -32014: "cli_command_timeout",
     -32015: "not_dispatch_compatible",
+    -32017: "subagent_not_found",
 }
 
 

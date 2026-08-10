@@ -17,6 +17,7 @@ from raven.agent.subagent.backends import (
     SubagentBackend,
     build_subagent_prompt,
     build_third_party_backend,
+    enabled_third_party,
     third_party_agent_meta,
 )
 from raven.agent.subagent.instances import get_registry
@@ -131,7 +132,7 @@ class SubagentManager:
         effect without a restart."""
         backends: dict[str, SubagentBackend] = {}
         meta: list[AgentMeta] = []
-        for cfg in configs or []:
+        for cfg in enabled_third_party(configs):
             name = getattr(cfg, "name", None)
             try:
                 backends[name] = build_third_party_backend(cfg)

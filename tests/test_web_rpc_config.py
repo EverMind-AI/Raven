@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,19 @@ def cfg_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     p = tmp_path / "config.json"
     monkeypatch.setattr(update_subagents, "get_config_path", lambda: p)
     return p
+
+
+@pytest.fixture(autouse=True)
+def _isolated_test_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test here may touch the real ~/.raven/subagent_test_state.json.
+
+    `raven.subagents.probe` and `.test` build a store with no explicit path, so
+    without this every run of this file would accumulate verdicts in the user's
+    own state file.
+    """
+    import raven.agent.subagent.test_state as state_mod
+
+    monkeypatch.setattr(state_mod, "default_state_path", lambda: tmp_path / "_autouse_state.json")
 
 
 async def _dispatch(d: Dispatcher, method: str, params: dict, rid: int = 1) -> dict:
@@ -76,6 +90,74 @@ async def test_set_invalid_returns_error_and_does_not_apply(cfg_path: Path) -> N
     assert "error" in resp
     assert agent.applied is None  # not applied on validation failure
     assert not cfg_path.exists()
+
+
+async def test_set_rejects_local_file_access_on_an_openai_agent(cfg_path: Path) -> None:
+    # The schema coerces this field away on load, so that a config an older form
+    # wrote still starts. A caller sending it is a different case: it owns the
+    # value and can act on the error, so the write path says no rather than
+    # silently storing something other than what was asked for.
+    agent = _FakeAgent()
+    d = Dispatcher()
+    register_config_methods(d, agent=agent)
+    entry = {
+        "name": "api",
+        "kind": "openai",
+        "baseUrl": "http://x/v1",
+        "model": "m",
+        "readsLocalFiles": True,
+    }
+    resp = await _dispatch(d, "raven.subagents.set", {"agents": [entry]})
+    assert "error" in resp
+    assert "readsLocalFiles" in str(resp["error"])
+    assert agent.applied is None
+    assert not cfg_path.exists()
+
+
+async def test_set_rejects_local_file_access_under_its_snake_case_spelling(cfg_path: Path) -> None:
+    # The schema accepts both spellings, so a payload that skipped the camel
+    # alias must not skip the check with it.
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    entry = {
+        "name": "api",
+        "kind": "openai",
+        "base_url": "http://x/v1",
+        "model": "m",
+        "reads_local_files": True,
+    }
+    resp = await _dispatch(d, "raven.subagents.set", {"agents": [entry]})
+    assert "error" in resp
+    assert not cfg_path.exists()
+
+
+async def test_removing_an_agent_still_works_with_a_legacy_entry_stored(cfg_path: Path) -> None:
+    # The guard lives at the RPC boundary, not in set_third_party_subagents:
+    # add/remove re-write entries they read back raw, so a legacy `true` in an
+    # unrelated entry would otherwise make every later add or remove fail.
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "thirdParty": [
+                        {
+                            "name": "legacy",
+                            "kind": "openai",
+                            "baseUrl": "http://x/v1",
+                            "model": "m",
+                            "readsLocalFiles": True,
+                        },
+                        {"name": "doomed", "kind": "cli", "command": "echo {prompt}"},
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    update_subagents.remove_third_party_subagent("doomed", config_path=cfg_path)
+    remaining = update_subagents.get_third_party_subagents(config_path=cfg_path)
+    assert [a["name"] for a in remaining] == ["legacy"]
+    assert remaining[0]["readsLocalFiles"] is False  # healed by the write
 
 
 class _FakeCron:
@@ -1061,9 +1143,7 @@ async def test_channels_qr_falls_back_to_raw_payload_without_qrcode(
 # ---------------------------------------------------------------------------
 
 
-async def test_channels_qr_reads_a_real_whatsapp_adapter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_channels_qr_reads_a_real_whatsapp_adapter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json as _json
 
     from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
@@ -1131,3 +1211,119 @@ async def test_channels_qr_reads_a_real_weixin_adapter() -> None:
     login.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await login
+
+
+async def test_subagents_probe_covers_config_and_presets(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.agent.subagent.probe as probe_mod
+
+    # A real capture shells out to `bash -lic` (up to 15s) and would make the
+    # result depend on what happens to be installed on the test machine.
+    monkeypatch.setattr(probe_mod, "_login_path", lambda: "/nonexistent-probe-path")
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    await _dispatch(d, "raven.subagents.set", {"agents": [{"name": "mine", "kind": "cli", "command": "nope {prompt}"}]})
+
+    resp = await _dispatch(d, "raven.subagents.probe", {})
+    assert "error" not in resp, resp
+    results = resp["result"]["results"]
+    by_key = {(r["source"], r["name"]): r for r in results}
+    assert by_key[("config", "mine")]["status"] == "missing"
+    # Every built-in preset is probed too, so the Presets group can show what is
+    # installed before the user commits to configuring it.
+    assert ("preset", "claude_code") in by_key
+    # A keyless openai preset is a template: reported, but never requested.
+    assert by_key[("preset", "mirothinker")]["status"] == "attention"
+    assert set(results[0]) == {"name", "source", "kind", "status", "detail", "target", "elapsedMs", "lastTest"}
+
+
+async def test_subagents_test_reports_an_unknown_name_without_raising(cfg_path: Path) -> None:
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    resp = await _dispatch(d, "raven.subagents.test", {"name": "ghost", "source": "config"})
+    assert "error" not in resp, resp
+    result = resp["result"]["result"]
+    assert result["ok"] is False
+    assert result["kind"] is None
+    assert "no such subagent" in result["detail"]
+
+
+async def test_subagents_test_rejects_an_unknown_source(cfg_path: Path) -> None:
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    resp = await _dispatch(d, "raven.subagents.test", {"name": "x", "source": "wherever"})
+    assert "error" in resp
+    # A bare `"error" in resp` also passes when the method is not registered at
+    # all, so it cannot tell a rejected source from any other failure. Pin both
+    # ends: the error is not method_not_found, it names the offending field, and
+    # the same call with a valid source does not error at all -- which is what
+    # attributes the rejection to `source` rather than to anything else.
+    assert resp["error"]["message"] != "method_not_found"
+    assert "source" in resp["error"].get("data", {}).get("traceback_tail", "")
+    ok_resp = await _dispatch(d, "raven.subagents.test", {"name": "x", "source": "preset"})
+    assert "error" not in ok_resp, ok_resp
+    assert ok_resp["result"]["result"]["ok"] is False
+
+
+async def test_subagents_test_runs_the_saved_entry(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    import raven.agent.subagent.backends.env as env_mod
+    import raven.agent.subagent.probe as probe_mod
+
+    exe = tmp_path / "rpc-agent"
+    exe.write_text("#!/bin/sh\necho PONG\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(probe_mod, "_login_path", lambda: f"{tmp_path}:/usr/bin:/bin")
+    # `_login_path` alone only steers the pre-check probe; the real spawn below
+    # builds its child env straight from `login_shell_env()`'s process-wide
+    # cache, so that cache needs the same PATH (mirrors
+    # test_subagent_probe.py's `_patch_login_env_for_spawn`).
+    monkeypatch.setattr(
+        env_mod, "_LOGIN_ENV", {"PATH": f"{tmp_path}:/usr/bin:/bin", "HOME": os.environ.get("HOME", "/root")}
+    )
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    await _dispatch(
+        d, "raven.subagents.set", {"agents": [{"name": "runme", "kind": "cli", "command": "rpc-agent {prompt}"}]}
+    )
+    resp = await _dispatch(d, "raven.subagents.test", {"name": "runme", "source": "config"})
+    assert "error" not in resp, resp
+    assert resp["result"]["result"]["ok"] is True
+    assert resp["result"]["result"]["reply"] == "PONG"
+
+
+async def test_subagents_test_records_a_verdict_the_probe_then_returns(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    import raven.agent.subagent.backends.env as env_mod
+    import raven.agent.subagent.probe as probe_mod
+
+    exe = tmp_path / "verdict-agent"
+    exe.write_text("#!/bin/sh\necho PONG\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(probe_mod, "_login_path", lambda: f"{tmp_path}:/usr/bin:/bin")
+    monkeypatch.setattr(
+        env_mod,
+        "_LOGIN_ENV",
+        {"PATH": f"{tmp_path}:/usr/bin:/bin", "HOME": os.environ.get("HOME", "/root")},
+    )
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_FakeAgent())
+    await _dispatch(
+        d,
+        "raven.subagents.set",
+        {"agents": [{"name": "verdicts", "kind": "cli", "command": "verdict-agent {prompt}"}]},
+    )
+    resp = await _dispatch(d, "raven.subagents.test", {"name": "verdicts", "source": "config"})
+    assert resp["result"]["result"]["ok"] is True
+
+    probe = await _dispatch(d, "raven.subagents.probe", {})
+    row = next(r for r in probe["result"]["results"] if r["source"] == "config" and r["name"] == "verdicts")
+    assert row["lastTest"] is not None
+    assert row["lastTest"]["ok"] is True
+    assert row["lastTest"]["testedAtMs"] > 0

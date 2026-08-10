@@ -190,6 +190,75 @@ describe('createSlashHandler', () => {
     })
   })
 
+  it('opens the subagents overlay with no argument', () => {
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/subagents')).toBe(true)
+    expect(getOverlayState().subagentsHub).toBe(true)
+  })
+
+  it('routes /subagents add <preset> [name] to subagents.add', () => {
+    const rpc = vi.fn(() => Promise.resolve({ added: true, name: 'Builder' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents add opencode Builder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode', name: 'Builder' })
+    expect(getOverlayState().subagentsHub).toBe(false)
+  })
+
+  it('routes /subagents on <name> to subagents.toggle', () => {
+    const rpc = vi.fn(() => Promise.resolve({ enabled: true }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents on Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Coder' })
+  })
+
+  it('routes /subagents off <name> to subagents.toggle with enabled false', () => {
+    const rpc = vi.fn(() => Promise.resolve({ enabled: false }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents off Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Coder' })
+  })
+
+  it('routes /subagents test <name> to subagents.test', () => {
+    const rpc = vi.fn(() => Promise.resolve({ cancelled: false, detail: 'ok', elapsed_ms: 1, ok: true }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents test Coder')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.test', { name: 'Coder', source: 'config' })
+  })
+
+  it('supports a multi-word agent name after on/off/test', () => {
+    // Agent names may contain spaces ("General Agent"); only the first token is
+    // the subcommand, the rest is the name.
+    const rpc = vi.fn(() => Promise.resolve({ enabled: false }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents off General Agent')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'General Agent' })
+  })
+
+  it('matches the subcommand case-insensitively while leaving the name untouched', () => {
+    const rpc = vi.fn(() => Promise.resolve({ added: true, name: 'opencode' }))
+    const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
+
+    expect(createSlashHandler(ctx)('/subagents ADD opencode')).toBe(true)
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode' })
+  })
+
+  it('prints a usage line for an unrecognized subcommand without opening the overlay or calling the gateway', () => {
+    const ctx = buildCtx()
+
+    expect(createSlashHandler(ctx)('/subagents bogus')).toBe(true)
+    expect(getOverlayState().subagentsHub).toBe(false)
+    expect(ctx.gateway.rpc).not.toHaveBeenCalled()
+    expect(ctx.transcript.sys).toHaveBeenCalledWith(
+      'usage: /subagents [add <preset> [name] | on <name> | off <name> | test <name>]'
+    )
+  })
+
   it('passes /new <title> through to the session lifecycle', () => {
     const ctx = buildCtx()
 

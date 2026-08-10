@@ -7,6 +7,12 @@ export interface RavenCliSubagent {
 	name: string;
 	kind: 'cli';
 	description?: string;
+	/** Which built-in preset this entry came from; absent for a hand-written one.
+	 *  Provenance only - `name` is user-editable, so the page groups on this. */
+	preset?: string | null;
+	/** Whether the dispatching model is offered this agent. Absent counts as
+	 *  enabled, matching the backend default. */
+	enabled?: boolean;
 	command: string;
 	resumeCommand?: string | null;
 	// Declared capabilities the DAG tool advertises and enforces before it runs a
@@ -17,7 +23,7 @@ export interface RavenCliSubagent {
 	idSource?: 'provisioned' | 'derived';
 	sessionIdPattern?: string | null;
 	outputPattern?: string | null;
-	transcriptFormat?: 'text' | 'codex_jsonl' | 'claude_stream_json';
+	transcriptFormat?: 'text' | 'codex_jsonl' | 'claude_stream_json' | 'openclaw_json' | 'opencode_json';
 	cwd?: string | null;
 	env?: Record<string, string>;
 	timeout?: number | null;
@@ -28,6 +34,12 @@ export interface RavenOpenAISubagent {
 	name: string;
 	kind: 'openai';
 	description?: string;
+	/** Which built-in preset this entry came from; absent for a hand-written one.
+	 *  Provenance only - `name` is user-editable, so the page groups on this. */
+	preset?: string | null;
+	/** Whether the dispatching model is offered this agent. Absent counts as
+	 *  enabled, matching the backend default. */
+	enabled?: boolean;
 	baseUrl: string;
 	model: string;
 	apiKey?: string;
@@ -38,6 +50,36 @@ export interface RavenOpenAISubagent {
 	maxTokens?: number | null;
 	timeout?: number | null;
 	maxOutputChars?: number;
+}
+
+/** One subagent's free availability check (`GET /raven/subagents/probe`).
+ *  `target` is the resolved executable path for a cli agent, or the base URL
+ *  for an openai one. */
+export interface RavenSubagentProbe {
+	name: string;
+	source: 'config' | 'preset';
+	kind: string;
+	status: 'ready' | 'attention' | 'missing' | 'unknown';
+	detail: string;
+	target: string;
+	elapsedMs: number;
+	/** The remembered outcome of an explicit test, when one is still valid for this
+	 *  exact configuration. Null when never tested, or when the configuration has
+	 *  changed since - a stale verdict is dropped rather than shown as current. */
+	lastTest?: { ok: boolean; detail: string; testedAtMs: number } | null;
+}
+
+/** One subagent's explicit test (`POST /raven/subagents/test`). `reply` carries
+ *  the agent's own answer for a cli test and is always null for openai, which
+ *  sends no completion. `kind` is null only when the name matched nothing. */
+export interface RavenSubagentTest {
+	name: string;
+	source: 'config' | 'preset';
+	kind: 'cli' | 'openai' | null;
+	ok: boolean;
+	detail: string;
+	reply: string | null;
+	elapsedMs: number;
 }
 
 export interface RavenSubagentInstance {
@@ -200,6 +242,11 @@ export const ravenConfigApi = {
 	listSubagents: () => client.get<{ agents: RavenThirdPartySubagent[] }>('/raven/subagents'),
 
 	presets: () => client.get<{ presets: RavenThirdPartySubagent[] }>('/raven/subagents/presets'),
+
+	probeSubagents: () => client.get<{ results: RavenSubagentProbe[] }>('/raven/subagents/probe'),
+
+	testSubagent: (body: { name: string; source: 'config' | 'preset' }) =>
+		client.post<{ result: RavenSubagentTest }>('/raven/subagents/test', body),
 
 	listSubagentInstances: (sessionKey?: string) =>
 		client.get<{ instances: RavenSubagentInstance[] }>(

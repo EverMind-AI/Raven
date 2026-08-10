@@ -2,7 +2,8 @@
 codex, ...) as a spawned sub-agent (req5).
 
 Runs on the host rather than through the sandbox executor - these CLIs need the
-host's auth, config, and PATH. Prompt delivery: a ``{prompt}`` token in the
+host's auth, config, and PATH, which is the login shell's rather than raven's
+own. Prompt delivery: a ``{prompt}`` token in the
 command is substituted as a single argv token (injection-safe), ``{prompt_file}``
 as a path to a file holding the prompt; with neither, the prompt goes on the
 child's stdin.
@@ -26,7 +27,13 @@ from typing import Any
 
 from loguru import logger
 
-from raven.agent.subagent.backends.transcript import parse_claude_stream_json, parse_codex_jsonl
+from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.transcript import (
+    parse_claude_stream_json,
+    parse_codex_jsonl,
+    parse_openclaw_json,
+    parse_opencode_json,
+)
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 
 
@@ -128,7 +135,10 @@ class CliAgentBackend:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(task)
             argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id)
-            env = {**os.environ, **self.env}
+            # The capture shells out and can block for real seconds on a slow
+            # profile (nvm/conda init); to_thread keeps that off the event loop.
+            env_base = await asyncio.to_thread(login_shell_env)
+            env = {**env_base, **self.env}
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -254,12 +264,21 @@ class CliAgentBackend:
                 raise CliAgentReportedError(
                     f"CLI agent {self.name!r} reported an error: {(jsonl_reply or stdout).strip()[-2000:]}"
                 )
+        elif self.transcript_format == "openclaw_json":
+            jsonl_id, jsonl_reply = parse_openclaw_json(stdout)
+        elif self.transcript_format == "opencode_json":
+            jsonl_id, jsonl_reply = parse_opencode_json(stdout)
 
         if created and self.id_source == "derived":
             if jsonl_id is not None:
                 agent_id = jsonl_id
-            elif self._session_id_re is not None and (m := self._session_id_re.search(stdout)) is not None:
-                agent_id = m.group(1)
+            elif self._session_id_re is not None:
+                # stdout first, then stderr: hermes prints the id only on stderr,
+                # which `combined` below already counts as part of the transcript.
+                for stream in (stdout, stderr):
+                    if (m := self._session_id_re.search(stream)) is not None:
+                        agent_id = m.group(1)
+                        break
 
         # Deferred commit: binding a handle after a failed create would resume a
         # session that never existed.
