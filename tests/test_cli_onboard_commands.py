@@ -3680,7 +3680,8 @@ def test_the_model_picker_reports_the_same_credential_shape_as_the_wizard() -> N
         entry = _build_provider_entry(spec.name, current_provider=None)
         kind = credential_kind(spec.name)
         assert entry["auth_type"] == kind, spec.name
-        assert entry["needs_api_base"] is (kind in (CRED_ENDPOINT, CRED_LOCAL)), spec.name
+        expected_needs_base = kind == CRED_LOCAL or (kind == CRED_ENDPOINT and not spec.usable_default_api_base)
+        assert entry["needs_api_base"] is expected_needs_base, spec.name
 
 
 def test_configuring_azure_stores_the_endpoint_it_was_given(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:

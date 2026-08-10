@@ -150,10 +150,15 @@ async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> 
 
 
 async def test_options_needs_api_base_flag(fake_home: Path) -> None:
+    """True only when the gate itself demands an address: azure ships no
+    default, a local deployment's address IS the credential -- while custom
+    runs on a bare key over its shipped localhost default, so the picker must
+    not block the submission the gate accepts."""
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
-    assert _entry(result, "custom")["needs_api_base"] is True
+    assert _entry(result, "custom")["needs_api_base"] is False
     assert _entry(result, "azure_openai")["needs_api_base"] is True
+    assert _entry(result, "ollama_chat")["needs_api_base"] is True
     assert _entry(result, "anthropic")["needs_api_base"] is False
 
 

@@ -222,7 +222,11 @@ def _build_provider_entry(
         "key_env": (spec.env_key or None) if spec else None,
         "models": models,
         "total_models": len(models),
-        "needs_api_base": kind in (CRED_ENDPOINT, CRED_LOCAL),
+        # "An address must be supplied" -- the gate's answer, not the shape's:
+        # an endpoint-credential spec that ships a usable default (custom's
+        # localhost gateway) runs on a bare key, and the picker must not
+        # demand what the gate does not.
+        "needs_api_base": kind == CRED_LOCAL or (kind == CRED_ENDPOINT and not (spec and spec.usable_default_api_base)),
         "warning": warning,
     }
 
