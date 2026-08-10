@@ -146,6 +146,50 @@ def test_http_404_classifies_as_model_unavailable_via_the_live_status():
     assert classification.should_fallback is True
 
 
+def test_chat_classifies_a_wire_404_from_the_live_status(monkeypatch):
+    """Pins the raise site itself, not just the exception class: a non-200 off
+    the wire must reach ``error_classification`` still carrying its status.
+    A plain RuntimeError here degrades the same input to ``unknown``."""
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok", "acct"))
+
+    class _Resp:
+        status_code = 404
+
+        async def aread(self):
+            return b"Resource not found"
+
+    class _StreamCM:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCM()
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider.httpx.AsyncClient", _Client)
+    provider = OpenAICodexProvider(default_model="gpt-5")
+
+    resp = asyncio.run(provider.chat(messages=[{"role": "user", "content": "hi"}], model="gpt-5"))
+
+    assert resp.finish_reason == "error"
+    assert resp.error_classification is not None
+    assert resp.error_classification.category == "model_unavailable"
+    assert resp.error_classification.should_fallback is True
+    assert "404" in (resp.content or "")
+
+
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
 
 
