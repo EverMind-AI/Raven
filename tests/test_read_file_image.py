@@ -20,8 +20,8 @@ from raven.agent.tools import media
 from raven.agent.tools.base import ToolOutput, ToolResult
 from raven.agent.tools.filesystem import ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
-from raven.providers.base import LLMProvider
 from raven.providers import rates as _pricing
+from raven.providers.base import LLMProvider
 
 # Captured before the autouse _no_openrouter_network fixture swaps it out.
 _REAL_FETCH = _pricing._fetch_openrouter_models
@@ -1193,8 +1193,8 @@ def test_the_catalog_is_warmed_in_the_background_when_it_has_no_answer(monkeypat
     would never be fetched at all and this probe would answer optimistically
     forever. Warmed off the request path because the fetch takes a 10s timeout.
     """
-    from raven.providers.capabilities import supports_vision
     from raven.providers import rates as pricing
+    from raven.providers.capabilities import supports_vision
 
     calls: list[str] = []
     monkeypatch.setattr(pricing, "_OPENROUTER_CACHE", {})
@@ -1216,8 +1216,8 @@ def test_a_failed_warm_is_retried_once_the_cooldown_passes(monkeypatch) -> None:
     """A machine whose first turn runs before the VPN is up must not be left
     answering from an empty catalog for the rest of the process -- an attempt
     that failed says nothing about the next one."""
-    from raven.providers.capabilities import supports_vision
     from raven.providers import rates as pricing
+    from raven.providers.capabilities import supports_vision
 
     calls: list[str] = []
 
