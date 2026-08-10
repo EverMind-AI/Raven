@@ -1900,3 +1900,59 @@ def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
     assert len(ok.media) == 64
     with pytest.raises(pydantic.ValidationError, match="at most 64"):
         TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 65)
+
+
+def test_a_blind_model_never_pays_to_read_the_picture(tmp_path: Path) -> None:
+    """The bytes exist only to inline a picture. A model that cannot see one
+    gets a note built from the path alone, so loading the file -- up to the
+    64MB ceiling, per attachment -- buys nothing and must not happen."""
+    from raven.context_engine.segments import render
+
+    pic = _write_image(tmp_path / "chart.png", (400, 300))
+    reads: list[int | None] = []
+    real_open = render.Path.open
+
+    class _CountingHandle:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def read(self, n=None):
+            reads.append(n)
+            return self._inner.read(n) if n is not None else self._inner.read()
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self._inner.__exit__(*exc)
+
+    render.Path.open = lambda self, *a, **k: _CountingHandle(real_open(self, *a, **k))
+    try:
+        blind = render.build_user_content("look", [str(pic)], can_see_images=False)
+        blind_reads = list(reads)
+        reads.clear()
+        render.build_user_content("look", [str(pic)], can_see_images=True)
+        sighted_reads = list(reads)
+    finally:
+        render.Path.open = real_open
+
+    assert "you cannot see images directly" in blind
+    # Header only for the blind model; the sighted one goes on to read the rest.
+    assert blind_reads == [render._SNIFF_BYTES]
+    assert sighted_reads == [render._SNIFF_BYTES, None]
+
+
+def test_the_oversize_note_points_at_the_tool_that_could_still_help(tmp_path: Path, monkeypatch) -> None:
+    """Only a model that can see images reaches this branch, and read_file
+    downscales rather than refusing on size -- so it, not the description tool,
+    is the useful next step."""
+    from raven.context_engine.segments import render
+
+    monkeypatch.setattr(render, "_MAX_IMAGE_BYTES", 16)
+    fat = _write_image(tmp_path / "fat.png", (200, 200))
+    out = render.build_user_content("look", [str(fat)], can_see_images=True, describe_tool="understand_media")
+
+    assert "too large" in out
+    assert "read_file" in out
+    assert "understand_media" not in out

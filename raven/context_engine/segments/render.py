@@ -277,12 +277,35 @@ def build_user_content(
                 if not is_image:
                     # No fallback hint when there is no description tool. The
                     # obvious candidate, read_file, decodes text and images and
-                    # fails on a PDF or an audio file, so naming it here would
-                    # just be a different instruction the model cannot follow.
+                    # errors on a real PDF ("'utf-8' codec can't decode byte
+                    # 0xff"), so naming it here would just be a different
+                    # instruction the model cannot follow.
                     notes.append(f"[Attachment: {p.name} (path: {p}){hint}]")
                     continue
+                # Every reason to refuse is settled before the file is read
+                # whole. The bytes exist only to inline a picture, so a model
+                # that cannot see one, or a message with no room left, must not
+                # pay to load it -- the header already answered the only
+                # question the note needs.
+                if not can_see_images:
+                    notes.append(f"[Image: {p.name} (path: {p}) — you cannot see images directly{hint}]")
+                    continue
                 if size > _MAX_IMAGE_BYTES:
-                    notes.append(f"[Image: {p.name} (path: {p}) — too large to read into this message{hint}]")
+                    # Past the blind check, so this model can see: read_file is
+                    # the tool that would hand it the picture, and it downscales
+                    # rather than refusing on size.
+                    notes.append(
+                        f"[Image: {p.name} (path: {p}) — too large to read into this message{_READ_FILE_HINT}]"
+                    )
+                    continue
+                if len(images) >= _MAX_INLINE_IMAGES or inlined_bytes >= _MAX_INLINE_BASE64_BYTES:
+                    # ``read_file``, not the description tool: this model can
+                    # see, so the useful next step is to fetch the picture
+                    # itself in a later turn.
+                    notes.append(
+                        f"[Image: {p.name} (path: {p}) — not shown, this message is already carrying "
+                        f"{len(images)} images{_READ_FILE_HINT}]"
+                    )
                     continue
                 raw = head + handle.read()
         except OSError as e:
@@ -290,17 +313,6 @@ def build_user_content(
             # here it can have lost its permissions or gone away entirely, and an
             # unreadable attachment must cost its own note, not the turn.
             notes.append(f"[Attachment: {p.name} (path: {p}) — could not be read: {e.strerror or e}]")
-            continue
-        if not can_see_images:
-            notes.append(f"[Image: {p.name} (path: {p}) — you cannot see images directly{hint}]")
-            continue
-        if len(images) >= _MAX_INLINE_IMAGES or inlined_bytes >= _MAX_INLINE_BASE64_BYTES:
-            # ``read_file``, not the description tool: this model can see, so the
-            # useful next step is to fetch the picture itself in a later turn.
-            notes.append(
-                f"[Image: {p.name} (path: {p}) — not shown, this message is already carrying "
-                f"{len(images)} images{_READ_FILE_HINT}]"
-            )
             continue
         block = _inline_image(raw, mime, p, notes)
         if block is not None:
