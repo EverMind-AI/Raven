@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.providers.endpoints import provider_endpoints
+
 if TYPE_CHECKING:
     from raven.providers.registry import ProviderSpec
 
@@ -131,13 +133,15 @@ def _present(section: Any, name: str) -> bool:
     Sections reach here as both: the schema object on the routing path, a raw
     mapping on the display path.
 
-    Mirrors the precedence ``provider_endpoints`` reads by: ``endpoints`` set
-    means the flat fields are ignored outright, not merged with them, so a flat
-    key alongside a keyless endpoint must not count as present -- that flat key
-    is never the one a request actually sends. Only when ``endpoints`` is empty
-    does the flat field (and, for a list field like ``api_key_list``, any
-    element of it) decide the answer. The gate and the reader must agree on
-    which shape is in effect; see the ``endpoints`` module docstring.
+    Consumes ``provider_endpoints`` rather than re-deriving its precedence:
+    ``endpoints`` set means only the resolved list counts -- flat fields
+    included, api_key never inherited -- so a flat key alongside a keyless
+    endpoint must not count as present, and an endpoint missing only its own
+    address still counts once the section's flat address fills it in. Only
+    ``api_key_list`` has no counterpart on ``ResolvedEndpoint`` (it collapses
+    into several per-key entries there), so it is read off the section
+    directly, and is unsatisfiable once ``endpoints`` is set -- ignored
+    outright, same as the flat key.
     """
     if section is None:
         return False
@@ -146,7 +150,9 @@ def _present(section: Any, name: str) -> bool:
     # arbitrary duck-typed objects (test doubles included), and only a real
     # list is the endpoints shape provider_endpoints reads.
     if isinstance(endpoints, (list, tuple)) and endpoints:
-        return any(_present(endpoint, name) for endpoint in endpoints)
+        if name not in ("api_key", "api_base"):
+            return False
+        return any(bool(getattr(ep, name, None)) for ep in provider_endpoints(section))
     value = section.get(name) if isinstance(section, dict) else getattr(section, name, None)
     if isinstance(value, (list, tuple)):
         return any(bool(v) for v in value)

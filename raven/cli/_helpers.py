@@ -153,9 +153,15 @@ def make_provider(config: Config):
             def make_inner(ep):
                 return LiteLLMProvider(
                     api_key=ep.api_key,
+                    # ``ep.api_base`` already carries the section's flat address
+                    # when the endpoint named none of its own (see
+                    # ``provider_endpoints``); the fallback here is only for a
+                    # gateway/local provider whose *flat* address is also empty,
+                    # where ``get_api_base`` still has the spec's default to
+                    # offer.
                     api_base=ep.api_base or config.get_api_base(model),
                     default_model=model,
-                    extra_headers=ep.extra_headers or (p.extra_headers if p else None),
+                    extra_headers=ep.extra_headers,
                     provider_name=provider_name,
                     extra_body=wire_overrides(provider_name, model) or None,
                     model_overrides=config.agents.defaults.model_overrides,
@@ -171,9 +177,12 @@ def make_provider(config: Config):
             extra_body = wire_overrides(provider_name, model) or None
             provider = LiteLLMProvider(
                 api_key=eps[0].api_key,
+                # Same fallback as ``make_inner`` above: only reached when the
+                # flat address is empty too, for a gateway/local provider's
+                # spec default.
                 api_base=eps[0].api_base or config.get_api_base(model),
                 default_model=model,
-                extra_headers=eps[0].extra_headers or (p.extra_headers if p else None),
+                extra_headers=eps[0].extra_headers,
                 provider_name=provider_name,
                 extra_body=extra_body,
                 model_overrides=config.agents.defaults.model_overrides,

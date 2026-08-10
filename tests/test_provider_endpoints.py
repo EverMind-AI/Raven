@@ -42,17 +42,72 @@ def test_endpoints_list_is_used_verbatim() -> None:
     ]
 
 
-def test_endpoints_list_takes_priority_over_flat_fields_not_merged() -> None:
+def test_endpoints_list_takes_priority_over_flat_key_but_inherits_missing_base_and_headers() -> None:
+    """``api_key`` never inherits -- a stale flat key must not outlive the
+    endpoint meant to replace it. ``api_base``/``extra_headers`` do, the same
+    way an ``api_key_list`` entry already shares the flat address: an
+    ``endpoint add`` that only ever set ``--label``/``--api-key`` still needs
+    somewhere to send the request.
+    """
     section = ProviderConfig(
         api_key="sk-flat",
         api_base="https://flat.example",
         extra_headers={"X-Flat": "1"},
+        endpoints=[ProviderEndpoint(label="only", api_key="sk-1")],
+    )
+
+    resolved = provider_endpoints(section)
+
+    assert resolved == [
+        ResolvedEndpoint(label="only", api_key="sk-1", api_base="https://flat.example", extra_headers={"X-Flat": "1"})
+    ]
+
+
+def test_endpoint_with_no_key_does_not_inherit_the_flat_key() -> None:
+    """The one field that never inherits, even though the others do."""
+    section = ProviderConfig(
+        api_key="sk-flat",
+        api_base="https://flat.example",
         endpoints=[ProviderEndpoint(label="only")],
     )
 
     resolved = provider_endpoints(section)
 
-    assert resolved == [ResolvedEndpoint(label="only", api_key="", api_base=None, extra_headers=None)]
+    assert resolved == [ResolvedEndpoint(label="only", api_key="", api_base="https://flat.example", extra_headers=None)]
+
+
+def test_endpoints_own_base_and_headers_win_over_the_flat_ones() -> None:
+    """Inheritance only fills a gap; an endpoint that names its own wins."""
+    section = ProviderConfig(
+        api_base="https://flat.example",
+        extra_headers={"X-Flat": "1"},
+        endpoints=[
+            ProviderEndpoint(label="only", api_key="sk-1", api_base="https://own.example", extra_headers={"X-Own": "2"})
+        ],
+    )
+
+    resolved = provider_endpoints(section)
+
+    assert resolved == [
+        ResolvedEndpoint(label="only", api_key="sk-1", api_base="https://own.example", extra_headers={"X-Own": "2"})
+    ]
+
+
+def test_endpoints_without_their_own_base_all_inherit_the_flat_one() -> None:
+    """``endpoint add`` with no ``--api-base`` must still be able to run --
+    every entry missing one falls back to the section's flat address, not just
+    the first."""
+    section = ProviderConfig(
+        api_base="http://10.0.0.5:8000/v1",
+        endpoints=[
+            ProviderEndpoint(label="a", api_key="k1"),
+            ProviderEndpoint(label="b", api_key="k2"),
+        ],
+    )
+
+    resolved = provider_endpoints(section)
+
+    assert [e.api_base for e in resolved] == ["http://10.0.0.5:8000/v1", "http://10.0.0.5:8000/v1"]
 
 
 def test_gemini_api_key_list_yields_one_endpoint_per_key() -> None:

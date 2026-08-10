@@ -13,12 +13,15 @@ several kept exactly one of them alive.
 uniform list, so "every endpoint this section offers" is asked once rather
 than re-derived at each call site with its own idea of the precedence.
 
-The three do not mix. ``endpoints`` set means the flat fields and
-``api_key_list`` are both ignored outright, not merged with the list -- a
-partial merge is how a stale flat key would outlive the endpoint meant to
-replace it. ``api_key_list`` without ``endpoints`` still shares the flat
-``api_base``/``extra_headers``: those were never plural, so there is nothing
-to choose between for them.
+The three do not mix in one respect: ``endpoints`` set means the flat
+``api_key`` and ``api_key_list`` are ignored outright, not merged with the
+list -- a partial merge of the key is how a stale flat one would outlive the
+endpoint meant to replace it. ``api_base``/``extra_headers`` are different:
+an entry that names neither inherits the section's flat value, the same way
+every ``api_key_list`` entry already shares the flat address -- an
+``endpoint add`` that only ever set ``--label``/``--api-key`` is otherwise
+unable to run at all, address included, while the very config it wrote passes
+every other check.
 
 An unconfigured section (no endpoints, no list, no flat key) resolves to one
 endpoint holding the empty flat values rather than an empty list. That is what
@@ -28,19 +31,15 @@ onto each of them instead of answering it once.
 
 The gate and the reader must answer the same question the same way:
 ``raven.providers.auth._present``, which decides whether a section is usable
-at all, has to mirror this precedence exactly -- ``endpoints`` non-empty means
-only the endpoints count, flat fields included, or a section with a healthy
-flat key and a keyless endpoint would pass the gate while this function hands
-the empty key to every actual request.
+at all, calls into this module rather than re-deriving the precedence -- a
+section with a healthy flat key and a keyless endpoint must fail the gate
+exactly as this function hands the empty key to every actual request.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from raven.config.schema import ProviderConfig
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -53,27 +52,41 @@ class ResolvedEndpoint:
     extra_headers: dict[str, str] | None
 
 
-def provider_endpoints(section: "ProviderConfig") -> list[ResolvedEndpoint]:
+def _field(section: Any, name: str) -> Any:
+    """Read one field off a section, whether it is a schema object or a raw
+    mapping -- see ``raven.providers.auth._present`` for why both reach here."""
+    return section.get(name) if isinstance(section, dict) else getattr(section, name, None)
+
+
+def provider_endpoints(section: Any) -> list[ResolvedEndpoint]:
     """Every endpoint ``section`` offers, in the shape it was declared."""
-    if section.endpoints:
+    endpoints = _field(section, "endpoints")
+    if endpoints:
+        flat_base = _field(section, "api_base")
+        flat_headers = _field(section, "extra_headers")
         return [
             ResolvedEndpoint(
-                label=endpoint.label,
-                api_key=endpoint.api_key,
-                api_base=endpoint.api_base,
-                extra_headers=endpoint.extra_headers,
+                label=_field(endpoint, "label"),
+                api_key=_field(endpoint, "api_key") or "",
+                # An entry that names neither inherits the section's flat
+                # value -- never the key, which must come from the entry
+                # itself or not at all (see the module docstring).
+                api_base=_field(endpoint, "api_base") or flat_base,
+                extra_headers=_field(endpoint, "extra_headers") or flat_headers,
             )
-            for endpoint in section.endpoints
+            for endpoint in endpoints
         ]
 
-    key_list = getattr(section, "api_key_list", None)
+    key_list = _field(section, "api_key_list")
     if key_list:
+        flat_base = _field(section, "api_base")
+        flat_headers = _field(section, "extra_headers")
         return [
             ResolvedEndpoint(
                 label=f"key-{i}",
                 api_key=key,
-                api_base=section.api_base,
-                extra_headers=section.extra_headers,
+                api_base=flat_base,
+                extra_headers=flat_headers,
             )
             for i, key in enumerate(key_list, start=1)
         ]
@@ -81,8 +94,8 @@ def provider_endpoints(section: "ProviderConfig") -> list[ResolvedEndpoint]:
     return [
         ResolvedEndpoint(
             label="default",
-            api_key=section.api_key,
-            api_base=section.api_base,
-            extra_headers=section.extra_headers,
+            api_key=_field(section, "api_key") or "",
+            api_base=_field(section, "api_base"),
+            extra_headers=_field(section, "extra_headers"),
         )
     ]

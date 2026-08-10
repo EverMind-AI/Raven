@@ -102,6 +102,18 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         # request -- the gate must say the same, not fall back to the flat key.
         "section": {"apiKey": "sk-ant-TEST", "endpoints": [{"label": "primary", "apiKey": ""}]},
     },
+    "hosted_vllm_endpoints_inherit_flat_base": {
+        "provider": "hosted_vllm",
+        "model": "hosted_vllm/some-model",
+        # `endpoint add` without `--api-base` is the common case: the address
+        # lives on the section, not repeated on every entry. The gate must read
+        # the same inherited address `provider_endpoints` resolves, not each
+        # endpoint's own (empty) field.
+        "section": {
+            "apiBase": "http://10.0.0.5:8000/v1",
+            "endpoints": [{"label": "a", "apiKey": "k1"}, {"label": "b", "apiKey": "k2"}],
+        },
+    },
 }
 
 
@@ -249,6 +261,27 @@ def test_flat_key_does_not_paper_over_a_keyless_endpoint(tmp_path: Path) -> None
     assert not _display_says(case, path)
     assert not _routing_says(case, path)
     assert not _startup_says(case, path)
+
+
+def test_endpoints_without_their_own_base_inherit_the_flat_one_at_the_gate() -> None:
+    """`endpoint add` without `--api-base` must not be refused at startup --
+    the gate reads the same inherited address the reader resolves, not each
+    endpoint's own (empty) field."""
+    from raven.config.schema import ProviderConfig
+    from raven.providers.auth import credential_status
+    from raven.providers.endpoints import provider_endpoints
+
+    section = ProviderConfig.model_validate(
+        {
+            "apiBase": "http://10.0.0.5:8000/v1",
+            "endpoints": [{"label": "a", "apiKey": "k1"}, {"label": "b", "apiKey": "k2"}],
+        }
+    )
+    assert credential_status("hosted_vllm", section).ok
+    assert [e.api_base for e in provider_endpoints(section)] == [
+        "http://10.0.0.5:8000/v1",
+        "http://10.0.0.5:8000/v1",
+    ]
 
 
 def test_credential_status_false_for_flat_key_and_keyless_endpoint() -> None:
