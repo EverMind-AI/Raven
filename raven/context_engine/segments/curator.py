@@ -82,6 +82,25 @@ class CuratorSegmentBuilder:
         )
         self._turn_ids: dict[str, str] = {}
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        ``curator_model`` is re-derived with the constructor's own
+        expression, so a switch cannot make it mean something it did not
+        mean at build time. The default is non-empty, so in practice it is
+        a pin; an explicitly empty ``context.curator_model`` is the one
+        config that follows the agent model, and it follows it here too.
+        """
+        self.provider = provider
+        self.model = model
+        self.curator_model = self.config.curator_model or model
+        self.assembler.set_provider(provider, model)
+
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch down into the assembler it owns."""
+        self.context_window_tokens = tokens
+        self.assembler.set_context_window(tokens)
+
     async def build(self, ctx: AssemblyContext) -> Segment | None:
         if ctx.prefix is None:
             raise RuntimeError("CuratorSegmentBuilder requires ctx.prefix (phase B)")
@@ -95,6 +114,8 @@ class CuratorSegmentBuilder:
         turn = TurnContext(
             current_message=ctx.current_message,
             media=ctx.media,
+            can_see_images=ctx.can_see_images,
+            describe_tool=ctx.describe_tool,
             channel=ctx.channel,
             chat_id=ctx.chat_id,
         )

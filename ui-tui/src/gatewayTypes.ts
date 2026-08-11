@@ -336,11 +336,18 @@ export interface ToolsConfigureResponse {
 
 // ── Model picker ─────────────────────────────────────────────────────
 
+// A hand-written copy of the picker payload that predates the generated RPC
+// types. Kept because the test stubs build partial objects that the generated
+// shape, whose fields are required, rejects. Two declarations of one contract
+// drift, and the drift is silent: a field added to the schema but not here
+// arrives on the wire invisible to the component reading this type. The drift
+// test beside this file fails if a generated property is missing here.
 export interface ModelOptionProvider {
   auth_type?: string
   authenticated?: boolean
   is_current?: boolean
   key_env?: null | string
+  model_labels?: Record<string, { description?: string; label: string }>
   models?: string[]
   name: string
   needs_api_base?: boolean
@@ -353,6 +360,20 @@ export interface ModelOptionsResponse {
   model?: string
   provider?: string
   providers?: ModelOptionProvider[]
+}
+
+// One of the several url/key groups a provider section can carry. `api_key`
+// arrives redacted (`****set****` / `(empty)`) — the gateway never sends the
+// real one back, so there is nothing here to unmask.
+export interface ProviderEndpointInfo {
+  api_base?: null | string
+  api_key?: string
+  extra_headers?: null | Record<string, string>
+  label: string
+}
+
+export interface ModelEndpointsResponse {
+  endpoints?: ProviderEndpointInfo[]
 }
 
 // ── MCP ──────────────────────────────────────────────────────────────
@@ -529,7 +550,28 @@ export type GatewayEvent =
       session_id?: string
       type: 'clarify.request'
     }
-  | { payload: { command: string; description: string }; session_id?: string; type: 'approval.request' }
+  | {
+      payload: {
+        approval_id: string
+        command: string
+        conversation_id: string
+        description: string
+        expires_at: number
+        tool_call_id: string
+        turn_id: string
+      }
+      session_id?: string
+      type: 'approval.request'
+    }
+  | {
+      payload: {
+        approval_id: string
+        conversation_id: string
+        reason: string
+      }
+      session_id?: string
+      type: 'approval.closed'
+    }
   | { payload: { request_id: string }; session_id?: string; type: 'sudo.request' }
   | { payload: { env_var: string; prompt: string; request_id: string }; session_id?: string; type: 'secret.request' }
   | { payload: { default: boolean; prompt: string; request_id: string }; session_id?: string; type: 'confirm.request' }

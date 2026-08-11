@@ -1,9 +1,9 @@
 """Configuration schema using Pydantic."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -249,7 +249,10 @@ class AgentDefaults(Base):
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    # None (or 0) means "figure it out" -- resolved against the model's real
+    # window at construction time. A positive value pins the window, taking
+    # priority over whatever the model's own catalogue reports.
+    context_window_tokens: int | None = None
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
@@ -276,6 +279,15 @@ class AgentDefaults(Base):
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
+    # Per-model request-parameter overrides, keyed by a substring of the model
+    # name: {"kimi-k2.5": {"temperature": 1.0}}. Some models reject the usual
+    # defaults, and hard-coding those quirks in the registry left users unable to
+    # adjust them. Entries here win over the registry's built-in defaults.
+    # This is also the direct channel for arbitrary sampling/serving params: an
+    # unknown top-level key is auto-forwarded into extra_body by LiteLLM for
+    # OpenAI-compatible backends (e.g. sglang's repetition_penalty); a nested
+    # structure can be written directly as extra_body: {...}.
+    model_overrides: dict[str, dict[str, Any]] = Field(default_factory=dict)
     enable_personalization: bool = False  # 4-step PAHF-inspired personalization flow (classify → ask → execute → learn)
 
     @property
@@ -309,47 +321,139 @@ class CronConfig(Base):
     """Default IANA timezone for cron expressions without explicit ``--tz``."""
 
 
+class ModelOverlay(Base):
+    """A name for a model no catalogue carries.
+
+    A self-hosted deployment serves whatever was put there, and a model released
+    since the bundled snapshot is in no table yet, so the picker falls back to
+    showing the id. That is usually fine -- the id is the name the user gave
+    their own deployment -- but it leaves no way to label several of them.
+
+    Only what a person states about presentation. Token accounting is not in
+    scope here -- `agents.defaults.contextWindowTokens` / `maxTokens` already
+    hold it. What has no knob at all is a *price* for an endpoint no catalogue
+    prices; such a deployment reports unknown spend rather than borrowing a
+    hosted model's rate. Adding one is a separate ask.
+    """
+
+    label: str = ""
+    description: str = ""
+
+
+class ProviderEndpoint(Base):
+    """One named URL/key group under a provider section.
+
+    ``label`` is not decoration: it is the idempotency key a later stage
+    (rotation, failover, per-endpoint health) uses to address one entry across
+    edits, so two endpoints in the same list must not share one.
+    """
+
+    label: str = Field(min_length=1)
+    api_key: str = ""
+    api_base: str | None = None
+    extra_headers: dict[str, str] | None = None
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
+    # display faces redact the values (keys stay visible).
+    extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
+    # Several full url/key/header groups under one provider section, for a
+    # vendor reachable by more than one account or region. Meaningful only for
+    # a plain API-key provider reached through the litellm client -- a section
+    # whose auth is OAuth, or that needs more than a key and an address (Azure
+    # OpenAI, Codex), gets this rejected at `make_provider` construction time
+    # (wired in a later stage; this field exists regardless). Set and non-empty,
+    # it replaces the flat `api_key` outright rather than merging with it; an
+    # entry inherits the flat `api_base`/`extra_headers` for whichever it does
+    # not name itself -- see `raven.providers.endpoints.provider_endpoints` for the
+    # one place that resolves which of the two shapes (or Gemini's
+    # `api_key_list`) is in effect.
+    endpoints: list[ProviderEndpoint] = Field(default_factory=list)
 
+    @field_validator("endpoints")
+    @classmethod
+    def _unique_endpoint_labels(cls, value: list[ProviderEndpoint]) -> list[ProviderEndpoint]:
+        """Reject a duplicate label -- see the class docstring for why one must be unique."""
+        seen: set[str] = set()
+        for ep in value:
+            if ep.label in seen:
+                raise ValueError(f"duplicate endpoint label {ep.label!r}: labels must be unique within a provider")
+            seen.add(ep.label)
+        return value
 
-class GeminiProviderConfig(ProviderConfig):
-    """Gemini provider configuration with Vertex AI and multi-key support.
-
-    Example YAML:
-        gemini:
-          vertex: true
-          api_key_list:
-            - "key1"
-            - "key2"
-    """
-
-    vertex: bool = False  # When true, sets GOOGLE_GENAI_USE_VERTEXAI=True for Vertex AI
-    api_key_list: list[str] = Field(default_factory=list)  # Multiple API keys for rotation
-
-    def next_api_key(self) -> str:
-        """Return the next API key using round-robin rotation.
-
-        Falls back to single api_key if api_key_list is empty.
-        """
-        import itertools
-
-        if not hasattr(self, "_key_cycle"):
-            keys = self.api_key_list if self.api_key_list else ([self.api_key] if self.api_key else [])
-            object.__setattr__(self, "_key_cycle", itertools.cycle(keys) if keys else None)
-        cycle = getattr(self, "_key_cycle", None)
-        if cycle is None:
-            return self.api_key or ""
-        return next(cycle)
+    # How requests spread across `endpoints` when there is more than one:
+    # "sticky" keeps using the first healthy entry until it fails, "round_robin"
+    # cycles through all of them. Meaningless with zero or one endpoint.
+    endpoint_strategy: Literal["sticky", "round_robin"] = "sticky"
+    # Keyed by model id, in any spelling: what the user knows about a model that
+    # the catalogues do not. Deliberately additive rather than a change to
+    # `models` -- that list already lets a model be added, and what was missing
+    # was a way to describe one, so no config has to be rewritten to get it.
+    model_overlay: dict[str, ModelOverlay] = Field(default_factory=dict)
 
     @property
     def effective_api_key(self) -> str:
-        """Get the current effective API key (first from list, or single key)."""
+        """The key to send, which is not always the ``api_key`` field.
+
+        Declared on the base so every call site can ask without knowing which
+        providers keep their key somewhere else. Gemini accepts a list, and a
+        section holding only that list handed LiteLLM an empty string: the
+        request left with no credential and failed at the API, having passed
+        every check that only asked whether credentials existed.
+        """
+        return self.api_key
+
+
+class AzureProviderConfig(ProviderConfig):
+    """Azure OpenAI, whose connection needs more than a key and an address.
+
+    A deployment is a name the tenant gives one model, and it goes into the
+    request URL's path. It used to be read off ``agents.defaults.model``, which
+    made a model id double as a connection parameter: the id could carry no
+    prefix without the prefix landing in the path, so Azure was the one provider
+    whose ids had to be spelled differently from everyone else's. Declared here,
+    the model id is free to be a model id.
+
+    ``api_version`` was hardcoded in the client, so a tenant on a different one
+    had no way to say so.
+    """
+
+    deployment: str = ""  # falls back to the model id, for configs written before this field
+    api_version: str = "2024-10-21"
+
+
+class GeminiProviderConfig(ProviderConfig):
+    """Gemini, which accepts several keys under one section.
+
+    Example:
+        gemini:
+          apiKeyList:
+            - "key1"
+            - "key2"
+
+    A ``vertex`` flag used to sit here, documented as setting
+    ``GOOGLE_GENAI_USE_VERTEXAI``. Nothing read it, and it could not have worked:
+    that variable belongs to the google-genai SDK, while requests go through
+    LiteLLM, which does not read it and reaches Vertex as a separate provider
+    (``vertex_ai``) needing ``VERTEXAI_PROJECT`` and ``VERTEXAI_LOCATION``. It was
+    settable from the CLI and covered by tests, so it read as a supported feature
+    while doing nothing at all. Reaching Vertex is a change to how a request is
+    routed, not a boolean on a key.
+    """
+
+    #: Several keys may be listed; the first is used. Round-robin rotation was
+    #: declared here once and never called -- listing keys and silently using one
+    #: is the honest description of what happens.
+    api_key_list: list[str] = Field(default_factory=list)
+
+    @property
+    def effective_api_key(self) -> str:
         if self.api_key_list:
             return self.api_key_list[0]
         return self.api_key
@@ -362,30 +466,161 @@ class GeminiProviderConfig(ProviderConfig):
         return [self.api_key] if self.api_key else []
 
 
+def _prefer_set_values(base: dict[str, Any], winner: dict[str, Any]) -> dict[str, Any]:
+    """Merge two sections for one provider, letting a set value beat an unset one.
+
+    The current name wins a genuine conflict, but a declared field exists as an
+    empty section whether or not it was configured -- so taking it verbatim let a
+    placeholder erase the credential the user had written under the provider's
+    other spelling.
+    """
+    merged = dict(base)
+    merged.update({k: v for k, v in winner.items() if v not in ("", None, [], {})})
+    return merged
+
+
+def _has_credentials(config: "ProviderConfig", spec: Any, name: str = "") -> bool:
+    """Is this section actually usable, or just a placeholder?
+
+    Every declared provider exists as an empty section whether or not the user
+    configured it, so "the field is there" says nothing. A spec flag must not
+    stand in for evidence either: `is_local` used to answer with no api_base at
+    all, and an empty declared section then beat the credentials the user had
+    really written under one of that provider's other names.
+
+    The rule itself lives in `providers.auth`, because deciding it here as well
+    is what made a Gemini section holding only `api_key_list` invisible to
+    routing while `provider list` showed it as configured.
+
+    A vendor Raven carries no spec for reaches this too -- the passthrough route,
+    where the section name is all there is -- so the name is passed separately
+    rather than read off a spec that may not exist.
+    """
+    from raven.providers.auth import credential_status
+
+    return credential_status(name or (spec.name if spec else ""), config, spec=spec).ok
+
+
 class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
+    """Configuration for LLM providers.
+
+    Fields below are the providers Raven carries metadata for. Any other key is
+    kept as-is and served through :meth:`get`, so a provider LiteLLM supports but
+    Raven has no spec for still works from config alone.
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _merge_renamed_sections(cls, data: Any) -> Any:
+        """Fold a provider's pre-rename section into its current one.
+
+        A file touched by both names holds two half-filled sections -- say the
+        credentials under the old name and a model list under the new one.
+        Picking either section alone drops the other's fields, so merge with the
+        current name winning per field.
+        """
+        if not isinstance(data, dict):
+            return data
+        from raven.providers.registry import PROVIDERS, names_same_provider
+
+        merged = dict(data)
+
+        # Fold any key that spells a declared field differently into that field.
+        # Extras are matched spelling-insensitively (`ProvidersConfig.get`), and
+        # a declared field exists as an empty section whether or not it was
+        # configured -- so without this, "azure-openai" or "OpenRouter" lands in
+        # extras where the always-present empty field then wins, and a key the
+        # user really wrote reads back as unset. One rule for both kinds.
+        for key in [k for k in merged if k not in cls.model_fields]:
+            field = next((f for f in cls.model_fields if names_same_provider(key, f)), None)
+            if field is None or not isinstance(merged[key], dict):
+                continue
+            section = dict(merged.pop(key))
+            current = merged.get(field)
+            if isinstance(current, dict):
+                section = _prefer_set_values(section, current)
+            merged[field] = section
+
+        for spec in PROVIDERS:
+            stale = [merged.pop(a) for a in spec.name_aliases if isinstance(merged.get(a), dict)]
+            if not stale:
+                continue
+            section: dict[str, Any] = {}
+            for older in stale:
+                section = _prefer_set_values(section, older)
+            current = merged.get(spec.name)
+            if isinstance(current, dict):
+                section = _prefer_set_values(section, current)
+            merged[spec.name] = section
+        return merged
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
+    azure_openai: AzureProviderConfig = Field(default_factory=AzureProviderConfig)  # Azure OpenAI
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Z.ai, the vendor's current brand and LiteLLM's name for it. Configs
+    # written before the rename say "zhipu"; both keys load.
+    zai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("zai", "zhipu"),
+    )
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
+    # LiteLLM's own names for these two, so a model id and a config section are
+    # spelled the same. Configs written before the rename keep loading.
+    hosted_vllm: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("hosted_vllm", "hostedVllm", "vllm"),
+    )
     gemini: GeminiProviderConfig = Field(default_factory=GeminiProviderConfig)  # Google Gemini / Vertex AI
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_global: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax_cn: ProviderConfig = Field(default_factory=ProviderConfig)
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
+    ollama_chat: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("ollama_chat", "ollamaChat", "ollama"),
+    )
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
+
+    def get(self, name: str) -> ProviderConfig | None:
+        """Return one provider's config, declared field or extra key alike.
+
+        The lookup is spelling-insensitive on both sides. A section key reaches
+        here in whichever form its writer used -- LiteLLM's hyphenated vendor
+        name, the camelCase this model serializes to, or the underscored field
+        name -- and a caller holding a model-id prefix has only one of those. So
+        this is the only place a provider name may be resolved to its config;
+        reading the attribute directly sees just the one spelling.
+        """
+        from raven.providers.registry import canonical_provider_name, names_same_provider
+
+        # A renamed provider keeps answering to its old name, and the declared
+        # field wins: a half-migrated config holding both keys must not serve
+        # the stale one.
+        name = canonical_provider_name(name)
+        declared = self.__dict__.get(name)
+        if isinstance(declared, ProviderConfig):
+            return declared
+        extra = (self.model_extra or {}).get(name)
+        if extra is None:
+            for key, value in (self.model_extra or {}).items():
+                if names_same_provider(key, name):
+                    extra = value
+                    break
+        if isinstance(extra, ProviderConfig):
+            return extra
+        if isinstance(extra, dict):
+            return ProviderConfig.model_validate(extra)
+        return None
 
 
 class ModelEndpoint(Base):
@@ -623,7 +858,8 @@ class Config(BaseSettings):
         resolution never mutates the raw config.
         """
         media = self.tools.media.model_copy(deep=True)
-        or_key = self.providers.openrouter.api_key
+        openrouter = self.providers.get("openrouter")
+        or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
@@ -632,52 +868,77 @@ class Config(BaseSettings):
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
         """Match provider config and its registry name. Returns (config, spec_name)."""
-        from raven.providers.registry import PROVIDERS
+        from raven.providers.registry import (
+            PROVIDERS,
+            canonical_provider_name,
+            find_by_keywords,
+            find_by_name,
+            split_model_id,
+        )
 
         forced = self.agents.defaults.provider
         if forced != "auto":
-            p = getattr(self.providers, forced, None)
+            # Return the canonical name: callers look the spec up by it, and a
+            # config still naming the provider the old way would find nothing.
+            forced = canonical_provider_name(forced)
+            p = self.providers.get(forced)
             return (p, forced) if p else (None, None)
 
-        model_lower = (model or self.agents.defaults.model).lower()
-        model_normalized = model_lower.replace("-", "_")
-        model_prefix = model_lower.split("/", 1)[0] if "/" in model_lower else ""
-        normalized_prefix = model_prefix.replace("-", "_")
+        model_id = model or self.agents.defaults.model
+        prefix, _ = split_model_id(model_id)
 
-        def _kw_matches(kw: str) -> bool:
-            kw = kw.lower()
-            return kw in model_lower or kw.replace("-", "_") in model_normalized
-
-        # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
+        # `spec.claims` is the whole prefix-beats-keyword rule: a prefixed id is
+        # answered only by the provider it names (so `github-copilot/...codex`
+        # cannot match openai_codex, and no vendor's key is posted to another's
+        # endpoint), while a bare id falls to keywords in registry order.
         for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
+            if not spec.claims(model_id):
+                continue
+            p = self.providers.get(spec.name)
+            if p and _has_credentials(p, spec):
+                return p, spec.name
 
-        # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or p.api_key:
-                    return p, spec.name
+        # Explicit prefix naming a provider Raven has no spec for: LiteLLM knows
+        # the vendor, so credentials under that name are enough to reach it.
+        #
+        # Only where there is genuinely no spec. A provider that has one has
+        # already been offered above and turned down for want of credentials --
+        # letting it back in here on `api_key` alone reinstated exactly the
+        # material this rejected it for missing: Azure with a key and no address
+        # routed here, while display and startup both called it unconfigured.
+        if prefix and find_by_name(prefix) is None:
+            passthrough = self.providers.get(prefix)
+            if passthrough and _has_credentials(passthrough, None, prefix):
+                return passthrough, canonical_provider_name(prefix)
 
         # Fallback: configured local providers can route models without
         # provider-specific keywords (for example plain "llama3.2" on Ollama).
         for spec in PROVIDERS:
             if not spec.is_local:
                 continue
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_base:
+            p = self.providers.get(spec.name)
+            if p and _has_credentials(p, spec):
                 return p, spec.name
 
-        # Fallback: gateways first, then others (follows registry order)
-        # OAuth providers are NOT valid fallbacks — they require explicit model selection
+        # Fallback: gateways first, then others (follows registry order).
+        # OAuth providers are NOT valid fallbacks -- they require explicit model
+        # selection.
+        #
+        # Once an id names a vendor -- by prefix, or by a keyword that only one
+        # vendor answers to -- reaching this point means that vendor has no
+        # credentials. Only a gateway or a local deployment may answer then,
+        # because they route whatever they are handed; a direct vendor would be
+        # receiving a competitor's model id along with its own key. Getting here
+        # having named nobody ("llama-3.3-70b") carries no such claim, so any
+        # credentialed provider is a legitimate guess.
+        names_a_vendor = bool(prefix) or find_by_keywords(model_id) is not None
         for spec in PROVIDERS:
+            if names_a_vendor and not (spec.is_gateway or spec.is_local):
+                continue
             if spec.is_oauth:
                 continue
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
+            p = self.providers.get(spec.name)
+            if p and _has_credentials(p, spec):
                 return p, spec.name
         return None, None
 
@@ -694,7 +955,7 @@ class Config(BaseSettings):
     def get_api_key(self, model: str | None = None) -> str | None:
         """Get API key for the given model. Falls back to first available key."""
         p = self.get_provider(model)
-        return p.api_key if p else None
+        return p.effective_api_key if p else None
 
     def get_api_base(self, model: str | None = None) -> str | None:
         """Get API base URL for the given model. Applies default URLs for gateway/local providers."""
@@ -704,12 +965,11 @@ class Config(BaseSettings):
         if p and p.api_base:
             return p.api_base
         # Only gateways get a default api_base here. Standard providers
-        # (like Moonshot) set their base URL via env vars in _setup_env
-        # to avoid polluting the global litellm.api_base.
+        # (like Moonshot) set their base URL via env vars in _setup_env.
         if name:
             spec = find_by_name(name)
-            if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:
-                return spec.default_api_base
+            if spec and spec.usable_default_api_base:
+                return spec.usable_default_api_base
         return None
 
     @property

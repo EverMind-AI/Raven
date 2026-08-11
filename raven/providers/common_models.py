@@ -15,27 +15,34 @@ Providers not listed here fall back to their configured list.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 COMMON_MODELS: dict[str, list[str]] = {
+    # Carries the "openrouter/" prefix like this provider's default_model does.
+    # Bare OpenRouter ids start with the upstream vendor ("anthropic/...",
+    # "deepseek/..."), which auto-detection reads as a request for that vendor
+    # direct -- so a model picked from this list would quietly leave OpenRouter
+    # as soon as the user also held that vendor's key.
     "openrouter": [
-        "anthropic/claude-opus-4.8",
-        "anthropic/claude-opus-4.7",
-        "anthropic/claude-sonnet-5",
-        "anthropic/claude-fable-5",
-        "openai/gpt-5.5",
-        "openai/gpt-5.4-mini",
-        "google/gemini-3.5-flash",
-        "google/gemini-3-flash-preview",
-        "x-ai/grok-4.3",
-        "meta-llama/llama-4-maverick",
-        "mistralai/mistral-medium-3-5",
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
-        "xiaomi/mimo-v2.5",
-        "minimax/minimax-m3",
-        "z-ai/glm-5.2",
-        "tencent/hy3",
-        "moonshotai/kimi-k2.6",
-        "qwen/qwen3.7-max",
+        "openrouter/anthropic/claude-opus-4.8",
+        "openrouter/anthropic/claude-opus-4.7",
+        "openrouter/anthropic/claude-sonnet-5",
+        "openrouter/anthropic/claude-fable-5",
+        "openrouter/openai/gpt-5.5",
+        "openrouter/openai/gpt-5.4-mini",
+        "openrouter/google/gemini-3.5-flash",
+        "openrouter/google/gemini-3-flash-preview",
+        "openrouter/x-ai/grok-4.3",
+        "openrouter/meta-llama/llama-4-maverick",
+        "openrouter/mistralai/mistral-medium-3-5",
+        "openrouter/deepseek/deepseek-v4-flash",
+        "openrouter/deepseek/deepseek-v4-pro",
+        "openrouter/xiaomi/mimo-v2.5",
+        "openrouter/minimax/minimax-m3",
+        "openrouter/z-ai/glm-5.2",
+        "openrouter/tencent/hy3",
+        "openrouter/moonshotai/kimi-k2.6",
+        "openrouter/qwen/qwen3.7-max",
     ],
     "openai": [
         "openai/gpt-5.5",
@@ -89,7 +96,7 @@ COMMON_MODELS: dict[str, list[str]] = {
         "minimax-cn/MiniMax-M2.7",
         "minimax-cn/MiniMax-M2.7-highspeed",
     ],
-    "zhipu": [
+    "zai": [
         "zai/glm-5.2",
         "zai/glm-5.1",
         "zai/glm-5",
@@ -119,3 +126,125 @@ COMMON_MODELS: dict[str, list[str]] = {
 def common_models_for(slug: str) -> list[str]:
     """Return a copy of the curated common-model shortlist for ``slug``."""
     return list(COMMON_MODELS.get(slug, []))
+
+
+def _is_priced_template(model: str) -> bool:
+    """Is this a price-book row rather than something callable?
+
+    The catalogue doubles as a price list, so it carries entries no request can
+    name: "ft:gpt-4o-..." states what a model fine-tuned from that base costs,
+    and "container" bills a code-interpreter session. Sorted alphabetically they
+    led OpenAI's candidates, so the first dozen rows a user saw were unusable.
+    """
+    bare = model.split("/", 1)[-1]
+    return bare.startswith("ft:") or bare == "container"
+
+
+@lru_cache(maxsize=1)
+def _cached_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """LiteLLM's own catalogue, indexed by the provider it belongs to.
+
+    Built once and cached: reading it imports LiteLLM, which costs about two
+    seconds, so callers must be somewhere a user is already waiting.
+
+    Only ``mode == "chat"`` survives. The catalogue also carries embedding and
+    speech models, and offering those where a chat model is asked for produces a
+    selection that fails on first use.
+    """
+    from collections import defaultdict
+
+    from raven.providers.litellm_setup import import_litellm
+
+    # Whatever table LiteLLM itself is using, deliberately. Forcing the packaged
+    # copy here looked like it bought determinism and did not: setting the
+    # environment variable has no effect once LiteLLM has been imported, so the
+    # answer still depended on import order -- and where it did take effect it
+    # pinned the whole process to a table that is 278 entries behind, which is
+    # how `claude-sonnet-5` (this project's own default) stopped having a known
+    # context window. Candidates now agree with what pricing and context-window
+    # lookups see, which matters more than agreeing across machines.
+    catalogue = import_litellm().model_cost
+
+    by_provider: dict[str, list[str]] = defaultdict(list)
+    for model, info in catalogue.items():
+        if not isinstance(info, dict) or info.get("mode") != "chat":
+            continue
+        if _is_priced_template(model):
+            continue
+        provider = info.get("litellm_provider")
+        if provider:
+            by_provider[provider].append(model)
+    return {provider: tuple(sorted(models)) for provider, models in by_provider.items()}
+
+
+def _litellm_chat_models_by_provider() -> dict[str, tuple[str, ...]]:
+    """The cached index, except that an empty one is not what gets cached.
+
+    `lru_cache` remembers whatever the call returned, so an empty result -- from a
+    LiteLLM whose table has not loaded -- would leave every provider without a
+    curated shortlist showing no models at all for the life of the process, with
+    no way to retry. A raised exception needs no such handling: `lru_cache` stores
+    only successful returns, so the next call re-runs on its own.
+    """
+    try:
+        index = _cached_chat_models_by_provider()
+    except Exception:
+        return {}
+    if not index:
+        _cached_chat_models_by_provider.cache_clear()
+    return index
+
+
+def litellm_models_for(slug: str) -> list[str]:
+    """Chat models LiteLLM knows for this provider, as ids that actually route.
+
+    Looked up by every name the provider answers to, not just its own: LiteLLM
+    files vLLM under "hosted_vllm" and Ollama under "ollama", so a lookup by the
+    section name alone finds nothing for exactly the providers whose curated
+    shortlist is empty.
+
+    Ids come back spelled the way LiteLLM would have to receive them. The
+    catalogue is inconsistent -- Moonshot's entries carry their prefix, VolcEngine's
+    do not -- and offering a bare id would route it by keyword rather than to the
+    provider the user picked.
+    """
+    from raven.providers.registry import find_by_name, litellm_spelling
+
+    spec = find_by_name(slug)
+    if spec is None:
+        # A vendor Raven carries no spec for still has rows in the catalogue --
+        # 51 for Mistral, 219 for Bedrock, 270 for Fireworks. Returning nothing
+        # left those providers with no candidates at all, which pushed the user
+        # into typing a bare id: the shape that gets routed to whoever a keyword
+        # matches.
+        #
+        # The rows are inconsistent about the prefix -- Mistral's carry it,
+        # Bedrock's do not -- so they are normalized here rather than trusted.
+        # Offering an unprefixed one would reintroduce the very thing this exists
+        # to avoid.
+        # The index is keyed by LiteLLM's own spelling, so it has to be read by
+        # that spelling too -- looking it up normalized found nothing for any
+        # vendor LiteLLM hyphenates.
+        index = _litellm_chat_models_by_provider()
+        prefix = litellm_spelling(slug)
+        out: list[str] = []
+        for model in index.get(prefix, ()):
+            bare = model[len(prefix) + 1 :] if model.startswith(f"{prefix}/") else model
+            out.append(f"{prefix}/{bare}")
+        return out
+    from raven.providers.wire import merge_key, stored_model_id
+
+    index = _litellm_chat_models_by_provider()
+    out: list[str] = []
+    seen: set[str] = set()
+    for route_name in sorted(spec.route_names):
+        for model in index.get(route_name, ()):
+            bare = model.split("/", 1)[1] if "/" in model else model
+            # One spelling for a candidate and for a stored pick, so choosing an
+            # offered model cannot write a second entry for one already listed.
+            full = stored_model_id(spec.name, bare)
+            key = merge_key(spec.name, full)
+            if key not in seen:
+                seen.add(key)
+                out.append(full)
+    return out

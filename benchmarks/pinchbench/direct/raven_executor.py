@@ -303,22 +303,25 @@ def _session_to_openclaw_transcript(
 def _make_benchmark_provider(model: str, api_key: str, api_base: str, provider_name: str):
     """Create the benchmark LLM provider."""
     from raven.providers.base import GenerationSettings
-    from raven.providers.custom_provider import CustomProvider
-    from raven.providers.litellm_provider import LiteLLMProvider
+    from raven.providers.litellm_provider import LiteLLMProvider, session_affinity_headers
+    from raven.providers.registry import find_by_name
 
-    if provider_name == "custom":
-        provider = CustomProvider(
-            api_key=api_key,
-            api_base=api_base,
-            default_model=model,
-        )
-    else:
-        provider = LiteLLMProvider(
-            api_key=api_key,
-            api_base=api_base or ("https://openrouter.ai/api/v1" if provider_name == "openrouter" else None),
-            default_model=model,
-            provider_name=provider_name,
-        )
+    spec = find_by_name(provider_name)
+    resolved_base = api_base or (spec.default_api_base if spec else "") or None
+    if not resolved_base and (spec is None or spec.via_driver):
+        # LiteLLM picks the endpoint from the wire prefix, so a provider reached
+        # through someone else's driver ("openai" for custom / SiliconFlow) lands
+        # on THAT vendor -- api.openai.com -- and would quietly benchmark a third
+        # party. Being registered is no protection: `custom` is registered and is
+        # precisely the case with no endpoint of its own.
+        raise ValueError(f"no api_base for provider {provider_name!r}; set OPENAI_BASE_URL or pass --api-base")
+    provider = LiteLLMProvider(
+        api_key=api_key,
+        api_base=resolved_base,
+        default_model=model,
+        provider_name=provider_name,
+        extra_headers=session_affinity_headers(),
+    )
     provider.generation = GenerationSettings(
         temperature=0.7,
         max_tokens=8192,
@@ -327,38 +330,20 @@ def _make_benchmark_provider(model: str, api_key: str, api_base: str, provider_n
 
 
 def _estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -> float | None:
-    """Estimate USD cost using LiteLLM's pricing database with manual fallbacks.
+    """Estimate USD cost for one call, or None when no source prices the model.
 
-    Falls back to _fallback_pricing for models not yet in LiteLLM's DB.
-    Returns None if the model is unknown to both.
+    A thin wrapper on purpose. This carried its own two-tier copy of the
+    resolution -- LiteLLM, then a hand-written table -- while the shipped ladder
+    grew a live gateway table and a per-vendor catalogue between them, so a
+    benchmark could report a figure the product would not. There is one answer to
+    "what does this cost" and it lives with the provider.
     """
-    # Manual fallback pricing ($/token) for models absent from LiteLLM's DB.
-    # Source: OpenRouter model pages (as of 2026-03).
-    _fallback_pricing: Dict[str, tuple[float, float]] = {
-        "z-ai/glm-4.5-air": (0.13e-6, 0.85e-6),  # $0.13/$0.85 per 1M tokens
-    }
+    from raven.token_wise.pricing import estimate_cost_usd
 
-    try:
-        import litellm
-
-        # LiteLLM expects "openrouter/<provider>/<model>" format for OpenRouter models.
-        or_model = f"openrouter/{model}" if not model.startswith("openrouter/") else model
-        prompt_cost, completion_cost = litellm.cost_per_token(
-            model=or_model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        return prompt_cost + completion_cost
-    except Exception:
-        pass
-
-    # Fallback for models not in LiteLLM DB
-    base_model = model.removeprefix("openrouter/")
-    if base_model in _fallback_pricing:
-        p_per_tok, c_per_tok = _fallback_pricing[base_model]
-        return p_per_tok * prompt_tokens + c_per_tok * completion_tokens
-
-    return None
+    # Benchmarks name OpenRouter models bare; the ladder is keyed by stored ids,
+    # which name their provider.
+    stored = model if model.startswith("openrouter/") else f"openrouter/{model}"
+    return estimate_cost_usd(stored, prompt_tokens, completion_tokens)
 
 
 async def _run_turn_text(agent, message: str, *, session_key: str, chat_id: str) -> str:

@@ -97,6 +97,16 @@ def test_classify_follows_cause_chain():
         ("connection reset by peer", "network"),
         ("insufficient credit / billing", "billing"),
         ("model not found", "model_unavailable"),
+        # None of these carries any of the wordier model_unavailable markers,
+        # even though each one has "404" inside a larger number or id --
+        # matching it as a bare substring once burned a fallback model and
+        # cooled a healthy endpoint for an error no swap could fix. Azure's own
+        # rendered non-200 body no longer reaches this degraded path at all:
+        # see ``AzureOpenAIProvider.chat``, which classifies from the live
+        # status code before the response is turned into a string.
+        ("Error: retry after 1404ms", "unknown"),
+        ("upstream error id=req_a404bc7f", "unknown"),
+        ("invalid JSON at char 4041", "unknown"),
         ("This model's maximum context length is 8192 tokens", "context_overflow"),
         ("401 unauthorized: invalid api key", "auth"),
         ("400 invalid request: bad schema", "invalid_request"),

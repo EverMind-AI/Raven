@@ -17,6 +17,7 @@ import type {
 import type { InputHandlerContext, InputHandlerResult } from './interfaces.js'
 
 import { TYPING_IDLE_MS } from '../config/timing.js'
+import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
@@ -27,6 +28,49 @@ import { patchTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
 
 const isCtrl = (key: { ctrl: boolean }, ch: string, target: string) => key.ctrl && ch.toLowerCase() === target
+
+export type CtrlCAction = 'cancel-turn' | 'clear-input' | 'force-reset' | 'interrupt-legacy' | 'quit'
+
+export interface CtrlCState {
+  /** A turn is in flight on an attached session. */
+  busyWithSession: boolean
+  /** A previous Ctrl+C already asked the server to cancel. */
+  escapeArmed: boolean
+  /** The composer holds text, or a queued line is buffered. */
+  hasPendingInput: boolean
+  /** chatStream reports a typed turn in flight (only consulted while busy). */
+  turnActive: boolean
+}
+
+/**
+ * Which rung of the Ctrl+C ladder a keypress lands on.
+ *
+ * Ctrl+C is not an exit key: it quits only from an idle UI with an empty
+ * composer. Reading it as "press once to exit" is what made the dogfood e2e
+ * suite flaky (#228), so the decision lives here where it can be tested
+ * without a PTY or a live turn.
+ *
+ * - `cancel-turn`: first Ctrl+C during a typed turn. Asks the server to cancel;
+ *   the resulting `error(reason=cancelled_by_client)` event resets the UI.
+ * - `force-reset`: second Ctrl+C during the same turn, i.e. the cancel produced
+ *   no terminal event (events lost, server wedged). Resets the prompt locally
+ *   so the user is never stuck waiting for a response that cannot arrive.
+ * - `interrupt-legacy`: busy, but chatStream is detached or has no typed turn --
+ *   the older `session.interrupt` path, still used by CLI/agent streaming.
+ * - `clear-input`: not busy, but there is a pending line to drop.
+ * - `quit`: idle and empty.
+ */
+export function decideCtrlC(state: CtrlCState): CtrlCAction {
+  if (state.busyWithSession) {
+    if (state.turnActive) {
+      return state.escapeArmed ? 'force-reset' : 'cancel-turn'
+    }
+
+    return 'interrupt-legacy'
+  }
+
+  return state.hasPendingInput ? 'clear-input' : 'quit'
+}
 
 export function applyVoiceRecordResponse(
   response: null | VoiceRecordResponse,
@@ -95,9 +139,18 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (overlay.approval) {
-      return gateway
-        .rpc<ApprovalRespondResponse>('approval.respond', { choice: 'deny', session_id: getUiState().sid })
-        .then(r => r && (patchOverlayState({ approval: null }), patchTurnState({ outcome: 'denied' })))
+      const approval = overlay.approval
+      // Ctrl+C is a local fail-closed action. Clear the overlay before awaiting
+      // RPC so a disconnected backend cannot leave a stale prompt accepting a
+      // later keypress. The captured ids still let the best-effort response
+      // resolve a live backend request when the connection is healthy.
+      patchOverlayState({ approval: null })
+      patchTurnState({ outcome: 'denied' })
+
+      return gateway.rpc<ApprovalRespondResponse>(
+        'approval.respond',
+        buildApprovalRespond(approval.approvalId, approval.conversationId, 'deny')
+      )
     }
 
     if (overlay.sudo) {
@@ -432,51 +485,39 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
     }
 
     if (key.ctrl && ch.toLowerCase() === 'c') {
-      if (live.busy && live.sid) {
-        // Phase 6 typed cancel path (per design.md §D5). When the chat
-        // stream is attached AND a typed turn is in flight, route Ctrl+C
-        // into `turn.cancel`; the server's `error(reason=cancelled_by_client)`
-        // event drives the actual UI reset via `chatStream.dispatch`. When
-        // chatStream is detached or no typed turn is active, fall back to
-        // the legacy `session.interrupt` path so existing CLI/agent
-        // streaming behavior (still consumed by 169 .tsx) is preserved.
-        const chat = chatStreamRef?.current ?? null
+      const busyWithSession = Boolean(live.busy && live.sid)
+      const chat = chatStreamRef?.current ?? null
+      const action = decideCtrlC({
+        // isTurnActive() is only consulted on the busy path, as before.
+        busyWithSession,
+        escapeArmed: Boolean(live.escapeArmed),
+        hasPendingInput: Boolean(cState.input || cState.inputBuf.length),
+        turnActive: busyWithSession && Boolean(chat?.isTurnActive())
+      })
 
-        if (chat?.isTurnActive()) {
-          if (live.escapeArmed) {
-            // Second Ctrl+C while the turn is still in flight — the first
-            // cancel produced no terminal event (events lost / server
-            // wedged). Hard-reset the prompt locally so the user is never
-            // stuck waiting on a response that can't arrive. This
-            // does NOT route through the legacy session.interrupt path.
-            patchUiState({ escapeArmed: false })
-            chat.forceReset()
-
-            return
-          }
-
-          // First Ctrl+C: issue the normal server cancel and arm the escape
-          // hatch — the busy placeholder flips to the force-quit hint and a
-          // second Ctrl+C falls back to the local reset above.
-          patchUiState({ escapeArmed: true })
-          chat.cancel().catch((err: Error) => actions.sys(`cancel failed: ${err.message}`))
+      switch (action) {
+        case 'force-reset':
+          patchUiState({ escapeArmed: false })
+          chat!.forceReset()
 
           return
-        }
+        case 'cancel-turn':
+          patchUiState({ escapeArmed: true })
+          chat!.cancel().catch((err: Error) => actions.sys(`cancel failed: ${err.message}`))
 
-        return turnController.interruptTurn({
-          appendMessage: actions.appendMessage,
-          gw: gateway.gw,
-          sid: live.sid,
-          sys: actions.sys
-        })
+          return
+        case 'interrupt-legacy':
+          return turnController.interruptTurn({
+            appendMessage: actions.appendMessage,
+            gw: gateway.gw,
+            sid: live.sid!,
+            sys: actions.sys
+          })
+        case 'clear-input':
+          return cActions.clearIn()
+        case 'quit':
+          return actions.die()
       }
-
-      if (cState.input || cState.inputBuf.length) {
-        return cActions.clearIn()
-      }
-
-      return actions.die()
     }
 
     if (isAction(key, ch, 'd')) {

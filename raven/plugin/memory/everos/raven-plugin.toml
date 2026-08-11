@@ -1,6 +1,6 @@
 [plugin]
 id                 = "everos-memory"
-version            = "1.0.0"
+version            = "1.1.0"
 display_name       = "EverOS memory"
 raven           = ">=0.1"
 bundled            = true
@@ -19,9 +19,9 @@ factory = "raven.plugin.memory.everos.backend:make_backend"
 name    = "understand_media"
 factory = "raven.plugin.memory.everos.tools:make_understand_media_tool"
 
-# Config schema sketch — the registry passes the user's
-# ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)``
-# verbatim; full schema validation will land alongside EM-2.
-[plugin.config_schema]
-base_url  = { type = "string", default = "http://localhost:18791" }
-agent_id  = { type = "string", default = "agent:default" }
+# No config_schema block: the registry passes the user's
+# ``plugins.config["everos-memory"]`` dict to ``make_backend(ctx)`` verbatim
+# and never validates it, so a schema declared here would be inert and its
+# defaults would not apply. The factory owns its defaults in code instead.
+# The only key it reads from that dict is ``base_url``; identity comes from
+# the host via ``ServiceLocator``.

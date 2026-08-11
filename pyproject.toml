@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.9"
+version = "0.1.11"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -34,12 +34,8 @@ dependencies = [
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.1.3",
+    "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
-    # OAuth provider login (Codex / GitHub Copilot) imports this during onboard,
-    # so it must be a runtime dep -- otherwise `uv tool install raven` users hit
-    # "oauth_cli_kit not installed" the moment they pick an OAuth provider.
-    "oauth-cli-kit>=0.1.6,<1.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -47,6 +43,11 @@ dependencies = [
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
     # working if upstream ever drops it.
     "numpy>=2.0,<3.0",
+    # Image downscale/recompress for read_file (agent/tools/media.py). Reaches
+    # us anyway via everos[multimodal] -> everalgo-parser, but that is a
+    # three-hop transitive path — pinning it directly so reading an image keeps
+    # working if any link in that chain drops it.
+    "pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
@@ -96,7 +97,6 @@ channels = [
 ]
 tools = [
     "readability-lxml>=0.8.4,<1.0.0",
-    "oauth-cli-kit>=0.1.6,<1.0.0",
 ]
 sandbox = [
     "anyio>=4.0",
@@ -147,6 +147,8 @@ include = [
     "raven/templates/**/*.md",
     "raven/skills/**/*.md",
     "raven/skills/**/*.sh",
+    # Bundled model-label snapshot, so a fresh install labels models offline.
+    "raven/providers/data/*.json",
     # Tracing dashboard viewer (dependency-free Node server + static client).
     "raven/tracing/viewer/**/*.js",
     "raven/tracing/viewer/**/*.css",
@@ -252,7 +254,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-norecursedirs = ["tests/integration", "tests/data", "*.egg", ".*", "build", "dist"]
+norecursedirs = ["tests/integration", "*.egg", ".*", "build", "dist"]
 addopts = [
     "-ra",
     "--strict-markers",
@@ -271,7 +273,6 @@ markers = [
 [dependency-groups]
 dev = [
     "json-repair>=0.59.5",
-    "oauth-cli-kit>=0.1.6",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",
@@ -279,5 +280,5 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.11,<0.16",
+    "ruff==0.15.12",
 ]

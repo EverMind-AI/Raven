@@ -13,6 +13,10 @@ from raven.importer.state import ImportState
 from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResult
 from raven.memory_engine.backend import MemoryBackend
 
+# Both bounds decide where batch boundaries fall, and EverOS derives its
+# message_id from (session_id, timestamp_ms, index-within-batch), so those
+# boundaries are part of the id: two messages sharing a millisecond collide,
+# and one is dropped, if they land at the same index in different batches.
 _BATCH_MSG_LIMIT = 100
 _BATCH_CHAR_LIMIT = 30_000
 
@@ -101,11 +105,14 @@ async def run_import(
             continue
 
         # NOTE: checkpoint is per source unit, not per batch. A multi-batch
-        # session that fails mid-way will re-send already-accepted batches
-        # on retry.  EverOS dedup is by session_id so duplicates are safe
-        # (redundant extraction, no data loss).  Per-batch checkpoint is
-        # deferred until full-conversation import is common enough to
-        # justify the added state complexity.
+        # session that fails mid-way re-sends already-accepted batches on
+        # retry. EverOS dedupes by message_id, but only across what is still
+        # in its unprocessed buffer -- a batch it has already extracted has
+        # left that buffer, so it is extracted again into a fresh memcell:
+        # a duplicate memory, and there is no endpoint to delete it. Accepted
+        # because the cost is tokens and duplicate entries rather than lost
+        # data. Per-batch checkpoint is deferred until full-conversation
+        # import is common enough to justify the added state complexity.
         logger.info("[{}/{}] importing {}/{}", i + 1, total, platform, key)
         try:
             session = await scanner.read(result)

@@ -64,15 +64,13 @@ class TestImportMessage:
             role="user",
             content="hello",
             timestamp=1720000000000,
-            sender_id="alice",
         )
         assert msg.role == "user"
         assert msg.content == "hello"
         assert msg.timestamp == 1720000000000
-        assert msg.sender_id == "alice"
 
     def test_tool_calls_default_none(self) -> None:
-        msg = ImportMessage(role="assistant", content="ok", timestamp=0, sender_id="bot")
+        msg = ImportMessage(role="assistant", content="ok", timestamp=0)
         assert msg.tool_calls is None
 
     def test_tool_calls_optional(self) -> None:
@@ -81,21 +79,20 @@ class TestImportMessage:
             role="assistant",
             content="",
             timestamp=0,
-            sender_id="bot",
             tool_calls=tc,
         )
         assert msg.tool_calls == tc
 
     def test_tool_call_id_default_none(self) -> None:
-        msg = ImportMessage(role="user", content="x", timestamp=0, sender_id="u")
+        msg = ImportMessage(role="user", content="x", timestamp=0)
         assert msg.tool_call_id is None
 
     def test_tool_call_id_on_tool_message(self) -> None:
-        msg = ImportMessage(role="tool", content="result", timestamp=0, sender_id="u", tool_call_id="t1")
+        msg = ImportMessage(role="tool", content="result", timestamp=0, tool_call_id="t1")
         assert msg.tool_call_id == "t1"
 
     def test_frozen(self) -> None:
-        msg = ImportMessage(role="user", content="x", timestamp=0, sender_id="u")
+        msg = ImportMessage(role="user", content="x", timestamp=0)
         with pytest.raises(dataclasses.FrozenInstanceError):
             msg.content = "y"  # type: ignore[misc]
 
@@ -110,7 +107,7 @@ class TestImportSession:
         assert sess.messages == ()
 
     def test_messages_are_tuple(self) -> None:
-        msg = ImportMessage(role="user", content="hi", timestamp=0, sender_id="u")
+        msg = ImportMessage(role="user", content="hi", timestamp=0)
         sess = ImportSession(session_id="s", messages=(msg,))
         assert isinstance(sess.messages, tuple)
         assert len(sess.messages) == 1

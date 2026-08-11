@@ -11,6 +11,8 @@ import type { AppOverlaysProps } from '../app/interfaces.js'
 import { useGateway } from '../app/gatewayContext.js'
 import { $overlayState, patchOverlayState } from '../app/overlayStore.js'
 import { $uiSessionId, $uiTheme } from '../app/uiStore.js'
+import { launchRavenCommand } from '../lib/externalCli.js'
+import { suspendForHandoff } from '../lib/handoff.js'
 import { FloatBox } from './appChrome.js'
 import { MaskedPrompt } from './maskedPrompt.js'
 import { ModelPicker } from './modelPicker.js'
@@ -164,9 +166,11 @@ export function FloatingOverlays({
         <FloatBox color={theme.color.border}>
           <ModelPicker
             gw={gw}
+            launcher={launchRavenCommand}
             onCancel={() => patchOverlayState({ modelPicker: false })}
             onSelect={onModelSelect}
             sessionId={sid}
+            suspend={suspendForHandoff}
             t={theme}
           />
         </FloatBox>

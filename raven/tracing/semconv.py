@@ -76,9 +76,10 @@ def _provider_label(model: str | None, provider_class: str | None) -> str | None
     path segment is the backend (``openrouter``). Fall back to the provider class
     name when the model carries no prefix (e.g. a native provider).
     """
-    if model and "/" in model:
-        return model.split("/", 1)[0]
-    return provider_class
+    from raven.providers.registry import split_model_id
+
+    prefix, _ = split_model_id(model or "")
+    return prefix or provider_class
 
 
 def _llm_attrs(resp: Any, provider: str, model: str | None, provider_class: str | None = None) -> dict[str, Any]:
@@ -130,7 +131,10 @@ def _llm_input_payload(
       - ``prompt``: the latest user message (the current input to this call),
       - ``historyMessages``: the prior turns only — everything EXCEPT the system
         message and that latest user message (so it doesn't duplicate them).
-    ``messages`` keeps the full raw list as the ground truth of what was sent.
+    ``messages`` keeps the full raw list as handed to the provider, which is not
+    what went on the wire: the provider adds or removes prompt-cache breakpoints
+    on copies (``providers.prompt_cache``) after this is recorded. Neither the
+    presence nor the absence of ``cache_control`` here says what was sent.
     """
     msgs = messages if isinstance(messages, list) else []
     system_prompt = ""

@@ -28,6 +28,11 @@ from raven.config.schema import CronConfig
 # supplies their own Bearer token.
 _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 
+# Default EverOS memory server endpoint, seeded into a fresh config's
+# plugins.config["everos-memory"]. Kept in sync with
+# raven.plugin.memory.everos._server.DEFAULT_EVEROS_BASE_URL.
+_DEFAULT_EVEROS_BASE_URL = "http://localhost:18791"
+
 
 def _write_atomic(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +185,7 @@ def set_language(
 def set_default_model(
     model: str,
     *,
+    provider: str | None = None,
     config_path: Path | None = None,
 ) -> str | None:
     """Patch ``agents.defaults.model`` on the on-disk config. Returns previous value.
@@ -188,14 +194,22 @@ def set_default_model(
     needs to swap the default model to one that matches the chosen provider
     (otherwise ``raven agent`` would still route to whatever the freshly
     created ``Config()`` baked in, which is typically a different vendor).
+
+    ``provider`` writes ``agents.defaults.provider`` in the same patch. That field
+    overrides what a model id says, so leaving it behind lets a stale pin route
+    the new model to the old vendor -- with the old vendor's key -- while the
+    write that was just reported as successful changes nothing. Callers that do
+    not know which provider serves the model pass None and leave it alone.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     defaults = data.setdefault("agents", {}).setdefault("defaults", {})
     prev = defaults.get("model")
     defaults["model"] = model
+    if provider is not None:
+        defaults["provider"] = provider
     _write_atomic(path, data)
-    logger.info("config/update: default model set to {} (was {})", model, prev)
+    logger.info("config/update: default model set to {} (was {}), provider={}", model, prev, provider)
     return prev
 
 
@@ -244,8 +258,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
       - ``skillForge.router.hub.endpoint`` is seeded to the live Skill Hub URL
         (the schema default is ``None`` so programmatic loads stay Hub-off);
         ``apiKey`` is left null for the user to fill with their own token;
-      - ``plugins.config["everos-memory"]`` is seeded with the plugin's identity
-        wiring so the block is never empty and the user can see/edit it.
+      - ``plugins.config["everos-memory"]`` is seeded with only ``base_url`` so
+        the block is never empty and the user can see/edit it. Identity
+        (``user_id`` / ``agent_id``) is deliberately NOT duplicated here — it
+        comes from ``memory.userId`` / ``memory.agentId`` via the host's
+        ``ServiceLocator`` at plugin activation time.
 
     The optional service fields on ``SkillForgeConfig`` (``embedding_url`` /
     ``embedding_api_key`` / ``reranker_url`` / ``reranker_api_key`` /
@@ -276,16 +293,11 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     plugins = data.setdefault("plugins", {})
     plugins.setdefault("disabled", list(PluginsConfig().disabled))
     # snake_case keys: plugins.config is handed to the plugin factory verbatim.
-    # user_id / agent_id mirror memory.* so the recall identities match (the
-    # backend stamps these onto stored messages; a mismatch makes memory
-    # unretrievable — see MemoryConfig docstring).
+    # Identity is not seeded here — it comes from ServiceLocator, sourced from
+    # memory.userId / memory.agentId at plugin activation, not duplicated.
     plugins.setdefault("config", {}).setdefault(
         "everos-memory",
-        {
-            "base_url": "http://localhost:18791",
-            "user_id": mem.user_id,
-            "agent_id": mem.agent_id,
-        },
+        {"base_url": _DEFAULT_EVEROS_BASE_URL},
     )
 
     router_defaults = SkillForgeRouterConfig()
@@ -318,7 +330,8 @@ def set_memory_backend(
     """Patch ``memory.backend`` on the on-disk config. Returns previous value.
 
     ``"everos"`` enables the EverOS backend; ``None`` disables backend-driven
-    memory (falls back to the native Markdown store). The onboarding wizard's
+    memory entirely -- there is no second backend to fall back to, so recall and
+    storage simply stop happening. The onboarding wizard's
     memory step writes the model sections to ``~/.everos/raven/everos.toml``
     and flips this flag here.
     """

@@ -40,6 +40,12 @@ class _MockEverOS:
             "data": {"message_count": 0, "status": "accumulated"},
         }
         self.status_for_path: dict[str, int] = {}
+        # Mirrors a real everos >=1.2.1 /health. `rerank` is what decides
+        # whether agent-track search has to ask for the LLM rerank lane, so
+        # tests set it directly; None drops `capabilities` entirely, which is
+        # what a pre-1.2.1 server returns.
+        self.rerank_available: bool | None = True
+        self.embed_available: bool = True
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -49,12 +55,31 @@ class _MockEverOS:
             return httpx.Response(status, json=self.search_response)
         if path.endswith("/memory/add"):
             return httpx.Response(status, json=self.add_response)
+        if path == "/health":
+            payload: dict = {"status": "ok"}
+            if self.rerank_available is not None:
+                payload["capabilities"] = {
+                    "llm": True,
+                    "embed": self.embed_available,
+                    "rerank": self.rerank_available,
+                }
+            return httpx.Response(status, json=payload)
         if path.endswith("/memory/flush"):
             return httpx.Response(
                 status,
                 json={"request_id": "test-req", "data": {"status": "extracted"}},
             )
         return httpx.Response(404, text="not found")
+
+
+def _first(mock, suffix: str) -> httpx.Request:
+    """The first recorded request whose path ends with `suffix`.
+
+    Positional indexing broke once the adapter learned to probe /health
+    before an agent-track search; naming the endpoint keeps each assertion
+    about the call it is actually testing.
+    """
+    return next(r for r in mock.requests if r.url.path.endswith(suffix))
 
 
 @pytest.fixture
@@ -122,17 +147,143 @@ class TestHttpAdapterSearch:
             query="coffee",
             top_k=5,
         )
-        assert len(mock.requests) == 1
-        req = mock.requests[0]
+        assert [r.url.path for r in mock.requests] == ["/health", "/api/v2/memory/search"]
+        req = _first(mock, "/memory/search")
         assert req.method == "POST"
-        assert str(req.url) == "http://mem.test/api/v1/memory/search"
+        assert str(req.url) == "http://mem.test/api/v2/memory/search"
         body = json.loads(req.content.decode())
         # everos's SearchRequest wire contract is user_id XOR agent_id.
         assert body == {
             "user_id": "alice",
             "query": "coffee",
             "top_k": 5,
+            "include_profile": True,
         }
+
+    async def test_requests_profile_for_user_track(
+        self,
+        mock,
+        http_client,
+    ) -> None:
+        adapter = _HttpEverosAdapter(
+            "http://mem.test",
+            client=http_client,
+        )
+        await adapter.search(
+            user_id="alice",
+            agent_id=None,
+            query="coffee",
+            top_k=5,
+        )
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert body["include_profile"] is True
+        assert "app_id" not in body
+        assert "project_id" not in body
+
+    async def test_agent_track_omits_include_profile(
+        self,
+        mock,
+        http_client,
+    ) -> None:
+        adapter = _HttpEverosAdapter(
+            "http://mem.test",
+            client=http_client,
+        )
+        await adapter.search(
+            user_id=None,
+            agent_id="agent:default",
+            query="coffee",
+            top_k=5,
+        )
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert "include_profile" not in body
+
+    @staticmethod
+    async def _agent_search_body(mock, http_client) -> dict:
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+        await adapter.search(user_id=None, agent_id="agent:default", query="coffee", top_k=5)
+        return json.loads(_first(mock, "/memory/search").content.decode())
+
+    async def test_agent_track_asks_for_the_llm_lane_when_rerank_is_absent(self, mock, http_client) -> None:
+        """Agent-track HYBRID needs a rerank cross-encoder; without one the
+        server refuses the request and `recall` turns that into an empty
+        result, so the whole track dies silently. The LLM lane is the
+        documented fallback."""
+        mock.rerank_available = False
+
+        body = await self._agent_search_body(mock, http_client)
+
+        assert body["enable_llm_rerank"] is True
+
+    async def test_agent_track_leaves_the_cross_encoder_alone_when_it_exists(self, mock, http_client) -> None:
+        """The LLM lane costs one call per recall, so a configured rerank
+        provider must not be bypassed."""
+        mock.rerank_available = True
+
+        body = await self._agent_search_body(mock, http_client)
+
+        assert "enable_llm_rerank" not in body
+
+    async def test_a_server_without_capabilities_is_left_alone(self, mock, http_client) -> None:
+        """Pre-1.2.1 servers do not report capabilities, and their
+        SearchRequest forbids extra keys -- guessing would turn a working
+        request into a validation error."""
+        mock.rerank_available = None
+
+        body = await self._agent_search_body(mock, http_client)
+
+        assert "enable_llm_rerank" not in body
+
+    async def test_an_unreachable_health_endpoint_is_left_alone(self, mock, http_client) -> None:
+        mock.status_for_path["/health"] = 503
+
+        body = await self._agent_search_body(mock, http_client)
+
+        assert "enable_llm_rerank" not in body
+
+    async def test_capabilities_are_probed_once_per_adapter(self, mock, http_client) -> None:
+        """A tier change needs a server restart, so re-probing per recall
+        would spend a round trip on an answer that cannot have changed."""
+        mock.rerank_available = False
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        for _ in range(3):
+            await adapter.search(user_id=None, agent_id="agent:default", query="coffee", top_k=5)
+
+        assert [r.url.path for r in mock.requests].count("/health") == 1
+
+    async def test_the_user_track_drops_to_keyword_search_without_embedding(self, mock, http_client) -> None:
+        """The embedding degradation is not agent-specific: HYBRID is refused for
+        either owner, so both tracks have to ask for KEYWORD."""
+        mock.embed_available = False
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        await adapter.search(user_id="alice", agent_id=None, query="coffee", top_k=5)
+
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert body["method"] == "keyword"
+        assert "enable_llm_rerank" not in body
+
+    async def test_keyword_search_does_not_also_ask_for_the_llm_lane(self, mock, http_client) -> None:
+        """KEYWORD's agent path never reaches the cross-encoder, so paying for
+        an LLM rerank on top of it would buy nothing."""
+        mock.embed_available = False
+        mock.rerank_available = False
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        await adapter.search(user_id=None, agent_id="agent:default", query="coffee", top_k=5)
+
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert body["method"] == "keyword"
+        assert "enable_llm_rerank" not in body
+
+    async def test_a_healthy_server_gets_the_default_method(self, mock, http_client) -> None:
+        adapter = _HttpEverosAdapter("http://mem.test", client=http_client)
+
+        await adapter.search(user_id="alice", agent_id=None, query="coffee", top_k=5)
+
+        body = json.loads(_first(mock, "/memory/search").content.decode())
+        assert "method" not in body
 
     async def test_returns_jsonified_data(self, mock, http_client) -> None:
         mock.search_response = {
@@ -162,7 +313,7 @@ class TestHttpAdapterSearch:
         assert data.episodes[0].score == pytest.approx(0.7)
 
     async def test_5xx_raises(self, mock, http_client) -> None:
-        mock.status_for_path["/api/v1/memory/search"] = 503
+        mock.status_for_path["/api/v2/memory/search"] = 503
         adapter = _HttpEverosAdapter(
             "http://mem.test",
             client=http_client,
@@ -191,7 +342,7 @@ class TestHttpAdapterSearch:
             top_k=1,
         )
         # No Authorization header set.
-        assert "authorization" not in {h.lower() for h in mock.requests[0].headers}
+        assert "authorization" not in {h.lower() for h in _first(mock, "/memory/search").headers}
 
 
 class TestHttpAdapterAuth:
@@ -209,7 +360,7 @@ class TestHttpAdapterAuth:
             query="q",
             top_k=1,
         )
-        assert mock.requests[0].headers["Authorization"] == "Bearer secret-token"
+        assert _first(mock, "/memory/search").headers["Authorization"] == "Bearer secret-token"
         await client.aclose()
 
 
@@ -223,13 +374,14 @@ class TestHttpAdapterMemorize:
             {"sender_id": "alice", "role": "user", "timestamp": 1, "content": "hi"},
         ]
         await adapter.memorize("session-1", msgs)
-        assert mock.requests[0].method == "POST"
-        assert str(mock.requests[0].url).endswith("/api/v1/memory/add")
-        body = json.loads(mock.requests[0].content.decode())
+        add = _first(mock, "/memory/add")
+        assert add.method == "POST"
+        assert str(add.url).endswith("/api/v2/memory/add")
+        body = json.loads(add.content.decode())
         assert body == {"session_id": "session-1", "messages": msgs}
 
     async def test_5xx_raises(self, mock, http_client) -> None:
-        mock.status_for_path["/api/v1/memory/add"] = 500
+        mock.status_for_path["/api/v2/memory/add"] = 500
         adapter = _HttpEverosAdapter(
             "http://mem.test",
             client=http_client,
@@ -264,7 +416,7 @@ class TestHttpAdapterLifecycle:
         adapter = _HttpEverosAdapter("http://x", client=client)
         await adapter.aclose()
         # Caller-owned client still usable
-        resp = await client.post("http://x/api/v1/memory/search", json={})
+        resp = await client.post("http://x/api/v2/memory/search", json={})
         assert resp.status_code == 200
         await client.aclose()
 
@@ -282,7 +434,7 @@ class TestEndpointNormalization:
             top_k=1,
         )
         # No double-slash in path.
-        assert str(mock.requests[0].url) == ("http://mem.test/api/v1/memory/search")
+        assert str(_first(mock, "/memory/search").url) == ("http://mem.test/api/v2/memory/search")
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +445,7 @@ class TestEndpointNormalization:
 def _ctx(tmp_path: Path, **config: Any) -> PluginContext:
     return PluginContext(
         config=config,
-        services=ServiceLocator(workspace=tmp_path),
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
     )
 
 

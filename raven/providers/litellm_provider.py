@@ -5,6 +5,7 @@ import hashlib
 import os
 import secrets
 import string
+import uuid
 import warnings
 from collections.abc import AsyncIterator
 from typing import Any
@@ -12,9 +13,19 @@ from typing import Any
 import json_repair
 from loguru import logger
 
+from raven.providers import prompt_cache
 from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest
 from raven.providers.litellm_setup import import_litellm
-from raven.providers.registry import find_by_model, find_gateway
+from raven.providers.prompt_cache import CACHE_CONTROL
+from raven.providers.reasoning import split_orphan_think
+from raven.providers.registry import (
+    canonical_provider_name,
+    find_by_keywords,
+    find_by_model,
+    find_by_name,
+    find_gateway,
+)
+from raven.providers.wire import wire_model
 
 litellm = import_litellm()
 acompletion = litellm.acompletion
@@ -55,6 +66,35 @@ def _short_tool_id() -> str:
     return "".join(secrets.choice(_ALNUM) for _ in range(9))
 
 
+def _merge_extra_body(kwargs: dict[str, Any], wire_extra_body: dict[str, Any]) -> None:
+    """Merge the provider's built-in extra_body into kwargs instead of overwriting it.
+
+    A model_overrides entry (see _apply_model_overrides) may have already placed
+    a user extra_body dict in kwargs -- for example Qwen3's
+    extra_body.chat_template_kwargs.enable_thinking. Assigning wire_extra_body
+    over it would silently drop those keys. On a key collision, the user's
+    value wins: everything wire_extra_body carries is a shipped default
+    workaround (see capabilities._WIRE_OVERRIDES -- disabling OpenRouter's
+    qwen reasoning mode is the whole table today), and model_overrides is
+    documented as the channel that overrides shipped defaults, so a collision
+    is the user deliberately reversing one.
+    """
+    existing = kwargs.get("extra_body")
+    if isinstance(existing, dict):
+        kwargs["extra_body"] = {**wire_extra_body, **existing}
+    else:
+        kwargs["extra_body"] = wire_extra_body
+
+
+def session_affinity_headers() -> dict[str, str]:
+    """Headers pinning one caller to one backend replica.
+
+    Self-hosted OpenAI-compatible backends (vLLM and friends) route by this
+    header, so a stable value per provider instance keeps prefix-cache hits warm.
+    """
+    return {"x-session-affinity": uuid.uuid4().hex}
+
+
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
@@ -73,8 +113,18 @@ class LiteLLMProvider(LLMProvider):
         provider_name: str | None = None,
         disable_auto_cache_control: bool = False,
         extra_body: dict[str, Any] | None = None,
+        model_overrides: dict[str, dict[str, Any]] | None = None,
+        *,
+        unparsed_reasoning: bool | None = None,
     ):
         super().__init__(api_key, api_base)
+        # None: derive from the resolved spec, as emits_unparsed_reasoning always
+        # did. An explicit bool overrides that derivation outright -- for a
+        # caller that already knows the answer and for which the spec would
+        # guess wrong, e.g. a per-model routing endpoint built with
+        # provider_name="custom" for its api_base/api_key shape alone, not
+        # because the backend behind it is a self-hosted inference server.
+        self._unparsed_reasoning = unparsed_reasoning
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         # When a TokenStrategy (e.g. CacheOptimizer) handles cache_control
@@ -85,10 +135,16 @@ class LiteLLMProvider(LLMProvider):
         # Common use: OpenRouter routing affinity to keep prompt-cache hits warm,
         #   extra_body={"provider": {"order": ["Anthropic"], "allow_fallbacks": False}}
         self.extra_body = extra_body or {}
+        # User-configured per-model parameter overrides; win over the registry's.
+        self.model_overrides = model_overrides or {}
 
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
         # api_key / api_base are fallback for auto-detection.
+        # Kept because the id alone cannot say where a request goes: a bare
+        # `anthropic/claude-...` sent through this client reads as Anthropic's
+        # wire, which is not the wire it will travel on.
+        self._provider_name = provider_name or ""
         self._gateway = find_gateway(provider_name, api_key, api_base)
         if self._gateway and self._gateway.name == "openrouter":
             self.extra_headers = {**_OPENROUTER_ATTRIBUTION, **self.extra_headers}
@@ -97,9 +153,6 @@ class LiteLLMProvider(LLMProvider):
         if api_key:
             self._setup_env(api_key, api_base, default_model)
 
-        if api_base:
-            litellm.api_base = api_base
-
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
 
@@ -107,6 +160,8 @@ class LiteLLMProvider(LLMProvider):
         """Set environment variables based on detected provider."""
         spec = self._gateway or find_by_model(model)
         if not spec:
+            # No spec: the key still reaches LiteLLM as an explicit api_key
+            # kwarg on every call, so nothing needs to go into the environment.
             return
         if not spec.env_key:
             # OAuth/provider-only specs (for example: openai_codex)
@@ -127,42 +182,107 @@ class LiteLLMProvider(LLMProvider):
             resolved = resolved.replace("{api_base}", effective_base)
             os.environ.setdefault(env_name, resolved)
 
+    def _strip_gateway_prefix(self, model: str) -> str:
+        """Drop this gateway's own prefix, leaving the upstream vendor's id."""
+        if not self._gateway:
+            return model
+        prefix = f"{self._gateway.model_prefix}/"
+        return model[len(prefix) :] if model.startswith(prefix) else model
+
     def _resolve_model(self, model: str) -> str:
-        """Resolve model name by applying provider/gateway prefixes."""
-        if self._gateway:
-            # Gateway mode: apply gateway prefix, skip provider-specific prefixes
-            prefix = self._gateway.litellm_prefix
-            if self._gateway.strip_model_prefix:
-                model = model.split("/")[-1]
-            if prefix and not model.startswith(f"{prefix}/"):
-                model = f"{prefix}/{model}"
-            return model
+        """The id this request is sent under. See ``providers.wire``."""
+        return wire_model(model, gateway=self._gateway)
 
-        # Standard mode: auto-prefix for known providers
-        spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            model = self._canonicalize_explicit_prefix(model, spec.name, spec.litellm_prefix)
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
+    def can_serve(self, model: str) -> bool:
+        """See ``LLMProvider.can_serve``.
 
-        return model
+        A gateway instance answers for any model -- it is the one deciding
+        which upstream vendor actually serves it, and its credentials are the
+        gateway's own, not tied to one vendor.
 
-    @staticmethod
-    def _canonicalize_explicit_prefix(model: str, spec_name: str, canonical_prefix: str) -> str:
-        """Normalize explicit provider prefixes like `github-copilot/...`."""
-        if "/" not in model:
-            return model
-        prefix, remainder = model.split("/", 1)
-        if prefix.lower().replace("-", "_") != spec_name:
-            return model
-        return f"{canonical_prefix}/{remainder}"
+        For a direct instance, this only vetoes the one case both sides are
+        certain about: this instance's own provider_name resolves to a known,
+        non-OAuth spec, the model resolves to a *different* known spec, and
+        the two disagree -- that is one vendor's key answering for another
+        vendor's model, rejected outright. Every other case is let through
+        rather than guessed away here:
+          - this instance's own identity does not resolve to a spec (empty
+            provider_name, "auto", or a custom passthrough name LiteLLM
+            recognizes natively but Raven has no ProviderSpec for, e.g.
+            nebius/fireworks/together) -- there is nothing to compare against;
+          - the resolved spec is OAuth-based (e.g. github_copilot): one OAuth
+            grant can serve several upstream vendors, so a spec mismatch there
+            says nothing about whether this instance can serve the model;
+          - the model resolves to no spec at all (custom endpoints, bare ids
+            only LiteLLM itself recognizes).
+        In all of those, the model is not known to be wrong for this
+        instance, so it fails loudly at the wire instead of being guessed
+        away here.
+        """
+        if self._gateway is not None:
+            return True
+        mine = find_by_name(canonical_provider_name(self._provider_name))
+        if mine is None or mine.is_oauth:
+            return True
+        theirs = find_by_model(model)
+        if theirs is None:
+            return True
+        return theirs.name == mine.name
+
+    def emits_unparsed_reasoning(self) -> bool:
+        """See ``LLMProvider.emits_unparsed_reasoning``.
+
+        ``self._unparsed_reasoning``, when set explicitly at construction, wins
+        outright: it exists for a caller that already knows the answer and for
+        which the spec-based guess below is wrong -- a per-model routing
+        endpoint is built with ``provider_name="custom"`` for its api_base /
+        api_key shape alone, not because the backend behind it is known to be a
+        self-hosted inference server, so ``custom`` there would falsely claim
+        every one of its responses.
+
+        Otherwise, ``self._gateway`` already answers this for both shapes it
+        can hold: a real network gateway (OpenRouter, AiHubMix) fronts one of
+        the large hosted vendors below it, so a bare ``</think>`` in content
+        is just content; the generic ``custom`` endpoint and a local spec
+        (hosted_vllm, ollama_chat) *are* the self-hosted inference server this
+        normalization exists for. When nothing was auto-detected, fall back to
+        whatever spec ``provider_name`` resolves to.
+
+        An identity that resolves to nothing answers False, the same reading
+        ``can_serve`` settled on: an unresolved name says nothing about the
+        backend, and several production constructors (the proactive planner,
+        the evolver) build direct big-vendor connections with no
+        ``provider_name`` at all -- guessing "self-hosted" there re-opens the
+        false-positive cut on ordinary content this gate exists to close. A
+        genuinely self-hosted backend is reached through ``custom`` or a
+        local spec, which is where the parser-less sglang/vLLM shape comes
+        from; a resolved direct big vendor (anthropic, openai, ...) never
+        produces it behind its own API.
+        """
+        if self._unparsed_reasoning is not None:
+            return self._unparsed_reasoning
+        spec = self._gateway or find_by_name(canonical_provider_name(self._provider_name))
+        return spec is not None and (spec.is_local or spec.name == "custom")
 
     def _supports_cache_control(self, model: str) -> bool:
-        """Return True when the provider supports cache_control on content blocks."""
-        if self._gateway is not None:
-            return self._gateway.supports_prompt_caching
-        spec = find_by_model(model)
-        return spec is not None and spec.supports_prompt_caching
+        """Return True when this request may carry cache_control blocks.
+
+        Decided by ``providers.prompt_cache``, which the token strategies ask too
+        -- three copies of this question disagreed, and the one here could not
+        have answered for the marks they place.
+
+        The address falls back to the auto-detected gateway when no
+        ``provider_name`` was given: several production constructors (the
+        evolver's launch models, the sentinel planner) pass only an
+        ``api_base``, and answering from the model id alone reads
+        ``anthropic/claude-...`` as Anthropic's wire while the request actually
+        travels through whatever gateway that base names -- a wire that may
+        have nowhere honest to put the field.
+        """
+        from raven.providers.prompt_cache import accepts_cache_control
+
+        addressed = self._provider_name or (self._gateway.name if self._gateway else "")
+        return accepts_cache_control(model, addressed_to=addressed)
 
     def _apply_cache_control(
         self,
@@ -175,10 +295,10 @@ class LiteLLMProvider(LLMProvider):
             if msg.get("role") == "system":
                 content = msg["content"]
                 if isinstance(content, str):
-                    new_content = [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]
+                    new_content = [{"type": "text", "text": content, "cache_control": CACHE_CONTROL}]
                 else:
                     new_content = list(content)
-                    new_content[-1] = {**new_content[-1], "cache_control": {"type": "ephemeral"}}
+                    new_content[-1] = {**new_content[-1], "cache_control": CACHE_CONTROL}
                 new_messages.append({**msg, "content": new_content})
             else:
                 new_messages.append(msg)
@@ -186,19 +306,31 @@ class LiteLLMProvider(LLMProvider):
         new_tools = tools
         if tools:
             new_tools = list(tools)
-            new_tools[-1] = {**new_tools[-1], "cache_control": {"type": "ephemeral"}}
+            new_tools[-1] = {**new_tools[-1], "cache_control": CACHE_CONTROL}
 
         return new_messages, new_tools
 
     def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
-        """Apply model-specific parameter overrides from the registry."""
+        """Layer per-model parameter overrides: registry defaults, config on top.
+
+        Config supplies one parameter without discarding the rest of the
+        registry's entry -- Kimi keeps its mandated temperature even when the
+        user only wanted to set top_p.
+        """
         model_lower = model.lower()
-        spec = find_by_model(model)
+        # A gateway-routed id names the gateway and its upstream, not the vendor
+        # whose quirks these defaults encode -- so match on keywords there.
+        spec = find_by_keywords(self._strip_gateway_prefix(model)) if self._gateway else find_by_model(model)
         if spec:
             for pattern, overrides in spec.model_overrides:
                 if pattern in model_lower:
                     kwargs.update(overrides)
-                    return
+                    break
+        # Longest match wins, so "kimi-k2.5" beats a broad "kimi" regardless of
+        # the order the entries happen to be written in.
+        matches = [(p, o) for p, o in self.model_overrides.items() if p.lower() in model_lower]
+        if matches:
+            kwargs.update(max(matches, key=lambda item: len(item[0]))[1])
 
     @staticmethod
     def _extra_msg_keys(original_model: str, resolved_model: str) -> frozenset[str]:
@@ -280,8 +412,11 @@ class LiteLLMProvider(LLMProvider):
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
-        if self._supports_cache_control(original_model) and not self.disable_auto_cache_control:
-            messages, tools = self._apply_cache_control(messages, tools)
+        if self._supports_cache_control(original_model):
+            if not self.disable_auto_cache_control:
+                messages, tools = self._apply_cache_control(messages, tools)
+        else:
+            messages, tools = prompt_cache.strip(messages, tools)
 
         # Clamp max_tokens to at least 1 — negative or zero values cause
         # LiteLLM to reject the request with "max_tokens must be at least 1".
@@ -316,7 +451,7 @@ class LiteLLMProvider(LLMProvider):
 
         # Pass provider-specific body extras (e.g. OpenRouter routing pin)
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
 
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
@@ -364,8 +499,11 @@ class LiteLLMProvider(LLMProvider):
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
 
-        if self._supports_cache_control(original_model) and not self.disable_auto_cache_control:
-            messages, tools = self._apply_cache_control(messages, tools)
+        if self._supports_cache_control(original_model):
+            if not self.disable_auto_cache_control:
+                messages, tools = self._apply_cache_control(messages, tools)
+        else:
+            messages, tools = prompt_cache.strip(messages, tools)
 
         max_tokens = max(1, max_tokens)
 
@@ -391,7 +529,7 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
         if self.extra_body:
-            kwargs["extra_body"] = self.extra_body
+            _merge_extra_body(kwargs, self.extra_body)
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
             kwargs["drop_params"] = True
@@ -399,26 +537,79 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        response = await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)
+        def _retry_without_breakpoints(exc: Exception) -> bool:
+            """Learn the refusal and take the marks off, or say this is not one.
+
+            The one retry this path takes. Restarting a *partially streamed* call
+            is the problem that kept retry out of here, and this is not that: the
+            refusal arrives before any chunk has been handed to the caller, so
+            nothing has been said that would have to be unsaid. Without it the
+            learned downgrade never reaches the surface that actually streams --
+            the TUI, where the affected model answered 400 on every single turn.
+            """
+            if prompt_cache.is_suppressed(original_model) or not prompt_cache.is_rejection(exc):
+                return False
+            prompt_cache.suppress(original_model)
+            kwargs["messages"], stripped = prompt_cache.strip(kwargs["messages"], kwargs.get("tools"))
+            if stripped is not None:
+                kwargs["tools"] = stripped
+            return True
+
+        async def _open():
+            return (await asyncio.wait_for(acompletion(**kwargs), self.generation.timeout)).__aiter__()
+
+        async def _close(target: Any) -> None:
+            aclose = getattr(target, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
         # Per-chunk idle cap: the timer resets on every chunk, so a long but
         # steadily-progressing generation is fine while a mid-stream stall (no
         # bytes for `timeout` seconds) raises TimeoutError instead of hanging.
-        # aclose() in finally closes the underlying HTTP stream deterministically
-        # on that timeout, mirroring the `async with` cleanup on the other paths.
-        stream = response.__aiter__()
+        # Everything from the open onward sits inside the one try/finally, so the
+        # underlying HTTP stream is closed deterministically on any exit -- a
+        # first-chunk timeout included, which is the most likely one there is
+        # (gateway queueing, cold start).
+        # A chunk of None is a chunk, not the end of the stream. Pulling the
+        # first one before the loop needs a value meaning "there was none", and
+        # reusing None for it would let a provider that yields one truncate the
+        # response silently -- which is not what the loop did before.
+        done = object()
+
+        stream: Any = None
         try:
-            while True:
+            # The open and the first pull are one unit, and the `except` has to
+            # cover both: an OpenAI-shaped route raises at the open, and a gateway
+            # that defers the request until the first pull raises there instead.
+            try:
+                stream = await _open()
+                first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+            except StopAsyncIteration:
+                first = done
+            except Exception as exc:
+                if not _retry_without_breakpoints(exc):
+                    raise
+                # The refused stream is finished with; closing it before opening
+                # the replacement keeps at most one live at a time. It is None
+                # when the open itself was what failed.
+                await _close(stream)
+                stream = await _open()
+                try:
+                    first = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
+                except StopAsyncIteration:
+                    first = done
+
+            chunk = first
+            while chunk is not done:
+                delta = self._normalize_stream_chunk(chunk)
+                if delta is not None:
+                    yield delta
                 try:
                     chunk = await asyncio.wait_for(stream.__anext__(), self.generation.timeout)
                 except StopAsyncIteration:
                     break
-                delta = self._normalize_stream_chunk(chunk)
-                if delta is not None:
-                    yield delta
         finally:
-            aclose = getattr(stream, "aclose", None)
-            if aclose is not None:
-                await aclose()
+            await _close(stream)
 
     def _normalize_stream_chunk(self, chunk: Any) -> StreamDelta | None:
         """Normalize a raw provider chunk into a StreamDelta.
@@ -569,6 +760,10 @@ class LiteLLMProvider(LLMProvider):
         reasoning_content = getattr(message, "reasoning_content", None) or None
         thinking_blocks = getattr(message, "thinking_blocks", None) or None
 
+        if not reasoning_content and isinstance(content, str) and self.emits_unparsed_reasoning():
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning or reasoning_content
+
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
@@ -577,6 +772,16 @@ class LiteLLMProvider(LLMProvider):
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
         )
+
+    @property
+    def provider_name(self) -> str:
+        """The config section this provider was built for, or ``""``.
+
+        Read by callers deciding whether the model string is the operator's
+        own naming (a ``custom`` gateway serves whatever its endpoint calls
+        the model) -- see ``capabilities._model_id_is_caller_chosen``.
+        """
+        return self._provider_name
 
     def get_default_model(self) -> str:
         """Get the default model."""

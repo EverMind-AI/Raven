@@ -137,10 +137,30 @@ async def test_config_set_missing_key_param_raises_validation(fake_home: Path) -
 # ----------------------------------------------------------------------------
 
 
+class _FakeLoop:
+    """Stand-in for AgentLoop's half of the switch contract.
+
+    Records the ``set_provider`` calls: assigning ``provider``/``model``
+    directly would leave the subagent manager, the context engine and the
+    consolidator on the old provider, so the handler must go through the
+    method, not the attributes.
+    """
+
+    def __init__(self, provider: object, model: str) -> None:
+        self.provider = provider
+        self.model = model
+        self.switches: list[tuple[object, str]] = []
+
+    def set_provider(self, provider: object, model: str) -> None:
+        self.provider = provider
+        self.model = model
+        self.switches.append((provider, model))
+
+
 async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, monkeypatch) -> None:
     import raven.tui_rpc.methods.config as config_mod
 
-    loop = SimpleNamespace(provider="old-prov", model="old-model")
+    loop = _FakeLoop("old-prov", "old-model")
     new_provider = SimpleNamespace(name="new-prov")
 
     monkeypatch.setattr(config_mod, "is_turn_active", lambda _key: False)
@@ -165,6 +185,11 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
     assert result["value"] == "anthropic/claude-opus-4-8"
     assert loop.model == "anthropic/claude-opus-4-8"
     assert loop.provider is new_provider
+    # Routed through set_provider, so everything holding the old provider
+    # (subagents, context-engine segments, consolidator) gets told too --
+    # including the context window, which the loop re-resolves at adoption
+    # (pinned in test_agent_loop_model_switch, where the adopt path lives).
+    assert loop.switches == [(new_provider, "anthropic/claude-opus-4-8")]
 
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
@@ -174,6 +199,11 @@ async def test_config_set_model_reassigns_loop_and_persists(fake_home: Path, mon
 async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
     # A bare `/model <name>` carries no provider; _set_model must derive it from
     # the model so a previously-forced provider does not silently mis-route.
+    # Configured, because an id naming a vendor with no section is deliberately
+    # left on `auto`: pinning it would stop routing before the fallback that lets
+    # a gateway serve that vendor's models.
+    _pin(fake_home, "auto", {"anthropic": {"api_key": "sk-ant"}})
+
     result = await config_set(
         {"key": "model", "value": "anthropic/claude-opus-4-8"},
         agent_loop_factory=lambda: None,
@@ -182,6 +212,23 @@ async def test_config_set_model_bare_derives_provider(fake_home: Path) -> None:
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
+
+
+async def test_config_set_model_leaves_an_unconfigured_vendor_on_auto(fake_home: Path) -> None:
+    """The picker must not write a pin that stops routing.
+
+    A pin is answered with the named vendor's section whether or not it holds
+    credentials, so pinning an unconfigured one fails every request on a missing
+    key -- never reaching the fallback written for a gateway serving that
+    vendor's models. An OpenRouter-only install picking `anthropic/...` would
+    reach nothing at all.
+    """
+    _pin(fake_home, "auto", {"openrouter": {"api_key": "sk-or"}})
+
+    await config_set({"key": "model", "value": "anthropic/claude-opus-4-8"}, agent_loop_factory=lambda: None)
+
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "auto"
 
 
 async def test_config_set_model_rejected_during_active_turn(fake_home: Path, monkeypatch) -> None:
@@ -219,7 +266,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
         lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
     )
 
-    loop = SimpleNamespace(provider="keep-prov", model="anthropic/claude-sonnet-4-5")
+    loop = _FakeLoop("keep-prov", "anthropic/claude-sonnet-4-5")
     with pytest.raises(ModelNotAvailableError):
         await config_set(
             {
@@ -233,6 +280,7 @@ async def test_config_set_model_unconstructable_preserves_previous(fake_home: Pa
     # Loop untouched and on-disk model preserved.
     assert loop.model == "anthropic/claude-sonnet-4-5"
     assert loop.provider == "keep-prov"
+    assert loop.switches == []
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-sonnet-4-5"
 
@@ -293,3 +341,128 @@ async def test_config_get_refuses_malformed_config(fake_home: Path) -> None:
     cfg.write_text('{\n  "tui": {"theme": "dark"},\n  // bad\n}\n', encoding="utf-8")
     with pytest.raises(ConfigValidationError):
         await config_get({"keys": ["tui.theme"]})
+
+
+def _pin(home: Path, provider: str, providers: dict | None = None) -> None:
+    """Write a config with a provider pinned, as the picker leaves it."""
+    cfg = home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": providers if providers is not None else {"openai": {"api_key": "sk-openai"}},
+                "agents": {"defaults": {"model": "gpt-4o", "provider": provider}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    import raven.config.loader as loader
+
+    loader._current_config_path = None
+
+
+async def test_a_bare_id_the_pinned_provider_does_not_serve_is_refused(fake_home: Path) -> None:
+    """The pin decided routing for a model that names nobody, and it was wrong.
+
+    Selecting anything from the picker pins its provider, so by the time someone
+    types `/model <name>` there is almost always one. A bare id matching no
+    provider's keywords is what a vendor Raven holds no spec for looks like, and
+    keeping the pin sent that provider's key to a different vendor.
+
+    Nothing here can tell whose model it is, so it says so rather than picking.
+    """
+    _pin(fake_home, "openai")
+
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await config_set(
+            {"key": "model", "value": "mistral-large-latest"},
+            agent_loop_factory=lambda: None,
+        )
+    assert "mistral-large-latest" in str(excinfo.value)
+
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "gpt-4o", "a refused switch must not write"
+    assert cfg["agents"]["defaults"]["provider"] == "openai"
+
+
+async def test_a_bare_id_the_pinned_provider_does_serve_keeps_the_pin(fake_home: Path) -> None:
+    """Refusing every bare id would break the case where the pin was right.
+
+    A user who configured a spec-less vendor and types one of its model names is
+    not being ambiguous -- that provider serves it. Asked of its own list and the
+    catalogue rather than assumed either way.
+    """
+    _pin(fake_home, "mistral", {"mistral": {"api_key": "sk-mistral"}})
+
+    result = await config_set(
+        {"key": "model", "value": "mistral-large-latest"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "mistral"
+    # Stored naming its provider, which is what every surface writes: the same
+    # input through `raven provider use` produced the qualified form while this
+    # one kept it bare, so the two disagreed about what the user had chosen.
+    assert cfg["agents"]["defaults"]["model"] == "mistral/mistral-large-latest"
+
+
+async def test_a_local_deployment_keeps_its_pin_for_any_bare_id(fake_home: Path) -> None:
+    """Its server names whatever models it likes, and it holds no key to mis-route."""
+    _pin(fake_home, "ollama_chat", {"ollama_chat": {"api_base": "http://gpu-box:11434"}})
+
+    result = await config_set(
+        {"key": "model", "value": "some-local-build"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "ollama_chat"
+
+
+async def test_a_prefixed_id_no_spec_matches_still_hands_routing_back(fake_home: Path) -> None:
+    """Unchanged: the prefix names the vendor, so the pin has no claim on it."""
+    _pin(fake_home, "openai")
+
+    result = await config_set(
+        {"key": "model", "value": "mistral/mistral-large-latest"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "auto"
+
+
+async def test_an_explicit_provider_is_never_second_guessed(fake_home: Path) -> None:
+    """The picker sends one with every selection; that path must not reach the gate."""
+    _pin(fake_home, "openai")
+
+    result = await config_set(
+        {"key": "model", "value": "some-deployment", "provider": "azure_openai"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "azure_openai"
+
+
+async def test_a_bare_id_the_pinned_provider_lists_itself_keeps_the_pin(fake_home: Path) -> None:
+    """The provider's own curated list is evidence too, and it stores ids bare.
+
+    `model.add_model` writes what the user typed, so a hand-added id sits there
+    unprefixed. Reading only the catalogue's prefixed spelling would refuse a model
+    the user had already told us this provider serves.
+    """
+    _pin(
+        fake_home,
+        "mistral",
+        {"mistral": {"api_key": "sk-mistral", "models": ["some-private-tune"]}},
+    )
+
+    result = await config_set(
+        {"key": "model", "value": "some-private-tune"},
+        agent_loop_factory=lambda: None,
+    )
+    assert result["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["provider"] == "mistral"

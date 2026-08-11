@@ -40,6 +40,15 @@ class TurnContext:
     channel: str | None = None
     chat_id: str | None = None
     selected_skills: list[Any] | None = None
+    # Whether this turn's model can see a picture. Decided by the loop (it owns
+    # the provider and the model id) and carried here because the message is
+    # built down in render, which knows neither. Defaults True so a caller that
+    # does not set it keeps the old inline-everything behavior.
+    can_see_images: bool = True
+    # Name of a registered tool that can read an attachment the model cannot,
+    # or None when none is (it comes from an optional plugin). Naming a tool the
+    # model does not have reads as an instruction it cannot follow.
+    describe_tool: str | None = None
 
 
 @dataclass
@@ -351,6 +360,18 @@ class CuratorAssembler:
         # Per-turn system prefix (seg1–5) + user message; set by
         # CuratorSegmentBuilder before any build/validate call.
         self.prefix: "AssembledPrefix | None" = None
+
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built."""
+        self.provider = provider
+        self.model = model
+        self.trimmer.set_provider(provider, model)
+
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch: the trimmer must budget against the
+        new model's window, not the one it was built with."""
+        self.context_window_tokens = tokens
+        self.trimmer.context_window_tokens = tokens
 
     @staticmethod
     def working_state_segment(working_state: str | None) -> str:

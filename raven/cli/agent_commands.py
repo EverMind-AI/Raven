@@ -214,16 +214,13 @@ def register(app: typer.Typer) -> None:
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
 
-        # Startup gate: when the required config (a provider key + default
-        # model) is missing, run the onboarding wizard first. Only on an
-        # interactive TTY — scripted one-shots (`-m`) and non-TTY pipes must
+        # Startup gate: a config that cannot reach a model is settled first. Only
+        # on an interactive TTY -- scripted one-shots (`-m`) and non-TTY pipes must
         # fail loudly later rather than block on prompts.
-        from raven.cli.onboard_commands import _is_config_populated
+        if message is None and _stdout_isatty():
+            from raven.cli.onboard_commands import ensure_ready_to_start
 
-        if message is None and _stdout_isatty() and not _is_config_populated():
-            from raven.cli.onboard_commands import ensure_configured_or_onboard
-
-            ensure_configured_or_onboard()
+            ensure_ready_to_start()
 
         from loguru import logger
 
@@ -462,10 +459,6 @@ def register(app: typer.Typer) -> None:
                             )
 
             asyncio.run(run_once())
-            # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
-            # thread, torch) segfault during interpreter finalization. The exit
-            # chokepoint in raven.cli.commands.run hard-exits past finalization
-            # when that hazard is live, so this path just returns normally.
         else:
             # Interactive mode — user turns run through spine (submit -> lane ->
             # hub -> CliOutlet); cron/sentinel nudges go via the spine hub

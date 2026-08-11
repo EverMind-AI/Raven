@@ -24,6 +24,10 @@ from raven.utils.helpers import build_assistant_message
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
 _SPAWN_WINDOW_SECONDS = 3600
+_ABORTED_ACTION_RESULT = (
+    "The subtask stopped because a safety decision terminated the requested operation. "
+    "No alternative method was attempted."
+)
 
 
 class SubagentManager:
@@ -71,6 +75,19 @@ class SubagentManager:
         # pruned to the rolling window on access, so it self-bounds.
         self._session_spawn_times: dict[str, deque[float]] = {}
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Subagents run on the parent's provider, so a switch that is not
+        propagated here leaves every spawn calling the credential the loop
+        has already abandoned. Only spawns requested after this call are
+        affected: a subagent is a detached task that outlives the turn that
+        spawned it, so the loop's park cannot cover it and ``spawn``
+        snapshots the pair it was asked for.
+        """
+        self.provider = provider
+        self.model = model
+
     async def spawn(
         self,
         task: str,
@@ -103,7 +120,13 @@ class SubagentManager:
         display_label = label or task[:30] + ("..." if len(task) > 30 else "")
         origin = {"channel": origin_channel, "chat_id": origin_chat_id, "session_key": quota_key}
 
-        bg_task = asyncio.create_task(self._run_subagent(task_id, task, display_label, origin))
+        # Snapshot here rather than where the task starts running: it queues
+        # behind the concurrency gate and a sandbox boot first, and a switch
+        # landing in that window would hand this task an endpoint the user
+        # chose after asking for it.
+        bg_task = asyncio.create_task(
+            self._run_subagent(task_id, task, display_label, origin, self.provider, self.model)
+        )
         self._running_tasks[task_id] = bg_task
         if session_key:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
@@ -127,6 +150,8 @@ class SubagentManager:
         task: str,
         label: str,
         origin: dict[str, str],
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
@@ -137,7 +162,7 @@ class SubagentManager:
             async with self._gate:
                 executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
                 async with executor:
-                    await self._run_subagent_inner(task_id, task, label, origin, executor)
+                    await self._run_subagent_inner(task_id, task, label, origin, executor, provider, model)
         except Exception as e:
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
@@ -150,6 +175,8 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
         executor: Any,
+        provider: LLMProvider,
+        model: str,
     ) -> None:
         try:
             # Build subagent tools (no message tool, no spawn tool)
@@ -182,14 +209,15 @@ class SubagentManager:
             max_iterations = 15
             iteration = 0
             final_result: str | None = None
+            final_status = "ok"
 
             while iteration < max_iterations:
                 iteration += 1
 
-                response = await self.provider.chat_with_retry(
+                response = await provider.chat_with_retry(
                     messages=messages,
                     tools=tools.get_definitions(),
-                    model=self.model,
+                    model=model,
                 )
 
                 if response.has_tool_calls:
@@ -220,6 +248,17 @@ class SubagentManager:
                                 "content": wrap_untrusted(result, source=tool_call.name),
                             }
                         )
+                        if getattr(result, "abort_action", False):
+                            # Subagents must enforce the same terminal safety
+                            # signal as the main loop. Returning to the model
+                            # would let it translate a rejected operation into
+                            # another command or interpreter, while continuing
+                            # this batch would execute already-proposed siblings.
+                            final_result = _ABORTED_ACTION_RESULT
+                            final_status = "error"
+                            break
+                    if final_result is not None:
+                        break
                 else:
                     final_result = response.content
                     break
@@ -227,8 +266,8 @@ class SubagentManager:
             if final_result is None:
                 final_result = "Task completed but no final response was generated."
 
-            logger.info("Subagent [{}] completed successfully", task_id)
-            await self._announce_result(task_id, label, task, final_result, origin, "ok")
+            logger.info("Subagent [{}] finished with status {}", task_id, final_status)
+            await self._announce_result(task_id, label, task, final_result, origin, final_status)
 
         except Exception as e:
             error_msg = f"Error: {str(e)}"

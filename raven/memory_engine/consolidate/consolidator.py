@@ -546,13 +546,17 @@ def _tokenize_for_relevance(text: str) -> set[str]:
     return {t.lower() for t in _RELEVANCE_TOKEN_RE.findall(text)}
 
 
-def _parse_user_md_sections(content: str) -> dict[str, str]:
+def parse_user_md_sections(content: str) -> dict[str, str]:
     """Return ``{H2_heading_line: body}`` for every H2 section in ``content``.
 
     The H1 preamble (text before the first H2) is dropped. Body is the
     text between the heading and the next H2 (or EOF) with leading and
     trailing blank lines stripped. Order of insertion matches order in
     the source file.
+
+    Public because cold-start import writes into the same ``user.md``: parsing it
+    a second way there is how the two sides would come to disagree about what a
+    section is.
     """
     lines = content.splitlines()
     sections: dict[str, str] = {}
@@ -635,7 +639,7 @@ def _ensure_foresight_at_end(content: str) -> str:
     splice so the auto-managed Foresight pillar can't get visually
     buried by a freshly-appended ``## Projects`` / ``## Habits`` etc.
     """
-    sections = _parse_user_md_sections(content)
+    sections = parse_user_md_sections(content)
     if _FORESIGHT_HEADING not in sections:
         return content
     h2_order = list(sections.keys())
@@ -833,7 +837,7 @@ class MemoryStore:
 
         with self.locked():
             current = self.read_long_term()
-            sections = _parse_user_md_sections(current)
+            sections = parse_user_md_sections(current)
 
             # Existing bullets in ## Foresight section, preserved verbatim
             # so we don't churn formatting on rewrite.
@@ -1018,7 +1022,7 @@ class MemoryStore:
             return ""
         if not current_message or not current_message.strip():
             return f"## Long-term Memory\n{long_term}"
-        sections = _parse_user_md_sections(long_term)
+        sections = parse_user_md_sections(long_term)
         if not sections:
             return f"## Long-term Memory\n{long_term}"
         selected = self._select_relevant_sections(
@@ -1718,6 +1722,11 @@ class MemoryConsolidator:
         # Off by default.
         self.enable_foresight = enable_foresight
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built."""
+        self.provider = provider
+        self.model = model
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""

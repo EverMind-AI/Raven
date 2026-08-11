@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from raven.cli._helpers import load_runtime_config, make_provider
-from raven.providers.registry import find_by_model
+from raven.providers import pin
+from raven.providers.auth import MissingCredentialsError
+from raven.providers.wire import stored_model_id
 from raven.tui_rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
@@ -295,12 +297,24 @@ def _set_model(
             data={"field": "provider", "got": repr(new_provider)},
         )
     # Bare `/model <name>` carries no provider; derive it from the model so a
-    # previously-forced provider does not silently mis-route the new model.
-    # Gateway/local models (no keyword match) leave the forced provider intact.
+    # previously-forced provider does not silently mis-route the new model. The
+    # picker always sends one, so this is the hand-typed path. The rule itself is
+    # `providers.pin`, which `raven provider use` asks too.
     if new_provider is None:
-        spec = find_by_model(raw_value)
-        if spec is not None:
-            new_provider = spec.name
+        new_provider = pin.resolve(raw_value, pinned=_get_nested(_load_config(), "agents.defaults.provider") or "")
+        if new_provider is None:
+            raise ConfigValidationError(
+                f"cannot tell which provider serves {raw_value!r}; qualify it as <provider>/{raw_value}",
+                data={"field": "value", "got": raw_value},
+            )
+
+    # Stored the way every other surface stores it -- naming its provider -- so
+    # the three cannot disagree about what was chosen. A hand-typed bare id used
+    # to be written raw here while the wizard qualified the same input, which is
+    # the spelling drift the storage rule exists to end. `auto` names nobody,
+    # so there is no prefix to add.
+    if new_provider and new_provider != pin.AUTO:
+        raw_value = stored_model_id(new_provider, raw_value)
 
     session_id = params.get("session_id")
     if isinstance(session_id, str) and session_id and is_turn_active(session_id):
@@ -321,6 +335,15 @@ def _set_model(
             runtime.agents.defaults.provider = new_provider
         try:
             built_provider = make_provider(runtime)
+        except MissingCredentialsError as exc:
+            # Carried through as the sentence the user needs. `typer.Exit`
+            # subclasses RuntimeError, so this used to land in the branch below
+            # and `str(exc)` was the exit code -- the picker said
+            # `cannot build provider ... error: "1"`.
+            raise ModelNotAvailableError(
+                exc.summary,
+                data={"model": raw_value, "provider": exc.provider, "remedy": exc.remedy},
+            ) from exc
         except (SystemExit, RuntimeError, ValueError) as exc:
             raise ModelNotAvailableError(
                 f"cannot build provider for model {raw_value!r}",
@@ -333,8 +356,12 @@ def _set_model(
     _save_config(payload)
 
     if loop is not None:
-        loop.provider = built_provider
-        loop.model = raw_value
+        # Not a two-attribute assignment: the loop hands its provider to the
+        # subagent manager, the context engine and the consolidator at build
+        # time, and each keeps it. set_provider is what reaches them (and
+        # re-resolves the context window at adoption -- which for a parked
+        # switch happens long after this call returns).
+        loop.set_provider(built_provider, raw_value)
 
     return {"applied": True, "previous": previous, "value": raw_value}
 

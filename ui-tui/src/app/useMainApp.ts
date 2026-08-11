@@ -8,6 +8,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
+  ApprovalRespondResponse,
   ClarifyRespondResponse,
   ClipboardPasteResponse,
   GatewayEvent,
@@ -23,6 +24,7 @@ import { fmtCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClientStub.js'
 import { useGitBranch } from '../hooks/useGitBranch.js'
 import { useVirtualHistory } from '../hooks/useVirtualHistory.js'
+import { approvalResponseAccepted, buildApprovalRespond } from '../lib/approval.js'
 import { buildConfirmRespond } from '../lib/confirmCountdown.js'
 import { composerPromptWidth } from '../lib/inputMetrics.js'
 import { appendTranscriptMessage } from '../lib/messages.js'
@@ -740,13 +742,42 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const answerApproval = useCallback(
-    (choice: string) =>
-      respondWith('approval.respond', { choice, session_id: ui.sid }, () => {
+    (choice: string) => {
+      const approval = overlay.approval
+
+      if (!approval) {
+        return
+      }
+
+      if (choice === 'deny') {
+        // Denial changes no host state, so the frontend can commit it locally
+        // before the RPC round-trip. Approval is different: the overlay remains
+        // until the backend confirms that the exact request was still live.
+        // This asymmetry prevents stale UI from granting authority while also
+        // ensuring a network failure cannot keep a rejected prompt interactive.
+        patchOverlayState({ approval: null })
+        patchTurnState({ outcome: 'denied' })
+        patchUiState({ status: 'running…' })
+      }
+
+      rpc<ApprovalRespondResponse>(
+        'approval.respond',
+        buildApprovalRespond(approval.approvalId, approval.conversationId, choice)
+      ).then(response => {
+        if (choice === 'deny') {
+          return
+        }
+
+        if (!approvalResponseAccepted(response)) {
+          return
+        }
+
         patchOverlayState({ approval: null })
         patchTurnState({ outcome: choice === 'deny' ? 'denied' : `approved (${choice})` })
         patchUiState({ status: 'running…' })
-      }),
-    [respondWith, ui.sid]
+      })
+    },
+    [overlay.approval, rpc]
   )
 
   const answerSudo = useCallback(

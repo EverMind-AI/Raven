@@ -1,4 +1,16 @@
-"""OpenAI Codex Responses Provider."""
+"""OpenAI Codex Responses Provider.
+
+LiteLLM owns the credential raven signs in with, but not the request. On the
+pinned 1.85.0 its bridge to this backend raises: the account streams a
+``response.completed`` whose ``output`` is empty, which 1.95.0 rebuilds from the
+``output_item.done`` events and 1.85.0 reports as an unknown response.
+
+Routing through it also needs the model spelled ``responses/<slug>`` (nothing an
+account offers is in LiteLLM's table, and without a table entry there is no
+bridge), and costs ``prompt_cache_key``, which its allow-list filters out. That
+last one is what ``test_openai_codex_provider`` guards; the rest is a version
+bump away.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +22,7 @@ from typing import Any, AsyncGenerator
 import httpx
 from loguru import logger
 
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -19,7 +31,7 @@ DEFAULT_ORIGINATOR = "raven"
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
 
@@ -36,16 +48,11 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
-        try:
-            from oauth_cli_kit import get_token as get_codex_token
-        except ImportError as e:
-            raise RuntimeError(
-                "OpenAICodexProvider requires the 'tools' extra. "
-                "Install with: pip install -e '.[tools]'  (or uv pip install -e '.[tools]')"
-            ) from e
+        from raven.providers.chatgpt_token import access_token_and_account
 
-        token = await asyncio.to_thread(get_codex_token)
-        headers = _build_headers(token.account_id, token.access)
+        # Refreshing can block, and the credential belongs to LiteLLM's driver.
+        access, account_id = await asyncio.to_thread(access_token_and_account)
+        headers = _build_headers(account_id, access)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -55,10 +62,14 @@ class OpenAICodexProvider(LLMProvider):
             "input": input_items,
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
-            "prompt_cache_key": _prompt_cache_key(messages),
             "tool_choice": tool_choice or "auto",
             "parallel_tool_calls": True,
         }
+
+        # Nothing to group without instructions: every such request would share
+        # one key while sharing no prefix.
+        if system_prompt:
+            body["prompt_cache_key"] = _prompt_cache_key(system_prompt)
 
         if reasoning_effort:
             body["reasoning"] = {"effort": reasoning_effort}
@@ -98,9 +109,15 @@ class OpenAICodexProvider(LLMProvider):
 
 
 def _strip_model_prefix(model: str) -> str:
-    if model.startswith("openai-codex/") or model.startswith("openai_codex/"):
-        return model.split("/", 1)[1]
-    return model
+    """The id the Responses API is asked for. See ``providers.wire``.
+
+    The stored id names this provider so nothing else can claim it; the backend
+    knows only the vendor's own slug.
+    """
+    from raven.providers.registry import find_by_name
+    from raven.providers.wire import wire_model
+
+    return wire_model(model, spec=find_by_name("openai_codex"))
 
 
 def _build_headers(account_id: str, token: str) -> dict[str, str]:
@@ -126,7 +143,9 @@ async def _request_codex(
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()
-                raise RuntimeError(_friendly_error(response.status_code, text.decode("utf-8", "ignore")))
+                raise ProviderHTTPError(
+                    response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
+                )
             return await _consume_sse(response, timeout)
 
 
@@ -197,17 +216,66 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
 
         if role == "tool":
             call_id, _ = _split_tool_call_id(msg.get("tool_call_id"))
-            output_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
             input_items.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": output_text,
+                    "output": _convert_tool_output(content),
                 }
             )
             continue
 
     return system_prompt, input_items
+
+
+def _convert_tool_output(content: Any) -> Any:
+    """Tool result -> Responses ``function_call_output.output``.
+
+    A plain string passes through. A multimodal block list becomes the array
+    form (``input_text`` / ``input_image``), which the Responses API accepts for
+    tool output -- unlike Chat Completions, whose ``role:"tool"`` content is
+    typed ``string | ChatCompletionContentPartText[]`` and so cannot carry an
+    image at all.
+
+    The important part is what this does NOT do: ``json.dumps`` a block list.
+    That used to serialize an image's whole base64 payload into the output as
+    prose -- the model saw megabytes of gibberish instead of a picture, and
+    nothing errored.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return json.dumps(content, ensure_ascii=False)
+
+    texts: list[str] = []
+    parts: list[dict[str, Any]] = []
+    has_image = False
+    for item in content:
+        if not isinstance(item, dict):
+            texts.append(str(item))
+            parts.append({"type": "input_text", "text": str(item)})
+            continue
+        if item.get("type") == "text":
+            text = item.get("text", "")
+            texts.append(text)
+            parts.append({"type": "input_text", "text": text})
+        elif item.get("type") == "image_url":
+            url = (item.get("image_url") or {}).get("url")
+            if url:
+                has_image = True
+                parts.append({"type": "input_image", "image_url": url, "detail": "auto"})
+        else:
+            # Unknown block: serializing it is fine (it carries no base64), but
+            # it must still reach the model rather than being dropped.
+            blob = json.dumps(item, ensure_ascii=False)
+            texts.append(blob)
+            parts.append({"type": "input_text", "text": blob})
+
+    if has_image:
+        return parts
+    # No image to preserve, so keep the simpler string form the API has always
+    # accepted rather than gratuitously switching shape.
+    return "\n".join(texts)
 
 
 def _convert_user_message(content: Any) -> dict[str, Any]:
@@ -238,9 +306,14 @@ def _split_tool_call_id(tool_call_id: Any) -> tuple[str, str | None]:
     return "call_0", None
 
 
-def _prompt_cache_key(messages: list[dict[str, Any]]) -> str:
-    raw = json.dumps(messages, ensure_ascii=True, sort_keys=True)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+def _prompt_cache_key(system_prompt: str) -> str:
+    """Group requests that share a cached prefix -- which is the instructions.
+
+    Keyed on the whole transcript before, which grows every turn: the key was
+    different on every request, so the one thing it exists for -- landing
+    requests with a common prefix on the same cache -- never happened.
+    """
+    return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()
 
 
 async def _iter_sse(response: httpx.Response, timeout: float) -> AsyncGenerator[dict[str, Any], None]:
@@ -323,7 +396,18 @@ async def _consume_sse(response: httpx.Response, timeout: float) -> tuple[str, l
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
         elif event_type in {"error", "response.failed"}:
-            raise RuntimeError("Codex response failed")
+            # The code is the retry signal: classify_error buckets by message
+            # substring, and "server_is_overloaded" is what turns a dead-end
+            # unknown into a retryable server error. An `error` event carries
+            # it at the top level or under "error"; `response.failed` nests it
+            # under the response.
+            err = event.get("error") or (event.get("response") or {}).get("error") or {}
+            if not isinstance(err, dict):
+                err = {}
+            code = err.get("code") or event.get("code") or ""
+            message = err.get("message") or event.get("message") or ""
+            detail = ": ".join(str(part) for part in (code, message) if part)
+            raise RuntimeError(f"Codex response failed: {detail}" if detail else "Codex response failed")
 
     return content, tool_calls, finish_reason
 

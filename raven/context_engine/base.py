@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     # for ``ContextEngine``, so referencing ``TurnContext`` only in type
     # hints keeps the loop unbroken.
     from raven.context_engine.curator import TurnContext
+    from raven.providers.base import LLMProvider
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,8 @@ class AssemblyContext:
     session_messages: list[dict[str, Any]]
     budget: TokenBudget
     prefix: AssembledPrefix | None = None
+    can_see_images: bool = True
+    describe_tool: str | None = None
 
 
 @dataclass
@@ -142,6 +145,17 @@ class ContextEngine(ABC):
         lets the engine manage history compaction itself (Curator archives
         messages out-of-band)."""
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Segments that call an LLM hold the provider handed to them at
+        construction; without this they keep calling the old one for the
+        rest of the process. Concrete rather than abstract so a future
+        implementation with no LLM-backed segment is not forced to write an
+        empty override; ``ContextAssembler`` is the only one today and does
+        override it.
+        """
+
     @abstractmethod
     async def assemble(
         self,
@@ -167,6 +181,13 @@ class ContextEngine(ABC):
         """Optional post-turn hook. Curator updates its manifest / archives
         here; Legacy ignores it. Default is no-op so future engines can
         opt in incrementally.
+        """
+        return None
+
+    def set_context_window(self, tokens: int) -> None:
+        """Follow a ``/model`` switch: re-budget whichever builders sized
+        themselves against the window at construction. Default is no-op so
+        an engine with no such builder need not override it.
         """
         return None
 

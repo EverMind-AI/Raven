@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from raven.utils.helpers import ContentPart
+
 
 @dataclass
 class ToolResult:
@@ -14,15 +16,32 @@ class ToolResult:
     to a generic preview of it) or this, when the tool wants a cleaner
     transcript rendering than what it feeds the model. ``display_text`` must be
     built from the tool's own execution data, not by re-parsing ``model_text``.
+
+    ``retryable=False`` suppresses the registry's generic change-approach hint.
+    ``abort_action=True`` tells the agent loop not to execute sibling calls or
+    ask the model for another approach.
+
+    ``blocks`` carries multimodal content parts (OpenAI-shaped ``text`` /
+    ``image_url`` dicts) for tools whose result is not expressible as text — a
+    read of a PNG, say. It is strictly *additive*: ``model_text`` must stand on
+    its own, because only providers that can carry an image in a tool result
+    ever look at ``blocks`` (see ``supports_image_tool_result``). Everything
+    else — the sentinel, subagents, the curator, session export, a provider
+    talking Chat Completions — keeps using the text and must still make sense.
+    So a tool setting ``blocks`` puts the metadata *and* the file path in
+    ``model_text``, never "see the image above".
     """
 
     model_text: str
     display_text: str | None = None
+    retryable: bool = True
+    abort_action: bool = False
+    blocks: list[ContentPart] | None = None
 
 
 class ToolOutput(str):
     """What :meth:`ToolRegistry.execute` hands back: the model-facing text with
-    the optional display string attached.
+    the optional display string and multimodal blocks attached.
 
     A ``str`` subclass on purpose. Every caller of the registry boundary --
     the sentinel action executor, the subagent manager, the context curator,
@@ -30,14 +49,29 @@ class ToolOutput(str):
     artifact, so the boundary has to return something that *is* a str; handing
     them a :class:`ToolResult` would format its repr into model context and
     user-facing replies. The agent loop reads ``display_text`` off it to render
-    the transcript row.
+    the transcript row, ``blocks`` to build a multimodal tool result, and the
+    control flags to enforce terminal tool decisions.
     """
 
     display_text: str | None
+    retryable: bool
+    abort_action: bool
+    blocks: list[ContentPart] | None
 
-    def __new__(cls, model_text: str, display_text: str | None = None) -> "ToolOutput":
+    def __new__(
+        cls,
+        model_text: str,
+        display_text: str | None = None,
+        *,
+        retryable: bool = True,
+        abort_action: bool = False,
+        blocks: list[ContentPart] | None = None,
+    ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
+        out.retryable = retryable
+        out.abort_action = abort_action
+        out.blocks = blocks
         return out
 
 

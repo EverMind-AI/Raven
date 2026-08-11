@@ -44,6 +44,44 @@ _PACKAGED_DIST_ENTRY = Path(__file__).resolve().parent.parent / "ui-tui" / "dist
 
 _MIN_NODE_VERSION = (22, 0, 0)
 
+#: Read by the TUI when it launches a raven command of its own (``provider
+#: login``, ``onboard``). Named here because the child must be this install.
+_RAVEN_BIN_ENV = "RAVEN_BIN"
+
+
+def own_entry_point() -> Optional[Path]:
+    """The ``raven`` executable that started this process, if it can be named.
+
+    A console script is invoked by path, so ``argv[0]`` is the answer whenever
+    there is one; ``python -m raven`` leaves something else there, and the
+    executable's own directory holds the script in that case.
+    """
+    argv0 = Path(sys.argv[0])
+    if argv0.name.startswith("raven") and argv0.is_file():
+        return argv0.resolve()
+
+    sibling = Path(sys.executable).with_name("raven.exe" if os.name == "nt" else "raven")
+
+    return sibling if sibling.is_file() else None
+
+
+def child_env() -> dict[str, str]:
+    """Environment for the Node child, naming the raven it must call back into.
+
+    The TUI runs ``raven provider login`` for the user, and that writes a
+    credential. Resolved through PATH it can be a different install than the one
+    running -- one whose idea of where credentials live is its own, so the login
+    reports success and this process still sees an unauthenticated provider.
+
+    An explicit ``RAVEN_BIN`` is left alone: a developer pointing it somewhere
+    means it.
+    """
+    env = os.environ.copy()
+    if not env.get(_RAVEN_BIN_ENV) and (entry := own_entry_point()):
+        env[_RAVEN_BIN_ENV] = str(entry)
+
+    return env
+
 
 def resolve_dist_entry() -> Optional[Path]:
     """Locate the prebuilt ``entry.js`` bundle for production (non-dev) launch.
@@ -265,7 +303,7 @@ def _spawn_with_rpc_pipes(
     for fd in (req_r, notif_w):
         os.set_inheritable(fd, False)
 
-    env = os.environ.copy()
+    env = child_env()
     # Inside the child these will appear as fd 3 / 4 (Popen remaps in order).
     env["RAVEN_RPC_FD_REQUEST"] = "3"
     env["RAVEN_RPC_FD_NOTIFY"] = "4"
@@ -359,6 +397,7 @@ def _build_tui_agent_loop():
     """
     from pydantic import ValidationError
 
+    from raven.providers.auth import MissingCredentialsError
     from raven.tui_rpc.errors import InternalError
 
     try:
@@ -441,6 +480,18 @@ def _build_tui_agent_loop():
         # scheduler and its reply is fanned out as a cron.delivered event.
 
         return agent_loop
+    except MissingCredentialsError as e:
+        # Not a crash: the install simply is not finished. Surfaced as the
+        # sentence that says which provider needs what, where the generic
+        # handler below reported `exception_message: "1"` -- `typer.Exit`
+        # stringified -- and put the real one in a log file.
+        from loguru import logger as _logger
+
+        _logger.warning("tui: provider not usable: {}", e.summary)
+        raise InternalError(
+            e.summary,
+            data={"reason": "missing_credentials", "provider": e.provider, "remedy": e.remedy},
+        ) from e
     except (*_TUI_INIT_CRASH_TYPES, ValidationError) as e:
         from loguru import logger as _logger
 
@@ -487,6 +538,7 @@ async def _run_rpc_server_until_done(
     """
     # Lazy import: keeps tui_commands importable without pulling tui_rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
+    from raven.tui_rpc.approval_broker import ApprovalBroker
     from raven.tui_rpc.confirm_broker import ConfirmBroker
     from raven.tui_rpc.dispatcher import Dispatcher
     from raven.tui_rpc.methods import register_aligned_methods_except_system
@@ -518,11 +570,12 @@ async def _run_rpc_server_until_done(
     # which can only happen post-handshake / post-serve.
     server = RpcServer(dispatcher=dispatcher, sock=conn, auth_token=auth_token)
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
-    # ConfirmBroker shares the same send_frame sink; it lets a paused
-    # cli.dispatch (typer.confirm) emit a confirm.request and await the
-    # confirm.respond. cancel_all() in the finally fail-safes any
-    # pending confirm to its default when the connection drops.
+    # Prompt brokers share the gateway's send_frame sink but retain separate
+    # semantics. Shell approval is not a conversational confirmation: it binds
+    # one exact command to one turn, has dual deadlines, and always fails closed
+    # when the transport disappears.
     confirm_broker = ConfirmBroker(send_frame=server.send_frame)
+    approval_broker = ApprovalBroker(send_frame=server.send_frame)
     # QuestionBroker shares the same send_frame sink: the ask_user tool emits a
     # clarify.request and awaits clarify.respond, mirroring ConfirmBroker.
     question_broker = QuestionBroker(send_frame=server.send_frame)
@@ -582,6 +635,7 @@ async def _run_rpc_server_until_done(
             emitter,
             on_turn_end=turn_module.clear_active,
             readback_texts=cron_readback,
+            approval_responder=approval_broker,
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -614,6 +668,7 @@ async def _run_rpc_server_until_done(
         dispatcher,
         emitter=emitter,
         agent_loop_factory=_agent_loop_factory,
+        approval_broker=approval_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=turn_scheduler,
@@ -664,9 +719,11 @@ async def _run_rpc_server_until_done(
         await proc_done.wait()
         return True
     finally:
-        # Fail-safe any pending confirm so a paused dispatch's worker thread
-        # is released when the connection drops.
+        # Release all pending UI waits before transport teardown. Approval
+        # cancellation is always denial, preserving fail-closed behavior on a
+        # disconnect; ordinary confirms retain their configured default.
         confirm_broker.cancel_all()
+        approval_broker.cancel_all()
         if agent_loop is not None and agent_loop.cron_service is not None:
             try:
                 agent_loop.cron_service.stop()
@@ -727,7 +784,7 @@ def _spawn_with_rpc_socket(
     host, port = server_sock.getsockname()[:2]
 
     token = secrets.token_hex(32)
-    env = os.environ.copy()
+    env = child_env()
     env[_RPC_SOCKET_ENV] = f"{host}:{port}"
     env[_RPC_TOKEN_ENV] = token
 
@@ -967,17 +1024,13 @@ def tui(
     if ctx.invoked_subcommand is not None:
         return
 
-    # Startup gate: launch the onboarding wizard first when the required
-    # config (a provider key + default model) is missing. Skipped for the
-    # no-TTY diagnostic spawns (--check / --print-colors / --preview-colors).
+    # Startup gate: a config that cannot reach a model is settled before the TUI
+    # owns the terminal. Skipped for the no-TTY diagnostic spawns
+    # (--check / --print-colors / --preview-colors).
     if not (check or print_colors or preview_colors) and _stdout_isatty():
-        from raven.cli.onboard_commands import (
-            _is_config_populated,
-            ensure_configured_or_onboard,
-        )
+        from raven.cli.onboard_commands import ensure_ready_to_start
 
-        if not _is_config_populated():
-            ensure_configured_or_onboard()
+        ensure_ready_to_start()
 
     node_path, version = find_node()
     if node_path is None:

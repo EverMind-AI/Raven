@@ -43,13 +43,21 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
+from raven.providers.rates import effective_context_window, resolve_context_window
+from raven.providers.reasoning import split_orphan_think
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
-from raven.token_wise.pricing import resolve_context_window
 from raven.tracing import semconv, trace
-from raven.utils.helpers import estimate_prompt_tokens
+from raven.utils.helpers import estimate_prompt_tokens, is_image_part, is_inline_image
+
+_ABORTED_ACTION_REPLY = (
+    "The operation was not completed, and no alternative method will be attempted. "
+    "Would you like me to continue with the remaining parts of the task that do not "
+    "require this operation?"
+)
 
 # NOTE: ``raven.context_engine`` is intentionally imported lazily (inside
 # ``__init__`` and ``_assemble_context_messages``) to break a runtime
@@ -177,6 +185,38 @@ _TRANSIENT_FAILURE_MARKERS = (
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
+# Marks the synthetic user message that carries images a transport cannot put in
+# a tool result. Not persisted: the tool result above it already names the file
+# path, so the only thing this message would add to the transcript is a user turn
+# saying "[image]" that the user never sent -- misleading on resume and in
+# session export. Deliberately a different key from ``_recovery_synthetic``:
+# that one marks empty-response recovery scaffolding, and collapsing the two
+# would make either meaning impossible to reason about separately.
+_ATTACHED_IMAGE_KEY = "_attached_image"
+
+
+def _strip_inline_images(content: list[Any]) -> list[Any]:
+    """Replace inline base64 images with a text placeholder, for persistence.
+
+    Images live for exactly the turn that produced them. Keeping the bytes would
+    bloat the session JSONL by megabytes per picture, and every later turn would
+    replay them to the model — paying for an image nobody asked about again.
+
+    A *new* list is returned: the input is the live message the model is still
+    working from this turn, and `_save_turn` only shallow-copies the entry, so
+    mutating in place would pull the picture out from under the current request.
+    """
+    out: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            out.append(part)
+            continue
+        if is_inline_image(part):
+            out.append({"type": "text", "text": "[image]"})
+        else:
+            out.append(part)
+    return out
+
 
 def _is_hard_tool_failure(result: object) -> bool:
     """True for a deterministic tool failure (recurs on an identical retry).
@@ -228,9 +268,18 @@ class AgentLoop:
     _TOOL_RESULT_MAX_CHARS = 16_000
     # Max emergency context shrinks per turn before a context overflow is fatal.
     _MAX_COMPRESS_RETRIES = 2
+    # Max image demotions per turn. One is enough: a refusal is deterministic for
+    # the model, and the first retry also caches the verdict, so a second attempt
+    # would mean the failure was never about images.
+    _MAX_IMAGE_DEMOTE_RETRIES = 1
     # Most recent tool results kept intact when emergency-shrinking; older ones
     # are elided (their bodies are the bulk of mid-turn context growth).
     _SHRINK_KEEP_RECENT_TOOL_RESULTS = 3
+    # Image-bearing messages kept intact when emergency-shrinking. Tighter than
+    # the tool-result count because one image can cost 1568 tokens: the picture
+    # the model is currently reasoning about is worth keeping, older ones are the
+    # cheapest thing to give up.
+    _SHRINK_KEEP_RECENT_IMAGES = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -242,7 +291,7 @@ class AgentLoop:
         workspace: Path,
         model: str | None = None,
         max_iterations: int = 40,
-        context_window_tokens: int = 65_536,
+        context_window_tokens: int | None = None,
         brave_api_key: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -320,10 +369,39 @@ class AgentLoop:
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
+        # Resolved lazily on the first tool result that carries an image. Keyed
+        # by model, not a single flag: the loop is a long-lived singleton and
+        # takes a per-call model (strategies rewrite it, and the model chain
+        # falls back), so one model's verdict must not answer for another's.
+        self._image_tool_result_ok: dict[str, bool] = {}
+        self._vision_ok: dict[str, bool] = {}
         self.max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
-        self.context_window_tokens = context_window_tokens
+        # A caller that passed a positive value set the window explicitly;
+        # None/0 means "figure it out", resolved once here against the model's
+        # real window. ("Explicit", not "pinned" -- Provider Pin is a different
+        # registered term, see CONTEXT.md.)
+        self._context_window_explicit = bool(context_window_tokens)
+        if context_window_tokens == 65536:
+            # The retired schema default, which the old bootstrap wrote to
+            # disk verbatim -- so on upgraded installs this exact value is
+            # more often a fossil than a choice. The config is deliberately
+            # not rewritten (a value the user can see in their own file stays
+            # theirs); this line is what keeps that stance from failing
+            # silently.
+            logger.warning(
+                "contextWindowTokens: 65536 is pinning the context window (the old default, "
+                "written out by earlier versions); remove the line from config.json to size "
+                "it from each model's real window"
+            )
+        # allow_fetch=False: construction must not block on a synchronous
+        # network call for an OpenRouter model's window -- whatever is already
+        # cached (in-process or on disk, any age) answers instead. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = context_window_tokens or effective_context_window(
+            self.model, None, allow_fetch=False
+        )
         self.brave_api_key = brave_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
@@ -410,7 +488,7 @@ class AgentLoop:
             builder=self.context,
             provider=provider,
             model=self.model,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
             # The factory uses these to assemble the unified engine's
@@ -492,13 +570,28 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
+            context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
             now_fn=now_fn,
         )
 
         self._consolidation_tasks: set[asyncio.Task] = set()
+
+        # A switch that arrives mid-turn is parked here until no turn is
+        # running, so a turn in flight finishes on the provider it started
+        # with. A depth counter, not a flag: OriginPools gates USER and
+        # system origins on independent semaphores with no global cap
+        # (spine/scheduler.py), so a user turn and a cron turn overlap on
+        # this loop under the TUI defaults.
+        self._pending_provider: tuple[LLMProvider, str] | None = None
+        self._turns_in_flight = 0
+
+        # ``self.subagents``, ``self.context_engine`` and
+        # ``self.memory_consolidator`` were each handed ``provider`` earlier in
+        # this constructor and hold their own reference; ``_adopt_provider`` is
+        # what keeps them from outliving a live model switch. Add the call
+        # there when adding another holder.
 
         # Phase B-3: the L4 facade (``DefaultMemoryEngine`` /
         # ``MemoryEngine`` ABC) has been retired. AgentLoop now holds
@@ -540,6 +633,15 @@ class AgentLoop:
         self._register_default_tools()
         self._apply_disabled_tools()
 
+        # LazyProvider defers the litellm import behind a background prewarm
+        # thread (see providers.lazy); the window this constructor just
+        # resolved above was answered with allow_import=False, so it can be
+        # wrong until that import lands. Wiring the callback fixes it up in
+        # place once the real provider is built -- a no-op for any other
+        # provider, which has no ``on_built`` to set.
+        if hasattr(provider, "on_built"):
+            provider.on_built = self.refresh_context_window
+
     def _apply_disabled_tools(self) -> None:
         """Unregister tools whose names appear in ``tools.disabled_tools``.
 
@@ -554,6 +656,72 @@ class AgentLoop:
             if self.tools.has(name):
                 self.tools.unregister(name)
 
+    def set_provider(self, provider: LLMProvider, model: str) -> None:
+        """Point the loop and everything it built at a new provider/model.
+
+        ``config.set model`` builds a provider from the prospective config
+        and hands it here. Assigning ``self.provider`` alone is not enough:
+        the subagent manager, the context engine's LLM-backed segments and
+        the consolidator each captured the provider handed to them in
+        ``__init__``. Left behind, they keep calling the old endpoint for
+        the rest of the process -- which is how switching away from a dead
+        credential fixed the main loop while subagents and the skill
+        rewriter/gate went on failing to authenticate.
+
+        A switch that lands while any turn is running is parked rather than
+        applied: the loop reads ``self.provider`` at call time (eight sites
+        in this module, plus the context engine and consolidator
+        underneath), so adopting mid-turn would relay one conversation
+        across two vendors. How that surfaces depends on the path: the
+        ``chat_with_retry`` sites turn a rejected request into
+        ``finish_reason="error"`` content, so the turn reports a failure
+        with no sign that its endpoint moved, while ``_llm_call_stream``
+        (which a TUI turn takes) catches only ``TimeoutError`` and lets the
+        rejection propagate. Neither is a diagnosis the user can act on.
+
+        The park is the second line of defence, not the first: the RPC
+        rejects a switch outright when the caller's own session has a turn
+        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
+        covers what that guard cannot see -- a caller that passes no
+        ``session_id``, and the proactive turns that run in their own lanes.
+        Note the RPC still answers ``applied: True`` and the config file is
+        already written, so a parked switch is applied on disk while the
+        loop reports the old model until the last turn drains.
+
+        Detached subagents are not covered by that park -- they outlive the
+        turn that spawned them -- so ``SubagentManager`` snapshots instead.
+        """
+        if self._turns_in_flight:
+            # The only trace of the window the docstring describes.
+            logger.info("model switch to {} parked until {} running turn(s) drain", model, self._turns_in_flight)
+            self._pending_provider = (provider, model)
+            return
+        self._adopt_provider(provider, model)
+
+    def _adopt_provider(self, provider: LLMProvider, model: str) -> None:
+        """Hand a provider to the loop and every subsystem holding the old one."""
+        logger.info("adopting provider switch: model={}", model)
+        self.provider = provider
+        self.model = model
+        # Cached per model id but computed from the provider, so a swap that
+        # keeps the model id would keep serving the old transport's verdict.
+        self._image_tool_result_ok.clear()
+        self.subagents.set_provider(provider, model)
+        self.context_engine.set_provider(provider, model)
+        self.memory_consolidator.set_provider(provider, model)
+        # Here rather than at the RPC call site: a parked switch adopts long
+        # after that call returns, and the window must follow the pair that
+        # was actually adopted, not the model the RPC saw.
+        self.refresh_context_window()
+
+    def _adopt_pending_provider(self) -> None:
+        """Apply a parked switch. Callers must check that no turn is running."""
+        pending = self._pending_provider
+        if pending is None:
+            return
+        self._pending_provider = None
+        self._adopt_provider(*pending)
+
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
 
@@ -567,6 +735,35 @@ class AgentLoop:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
+
+    def refresh_context_window(self) -> None:
+        """Re-resolve ``context_window_tokens`` against the current ``self.model``.
+
+        A no-op once the window was set explicitly at construction -- an
+        explicit value is a deliberate override, and a model switch afterwards
+        must not quietly discard it. Otherwise the ladder is re-walked so a
+        ``/model`` switch picks up the new model's real window instead of
+        keeping the old one's.
+
+        Also the callback ``LazyProvider.on_built`` fires from its prewarm
+        thread, i.e. off the event loop -- safe because every write this
+        method triggers, transitively through the consolidator and the
+        context engine's builders, is a plain ``int`` attribute assignment,
+        and the GIL makes each one atomic.
+        """
+        if self._context_window_explicit:
+            return
+        # allow_fetch=False: a /model switch runs inside the running event
+        # loop, so this must not block it on a synchronous network call. See
+        # rates._fetch_openrouter_models.
+        self.context_window_tokens = effective_context_window(self.model, None, allow_fetch=False)
+        # Cascade into the builders that sized themselves against the window
+        # at construction (the Curator's trimmer) and the consolidator --
+        # both would otherwise keep budgeting against the pre-switch model's
+        # window for the rest of the session. The consolidator's window is a
+        # plain attribute (no setter of its own), set directly here.
+        self.context_engine.set_context_window(self.context_window_tokens)
+        self.memory_consolidator.context_window_tokens = self.context_window_tokens
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -721,6 +918,119 @@ class AgentLoop:
             cache_dir=workspace / "skills" / "hub",
         )
 
+    def _supports_image_tool_result(self, model: str | None = None) -> bool:
+        """Cached per model: resolving the LiteLLM target parses the model string,
+        and this is asked once per tool call that returns an image.
+
+        A ``False`` learned from a refused request (see ``should_drop_tool_images``)
+        is written into the same cache, so a static table that guessed wrong stops
+        costing a wasted call after the first one.
+        """
+        key = model or self.model
+        if key not in self._image_tool_result_ok:
+            spec = None
+            try:
+                from raven.providers.registry import find_by_model
+
+                spec = find_by_model(key)
+            except Exception:
+                pass
+            self._image_tool_result_ok[key] = supports_image_tool_result(self.provider, key, spec)
+            logger.debug(
+                "image-in-tool-result support for {}: {}",
+                key,
+                self._image_tool_result_ok[key],
+            )
+        return self._image_tool_result_ok[key]
+
+    # The tool that can read an attachment for a model that cannot see it.
+    # Contributed by the EverOS plugin, so absent on a default install.
+    _DESCRIBE_TOOL = "understand_media"
+
+    def _describe_tool_name(self) -> str | None:
+        """The description tool's name if it is registered, else ``None``.
+
+        Checked rather than assumed: the note that replaces a picture points at
+        this tool, and pointing at one the model was never given is an
+        instruction it cannot follow.
+        """
+        return self._DESCRIBE_TOOL if self.tools.get(self._DESCRIBE_TOOL) else None
+
+    def _route_result_images(
+        self,
+        model_text: str,
+        blocks: list[dict[str, Any]] | None,
+        model: str,
+    ) -> tuple[str, list[dict[str, Any]] | None, list[dict[str, Any]] | None]:
+        """Decide how a tool result's pictures reach ``model``.
+
+        Returns the text the tool result carries, the blocks to put *in* it, and
+        the blocks to attach to a following user message. Exactly one of the last
+        two is ever populated.
+
+        Three outcomes, and the wording differs because the model's next move
+        differs. No vision at all: nothing follows, so the note must not promise
+        an attachment, and it names the description tool when one is registered.
+        Vision and a transport that carries images in a ``role="tool"`` message:
+        the blocks ride along untouched. Vision but a transport that cannot (every
+        OpenAI-style Chat Completions endpoint -- image is excluded from the tool
+        role at the schema level): the result carries text and the picture follows
+        in a user message, the shape OpenClaw uses.
+
+        A method rather than a branch inside the loop so it can be tested at all:
+        the loop reaches this point only through a live provider and a real tool
+        call, and the wrong choice here is silent -- the model answers about a
+        picture it never received.
+        """
+        if not blocks:
+            return model_text, blocks, None
+        if not self._supports_vision(model):
+            return image_placeholder_text(blocks, blind=True, describe_tool=self._describe_tool_name()), None, None
+        if self._supports_image_tool_result(model):
+            return model_text, blocks, None
+        attach = [b for b in blocks if b.get("type") == "image_url"]
+        return image_placeholder_text(blocks), None, attach
+
+    def _supports_vision(self, model: str | None = None) -> bool:
+        """Cached per model: whether this model can see a picture at all.
+
+        Asked once per turn and once per tool result that returns an image, and
+        the lookup joins the model string against the gateway catalogue -- same
+        reason the sibling probe above is cached.
+
+        Only a real verdict is cached. ``vision_verdict`` returns ``None`` while
+        the catalog has no answer -- a cold install, before the background warm
+        lands -- and that is optimism rather than knowledge: caching it would
+        freeze the guess for the life of this loop, which is the life of the
+        process, and the warm would then fill a table nothing re-reads. An
+        unknown model is re-asked each turn, which costs a dict lookup.
+
+        The verdict is the routed primary's. A fallback further down the chain is
+        sent the same message list, so a vision-capable primary with a blind
+        fallback hands the blind endpoint an image block it will refuse; that
+        refusal classifies as fatal and stops the chain rather than answering
+        blind. Pre-existing in the sibling probe too, and it needs the fallback
+        chain to be assembled per candidate to fix properly.
+        """
+        key = model or self.model
+        cached = self._vision_ok.get(key)
+        if cached is not None:
+            return cached
+
+        spec = None
+        try:
+            from raven.providers.registry import find_by_model
+
+            spec = find_by_model(key)
+        except Exception:
+            pass
+        verdict = vision_verdict(key, spec, self.provider)
+        logger.debug("vision support for {}: {}", key, verdict)
+        if verdict is None:
+            return True
+        self._vision_ok[key] = verdict
+        return verdict
+
     # ── Context engine helpers ──────────────────────────────────────────
 
     def _context_messages_for_session(self, session: Session) -> list[dict[str, Any]]:
@@ -787,8 +1097,15 @@ class AgentLoop:
         channel: str | None = None,
         chat_id: str | None = None,
         selected_skills: list[Any] | None = None,
+        model: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Ask the active context engine for the main-agent message window."""
+        """Ask the active context engine for the main-agent message window.
+
+        ``model`` is the id the request will actually reach (the router's pick,
+        when there is one). It decides whether an attachment is inlined as a
+        picture, so defaulting it to ``self.model`` would let the configured
+        model answer for a routed one.
+        """
         from raven.context_engine import TurnContext  # deferred — see module note
 
         # Phase A / Phase C tidy: reset the metadata stash BEFORE calling
@@ -805,6 +1122,8 @@ class AgentLoop:
             turn=TurnContext(
                 current_message=current_message,
                 media=media,
+                can_see_images=self._supports_vision(model),
+                describe_tool=self._describe_tool_name(),
                 channel=channel,
                 chat_id=chat_id,
                 selected_skills=selected_skills,
@@ -1253,7 +1572,9 @@ class AgentLoop:
         else:
             fresh = prompt_t
 
-        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write) or 0.0
+        # Left as None for a plan-billed provider: the field is optional all the
+        # way to the status bar, which renders it only when it is a number.
+        cost = estimate_cost_usd(model, fresh, out_toks, cache_read, cache_write)
         return UsageSnapshot(
             model=model,
             input_tokens=fresh,
@@ -1295,6 +1616,9 @@ class AgentLoop:
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
         final_usage: dict[str, Any] | None = None
+        had_error = False
+        error_content: str | None = None
+        error_classification: ErrorClassification | None = None
 
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when a TimeoutError from the per-chunk idle cap unwinds the
@@ -1304,6 +1628,18 @@ class AgentLoop:
         try:
             async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
                 async for delta in stream:
+                    if delta.finish_reason == "error":
+                        # A non-streaming provider's chat() error, replayed
+                        # through the fallback as its single terminal delta.
+                        # Its content is the error text, not a token to render
+                        # or accumulate -- surface it via error_classification
+                        # instead of the normal success collation below.
+                        had_error = True
+                        error_content = delta.content
+                        error_classification = delta.error_classification
+                        if delta.usage is not None:
+                            final_usage = delta.usage
+                        continue
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -1327,15 +1663,33 @@ class AgentLoop:
                 error_classification=self.provider.classify_error(TimeoutError()),
             )
 
+        if had_error:
+            return LLMResponse(
+                content=error_content,
+                finish_reason="error",
+                error_classification=error_classification,
+                usage=final_usage or {},
+            )
+
         tool_calls = _finalize_tool_calls(tool_call_slots)
         finish_reason = "tool_calls" if tool_calls else "stop"
 
+        content = "".join(content_buf)
+        reasoning_content = "".join(reasoning_buf) or None
+        # getattr because the loop accepts duck-typed providers (test stubs and
+        # thin adapters implement just chat/chat_stream); absent means the
+        # LLMProvider default, False.
+        emits_unparsed = getattr(self.provider, "emits_unparsed_reasoning", None)
+        if reasoning_content is None and emits_unparsed is not None and emits_unparsed():
+            split_reasoning, content = split_orphan_think(content)
+            reasoning_content = split_reasoning
+
         return LLMResponse(
-            content="".join(content_buf),
+            content=content,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=final_usage or {},
-            reasoning_content="".join(reasoning_buf) or None,
+            reasoning_content=reasoning_content,
         )
 
     @classmethod
@@ -1349,13 +1703,14 @@ class AgentLoop:
         call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
         there was nothing worth eliding (caller should not bother retrying).
         """
+        messages, elided = cls._elide_older_images(messages)
+
         placeholder = "[earlier tool output elided to fit the context window]"
         tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
         if len(tool_idxs) <= cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            return messages, 0
+            return messages, elided
         elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
         shrunk: list[dict] = []
-        elided = 0
         for i, m in enumerate(messages):
             if i in elide and m.get("content") and m.get("content") != placeholder:
                 clean = dict(m)
@@ -1365,6 +1720,94 @@ class AgentLoop:
             else:
                 shrunk.append(m)
         return shrunk, elided
+
+    @staticmethod
+    def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
+        """Move images out of tool results into a following user message.
+
+        The recovery for an endpoint that refuses a picture in ``role="tool"``.
+        Produces exactly the message list a ``False`` capability verdict would
+        have built in the first place, so the retry lands on the already-tested
+        placeholder path rather than inventing a third shape.
+
+        A run of consecutive tool messages is one batch answering one assistant
+        message, so the pictures pulled out of it are attached once after the last
+        of them -- putting one between two tool results leaves a tool_call
+        unanswered where the API checks the sequence (measured, see the batching
+        comment in the tool loop).
+
+        Returns ``(new_messages, num_demoted)``; ``0`` means no tool result
+        carried an image, so the refusal was about something else and the caller
+        should not retry.
+        """
+        out: list[dict] = []
+        pending: list[dict] = []
+        demoted = 0
+
+        def flush() -> None:
+            if pending:
+                out.append({"role": "user", "content": list(pending), _ATTACHED_IMAGE_KEY: True})
+                pending.clear()
+
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "tool":
+                flush()
+                out.append(m)
+                continue
+            if not isinstance(content, list):
+                out.append(m)
+                continue
+            images = [p for p in content if is_image_part(p)]
+            if not images:
+                out.append(m)
+                continue
+            clean = dict(m)
+            clean["content"] = image_placeholder_text(content)
+            out.append(clean)
+            pending.extend(images)
+            demoted += len(images)
+        flush()
+        return out, demoted
+
+    @classmethod
+    def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
+        """Drop inline images from all but the most recent image-bearing message.
+
+        Run before the tool-text pass because an image is by far the densest
+        thing in the window -- one costs up to 1568 tokens, which is more than
+        most tool outputs -- so dropping a stale picture buys more room than
+        eliding several text results, and costs less of what the model still
+        needs.
+
+        Not restricted to ``role="tool"``: when the endpoint cannot carry an
+        image in a tool result the picture is attached to a following ``user``
+        message instead, and that message would otherwise be untouchable here.
+        """
+        bearing = [
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), list) and any(is_inline_image(p) for p in m["content"])
+        ]
+        if len(bearing) <= cls._SHRINK_KEEP_RECENT_IMAGES:
+            return messages, 0
+
+        target = set(bearing[: -cls._SHRINK_KEEP_RECENT_IMAGES] if cls._SHRINK_KEEP_RECENT_IMAGES else bearing)
+        out: list[dict] = []
+        elided = 0
+        for i, m in enumerate(messages):
+            if i not in target:
+                out.append(m)
+                continue
+            clean = dict(m)
+            # New list: the caller's messages may still be referenced elsewhere.
+            clean["content"] = [
+                {"type": "text", "text": "[image elided to fit the context window]"} if is_inline_image(p) else p
+                for p in m["content"]
+            ]
+            out.append(clean)
+            elided += 1
+        return out, elided
 
     async def _synthesize_final_on_exhaustion(
         self,
@@ -1462,6 +1905,8 @@ class AgentLoop:
         # Context-overflow recovery: bound the number of emergency shrinks so a
         # turn that overflows even after eliding can't loop forever.
         compress_retries = 0
+        # Image-demotion recovery: bound per turn, same reason.
+        image_demote_retries = 0
         # Tool-failure-loop break (#1b): track consecutive same-tool hard
         # failures across iterations; nudge once per fresh streak, bounded/turn.
         loop_fail_tool: str | None = None
@@ -1546,9 +1991,19 @@ class AgentLoop:
             if usage_sink is not None and response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # Real window from the model's provider table when LiteLLM lags
-                # (e.g. OpenRouter); otherwise the configured default.
-                context_max = resolve_context_window(call_model) or self.context_window_tokens
+                # An explicitly configured window always wins over the live
+                # table -- that is what setting it means. Otherwise the live
+                # window from the model's provider table (e.g. OpenRouter,
+                # when LiteLLM lags) answers instead; unknown to that table
+                # too, 0 tells the UI to show its empty state rather than a
+                # number that isn't this model's.
+                if self._context_window_explicit:
+                    context_max = self.context_window_tokens
+                else:
+                    # Off the event loop: allow_fetch=True here can hit the
+                    # network for up to 10s on an OpenRouter model with both
+                    # caches expired. See rates._fetch_openrouter_models.
+                    context_max = await asyncio.to_thread(resolve_context_window, call_model) or 0
                 context_used = prompt_tokens + completion_tokens
                 usage_sink.clear()
                 usage_sink["prompt_tokens"] = prompt_tokens
@@ -1583,13 +2038,55 @@ class AgentLoop:
                     )
                     continue
 
+            # Image-in-tool-result refused: this endpoint takes a picture only in
+            # a user message. Rebuild onto the placeholder path -- the shape a
+            # False capability verdict would have produced -- and retry this
+            # iteration. Also cache the verdict so the rest of the process stops
+            # paying for the attempt: the static table in `capabilities` guessed
+            # wrong, and this is how it self-corrects.
+            if (
+                response.finish_reason == "error"
+                and cls_ is not None
+                and cls_.should_drop_tool_images
+                and image_demote_retries < self._MAX_IMAGE_DEMOTE_RETRIES
+            ):
+                demoted_messages, demoted = self._demote_tool_images(messages)
+                if demoted > 0:
+                    messages = demoted_messages
+                    self._image_tool_result_ok[call_model or effective_model] = False
+                    image_demote_retries += 1
+                    iteration -= 1  # the refused call did no work; don't bill it
+                    logger.warning(
+                        "Endpoint refused {} image(s) in a tool result; moved them "
+                        "to a user message and retrying ({}/{})",
+                        demoted,
+                        image_demote_retries,
+                        self._MAX_IMAGE_DEMOTE_RETRIES,
+                    )
+                    continue
+
             if response.has_tool_calls:
+                abort_action = False
                 if on_progress:
                     thought = self._strip_think(response.content)
                     if thought:
                         await on_progress(thought)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
+                # Images this transport cannot carry inside a tool result.
+                # Collected across the whole batch and attached once *after* the
+                # last tool result: a user message sitting between two tool
+                # results leaves an assistant tool_call unanswered at the point
+                # the API validates the sequence. Measured on gpt-4o, 2026-07-31,
+                # two tool calls with the picture from the first:
+                #   tool(c1), user, tool(c2) -> 400 "An assistant message with
+                #     'tool_calls' must be followed by tool messages responding
+                #     to each 'tool_call_id'"
+                #   tool(c1), tool(c2), user -> 200, and the model named the
+                #     image's colour
+                # Anthropic accepts both, so this only bites on Chat Completions
+                # -- which is the only transport that takes this path at all.
+                pending_images: list[dict[str, Any]] = []
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
@@ -1599,7 +2096,7 @@ class AgentLoop:
                     thinking_blocks=response.thinking_blocks,
                 )
 
-                for tool_call in response.tool_calls:
+                for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
@@ -1618,6 +2115,10 @@ class AgentLoop:
                                 "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
+                    if tool_call.name == "exec":
+                        exec_tool = self.tools.get("exec")
+                        if isinstance(exec_tool, ExecTool):
+                            exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -1646,7 +2147,39 @@ class AgentLoop:
                                 "truncated": len(display_src) > 200,
                             },
                         )
-                    messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    model_text, blocks, attach_blocks = self._route_result_images(
+                        model_text, getattr(result, "blocks", None), call_model or effective_model
+                    )
+                    if blocks:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, model_text, blocks
+                        )
+                    else:
+                        # Keep the long-standing 4-arg call for text results so no
+                        # existing caller or test double sees a signature change.
+                        messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, model_text)
+                    if attach_blocks:
+                        pending_images.extend(attach_blocks)
+                    if getattr(result, "abort_action", False):
+                        abort_action = True
+                        # A single assistant message may contain several parallel
+                        # tool calls (for example ``rm`` followed by a Python
+                        # fallback). Once policy terminates the action, none of
+                        # the siblings may execute. We must nevertheless append
+                        # one result for every advertised call id: OpenAI-style
+                        # providers reject conversation history containing an
+                        # assistant tool call without its matching tool result.
+                        for skipped_call in response.tool_calls[tool_call_index + 1 :]:
+                            messages = self.context.add_tool_result(
+                                messages,
+                                skipped_call.id,
+                                skipped_call.name,
+                                (
+                                    "Error: Tool call was not executed because a prior safety "
+                                    "decision terminated this action."
+                                ),
+                            )
+                        break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(model_text):
@@ -1656,6 +2189,20 @@ class AgentLoop:
                             loop_fail_tool, loop_fail_streak = tool_call.name, 1
                     else:
                         loop_fail_tool, loop_fail_streak = None, 0
+
+                if abort_action:
+                    # A normal tool result starts another model iteration. That
+                    # is specifically unsafe here: the next plan can translate
+                    # the rejected operation into an equivalent interpreter,
+                    # script, or tool call. Finish the turn in runtime code and
+                    # expose only the non-destructive continuation question.
+                    # Streaming callers need the explicit callback because no
+                    # final model response exists to generate token deltas.
+                    messages = self.context.add_assistant_message(messages, _ABORTED_ACTION_REPLY)
+                    final_content = _ABORTED_ACTION_REPLY
+                    if on_token_delta is not None:
+                        await on_token_delta(_ABORTED_ACTION_REPLY)
+                    break
 
                 # #1b Failure-loop break: the same tool failed deterministically
                 # `threshold` times running → append a change-approach nudge to
@@ -1673,6 +2220,13 @@ class AgentLoop:
                         + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
+                # After the nudge above, which needs the last message to still be
+                # the tool result it appends to. Also after the abort_action
+                # branch, which ends the turn in runtime code -- there is no
+                # further model call to show a picture to, so an aborted action
+                # deliberately drops it rather than leaving it dangling.
+                if pending_images:
+                    messages.append({"role": "user", "content": pending_images, _ATTACHED_IMAGE_KEY: True})
                 prev_had_tool_calls = True
             else:
                 clean = self._strip_think(response.content)
@@ -1783,8 +2337,13 @@ class AgentLoop:
         # was retired on feature/integrate-everos; the after-turn pipeline —
         # ``context_engine.after_turn`` + ``backend.store`` in
         # ``_process_message`` — owns extraction now.)
-        if any(m.get("_recovery_synthetic") for m in messages):
-            messages = [m for m in messages if not m.get("_recovery_synthetic")]
+        # Attached-image messages are dropped here for the same reason and at the
+        # same point: the returned list feeds persistence, ``after_turn``
+        # extraction and ``backend.store`` alike, so filtering once upstream of
+        # all three is the only place that covers them.
+        _transient = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+        if any(any(m.get(k) for k in _transient) for m in messages):
+            messages = [m for m in messages if not any(m.get(k) for k in _transient)]
 
         # Phase B-1 (feature/integrate-everos): embedded extraction (the
         # ``_trigger_local_extraction`` / ``SkillService.on_execution`` path)
@@ -2095,17 +2654,12 @@ class AgentLoop:
             content,
             context_messages,
         )
-        initial_messages = await self._assemble_context_messages(
-            session=session,
-            session_key=key,
-            current_message=content,
-            media=media_paths if media_paths else None,
-            channel=channel,
-            chat_id=chat_id,
-            selected_skills=selected_skills or None,
-        )
-
         # ── Model routing (EcoClaw-style) ────────────────────────────────────
+        # Ahead of assembly, not after it: assembly decides whether an
+        # attachment is inlined as a picture or described in text, and that
+        # question is about the model the request will actually reach. Routing
+        # needs only ``content``, so asking first costs nothing and stops one
+        # model's verdict from shaping a message another model receives.
         routed_model: str | None = None
         fallback_models: list[str] = []
         if self.router is not None:
@@ -2114,6 +2668,17 @@ class AgentLoop:
                 logger.info("Router: {} → {}", self.model, routed_model)
             if fallback_models:
                 logger.info("Router fallback chain: {}", fallback_models)
+
+        initial_messages = await self._assemble_context_messages(
+            session=session,
+            session_key=key,
+            current_message=content,
+            media=media_paths if media_paths else None,
+            channel=channel,
+            chat_id=chat_id,
+            selected_skills=selected_skills or None,
+            model=routed_model,
+        )
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
@@ -2221,8 +2786,20 @@ class AgentLoop:
             role, content = entry.get("role"), entry.get("content")
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
+            if entry.get(_ATTACHED_IMAGE_KEY):
+                # Already filtered upstream; kept because this is the last gate
+                # before a write that cannot be undone, unlike the code above it.
+                continue
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
+            if role == "tool" and isinstance(content, list):
+                # A multimodal tool result. Images must never reach the JSONL:
+                # a single one adds megabytes that are then replayed on every
+                # resume and re-fed to the model, and unlike a code bug that is
+                # not revertible once written. The char cap below cannot catch
+                # it either — it guards `str` content only.
+                content = _strip_inline_images(content)
+                entry["content"] = content
             if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
                 entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
             elif role == "user":
@@ -2234,20 +2811,16 @@ class AgentLoop:
                     else:
                         continue
                 if isinstance(content, list):
-                    filtered = []
-                    for c in content:
-                        if (
-                            c.get("type") == "text"
+                    filtered = [
+                        c
+                        for c in _strip_inline_images(content)
+                        if not (
+                            isinstance(c, dict)
+                            and c.get("type") == "text"
                             and isinstance(c.get("text"), str)
                             and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG)
-                        ):
-                            continue  # Strip runtime context from multimodal messages
-                        if c.get("type") == "image_url" and c.get("image_url", {}).get("url", "").startswith(
-                            "data:image/"
-                        ):
-                            filtered.append({"type": "text", "text": "[image]"})
-                        else:
-                            filtered.append(c)
+                        )
+                    ]
                     if not filtered:
                         continue
                     entry["content"] = filtered
@@ -2266,13 +2839,59 @@ class AgentLoop:
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> TurnOutcome:
+        """Turn boundary for a live ``/model`` switch; see ``_run_turn``.
+
+        A parked switch is adopted here, before the turn reads
+        ``self.provider`` for the first time, and the count kept for the
+        duration is what parks the next one. Wrapping rather than
+        snapshotting because the provider is read from ``self`` at eight
+        sites in this module and by the context engine and consolidator
+        underneath them -- one boundary covers all of them, a snapshot
+        would have to be threaded through each.
+
+        Both ends gate on zero, because turns overlap: a user turn and a
+        proactive turn hold slots in separate pools. Adopting on the way in
+        would otherwise land a switch parked for a turn that is still
+        running, and clearing a flag on the way out would unpark it just as
+        wrongly. Adopting again on the last exit is what keeps a park from
+        outliving the turns it was waiting on.
+        """
+        if self._turns_in_flight == 0:
+            self._adopt_pending_provider()
+        self._turns_in_flight += 1
+        try:
+            return await self._run_turn(
+                req,
+                emit,
+                drain,
+                stream=stream,
+                inline_tool_stream=inline_tool_stream,
+                usage_sink=usage_sink,
+                text_sink=text_sink,
+            )
+        finally:
+            self._turns_in_flight -= 1
+            if self._turns_in_flight == 0:
+                self._adopt_pending_provider()
+
+    async def _run_turn(
+        self,
+        req: TurnRequest,
+        emit: Emit,
+        drain: Drain,
+        *,
+        stream: bool = True,
+        inline_tool_stream: bool = False,
+        usage_sink: dict[str, Any] | None = None,
+        text_sink: dict[str, Any] | None = None,
+    ) -> TurnOutcome:
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
         output paths (a str return + the five callbacks) onto one boundary.
 
         Named ``run_turn`` rather than ``run``: ``run`` is the runtime keep-alive
-        (executor / debug server / MCP up, then idle). A spine runner wraps this
-        method to satisfy the TurnRunner protocol.
+        (executor / debug server / MCP up, then idle). A spine runner calls the
+        public ``run_turn`` to satisfy the TurnRunner protocol.
 
         ``stream`` is the canon Q2-D assembly switch: a streaming outlet (TUI)
         wires it True so the reply goes out as StreamDelta and dissolves (b2 — no

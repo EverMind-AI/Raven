@@ -1,15 +1,9 @@
-"""Tests for the hard-exit guard in ``raven.cli._exit``.
+"""Tests for the hard-exit helper in ``raven.cli._exit``.
 
-The guard exists because native runtimes loaded by the agent loop segfault
-during interpreter finalization; ``raven.cli.commands.run`` and the pytest
-session both route their exit through it. These pin the guard's own behaviour
+Its only caller is the pytest session hook in ``tests/conftest.py``, which needs
+it because a fully green run was observed exiting 139 on Linux when the
+interpreter finalized with native state live. These pin the helper's behaviour
 in-process, so the coverage does not depend on provoking a real native crash.
-
-Scope note, so these tests are not mistaken for proof the guard is load-bearing:
-``flush_and_hard_exit`` is live (the pytest session calls it on CI), but the
-``lancedb_finalization_hazard`` gate in ``commands.py`` is currently dormant --
-the memory plugin talks to everos over HTTP and opens no local lancedb
-connection, so the probe returns False in every configuration today.
 """
 
 from __future__ import annotations
@@ -17,32 +11,6 @@ from __future__ import annotations
 import subprocess
 import sys
 import textwrap
-import threading
-
-import pytest
-
-from raven.cli._exit import lancedb_finalization_hazard
-
-_LANCEDB_THREAD = "LanceDBBackgroundEventLoop"
-
-
-def test_hazard_false_without_the_lancedb_thread() -> None:
-    if any(t.name == _LANCEDB_THREAD for t in threading.enumerate()):
-        pytest.skip("a lancedb connection is already open in this process")
-    assert lancedb_finalization_hazard() is False
-
-
-def test_hazard_true_while_a_thread_of_that_name_is_alive() -> None:
-    """The probe keys on the thread name, not on lancedb being imported."""
-    stop = threading.Event()
-    worker = threading.Thread(target=stop.wait, name=_LANCEDB_THREAD, daemon=True)
-    worker.start()
-    try:
-        assert lancedb_finalization_hazard() is True
-    finally:
-        stop.set()
-        worker.join(timeout=5)
-    assert lancedb_finalization_hazard() is False
 
 
 def _hard_exit_child(code: int, *, prints: str = "") -> subprocess.CompletedProcess:

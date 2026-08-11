@@ -148,7 +148,7 @@ class TestEndToEnd:
         backend = registry.build_memory_backend(
             "everos",
             config={"mode": "embedded"},
-            services=ServiceLocator(workspace=ws),
+            services=ServiceLocator(workspace=ws, user_id="default", agent_id="default"),
         )
         assert backend == {"workspace": str(ws), "mode": "embedded"}
 
@@ -161,7 +161,7 @@ class TestEndToEnd:
             registry.build_memory_backend(
                 "everos",
                 config={},
-                services=ServiceLocator(workspace=tmp_path),
+                services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
             )
 
     def test_disabled_plugin_does_not_register(self, tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ class TestCrossSource:
         result = registry.build_memory_backend(
             "everos",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert result == "BUNDLED"
 
@@ -284,7 +284,7 @@ class TestUserDirImport:
         backend = registry.build_memory_backend(
             "ud_mem",
             config={"mode": "embedded"},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert backend == {"kind": "backend", "mode": "embedded"}
 
@@ -301,7 +301,7 @@ class TestUserDirImport:
         tool = registry.build_tool(
             "pd_tool",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert tool == {"kind": "tool"}
 
@@ -319,12 +319,12 @@ class TestUserDirImport:
         backend = registry.build_memory_backend(
             "mixed_mem",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         tool = registry.build_tool(
             "mixed_tool",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert backend == {"kind": "backend"}
         assert tool == {"kind": "tool"}

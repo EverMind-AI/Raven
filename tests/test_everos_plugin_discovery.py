@@ -48,7 +48,7 @@ class TestPackageSurface:
         import raven.plugin.memory.everos
         from raven.plugin.memory.everos.backend import EverosBackend, make_backend
 
-        assert raven.plugin.memory.everos.__version__ == "1.0.0"
+        assert raven.plugin.memory.everos.__version__ == "1.1.0"
         assert callable(make_backend)
         assert EverosBackend is not None
 
@@ -107,9 +107,9 @@ class TestBundledDiscovery:
         d = PluginDiscovery(bundled_dir=_BUNDLED, user_dir=user_dir)
         out = d.discover()
         record = next(p for p in out if p.manifest.id == "everos-memory")
-        # Bundled (version 1.0.0) wins; user-dir version (9.9.9) is shadowed.
+        # Bundled (version 1.1.0) wins; user-dir version (9.9.9) is shadowed.
         assert record.source == Source.BUNDLED
-        assert record.manifest.version == "1.0.0"
+        assert record.manifest.version == "1.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ class TestActivationAndFactory:
         backend = reg.build_memory_backend(
             "everos",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         # @runtime_checkable Protocol: isinstance returns True iff all
         # five methods are present.
@@ -151,7 +151,7 @@ def backend(tmp_path: Path):
     be = reg.build_memory_backend(
         "everos",
         config={},
-        services=ServiceLocator(workspace=tmp_path),
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
     )
     be._adapter = _NoOpAdapter()
     return be
@@ -195,7 +195,7 @@ class TestConfigPassthrough:
         backend = reg.build_memory_backend(
             "everos",
             config={},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(backend._adapter, _HttpEverosAdapter)
 
@@ -206,7 +206,7 @@ class TestConfigPassthrough:
         backend = reg.build_memory_backend(
             "everos",
             config={"base_url": "http://custom:9000"},
-            services=ServiceLocator(workspace=tmp_path),
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
         )
         assert isinstance(backend._adapter, _HttpEverosAdapter)
         assert backend._adapter._base_url == "http://custom:9000"

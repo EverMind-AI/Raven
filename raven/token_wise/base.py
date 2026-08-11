@@ -32,7 +32,10 @@ class UsageSnapshot:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
-    estimated_cost_usd: float = 0.0
+    # None when the call has no per-token price to state: a plan-billed provider
+    # is paid for by subscription, so a number here would be invented. Distinct
+    # from 0.0, which means "priced, and it cost nothing".
+    estimated_cost_usd: float | None = None
     session_key: str | None = None
 
 

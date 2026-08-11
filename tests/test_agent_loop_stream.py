@@ -12,20 +12,29 @@ from types import SimpleNamespace
 from typing import Any
 
 from raven.agent.loop import AgentLoop
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
+from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
 
 
 class _FakeProvider:
-    """Provider stand-in exposing only ``chat_stream`` (and ``chat_with_retry`` unused)."""
+    """Provider stand-in exposing only ``chat_stream`` (and ``chat_with_retry`` unused).
 
-    def __init__(self, chunks: list[StreamDelta]) -> None:
+    ``emits_unparsed_reasoning`` defaults to False, mirroring
+    ``LLMProvider``'s own default: only a provider shaped like a parser-less
+    self-hosted backend opts into the orphan-``</think>`` split.
+    """
+
+    def __init__(self, chunks: list[StreamDelta], emits_unparsed_reasoning: bool = False) -> None:
         self._chunks = chunks
         self.chat_stream_calls: list[dict[str, Any]] = []
+        self._emits_unparsed_reasoning = emits_unparsed_reasoning
 
     async def chat_stream(self, **kwargs: Any):
         self.chat_stream_calls.append(kwargs)
         for chunk in self._chunks:
             yield chunk
+
+    def emits_unparsed_reasoning(self) -> bool:
+        return self._emits_unparsed_reasoning
 
 
 def _bind_helper(provider: _FakeProvider):
@@ -245,6 +254,41 @@ async def test_llm_call_stream_timeout_returns_structured_error() -> None:
     assert seen == ["partial"]
 
 
+async def test_llm_call_stream_error_delta_is_not_rendered_as_a_token() -> None:
+    """A non-streaming provider's chat() error, replayed through the base
+    fallback as a single terminal delta with finish_reason='error', must not
+    be treated as ordinary streamed content: on_token_delta must not fire for
+    it, and the final response must surface finish_reason + classification
+    instead of a fabricated 'stop'/'tool_calls'."""
+    classification = ErrorClassification(category="http_4xx", should_fallback=True)
+    chunks = [
+        StreamDelta(
+            content="Azure OpenAI API Error 404: deployment not found",
+            finish_reason="error",
+            error_classification=classification,
+        ),
+    ]
+    provider = _FakeProvider(chunks)
+    call = _bind_helper(provider)
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await call(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        model="m",
+        on_token_delta=on_delta,
+    )
+
+    assert seen == []
+    assert response.content == "Azure OpenAI API Error 404: deployment not found"
+    assert response.finish_reason == "error"
+    assert response.error_classification is classification
+
+
 async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     """Provider yields zero chunks → response.content == '' + finish_reason='stop'."""
     provider = _FakeProvider([])
@@ -259,3 +303,70 @@ async def test_llm_call_stream_empty_stream_yields_empty_content() -> None:
     assert response.content == ""
     assert response.tool_calls == []
     assert response.finish_reason == "stop"
+
+
+# ---------------------------------------------------------------------------
+# Orphan <think> recovery -- backend never emitted a structured
+# reasoning delta, and the accumulated content carries a closing tag with no
+# opener (the server's prompt template swallowed it). Only fires for a
+# provider shaped like a parser-less self-hosted backend
+# (``emits_unparsed_reasoning() == True``); a normal direct/gateway provider
+# leaves a bare closing tag in its content alone (F12).
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_call_stream_splits_orphan_think_from_content() -> None:
+    chunks = [
+        StreamDelta(content="raw reasoning"),
+        StreamDelta(content="</think>\n"),
+        StreamDelta(content="final answer"),
+    ]
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content == "raw reasoning"
+    assert response.content == "final answer"
+
+
+async def test_llm_call_stream_leaves_orphan_think_alone_for_non_leaking_provider() -> None:
+    """A provider not shaped like a parser-less self-hosted backend keeps a
+    bare closing tag as ordinary content (F12 regression guard)."""
+    chunks = [
+        StreamDelta(content="discussing the "),
+        StreamDelta(content="</think>"),
+        StreamDelta(content=" tag in my answer"),
+    ]
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=False)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content is None
+    assert response.content == "discussing the </think> tag in my answer"
+
+
+async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
+    """A non-empty structured reasoning_content stream wins outright; an
+    orphan tag inside content (if any) is left untouched."""
+    chunks = [
+        StreamDelta(content=None, reasoning_content="thinking"),
+        StreamDelta(content="visible</think> more text"),
+    ]
+    provider = _FakeProvider(chunks, emits_unparsed_reasoning=True)
+    call = _bind_helper(provider)
+
+    async def on_delta(_text: str) -> None:
+        return None
+
+    response = await call(messages=[], tools=None, model="m", on_token_delta=on_delta)
+
+    assert response.reasoning_content == "thinking"
+    assert response.content == "visible</think> more text"

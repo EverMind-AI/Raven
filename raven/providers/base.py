@@ -5,12 +5,41 @@ import json
 import random
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from loguru import logger
 
 from raven.tracing import semconv, trace
+
+# Wordings providers use to reject list-type content in a tool message. Each is
+# a real 400 body, not a guess: the first group was measured against
+# OpenRouter -> OpenAI, the rest are the set Hermes accumulated across vendors
+# (agent/error_classifier.py, MIT, see LICENSES/MIT-hermes-agent.txt).
+#
+# Some are ambiguous alone -- "text is not set" says nothing about images -- and
+# that is safe here because the recovery is a no-op when no tool result actually
+# carries one, so a false match costs nothing and never retries blind.
+_TOOL_IMAGE_REJECTION_PATTERNS = (
+    # OpenAI, measured: "Invalid 'messages[2]'. Image URLs are only allowed for
+    # messages with role 'user', but this message with role 'tool' contains an
+    # image URL."
+    "only allowed for messages with role",
+    # Xiaomi MiMo: {"code":"400","message":"Param Incorrect","param":"text is not set"}
+    "text is not set",
+    # Generic "tool message must be a string" shapes
+    "tool message content must be a string",
+    "tool content must be a string",
+    "tool message must be a string",
+    # OpenAI-compatible servers rejecting list content at schema validation.
+    # The DeepInfra wording was measured on 2026-07-31 (422, not 400):
+    # {"message":"Input should be a valid string","param":"messages.2.function..."}
+    "expected string, got list",
+    "expected string, got array",
+    "input should be a valid string",
+    # Alibaba / DashScope
+    "tool_call.content must be string",
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +50,8 @@ class ErrorClassification:
       - ``retryable``       → retry the same model after backoff
       - ``should_fallback`` → a different model/provider might succeed
       - ``should_compress`` → context-window overflow; shrink then retry
+      - ``should_drop_tool_images`` → the endpoint refuses an image inside a
+        tool result; move it to a user message then retry
     ``category`` is for logging/telemetry only.
     """
 
@@ -28,6 +59,29 @@ class ErrorClassification:
     retryable: bool = False
     should_fallback: bool = False
     should_compress: bool = False
+    should_drop_tool_images: bool = False
+    #: The upstream refused the prompt-cache breakpoints specifically. Decided
+    #: here for the same reason the rest of this verdict is: a provider that
+    #: swallows the exception into a string loses the response body with it, and
+    #: whether ``str()`` carried that body is a property of the client that
+    #: raised it. Deciding while the exception is alive makes it one answer.
+    refuses_prompt_cache: bool = False
+
+
+class ProviderHTTPError(RuntimeError):
+    """Carries a real HTTP status past the point where a provider renders its
+    non-200 response into a string.
+
+    ``classify_error`` reads a status code off a live exception; a provider
+    that speaks HTTP directly (azure, codex) has one on the response but loses
+    it the moment the error becomes ``str`` content -- raising or classifying
+    through this keeps the status attached, instead of regex-guessing it back
+    out of the rendered text.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass
@@ -86,12 +140,18 @@ class StreamDelta:
     Consumers (AgentLoop on_token_delta path, TUI SubscriptionEmitter) read
     `.content` for incremental token text; `tool_call_delta` / `usage` are
     optional carriers for in-stream tool deltas and final usage snapshots.
+
+    `finish_reason` / `error_classification` are only ever set on the
+    terminal delta of a stream (mirroring `LLMResponse`); mid-stream deltas
+    leave both as ``None``.
     """
 
     content: str | None
     tool_call_delta: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1, qwen, o-series thinking stream
+    finish_reason: str | None = None
+    error_classification: ErrorClassification | None = None
 
 
 @dataclass(frozen=True)
@@ -262,6 +322,8 @@ class LLMProvider(ABC):
             tool_call_delta=tool_call_delta,
             usage=response.usage or None,
             reasoning_content=response.reasoning_content,
+            finish_reason=response.finish_reason,
+            error_classification=response.error_classification,
         )
 
     @staticmethod
@@ -305,9 +367,24 @@ class LLMProvider(ABC):
 
         Precise when given the live exception (status code + class names);
         degrades to substring matching when the provider already swallowed it
-        into ``content``. Order matters: context-overflow and rate-limit are
-        checked before the generic 400/server buckets.
+        into ``content`` -- which is why every verdict, including
+        ``refuses_prompt_cache``, is decided here rather than downstream.
         """
+        from raven.providers import prompt_cache
+
+        verdict = cls._classify(exc, content)
+        if prompt_cache.is_rejection(exc if exc is not None else (content or "")):
+            return replace(verdict, refuses_prompt_cache=True)
+        return verdict
+
+    @classmethod
+    def _classify(
+        cls,
+        exc: BaseException | None = None,
+        content: str | None = None,
+    ) -> ErrorClassification:
+        """The bucket this failure falls in. Order matters: context-overflow and
+        rate-limit are checked before the generic 400/server buckets."""
         status = cls._extract_status_code(exc)
         names = cls._error_type_names(exc)
         msg = (content if content is not None else str(exc) if exc is not None else "").lower()
@@ -394,6 +471,13 @@ class LLMProvider(ABC):
             return ErrorClassification("billing", should_fallback=True)
 
         # Model unavailable / not found → no point retrying it; try another model.
+        # No bare "404" substring here: it also matched the 404 inside "retry
+        # after 1404ms", a request id, and a character offset -- each one
+        # burning a fallback model and cooling a healthy endpoint for an error
+        # no swap can fix. A provider that renders its non-200 body into a
+        # plain string before it reaches this method (azure's path) attaches
+        # the classification at the source instead, where the real status
+        # code is still available -- see ``AzureOpenAIProvider.chat``.
         if (
             status == 404
             or "notfounderror" in names
@@ -406,6 +490,21 @@ class LLMProvider(ABC):
             )
         ):
             return ErrorClassification("model_unavailable", should_fallback=True)
+
+        # An image inside a role="tool" message the endpoint won't take → resend
+        # with the picture moved to a following user message. Must precede the
+        # generic 400 bucket below, which is fatal.
+        #
+        # The first clause is that bucket's condition plus ``badrequesterror`` in
+        # the *message*: once a provider has swallowed the exception into content
+        # there is no status code or class name left to read, and LiteLLM's
+        # swallowed form reads "litellm.BadRequestError: ...". That is the
+        # substring degradation this method's docstring describes, and it is why
+        # this branch recognises a 400 the bucket below would call unknown.
+        if (
+            status == 400 or "badrequesterror" in names or has("badrequesterror", "invalid request", "invalid_request")
+        ) and has(*_TOOL_IMAGE_REJECTION_PATTERNS):
+            return ErrorClassification("tool_image_unsupported", should_drop_tool_images=True)
 
         # Generic bad request (non-context 400) → fatal; no model swap helps.
         if status == 400 or "badrequesterror" in names or has("invalid request", "invalid_request"):
@@ -449,8 +548,11 @@ class LLMProvider(ABC):
         always carries an ``error_classification`` so the caller (model-chain
         fallback) can decide without re-classifying.
         """
+        from raven.providers import prompt_cache
+
         total_attempts = len(self._CHAT_RETRY_DELAYS) + 1
         last_response: LLMResponse | None = None
+        dropped_cache_control = False
         for attempt in range(1, total_attempts + 1):
             exc: Exception | None = None
             try:
@@ -478,6 +580,19 @@ class LLMProvider(ABC):
             response.error_classification = classification
             last_response = response
 
+            # Why an upstream can refuse this at all: see
+            # ``providers.prompt_cache.suppress``. Learned from the refusal, once
+            # per model. The marks already in the payload were placed upstream by
+            # a token strategy, so they are taken off here; suppressing stops the
+            # provider adding its own back on the way out.
+            # Read off the verdict rather than re-derived here: by this point a
+            # provider may have turned the exception into a string.
+            if not dropped_cache_control and attempt < total_attempts and classification.refuses_prompt_cache:
+                dropped_cache_control = True
+                prompt_cache.suppress(model or getattr(self, "default_model", "") or "")
+                messages, tools = prompt_cache.strip(messages, tools)
+                continue
+
             if not classification.retryable or attempt == total_attempts:
                 return response
 
@@ -494,6 +609,23 @@ class LLMProvider(ABC):
             await asyncio.sleep(delay)
 
         return last_response  # type: ignore[return-value]  # loop always returns on the last attempt
+
+    def can_serve(self, model: str) -> bool:
+        """Whether this provider instance's credentials and wire can serve this model.
+
+        Default True: the base class knows nothing about routing, and a wrong
+        guess must fail loudly at the wire rather than silently skip a hop.
+        """
+        return True
+
+    def emits_unparsed_reasoning(self) -> bool:
+        """Whether this provider's backend may leak bare think tags into content.
+
+        Only an inference server run without its reasoning parser produces the
+        orphan-closing-tag shape; everyone else's `</think>` in content is just
+        text. Default False: normalization is opt-in per provider shape.
+        """
+        return False
 
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(
@@ -527,9 +659,30 @@ class LLMProvider(ABC):
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
 
+        from raven.providers import prompt_cache
+
         model_chain = [model, *(fallback_models or [])]
         response: LLMResponse | None = None
         for idx, current_model in enumerate(model_chain):
+            # A fallback hop that this instance's credentials/wire cannot serve
+            # (e.g. a direct provider whose fallback model resolves to another
+            # vendor) is skipped rather than sent -- the wrong key on the wrong
+            # wire either 400s outright or, worse, silently answers under a
+            # same-named model from the wrong vendor. Never skips the primary
+            # model: idx 0 is what the caller asked for.
+            if idx and not self.can_serve(current_model or ""):
+                logger.warning(
+                    "Skipping fallback model={} - this provider instance cannot serve it (wrong vendor)",
+                    current_model,
+                )
+                continue
+
+            # The breakpoints in this payload were placed for whoever was asked
+            # first. A fallback is a different model, often a different vendor,
+            # and the field it does not read is billed rather than refused --
+            # sending Anthropic's markers on to Gemini is what doubled a prompt.
+            if idx and not prompt_cache.accepts_cache_control(current_model or ""):
+                messages, tools = prompt_cache.strip(messages, tools)
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,
