@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/f2882578-ff8e-4817-a5d2-6ada414acf1a)
+![Raven banner](https://github.com/user-attachments/assets/6c6f585a-21b6-4e7b-9187-acffe59d0c10)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -21,7 +21,7 @@ Raven is a memory-first, self-improving agent harness built on [EverOS](https://
 
 ## Benchmarks
 
-![Raven benchmark results across efficiency, self-evolution, and proactivity](https://github.com/user-attachments/assets/86a64ee7-3a0a-4aa0-969e-374646f604f2)
+![Raven benchmark results across efficiency, self-evolution, and proactivity](https://github.com/user-attachments/assets/97092494-6975-4bde-92ca-32db7bd73f62)
 
 Raven's published benchmark runs show three complementary advantages:
 
