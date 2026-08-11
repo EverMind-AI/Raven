@@ -80,6 +80,10 @@ class ProviderSpec:
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
+    # Vendor model id to context window for current models the pinned LiteLLM
+    # metadata does not yet describe correctly.
+    model_context_windows: tuple[tuple[str, int], ...] = ()
+
     # OAuth-based providers (e.g., OpenAI Codex) don't use API keys
     is_oauth: bool = False  # if True, uses OAuth flow instead of API key
 
@@ -484,6 +488,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         detect_by_base_keyword="",
         strip_model_prefix=False,
         model_overrides=(),
+        model_context_windows=(("MiniMax-M3", 1_000_000), ("MiniMax-M2.7", 204_800)),
         # Needed by `provider test` and the wizard preflight, which probe
         # /v1/models before any LiteLLM call resolves an endpoint.
         default_api_base="https://api.minimax.io/v1",

@@ -527,11 +527,29 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     return None
 
 
+def _registry_context_window(model: str) -> int | None:
+    """A current vendor window declared by the provider registry, or None."""
+    from raven.providers.registry import find_by_model, find_by_name, split_model_id
+
+    prefix, vendor_model = split_model_id(model)
+    if not prefix:
+        return None
+    spec = find_by_model(model)
+    if spec is None:
+        return None
+    source = find_by_name(spec.metadata_prefix) if spec.metadata_prefix else spec
+    if source is None:
+        return None
+    wanted = vendor_model.casefold()
+    return next((window for model_id, window in source.model_context_windows if model_id.casefold() == wanted), None)
+
+
 def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | None:
     """Return a model's real context window in tokens, or None.
 
-    LiteLLM's static metadata first, then OpenRouter's catalogue for ids that
-    name OpenRouter. The snapshot is deliberately not a source: a window sizes
+    Current model facts declared by the routing registry come first, then
+    LiteLLM's static metadata, then OpenRouter's catalogue for ids that name
+    OpenRouter. The snapshot is deliberately not a source: a window sizes
     trimming, so a community-maintained file that goes stale or wrong would
     shape the next request rather than cost a label. Unknown models return None
     so the caller keeps its configured default.
@@ -542,6 +560,10 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
     behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
     pass this is cheap enough not to pay a fresh import either.
     """
+    window = _registry_context_window(model)
+    if window:
+        return window
+
     window = _try_litellm_context_window(model, allow_import=allow_fetch)
     if window:
         return window
