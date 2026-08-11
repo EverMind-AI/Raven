@@ -6,7 +6,9 @@ import os
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from dataclasses import FrozenInstanceError
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -19,6 +21,7 @@ from raven.cli.commands import app
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
 WHEEL_URL = "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-0.1.4-py3-none-any.whl"
+RATE_LIMIT_RESET = 1786451027
 MALFORMED_DIRECT_URL_METADATA = [
     pytest.param("", id="empty-document"),
     pytest.param("[]", id="top-level-list"),
@@ -59,6 +62,30 @@ def _release_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _quota_exhausted_response() -> httpx.Response:
+    return httpx.Response(
+        403,
+        headers={
+            "x-ratelimit-limit": "60",
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset": str(RATE_LIMIT_RESET),
+        },
+        json={"message": "API rate limit exceeded for 203.0.113.7."},
+    )
+
+
+def _quota_spent_handler(requested: list[str]) -> Callable[[httpx.Request], httpx.Response]:
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(f"{request.method} {request.url}")
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_WEB:
+            return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+        return httpx.Response(200)
+
+    return handler
 
 
 def test_release_info_is_immutable() -> None:
@@ -112,7 +139,9 @@ def test_parse_release_payload_selects_exact_release_wheel() -> None:
 
 @pytest.mark.parametrize("field", ["draft", "prerelease"])
 def test_parse_release_payload_rejects_unstable_releases(field: str) -> None:
-    with pytest.raises(upgrade_commands.UpgradeError):
+    # ReleaseLookupError, not a bare UpgradeError: a remote release problem must not
+    # make the CLI advise reinstalling a healthy local installation.
+    with pytest.raises(upgrade_commands.ReleaseLookupError):
         upgrade_commands._parse_release_payload(_release_payload(**{field: True}))
 
 
@@ -196,22 +225,126 @@ def test_fetch_latest_release_uses_github_api_contract(monkeypatch: pytest.Monke
     assert release == upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL)
 
 
-def test_fetch_latest_release_propagates_timeout() -> None:
+def test_fetch_latest_release_reports_both_paths_on_transport_failure() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(httpx.ReadTimeout):
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
             upgrade_commands._fetch_latest_release(client)
 
+    message = str(excinfo.value)
+    assert "GitHub API: timed out" in message
+    assert "release page: timed out" in message
+    assert "check your network" in message
 
-def test_fetch_latest_release_propagates_non_2xx_response() -> None:
+
+def test_fetch_latest_release_reports_both_paths_on_server_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"message": "unavailable"})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
             upgrade_commands._fetch_latest_release(client)
+
+    message = str(excinfo.value)
+    assert "GitHub API: HTTP 503" in message
+    assert "release page: HTTP 503" in message
+    assert "check your network" not in message
+
+
+def test_fetch_latest_release_falls_back_to_release_page_when_quota_is_spent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    requested: list[str] = []
+
+    with httpx.Client(transport=httpx.MockTransport(_quota_spent_handler(requested))) as client:
+        release = upgrade_commands._fetch_latest_release(client)
+
+    assert release == upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL)
+    assert requested == [
+        f"GET {upgrade_commands.LATEST_RELEASE_API}",
+        f"GET {upgrade_commands.LATEST_RELEASE_WEB}",
+        f"HEAD {WHEEL_URL}",
+    ]
+
+
+def test_fetch_latest_release_reports_spent_quota_reset_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    message = str(excinfo.value)
+    assert "rate limit exhausted" in message
+    assert "60 per hour per IP" in message
+    assert datetime.fromtimestamp(RATE_LIMIT_RESET).strftime("%H:%M:%S") in message
+    assert "check your network" not in message
+
+
+def test_fetch_latest_release_rejects_prerelease_tag_from_release_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(f"{request.method} {request.url}")
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.5-rc1"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    assert "Unsupported Raven version: v0.1.5-rc1" in str(excinfo.value)
+    assert not any(entry.startswith("HEAD") for entry in requested)
+
+
+def test_fetch_latest_release_rejects_release_page_without_a_wheel(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_WEB:
+            return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+        return httpx.Response(404)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    assert "release page: HTTP 404" in str(excinfo.value)
+
+
+def test_fetch_latest_release_does_not_route_around_a_prerelease_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return httpx.Response(200, json=_release_payload(prerelease=True))
+        return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.UpgradeError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    assert "not stable" in str(excinfo.value)
+    assert "release page" not in str(excinfo.value)
+    assert requested == [upgrade_commands.LATEST_RELEASE_API]
 
 
 def test_fetch_latest_release_propagates_invalid_json() -> None:
@@ -868,9 +1001,11 @@ def test_upgrade_refuses_editable_install(monkeypatch: pytest.MonkeyPatch) -> No
 
     result = runner.invoke(app, ["upgrade"])
 
+    output = " ".join(result.stdout.split())
     assert result.exit_code == 1
     assert "editable" in result.stdout.lower()
     assert "source checkout" in result.stdout.lower()
+    assert "Raven.." not in output
     target_lookup.assert_not_called()
     handoff.assert_not_called()
 
@@ -975,8 +1110,35 @@ def test_upgrade_reports_release_errors(
     output = " ".join(result.stdout.lower().split())
     assert result.exit_code == 1
     assert "Unable to upgrade Raven" in result.stdout
-    assert "try again" in output
     assert "official installer" in output
+    assert "Traceback" not in result.stdout
+
+
+def test_upgrade_reports_a_spent_quota_without_network_or_installer_advice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        return httpx.Response(503)
+
+    def fetch() -> upgrade_commands.ReleaseInfo:
+        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+            return upgrade_commands._resolve_latest_release(client)
+
+    monkeypatch.setattr(upgrade_commands, "_fetch_latest_release", fetch)
+
+    result = runner.invoke(app, ["upgrade"])
+
+    output = " ".join(result.stdout.split())
+    assert result.exit_code == 1
+    assert "rate limit exhausted" in output
+    assert "60 per hour per IP" in output
+    assert datetime.fromtimestamp(RATE_LIMIT_RESET).strftime("%H:%M:%S") in output
+    assert "network" not in output.lower()
+    assert "official installer" not in output.lower()
     assert "Traceback" not in result.stdout
 
 
@@ -1007,6 +1169,5 @@ def test_upgrade_reports_malformed_installation_metadata(
     output = " ".join(result.stdout.lower().split())
     assert result.exit_code == 1
     assert "Unable to upgrade Raven" in result.stdout
-    assert "try again" in output
     assert "official installer" in output
     assert "Traceback" not in result.stdout
