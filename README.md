@@ -21,15 +21,13 @@ Raven is a memory-first, self-improving agent harness built on [EverOS](https://
 
 ## Benchmarks
 
-![Raven benchmark results across efficiency, self-evolution, and proactivity](https://github.com/user-attachments/assets/97092494-6975-4bde-92ca-32db7bd73f62)
+| Benchmark | Raven Result | Comparison |
+| --- | --- | --- |
+| [Efficiency](https://raven.evermind.ai/) | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
+| [Self-evolution](https://evermind-ai.github.io/EvoAgentBench/) | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
+| [Proactivity](https://x.com/evermind) | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
 
-Raven's published benchmark runs show three complementary advantages:
-
-- **More efficient:** higher scores at both tested compute budgets, including `56.7%` vs `46.8%` at 27B tokens.
-- **Self-evolving:** first among the tested self-evolution methods on EvoAgentBench, with a `+6.2pp` lead over the next result.
-- **More proactive:** `0.60` F1 on ProAgentBench, `2.4x` the `0.253` comparison result.
-
-Sources: [Raven benchmark overview](https://raven.evermind.ai/), [EvoAgentBench methodology](https://evermind-ai.github.io/EvoAgentBench/), and [EverMind benchmark updates](https://x.com/evermind). Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
+Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
 ## Quick Start
 
