@@ -1,15 +1,18 @@
 """Weighted Reciprocal Rank Fusion across heterogeneous skill sources.
 
-The classic RRF formula sums ``1 / (k + rank_i(d))`` over the sources
-that hit document ``d``. Multi-source skill retrieval needs a small
-extension: each source carries a **trust weight** so curated content
-(Local) outranks imported content (Mass) at equal rank. The weighted
-form is::
+The classic RRF formula sums ``1 / (rrf_k + rank_i(d))`` over the
+sources that hit document ``d``. Multi-source skill retrieval needs a
+small extension: each source carries a **trust weight** so curated
+content (Local) outranks imported content (Mass) at equal rank. The
+weighted form is::
 
-    rrf_score(d) = Σ_i  w_i / (k + rank_i(d))
+    rrf_score(d) = Σ_i  w_i / (rrf_k + rank_i(d))
 
-with ``k = 60`` (the long-standing RRF constant) and the per-source
-``w_i`` coming from the source's :attr:`SkillSource.weight` attribute.
+with ``rrf_k`` defaulting to :data:`RRF_K` and overridable per call or
+via ``skillForge.router.rrfK``, and the per-source ``w_i`` coming from
+the source's :attr:`SkillSource.weight` attribute. Note that ``rrf_k``
+is the damping constant, distinct from the ``k`` argument of
+:func:`rrf_merge_weighted`, which caps the output length.
 
 Three additional behaviors are baked in:
 

@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from raven.config.raven import SkillForgeRouterConfig
 from raven.memory_engine.skill_forge import (
     RRF_K,
     RouterHit,
@@ -207,6 +208,28 @@ class TestSkillForgeRouterSelect:
 
         out = await SkillForgeRouter([a]).select("q", history=[], k=5)
         assert out[0].meta["rrf_score"] == pytest.approx(1.0 / (RRF_K + 1))
+
+    async def test_shipped_defaults_interleave_the_three_sources(self) -> None:
+        """The ordering the shipped config produces, asserted rather than
+        described: every source places its top hit and Local keeps slot 1."""
+        cfg = SkillForgeRouterConfig()
+        sources = [
+            _StubSource(
+                name,
+                cfg.weights[name],
+                [_hit(f"{name}/1", f"{name}#1"), _hit(f"{name}/2", f"{name}#2")],
+            )
+            for name in ("local", "everos", "hub")
+        ]
+        router = SkillForgeRouter(sources, rrf_k=cfg.rrf_k)
+        out = await router.select("q", history=[], k=5)
+        assert [h.name for h in out] == [
+            "local#1",
+            "everos#1",
+            "local#2",
+            "hub#1",
+            "everos#2",
+        ]
 
     async def test_over_fetches_per_source(self) -> None:
         """Default over_fetch_factor=2 means each source is asked for k*2."""
