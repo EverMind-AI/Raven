@@ -180,20 +180,161 @@ def test_parse_release_payload_rejects_untrusted_wheel_urls(wheel_url: str) -> N
         upgrade_commands._parse_release_payload(_release_payload(assets=assets))
 
 
-def test_fetch_latest_release_uses_github_api_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+def _tag_redirect(version: str = "0.1.4") -> httpx.Response:
+    return httpx.Response(
+        302,
+        headers={"location": f"https://github.com/EverMind-AI/Raven/releases/tag/v{version}"},
+    )
+
+
+def _quota_response(remaining: str = "0", reset: str = "1785243845") -> httpx.Response:
+    return httpx.Response(
+        403,
+        headers={
+            "x-ratelimit-limit": "60",
+            "x-ratelimit-remaining": remaining,
+            "x-ratelimit-reset": reset,
+        },
+        json={"message": "API rate limit exceeded"},
+    )
+
+
+def test_release_from_tag_builds_the_url_the_payload_parser_accepts() -> None:
+    from_tag = upgrade_commands._release_from_tag("v0.1.4")
+
+    assert from_tag == upgrade_commands._parse_release_payload(_release_payload())
+
+
+def test_fetch_latest_release_prefers_the_redirect_over_the_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        assert request.headers["User-Agent"] == "raven/0.1.3"
+        return _tag_redirect()
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        release = upgrade_commands._fetch_latest_release(client)
+
+    assert release == upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL)
+    assert seen == [upgrade_commands.LATEST_RELEASE_URL]
+
+
+def test_fetch_latest_release_does_not_follow_the_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return _tag_redirect()
+        raise AssertionError(f"followed the redirect to {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        release = upgrade_commands._fetch_latest_release(client)
+
+    assert release.version == "0.1.4"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(httpx.Response(200), id="no-redirect"),
+        pytest.param(
+            httpx.Response(302, headers={"location": "https://github.com/login"}),
+            id="unexpected-target",
+        ),
+        pytest.param(httpx.Response(302), id="redirect-without-location"),
+    ],
+)
+def test_fetch_latest_release_falls_back_to_the_api(response: httpx.Response, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return response
         assert str(request.url) == upgrade_commands.LATEST_RELEASE_API
         assert request.headers["Accept"] == "application/vnd.github+json"
         assert request.headers["User-Agent"] == "raven/0.1.3"
         assert request.headers["X-GitHub-Api-Version"] == "2022-11-28"
+        assert "Authorization" not in request.headers
         return httpx.Response(200, json=_release_payload())
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         release = upgrade_commands._fetch_latest_release(client)
 
     assert release == upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL)
+
+
+@pytest.mark.parametrize("env_var", ["GITHUB_TOKEN", "GH_TOKEN"])
+def test_fetch_latest_release_authenticates_the_api_when_a_token_is_set(
+    env_var: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv(env_var, "  gho_secret  ")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return httpx.Response(500)
+        assert request.headers["Authorization"] == "Bearer gho_secret"
+        return httpx.Response(200, json=_release_payload())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        release = upgrade_commands._fetch_latest_release(client)
+
+    assert release.version == "0.1.4"
+
+
+def test_fetch_latest_release_reports_an_exhausted_api_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return httpx.Response(500)
+        return _quota_response()
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.UpgradeError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    message = str(excinfo.value)
+    assert "quota of 60 requests per hour is exhausted" in message
+    assert "for this IP address" in message
+    assert "resetting at" in message
+    assert excinfo.value.hint is not None
+    assert "GITHUB_TOKEN" in excinfo.value.hint
+
+
+def test_fetch_latest_release_quota_hint_skips_the_token_advice_when_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "gho_secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return httpx.Response(500)
+        return _quota_response()
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.UpgradeError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    assert excinfo.value.hint is not None
+    assert "GITHUB_TOKEN" not in excinfo.value.hint
+
+
+def test_fetch_latest_release_keeps_a_plain_403_a_status_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_URL:
+            return httpx.Response(500)
+        return _quota_response(remaining="7")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            upgrade_commands._fetch_latest_release(client)
 
 
 def test_fetch_latest_release_propagates_timeout() -> None:
@@ -820,6 +961,24 @@ def test_upgrade_check_reports_available_without_install(monkeypatch: pytest.Mon
     assert "0.1.3 -> 0.1.4" in result.stdout
     assert "raven upgrade" in result.stdout
     handoff.assert_not_called()
+
+
+def test_upgrade_replaces_the_network_advice_with_the_error_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    def quota_exhausted() -> upgrade_commands.ReleaseInfo:
+        raise upgrade_commands.UpgradeError(
+            "GitHub API quota of 60 requests per hour is exhausted for this IP address",
+            hint="Set GITHUB_TOKEN to use your own, or wait for the reset.",
+        )
+
+    monkeypatch.setattr(upgrade_commands, "_fetch_latest_release", quota_exhausted)
+
+    result = runner.invoke(app, ["upgrade"])
+
+    output = " ".join(result.stdout.split())
+    assert result.exit_code == 1
+    assert "quota of 60 requests per hour is exhausted" in output
+    assert "Set GITHUB_TOKEN" in output
+    assert "Check your network" not in output
 
 
 def test_upgrade_reports_current_release_as_up_to_date(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,12 +19,25 @@ import typer
 from rich.console import Console
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
+# Plain web redirect to the newest non-draft, non-prerelease tag. Not the REST
+# API, so it does not spend the 60-per-hour unauthenticated API quota that
+# GitHub meters per IP address (one shared counter for everyone behind an office
+# NAT). Preferred over LATEST_RELEASE_API for that reason alone.
+LATEST_RELEASE_URL = "https://github.com/EverMind-AI/Raven/releases/latest"
+RELEASE_DOWNLOAD_PREFIX = "https://github.com/EverMind-AI/Raven/releases/download"
 _VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_TAG_PATH_RE = re.compile(r"^/EverMind-AI/Raven/releases/tag/(v(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2})$")
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 console = Console()
 
 
 class UpgradeError(RuntimeError):
-    pass
+    """An upgrade failure. ``hint`` replaces the generic remediation line when
+    the cause is understood well enough to say something more useful."""
+
+    def __init__(self, message: str, *, hint: str | None = None) -> None:
+        super().__init__(message)
+        self.hint = hint
 
 
 @dataclass(frozen=True)
@@ -231,20 +245,101 @@ def _parse_release_payload(payload: object) -> ReleaseInfo:
     return ReleaseInfo(version=version, wheel_url=wheel_url)
 
 
-def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
+def _github_token() -> str | None:
+    for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+        token = os.environ.get(name, "").strip()
+        if token:
+            return token
+    return None
+
+
+def _api_headers() -> dict[str, str]:
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": f"raven/{_current_version()}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    token = _github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _release_from_tag(tag_name: str) -> ReleaseInfo:
+    """Build the release info a tag implies.
+
+    Release asset names are deterministic, and ``_parse_release_payload``
+    already rejects any wheel URL that is not exactly this one, so resolving a
+    tag is equivalent to reading the API payload for it.
+    """
+    version = ".".join(str(part) for part in _version_key(tag_name))
+    wheel_name = f"raven-{version}-py3-none-any.whl"
+    return ReleaseInfo(version=version, wheel_url=f"{RELEASE_DOWNLOAD_PREFIX}/v{version}/{wheel_name}")
+
+
+def _fetch_latest_release_via_redirect(client: httpx.Client) -> ReleaseInfo:
+    response = client.get(
+        LATEST_RELEASE_URL,
+        headers={"User-Agent": f"raven/{_current_version()}"},
+        follow_redirects=False,
+    )
+    if response.status_code not in _REDIRECT_CODES:
+        raise UpgradeError(f"GitHub did not redirect to a Raven release tag (HTTP {response.status_code})")
+    location = response.headers.get("location", "")
+    match = _TAG_PATH_RE.match(urlparse(location).path) if location else None
+    if match is None:
+        raise UpgradeError(f"Unexpected latest-release redirect target: {location or '(none)'}")
+    return _release_from_tag(match.group(1))
+
+
+def _rate_limit_error(response: httpx.Response) -> UpgradeError | None:
+    """Turn an exhausted-quota API response into an error that says so.
+
+    GitHub answers a spent quota with 403 (or 429) plus
+    ``x-ratelimit-remaining: 0``; without reading those headers the failure is
+    indistinguishable from a network fault, which is what the generic
+    remediation line used to claim it was.
+    """
+    if response.status_code not in (403, 429) or response.headers.get("x-ratelimit-remaining") != "0":
+        return None
+    limit = response.headers.get("x-ratelimit-limit", "?")
+    reset = response.headers.get("x-ratelimit-reset", "")
+    when = ""
+    if reset.isdigit():
+        when = f", resetting at {datetime.fromtimestamp(int(reset)).strftime('%H:%M:%S')}"
+    hint = "Wait for the reset, or rerun the official installer, which resolves releases without the API."
+    if _github_token() is None:
+        hint = (
+            "GitHub meters unauthenticated requests per IP address, so anyone sharing yours "
+            "spends the same quota. Set GITHUB_TOKEN to use your own, or wait for the reset."
+        )
+    return UpgradeError(
+        f"GitHub API quota of {limit} requests per hour is exhausted for this IP address{when}",
+        hint=hint,
+    )
+
+
+def _fetch_latest_release_via_api(client: httpx.Client) -> ReleaseInfo:
+    response = client.get(LATEST_RELEASE_API, headers=_api_headers())
+    quota_error = _rate_limit_error(response)
+    if quota_error is not None:
+        raise quota_error
+    response.raise_for_status()
+    return _parse_release_payload(response.json())
+
+
+def _fetch_latest_release_from(client: httpx.Client) -> ReleaseInfo:
+    try:
+        return _fetch_latest_release_via_redirect(client)
+    except (UpgradeError, httpx.HTTPError):
+        return _fetch_latest_release_via_api(client)
+
+
+def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
     if client is not None:
-        response = client.get(LATEST_RELEASE_API, headers=headers)
-        response.raise_for_status()
-        return _parse_release_payload(response.json())
-    with httpx.Client(timeout=10.0, follow_redirects=True) as owned_client:
-        response = owned_client.get(LATEST_RELEASE_API, headers=headers)
-        response.raise_for_status()
-        return _parse_release_payload(response.json())
+        return _fetch_latest_release_from(client)
+    with httpx.Client(timeout=10.0) as owned_client:
+        return _fetch_latest_release_from(owned_client)
 
 
 def _direct_url_data() -> dict[str, object] | None:
@@ -456,9 +551,8 @@ def register(app: typer.Typer) -> None:
             ValueError,
             metadata.PackageNotFoundError,
         ) as exc:
-            console.print(
-                f"[red]Unable to upgrade Raven:[/red] {exc}. "
-                "Check your network and try again; if the problem persists, "
-                "rerun the official installer."
+            hint = getattr(exc, "hint", None) or (
+                "Check your network and try again; if the problem persists, rerun the official installer."
             )
+            console.print(f"[red]Unable to upgrade Raven:[/red] {exc}. {hint}")
             raise typer.Exit(1) from exc

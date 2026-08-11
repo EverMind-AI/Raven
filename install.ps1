@@ -191,10 +191,44 @@ function Ensure-Node {
     }
 }
 
+function Resolve-RavenWheelFromTag {
+    # Prefer the plain github.com redirect (releases/latest -> releases/tag/vX.Y.Z)
+    # over the REST API: the redirect is not the API, so it does not spend the
+    # 60-requests-per-hour unauthenticated quota GitHub meters per IP address --
+    # one counter shared by everyone behind the same address. Release asset names
+    # follow from the tag. Any failure returns $null so the caller falls back to
+    # the API rather than making a piped install worse than before.
+    $latest = "https://github.com/EverMind-AI/Raven/releases/latest"
+    $location = $null
+    try {
+        $response = Invoke-WebRequest $latest -MaximumRedirection 0 -UseBasicParsing -ErrorAction SilentlyContinue
+        if ($response) { $location = $response.Headers["Location"] }
+    } catch {
+        # Windows PowerShell 5.1 raises on a 3xx instead of returning it.
+        $failed = $_.Exception.Response
+        if ($failed) { $location = $failed.Headers["Location"] }
+    }
+    if ($location -is [array]) { $location = $location[0] }
+    if (-not $location) { return $null }
+    if ($location -notmatch '^https://github\.com/EverMind-AI/Raven/releases/tag/(v\d+\.\d+\.\d+)$') { return $null }
+    $tag = $Matches[1]
+    $version = $tag.TrimStart("v")
+    return "https://github.com/EverMind-AI/Raven/releases/download/$tag/raven-$version-py3-none-any.whl"
+}
+
 function Resolve-RavenWheel {
     if ($env:RAVEN_WHEEL_URL) { return $env:RAVEN_WHEEL_URL }
     Write-Info "Resolving the latest Raven release from GitHub..."
-    $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
+    $fromTag = Resolve-RavenWheelFromTag
+    if ($fromTag) { return $fromTag }
+    $headers = @{ "User-Agent" = "raven-installer" }
+    $token = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } elseif ($env:GH_TOKEN) { $env:GH_TOKEN } else { $null }
+    if ($token) { $headers["Authorization"] = "Bearer $token" }
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers $headers
+    } catch {
+        Fail ("Could not resolve the latest Raven release from GitHub: " + $_.Exception.Message + " Its unauthenticated API quota (60 per hour, metered per IP address) may be spent: set GITHUB_TOKEN to use your own quota, or set RAVEN_WHEEL_URL to a wheel URL.")
+    }
     $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
     if (-not $asset) {
         Fail "Could not resolve the latest Raven release wheel from GitHub. Set RAVEN_WHEEL_URL to a wheel URL."

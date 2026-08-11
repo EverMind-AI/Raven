@@ -146,6 +146,34 @@ ensure_node() {
 }
 
 # --- 3. install raven ------------------------------------------------------
+RELEASES_BASE="https://github.com/EverMind-AI/Raven/releases"
+LATEST_RELEASE_API="https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
+
+# Print the latest release wheel URL, or nothing when it cannot be resolved.
+#
+# Prefers the plain github.com redirect (releases/latest -> releases/tag/vX.Y.Z)
+# over the REST API: the redirect is not the API, so it does not spend the
+# 60-requests-per-hour unauthenticated quota that GitHub meters per IP address
+# -- one counter shared by everyone behind an office NAT, which is why installs
+# start failing in a busy network. Release asset names follow from the tag, so
+# the tag is all this needs. The API stays as a fallback, authenticated when a
+# token is in the environment (5000 per hour, metered per account).
+resolve_wheel_url() {
+  tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' "$RELEASES_BASE/latest" 2>/dev/null \
+    | sed -n "s#^$RELEASES_BASE/tag/\(v[0-9][0-9.]*\)\$#\1#p")"
+  if [ -n "$tag" ]; then
+    printf '%s/download/%s/raven-%s-py3-none-any.whl\n' "$RELEASES_BASE" "$tag" "${tag#v}"
+    return 0
+  fi
+  token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -n "$token" ]; then
+    body="$(curl -fsSL -H "Authorization: Bearer $token" "$LATEST_RELEASE_API" 2>/dev/null || true)"
+  else
+    body="$(curl -fsSL "$LATEST_RELEASE_API" 2>/dev/null || true)"
+  fi
+  printf '%s' "$body" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1
+}
+
 install_raven() {
   # Local mode: run from a raven source checkout -> editable install of the
   # working tree (what a developer wants). Otherwise install from git.
@@ -189,10 +217,9 @@ install_raven() {
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      wheel_url="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/raven/releases/latest" 2>/dev/null \
-        | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
+      wheel_url="$(resolve_wheel_url)"
     fi
-    [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub (check network, or set RAVEN_WHEEL_URL to a wheel URL)."
+    [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub. GitHub may be unreachable, or its unauthenticated API quota (60 per hour, metered per IP address) may be spent: set GITHUB_TOKEN to use your own quota, or set RAVEN_WHEEL_URL to a wheel URL."
     # Derive the locked-constraints URL from the wheel URL (same release dir) so
     # the constraints always match the wheel being installed, including when
     # RAVEN_WHEEL_URL pins an older wheel. Missing asset / download failure ->
