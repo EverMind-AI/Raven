@@ -46,10 +46,11 @@ class TestDefaults:
     def test_skill_router_defaults(self) -> None:
         c = SkillForgeRouterConfig()
         assert c.enabled is True
-        assert c.weights == {"local": 1.0, "everos": 0.9, "hub": 0.85}
+        assert c.weights == {"local": 0.96, "everos": 0.9, "hub": 0.85}
         assert c.over_fetch_factor == 2
         assert c.dedup_by == "name"
         assert c.top_k == 5
+        assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source);
         # disabled until an endpoint is set.
         assert isinstance(c.hub, HubSourceConfig)
@@ -57,6 +58,11 @@ class TestDefaults:
         assert c.hub.api_key is None
         assert c.hub.timeout_s == pytest.approx(2.0)
         assert c.hub.min_safety == pytest.approx(0.7)
+
+    def test_rrf_k_accepts_camel_case_and_rejects_zero(self) -> None:
+        assert SkillForgeRouterConfig(rrfK=30).rrf_k == 30
+        with pytest.raises(ValidationError):
+            SkillForgeRouterConfig(rrf_k=0)
 
     def test_skill_forge_public_defaults(self) -> None:
         c = SkillForgeConfig()

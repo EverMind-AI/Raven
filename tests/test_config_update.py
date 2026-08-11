@@ -279,7 +279,7 @@ def test_init_extension_defaults_seeds_safe_subset(cfg_path: Path) -> None:
     assert data["skillForge"]["enabled"] is True
     assert data["skillForge"]["everos"] == {"enabled": True}
     assert data["skillForge"]["router"]["weights"] == {
-        "local": 1.0,
+        "local": 0.96,
         "everos": 0.9,
         "hub": 0.85,
     }

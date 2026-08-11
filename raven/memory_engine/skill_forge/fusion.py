@@ -37,16 +37,18 @@ from dataclasses import replace
 
 from raven.memory_engine.skill_forge.types import RouterHit
 
-# The "60" in classic RRF — dampens rank effects so a #1 at one source
-# doesn't always crowd out top-3 from another. Standard value, kept as
-# a module constant so the rare experiment that wants to tune it can.
-RRF_K: int = 60
+# Classic RRF uses 60, tuned for TREC-scale runs of ~1000 hits. Sources
+# here return ~10, where 60 flattens the whole rank ladder to a 15% score
+# spread -- narrower than the 1.0/0.85 source-weight gap, so weight alone
+# decides the order and rank stops mattering. 10 keeps that ladder at 82%.
+RRF_K: int = 10
 
 
 def rrf_merge_weighted(
     source_results: list[tuple[str, float, list[RouterHit]]],
     k: int,
     dedup_by: str = "name",
+    rrf_k: int | None = None,
 ) -> list[RouterHit]:
     """Fuse per-source ranked lists into one top-K.
 
@@ -60,6 +62,8 @@ def rrf_merge_weighted(
             sources surfacing a skill with the same display name are
             one logical skill. Tests pass ``"qualified_id"`` when they
             want to verify "no dedup happened" on disjoint hits.
+        rrf_k: RRF damping constant. ``None`` uses :data:`RRF_K`. Not to
+            be confused with ``k`` above, which caps the output length.
 
     Returns:
         Up to ``k`` :class:`RouterHit` records, ranked by descending
@@ -67,6 +71,7 @@ def rrf_merge_weighted(
         ``contributing_sources`` (list[str], stable-ordered as
         encountered) added to its ``meta``.
     """
+    damping = RRF_K if rrf_k is None else rrf_k
     rrf_scores: dict[str, float] = defaultdict(float)
     best_hit: dict[str, RouterHit] = {}
     contributing: dict[str, list[str]] = defaultdict(list)
@@ -74,7 +79,7 @@ def rrf_merge_weighted(
     for source_name, weight, hits in source_results:
         for rank, hit in enumerate(hits, start=1):
             key = getattr(hit, dedup_by)
-            rrf_scores[key] += weight / (RRF_K + rank)
+            rrf_scores[key] += weight / (damping + rank)
             contributing[key].append(source_name)
             prev = best_hit.get(key)
             # Keep the hit with the higher per-source ``score`` as the
