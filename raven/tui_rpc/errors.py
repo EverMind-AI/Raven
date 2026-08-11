@@ -61,6 +61,20 @@ class RpcError(Exception):
         return self.MESSAGE
 
 
+def error_data(exc: RpcError) -> dict[str, Any] | None:
+    """Wire ``error.data`` for an exception: ``data`` with ``detail`` folded in.
+
+    ``message`` is a fixed code name, so ``detail`` is the only place the cause
+    is spelled out; callers that set both must not lose it. Shared by the
+    dispatcher's error frames and the per-turn error events so both carry the
+    same context.
+    """
+    data = dict(exc.data) if exc.data is not None else {}
+    if exc.detail:
+        data.setdefault("detail", exc.detail)
+    return data or None
+
+
 class SessionNotFoundError(RpcError):
     CODE = -32001
     MESSAGE = "session_not_found"

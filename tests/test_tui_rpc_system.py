@@ -17,7 +17,7 @@ import time
 import pytest
 
 from raven.tui_rpc.dispatcher import Dispatcher
-from raven.tui_rpc.errors import ConfigValidationError
+from raven.tui_rpc.errors import ConfigValidationError, InternalError
 from raven.tui_rpc.methods.system import (
     register_system_methods,
     system_hello,
@@ -160,6 +160,26 @@ async def test_dispatcher_internal_error_maps_to_32603():
     # Traceback tail should be included for debuggability
     assert "data" in resp["error"]
     assert "traceback_tail" in resp["error"]["data"]
+
+
+async def test_dispatcher_keeps_detail_alongside_structured_data():
+    # `message` is only a code name, so dropping `detail` when a raiser also set
+    # `data` leaves the client with nothing to show. Both must reach the wire.
+    d = Dispatcher()
+
+    async def boom(params: dict) -> dict:
+        raise InternalError(
+            detail="Config at ~/.raven/config.json fails schema validation",
+            data={"reason": "tui_init_crash", "log_path": "~/.raven/logs/tui.log"},
+        )
+
+    d.register("test.boom", boom)
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 7, "method": "test.boom", "params": {}})
+
+    assert resp["error"]["code"] == -32603
+    assert resp["error"]["data"]["detail"] == "Config at ~/.raven/config.json fails schema validation"
+    assert resp["error"]["data"]["reason"] == "tui_init_crash"
+    assert resp["error"]["data"]["log_path"] == "~/.raven/logs/tui.log"
 
 
 async def test_dispatcher_parse_response_id_echoed():

@@ -188,6 +188,47 @@ async def test_turn_send_without_scheduler_surfaces_build_error_code() -> None:
     assert emitter.emitted[-1][1]["payload"]["code"] == -32603
 
 
+async def test_turn_send_emits_the_build_error_cause_not_just_its_code() -> None:
+    # -32603 internal_error names no cause on its own; the init crash detail and
+    # the log path are what make the failure diagnosable in the transcript.
+    class _BuildErr(RpcError):
+        CODE = -32603
+        MESSAGE = "internal_error"
+
+    emitter = FakeEmitter()
+    build_error = _BuildErr(
+        "Config at ~/.raven/config.json fails schema validation",
+        {"reason": "tui_init_crash", "log_path": "~/.raven/logs/tui.log"},
+    )
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"},
+        emitter=emitter,
+        scheduler=None,
+        build_error=build_error,
+    )
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["detail"] == (
+        "Config at ~/.raven/config.json fails schema validation (details in ~/.raven/logs/tui.log)"
+    )
+
+
+async def test_turn_send_omits_detail_when_the_build_error_has_no_cause() -> None:
+    class _BuildErr(RpcError):
+        CODE = -32603
+        MESSAGE = "internal_error"
+
+    emitter = FakeEmitter()
+    await turn_send(
+        {"session_key": "tui:default", "content": "x"},
+        emitter=emitter,
+        scheduler=None,
+        build_error=_BuildErr(),
+    )
+
+    assert "detail" not in emitter.emitted[-1][1]["payload"]
+
+
 # --- Params validation ---
 
 
