@@ -185,8 +185,7 @@ class HistoryTrimmer:
                 if candidate.get("role") != "assistant":
                     continue
                 if any(
-                    isinstance(tool_call, dict)
-                    and str(tool_call.get("id", "")) == call_id
+                    isinstance(tool_call, dict) and str(tool_call.get("id", "")) == call_id
                     for tool_call in candidate.get("tool_calls") or []
                 ):
                     parent_idx = idx
@@ -204,8 +203,7 @@ class HistoryTrimmer:
         exchange.update(
             idx
             for idx, candidate in enumerate(messages)
-            if candidate.get("role") == "tool"
-            and str(candidate.get("tool_call_id", "")) in call_ids
+            if candidate.get("role") == "tool" and str(candidate.get("tool_call_id", "")) in call_ids
         )
         return exchange
 
@@ -250,10 +248,7 @@ class HistoryTrimmer:
             dropped = trimmed_ids[drop_idx]
             dropped_group = self._tool_exchange_ids(session_messages, dropped)
             trimmed_ids = [mid for mid in trimmed_ids if mid not in dropped_group]
-            warnings.extend(
-                f"dropped message {mid} to fit budget"
-                for mid in sorted(dropped_group)
-            )
+            warnings.extend(f"dropped message {mid} to fit budget" for mid in sorted(dropped_group))
             history = self.history_from_ids(session_messages, trimmed_ids)
             messages = build_messages(history)
             estimated, source = estimate_prompt_tokens_chain(
