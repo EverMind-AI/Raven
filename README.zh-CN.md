@@ -29,6 +29,12 @@ Raven 是一个构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上�
 
 以上结果对应已发布的测试配置；模型、任务集和评测协议都会影响最终结果。
 
+安装 Raven 后，在终端运行 `raven`，你会看到下面的欢迎界面：
+
+| 浅色主题 | 深色主题 |
+| --- | --- |
+| ![Raven 终端浅色主题欢迎界面](https://github.com/user-attachments/assets/d415573d-98ab-4265-872b-67c33b42dcee) | ![Raven 终端深色主题欢迎界面](https://github.com/user-attachments/assets/0ffa1ba4-c03f-4d3f-bfff-d9eda87122dd) |
+
 ## 快速开始
 
 ### 安装

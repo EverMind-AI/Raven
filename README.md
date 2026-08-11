@@ -29,6 +29,12 @@ Raven is a memory-first, self-improving agent harness built on [EverOS](https://
 
 Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
+Install Raven, run `raven` in your terminal, and this is the welcome screen you will see:
+
+| Light theme | Dark theme |
+| --- | --- |
+| ![Raven terminal welcome screen in light theme](https://github.com/user-attachments/assets/d415573d-98ab-4265-872b-67c33b42dcee) | ![Raven terminal welcome screen in dark theme](https://github.com/user-attachments/assets/0ffa1ba4-c03f-4d3f-bfff-d9eda87122dd) |
+
 ## Quick Start
 
 ### Install
