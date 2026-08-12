@@ -164,21 +164,33 @@ def test_failed_refresh_still_backs_off_and_keeps_version(cache, monkeypatch):
 
 
 def test_successful_refresh_records_fetched_version(cache, monkeypatch):
-    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: _Release("0.3.0")))
+    monkeypatch.setitem(sys.modules, "raven.cli.upgrade_commands", _FakeUpgrade(lambda: "0.3.0"))
     un._refresh()
 
     saved = json.loads(cache.read_text(encoding="utf-8"))
     assert saved["latest_version"] == "0.3.0"
 
 
+def test_refresh_uses_the_quota_free_lookup(cache, monkeypatch):
+    # The daily check runs on every install behind a shared egress; routing it through
+    # the API is what drains the 60/hour unauthenticated bucket.
+    import raven.cli.upgrade_commands as upgrade
+
+    monkeypatch.setattr(upgrade, "_fetch_latest_release", _forbidden_api_call)
+    monkeypatch.setattr(upgrade, "fetch_latest_version", lambda: "0.4.0")
+    un._refresh()
+
+    saved = json.loads(cache.read_text(encoding="utf-8"))
+    assert saved["latest_version"] == "0.4.0"
+
+
+def _forbidden_api_call(*args, **kwargs):
+    raise AssertionError("the update notice must not touch the GitHub API")
+
+
 class _FakeThread:
     def start(self):  # noqa: D102 - test double
         pass
-
-
-class _Release:
-    def __init__(self, version: str) -> None:
-        self.version = version
 
 
 class _FakeUpgrade:
@@ -189,7 +201,7 @@ class _FakeUpgrade:
     def __init__(self, fetch) -> None:
         self._fetch = fetch
 
-    def _fetch_latest_release(self):  # noqa: D102 - test double
+    def fetch_latest_version(self):  # noqa: D102 - test double
         return self._fetch()
 
     def _version_key(self, value):  # noqa: D102 - test double

@@ -199,15 +199,27 @@ install_raven() {
       warn "GitHub API returned no release wheel; falling back to the release page."
       tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
         "https://github.com/EverMind-AI/Raven/releases/latest")" || tag=""
-      version="${tag##*/}"
+      # Same shape the CLI and install.ps1 enforce: the redirect must land on this
+      # repository's tag page, and the version must be exactly three numeric fields
+      # with no leading zeros.
+      case "$tag" in
+        https://github.com/EverMind-AI/Raven/releases/tag/v*) version="${tag##*/}" ;;
+        *) version="" ;;
+      esac
       version="${version#v}"
       case "$version" in
+        *.*.*.*) version="" ;;
         *.*.*) ;;
         *) version="" ;;
       esac
-      case "$version" in
-        *[!0-9.]*) version="" ;;
-      esac
+      if [ -n "$version" ]; then
+        v_rest="${version#*.}"
+        for field in "${version%%.*}" "${v_rest%%.*}" "${v_rest#*.}"; do
+          case "$field" in
+            ""|*[!0-9]*|0[0-9]*) version="" ;;
+          esac
+        done
+      fi
       if [ -n "$version" ]; then
         wheel_url="https://github.com/EverMind-AI/Raven/releases/download/v${version}/raven-${version}-py3-none-any.whl"
       fi

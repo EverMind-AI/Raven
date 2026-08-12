@@ -23,6 +23,10 @@ LATEST_RELEASE_WEB = "https://github.com/EverMind-AI/Raven/releases/latest"
 RELEASE_TAG_PREFIX = "https://github.com/EverMind-AI/Raven/releases/tag/"
 RELEASE_DOWNLOAD_PREFIX = "https://github.com/EverMind-AI/Raven/releases/download/"
 _VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_REQUEST_TIMEOUT = 10.0
+# The fallback exists to rescue a failing command, so it may not add another full
+# timeout to the wait: three sequential requests at 10s would triple the worst case.
+_FALLBACK_TIMEOUT = 5.0
 console = Console()
 
 
@@ -187,13 +191,17 @@ def _upgrade_helper_bootstrap() -> str:
 def _version_key(value: str) -> tuple[int, int, int]:
     match = _VERSION_RE.fullmatch(value)
     if match is None:
-        raise UpgradeError(f"Unsupported Raven version: {value}")
+        raise UpgradeError(f"Unsupported Raven version: {value!r}")
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch)
 
 
 def _current_version() -> str:
     return metadata.version("raven")
+
+
+def _user_agent() -> str:
+    return f"raven/{_current_version()}"
 
 
 def _release_wheel_name(version: str) -> str:
@@ -258,39 +266,74 @@ def _rate_limit_detail(response: httpx.Response) -> str:
 def _github_failure_detail(error: Exception) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         response = error.response
-        if response.status_code in (403, 429) and response.headers.get("x-ratelimit-remaining") == "0":
-            return _rate_limit_detail(response)
+        if response.status_code in (403, 429):
+            if response.headers.get("x-ratelimit-remaining") == "0":
+                return _rate_limit_detail(response)
+            # The secondary (abuse) limit leaves the primary budget untouched and
+            # says when to come back instead.
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                return f"GitHub asked us to retry in {retry_after}s (HTTP {response.status_code})"
         return f"HTTP {response.status_code} {response.reason_phrase}".strip()
     return str(error).strip() or type(error).__name__
 
 
 def _sentence(error: Exception) -> str:
-    """Terminate the message with exactly one period; some already carry theirs."""
-    return f"{str(error).rstrip('.')}."
+    """Terminate the message with a period unless it already ends in one.
+
+    Strips a single trailing period rather than the whole run, so a message ending in
+    an ellipsis keeps it.
+    """
+    return f"{str(error).removesuffix('.')}."
 
 
 def _fetch_latest_release_via_api(client: httpx.Client) -> ReleaseInfo:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": f"raven/{_current_version()}",
+        "User-Agent": _user_agent(),
         "X-GitHub-Api-Version": "2022-11-28",
     }
     response = client.get(LATEST_RELEASE_API, headers=headers)
     response.raise_for_status()
-    return _parse_release_payload(response.json())
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        # A proxy or captive portal answering 200 with HTML is a remote failure the
+        # release page can recover from, so it has to reach the fallback: DecodingError
+        # is an httpx.HTTPError but not a TransportError, so it never reads as "offline".
+        raise httpx.DecodingError("GitHub API returned a non-JSON body", request=response.request) from exc
+    return _parse_release_payload(payload)
+
+
+def _fetch_latest_version_via_redirect(client: httpx.Client) -> str:
+    """Read the latest stable version off the release page, which no API quota applies to."""
+    response = client.get(
+        LATEST_RELEASE_WEB,
+        headers={"User-Agent": _user_agent()},
+        follow_redirects=False,
+        timeout=_FALLBACK_TIMEOUT,
+    )
+    location = response.headers.get("location", "")
+    tag = location[len(RELEASE_TAG_PREFIX) :] if location.startswith(RELEASE_TAG_PREFIX) else ""
+    if not response.has_redirect_location or not tag:
+        raise ReleaseLookupError(f"HTTP {response.status_code} without a release tag redirect")
+    return ".".join(str(part) for part in _version_key(tag))
 
 
 def _fetch_latest_release_via_redirect(client: httpx.Client) -> ReleaseInfo:
-    """Resolve the latest release from the release page, which no API quota applies to."""
-    headers = {"User-Agent": f"raven/{_current_version()}"}
-    response = client.get(LATEST_RELEASE_WEB, headers=headers, follow_redirects=False)
-    location = response.headers.get("location", "")
-    if not response.has_redirect_location or not location.startswith(RELEASE_TAG_PREFIX):
-        raise ReleaseLookupError(f"HTTP {response.status_code} without a release tag redirect")
-
-    version = ".".join(str(part) for part in _version_key(location[len(RELEASE_TAG_PREFIX) :]))
+    version = _fetch_latest_version_via_redirect(client)
     wheel_url = _release_wheel_url(version)
-    client.head(wheel_url, follow_redirects=True).raise_for_status()
+    try:
+        client.head(
+            wheel_url,
+            headers={"User-Agent": _user_agent()},
+            follow_redirects=True,
+            timeout=_FALLBACK_TIMEOUT,
+        ).raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ReleaseLookupError(
+            f"release {version} has no wheel at the expected URL ({_github_failure_detail(exc)})"
+        ) from exc
     return ReleaseInfo(version=version, wheel_url=wheel_url)
 
 
@@ -298,9 +341,10 @@ def _resolve_latest_release(client: httpx.Client) -> ReleaseInfo:
     try:
         return _fetch_latest_release_via_api(client)
     except httpx.HTTPError as error:
-        # Only transport / status failures fall back. A payload that parsed as draft
-        # or prerelease must not be routed around: the release page cannot re-check
-        # those flags, so falling back there would install what the API rejected.
+        # Only transport / status / decoding failures fall back. No payload-level
+        # failure is routed around, because the release page cannot re-check what the
+        # payload carries -- above all the draft / prerelease flags, where falling
+        # back would install exactly what the API rejected.
         api_error = error
 
     try:
@@ -319,8 +363,22 @@ def _resolve_latest_release(client: httpx.Client) -> ReleaseInfo:
 def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
     if client is not None:
         return _resolve_latest_release(client)
-    with httpx.Client(timeout=10.0, follow_redirects=True) as owned_client:
+    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
         return _resolve_latest_release(owned_client)
+
+
+def fetch_latest_version(client: httpx.Client | None = None) -> str:
+    """Return the latest stable version, resolved without touching the API quota.
+
+    The update notice needs a version string and nothing else -- no payload, no wheel
+    URL -- so it stays off `api.github.com` entirely. That budget is 60 requests per
+    hour per IP for unauthenticated callers, and a daily check from every install
+    behind one egress is what drains it.
+    """
+    if client is not None:
+        return _fetch_latest_version_via_redirect(client)
+    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
+        return _fetch_latest_version_via_redirect(owned_client)
 
 
 def _direct_url_data() -> dict[str, object] | None:

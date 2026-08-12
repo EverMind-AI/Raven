@@ -289,6 +289,74 @@ def test_fetch_latest_release_reports_spent_quota_reset_time(monkeypatch: pytest
     assert "check your network" not in message
 
 
+def test_fetch_latest_release_reports_a_secondary_rate_limit_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The secondary (abuse) limit leaves the primary budget untouched, so the
+    # remaining==0 branch does not apply and retry-after is the only actionable fact.
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return httpx.Response(403, headers={"retry-after": "60", "x-ratelimit-remaining": "42"})
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
+            upgrade_commands._fetch_latest_release(client)
+
+    assert "retry in 60s" in str(excinfo.value)
+
+
+def test_fetch_latest_version_stays_off_the_api_and_sends_no_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The update notice runs daily on every install; it must not spend API budget.
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(f"{request.method} {request.url}")
+        return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        version = upgrade_commands.fetch_latest_version(client)
+
+    assert version == "0.1.4"
+    assert requested == [f"GET {upgrade_commands.LATEST_RELEASE_WEB}"]
+
+
+def test_release_page_requests_identify_raven(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    agents: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        agents.append(request.headers.get("User-Agent", ""))
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_WEB:
+            return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        upgrade_commands._fetch_latest_release(client)
+
+    assert agents == ["raven/0.1.3", "raven/0.1.3", "raven/0.1.3"]
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("no punctuation", "no punctuation."),
+        ("already ends.", "already ends."),
+        ("waiting for the runner...", "waiting for the runner..."),
+    ],
+    ids=["bare", "terminated", "ellipsis"],
+)
+def test_sentence_adds_one_period_without_eating_an_ellipsis(message: str, expected: str) -> None:
+    assert upgrade_commands._sentence(ValueError(message)) == expected
+
+
 def test_fetch_latest_release_rejects_prerelease_tag_from_release_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -305,7 +373,7 @@ def test_fetch_latest_release_rejects_prerelease_tag_from_release_page(
         with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
             upgrade_commands._fetch_latest_release(client)
 
-    assert "Unsupported Raven version: v0.1.5-rc1" in str(excinfo.value)
+    assert "Unsupported Raven version: 'v0.1.5-rc1'" in str(excinfo.value)
     assert not any(entry.startswith("HEAD") for entry in requested)
 
 
@@ -323,7 +391,12 @@ def test_fetch_latest_release_rejects_release_page_without_a_wheel(monkeypatch: 
         with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
             upgrade_commands._fetch_latest_release(client)
 
-    assert "release page: HTTP 404" in str(excinfo.value)
+    # The release page answered correctly (302); only the wheel was missing, and the
+    # message must not blame the page for it.
+    message = str(excinfo.value)
+    assert "release 0.1.4 has no wheel at the expected URL" in message
+    assert "HTTP 404" in message
+    assert "release page: HTTP 404" not in message
 
 
 def test_fetch_latest_release_does_not_route_around_a_prerelease_payload(
@@ -347,17 +420,46 @@ def test_fetch_latest_release_does_not_route_around_a_prerelease_payload(
     assert requested == [upgrade_commands.LATEST_RELEASE_API]
 
 
-def test_fetch_latest_release_propagates_invalid_json() -> None:
+def test_fetch_latest_release_falls_back_when_the_api_body_is_not_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A proxy or captive portal answering 200 with HTML is a remote failure, so it has
+    # to reach the fallback rather than surface a raw JSON-parser message.
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    requested: list[str] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            content=b"{not-json",
-            headers={"Content-Type": "application/json"},
-        )
+        requested.append(f"{request.method} {request.url}")
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return httpx.Response(200, content=b"<html>blocked by proxy</html>")
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_WEB:
+            return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+        return httpx.Response(200)
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(ValueError):
+        release = upgrade_commands._fetch_latest_release(client)
+
+    assert release == upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL)
+    assert any(entry.startswith(f"GET {upgrade_commands.LATEST_RELEASE_WEB}") for entry in requested)
+
+
+def test_fetch_latest_release_reports_a_non_json_body_when_the_fallback_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return httpx.Response(200, content=b"<html>blocked by proxy</html>")
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(upgrade_commands.ReleaseLookupError) as excinfo:
             upgrade_commands._fetch_latest_release(client)
+
+    message = str(excinfo.value)
+    assert "non-JSON body" in message
+    assert "check your network" not in message
 
 
 def _patch_available_release(monkeypatch: pytest.MonkeyPatch) -> upgrade_commands.ReleaseInfo:
