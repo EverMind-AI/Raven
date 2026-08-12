@@ -42,12 +42,6 @@ Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来�
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-安装 Raven 后，在终端运行 `raven`，你会看到下面的欢迎界面：
-
-| 浅色主题 | 深色主题 |
-| --- | --- |
-| ![Raven 终端浅色主题欢迎界面](https://github.com/user-attachments/assets/d415573d-98ab-4265-872b-67c33b42dcee) | ![Raven 终端深色主题欢迎界面](https://github.com/user-attachments/assets/0ffa1ba4-c03f-4d3f-bfff-d9eda87122dd) |
-
 ## 快速开始
 
 ### 安装
