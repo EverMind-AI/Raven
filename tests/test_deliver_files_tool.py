@@ -35,6 +35,15 @@ def test_name_is_snake_case(tool) -> None:
     assert tool.name == "deliver_files"
 
 
+def test_description_forbids_substituting_a_path_or_a_link(tool) -> None:
+    """The observed failure is a reply carrying a self-composed download URL
+    instead of a call, which resolves to nothing. Nothing else in the prompt
+    says a path is not a delivery, so this description has to."""
+    desc = tool.description
+    assert "only way" in desc
+    assert "Never write a path or a link instead" in desc
+
+
 async def test_happy_path_manifest_shape(tool, tmp_path) -> None:
     _write(tmp_path / "chanwork", "report.pdf", b"12345")
 
@@ -237,7 +246,8 @@ async def test_manifest_survives_the_tool_call_forwarder(tool, tmp_path) -> None
 def test_set_tool_context_hands_deliver_files_the_channel_and_session_key() -> None:
     """The tool needs the turn's channel (for the web gate) and the session key
     (for token reuse); only _set_tool_context supplies them, and it only reaches
-    tools named in its whitelist."""
+    tools named in its whitelist. The registry gets the channel too -- that is
+    what withholds the tool from a channel it cannot serve."""
     from raven.agent.loop.main import AgentLoop
 
     seen: dict[str, tuple[str, str, str]] = {}
@@ -250,9 +260,42 @@ def test_set_tool_context_hands_deliver_files_the_channel_and_session_key() -> N
         def get(self, name: str):
             return _FakeDeliver() if name == "deliver_files" else None
 
+        def set_channel(self, channel: str | None) -> None:
+            seen["channel"] = channel
+
     class _Stub:
         tools = _Tools()
 
     AgentLoop._set_tool_context(_Stub(), "web", "default", None, session_key="web:s1")
 
     assert seen["args"] == ("web", "default", "web:s1")
+    assert seen["channel"] == "web"
+
+
+def test_declares_itself_web_only(tool) -> None:
+    """The declaration is what the registry filters on; losing it puts the tool
+    back in every IM channel's schema, refusing only once called."""
+    assert tool.channels == frozenset({"web"})
+
+
+def test_an_im_turn_never_sees_deliver_files_in_the_schema(tool) -> None:
+    """The join the test above cannot make: a real registry holding the real
+    tool, driven through the real _set_tool_context, read back the way a request
+    is actually assembled. Declaration, wiring and schema are each covered
+    alone; a break in how they meet would pass all three."""
+    from raven.agent.loop.main import AgentLoop
+
+    registry = ToolRegistry()
+    registry.register(tool)
+
+    class _Loop:
+        tools = registry
+
+    def offered() -> set[str]:
+        return {d["function"]["name"] for d in registry.get_definitions()}
+
+    AgentLoop._set_tool_context(_Loop(), "telegram", "c1", None, session_key="telegram:c1")
+    assert "deliver_files" not in offered()
+
+    AgentLoop._set_tool_context(_Loop(), "web", "c1", None, session_key="web:c1")
+    assert "deliver_files" in offered()

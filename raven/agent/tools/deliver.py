@@ -41,6 +41,13 @@ class DeliverFilesTool(Tool):
     enter the model's context.
     """
 
+    # A delivery is a download box, which only the web UI has. The store is
+    # already gated on ``gateway.web.enabled``, but that gate is per process and
+    # one gateway serves the IM channels from the same registry, so without this
+    # the tool is advertised on every one of them. ``execute`` keeps its own
+    # channel check as the backstop for a caller that never set a context.
+    channels = frozenset({_WEB_CHANNEL})
+
     def __init__(
         self,
         store: DeliverableStore,
@@ -75,11 +82,14 @@ class DeliverFilesTool(Tool):
 
     @property
     def description(self) -> str:
+        # Stated as the only route because the observed failure is a reply that
+        # hands over a path or a self-composed URL instead of calling the tool.
+        # Neither resolves to anything the user can open.
         return (
-            "Deliver finished output files to the user. Call this with the files the user "
-            "should receive (a report, a dataset, a chart) once they are written to disk. "
-            "The web UI renders them as a download card and collects them in a Deliverables "
-            "panel. Deliver only final artifacts, not scratch files."
+            "Deliver finished output files to the user -- the only way to hand one over. "
+            "Never write a path or a link instead; neither reaches the user. Call this once "
+            "the file is on disk, for final artifacts only, not scratch files. The web UI "
+            "shows them as download cards in a Deliverables panel."
         )
 
     @property

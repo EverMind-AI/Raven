@@ -520,3 +520,75 @@ async def test_tool_call_does_not_timer_kill_a_blocking_target() -> None:
     out = await reg.execute(TOOL_CALL_NAME, {"name": "run_subagent_dag", "arguments": {}})
 
     assert out == "ran run_subagent_dag"
+
+
+# ---------------------------------------------------------------------------
+# channel-bound tools: hidden from search must also mean unreachable by name
+# ---------------------------------------------------------------------------
+
+
+class _WebOnlyTool(_FakeTool):
+    channels = frozenset({"web"})
+
+
+def _web_only_registry() -> tuple[ToolRegistry, ToolSearchController]:
+    reg = ToolRegistry()
+    reg.register(_WebOnlyTool("deliver_files", "deliver finished output files to the user"))
+    ctrl = _controller(reg)
+    reg.register(ToolCallTool(ctrl))
+    ctrl.refresh()
+    return reg, ctrl
+
+
+def test_search_hides_a_tool_this_channel_cannot_use() -> None:
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("whatsapp")
+    assert ctrl.search("deliver files") == []
+
+
+def test_search_surfaces_it_on_its_own_channel() -> None:
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("web")
+    assert [h["name"] for h in ctrl.search("deliver files")] == ["deliver_files"]
+
+
+def test_the_index_itself_stays_channel_independent() -> None:
+    """The BM25 index is keyed on the catalog and shared by concurrent turns, so
+    it must not vary per channel -- filtering happens on the read instead."""
+    reg, ctrl = _web_only_registry()
+    reg.set_channel("whatsapp")
+    ctrl.refresh()
+    assert "deliver_files" in [t.name for t in ctrl._catalog_tools()]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_refuses_a_tool_this_channel_cannot_use() -> None:
+    """Naming it directly is the way around a search-only filter, so tool_call
+    has to apply the same predicate rather than fall through to the registry."""
+    reg, _ = _web_only_registry()
+    reg.set_channel("whatsapp")
+
+    out = await reg.execute(TOOL_CALL_NAME, {"name": "deliver_files", "arguments": {}})
+
+    assert "not found" in out
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_tool_does_not_consume_a_result_slot() -> None:
+    """The filter must run before truncation. With it after, a withheld rank-1
+    hit ate the only slot and the model was told nothing matched while a usable
+    rank-2 tool existed -- worse than not having the filter at all."""
+    reg = ToolRegistry()
+    reg.register(_WebOnlyTool("deliver_files", "deliver files to the user"))
+    reg.register(_FakeTool("message", "send a message with files to the user"))
+    ctrl = _controller(reg)
+    ctrl.refresh()
+
+    # Rank 1 is the web-only tool, so a telegram turn has to fall through to it.
+    assert ctrl._index.search("deliver files to the user", 10)[0] == "deliver_files"
+
+    reg.set_channel("telegram")
+    assert [h["name"] for h in ctrl.search("deliver files to the user", limit=1)] == ["message"]
+
+    reg.set_channel("web")
+    assert [h["name"] for h in ctrl.search("deliver files to the user", limit=1)] == ["deliver_files"]
