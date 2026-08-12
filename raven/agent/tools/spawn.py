@@ -74,6 +74,14 @@ class SpawnTool(Tool):
                 " By default the subagent is a Raven agent; to delegate to a specialized "
                 f"third-party agent instead, pass its name as `agent`. Available: {listing}."
             )
+            # The one moment a wrong choice is visible: the model is reading this
+            # tool while the work is really a graph. Gated on the same roster the
+            # DAG tool is registered from, so it never names an absent tool.
+            base += (
+                " If you are about to issue several spawns for one task, that is a DAG: use "
+                "`run_subagent_dag` instead, so the independent parts run concurrently and each "
+                "step's output reaches the next through a file."
+            )
         return base
 
     @property

@@ -292,11 +292,15 @@ class SubAgentDagTool(Tool):
                 "when a single `spawn` is the better choice. Do not design the graph from this "
                 "description and the node schema alone. "
             )
+        # When to reach for a DAG at all is the always-injected guide's job, not
+        # this description's: the model reads the digest before it picks a tool,
+        # and two resident surfaces stating the trigger differently is how they
+        # drift. What stays here is how to call it.
         return (
             "Orchestrate two or more sub-agent tasks as a single DAG instead of calling sub-agents "
             "one at a time. Independent nodes run concurrently; a node's output is passed to its "
-            "dependents through files (large outputs never enter your context). Prefer this whenever a "
-            "task spans multiple sub-agents or one sub-agent's output feeds another. "
+            "dependents through files (large outputs never enter your context). One call carries the "
+            "whole graph -- do not issue a separate call per node. "
             f"{guide}"
             f"Available sub-agents for the `subagent` field: {names}."
         )

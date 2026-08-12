@@ -1416,6 +1416,10 @@ class AgentLoop:
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
+        # Before the per-tool contexts because the schema is assembled from this
+        # same turn: a channel-bound tool is withheld by the registry, not by
+        # its own refusal (see ToolRegistry.set_channel).
+        self.tools.set_channel(channel)
         for name in ("message", "spawn", "cron", "deep_research", "run_subagent_dag", "deliver_files"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):

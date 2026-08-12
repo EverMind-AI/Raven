@@ -1,6 +1,6 @@
 ---
 name: subagent-dag-orchestration
-description: Use whenever a task needs two or more sub-agents, or a multi-step pipeline where one sub-agent's output feeds another. Orchestrate the whole graph as a single run_subagent_dag call (parallel fan-out, file-based passing) instead of dispatching sub-agents one at a time.
+description: Use when a task breaks into several distinct steps that a third-party sub-agent could each carry out. A DAG node dispatches only to a configured third-party sub-agent and cannot call your own tools, so work whose steps are reading files, editing code or running commands is never a DAG, however many steps it has - do that yourself. For work that does clear that bar, test three things before running the steps one at a time: are two or more steps independent (they can run at once), does a step hand a large artifact to the next (it can pass by file instead of through your context), do the steps want different specialists (the tool lists the roster). If any of the three holds, orchestrate the whole task as one run_subagent_dag call.
 metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}
 ---
 
@@ -8,20 +8,35 @@ metadata: {"raven":{"emoji":"🕸️","always":true,"inject":"description","requ
 
 ## When to use
 
-Prefer the `run_subagent_dag` tool for **any task that needs two or more sub-agent
-runs**, or where one sub-agent's output feeds another. Express the whole thing as
-**one** DAG call rather than dispatching sub-agents one at a time.
+The trigger is **a task that breaks into several distinct steps** — not a task you
+have already decided needs sub-agents.
 
-Call a single sub-agent (`spawn`) directly only when the task is genuinely one
-sub-agent doing one thing.
+**First, the hard bound.** A DAG node dispatches only to a configured third-party
+sub-agent; it cannot call your own tools. So work whose steps are reading files,
+editing code, or running commands is **never** a DAG, however many steps it has and
+however independent they are — do that yourself. Only work a sub-agent on the roster
+could carry out gets as far as the tests below.
 
-Why a DAG:
+For work that clears that bound, test three things before running the steps one at a
+time:
 
-- **Concurrency** — independent nodes run in parallel automatically (up to 5 at a time).
-- **File-based passing** — a node's output is written to a file downstream nodes read;
-  large outputs never pass through your context.
-- **Auditability** — every node's prompt and output is persisted, including intermediate
-  steps you can read afterwards.
+- **Independence** — can two or more steps run at the same time? Independent nodes are
+  scheduled concurrently (up to 5 at a time).
+- **Artifact size** — does a step hand a large result to the next one? A node's output
+  is written to a file the downstream node reads, so it never passes through your
+  context.
+- **Specialism** — do the steps want different sub-agents? The tool's own description
+  lists the roster and what each one is for.
+
+If any of the three holds, express the whole task as **one** `run_subagent_dag` call
+rather than dispatching sub-agents one at a time. A fourth property comes free once
+you do: every node's prompt and output is persisted, so intermediate steps stay
+readable afterwards.
+
+If none of the three holds, the graph buys you nothing — dispatch the work as a single
+`spawn`, which is the right call exactly when the task is genuinely one sub-agent doing
+one thing. The work you do yourself is the work that never cleared the bound above, not
+this.
 
 `run_subagent_dag` is only registered when third-party sub-agents are configured
 (`subagents.third_party`). If the tool is absent, there is nothing for DAG nodes to
@@ -48,7 +63,7 @@ Call `run_subagent_dag` with a single argument `nodes`: a list of node objects.
 | `subagent` | yes | Name of a configured third-party sub-agent. Use one of the names listed in the tool's own description — don't invent them. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
 | `depends_on` | no | Upstream node ids that must finish before this node runs. |
-| `inputs` | no | Object mapping a key to a literal string, or to `{"file": "<workspace-relative path>"}`. |
+| `inputs` | no | Object mapping a key to a literal string, or to `{"file": "<path relative to the working directory>"}`. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
 
 ### Sub-agent capability tags
@@ -77,7 +92,7 @@ Inside `prompt_template`:
 | `{{ <id>.output_path }}` | The upstream node's output file **path**. |
 | `{{ inputs.<key> }}` | The input's literal value, or the referenced file's **contents**. |
 | `{{ inputs.<key>.path }}` | The input file's **path**. |
-| `{{ ref:<path> }}` | The **contents** of an existing workspace file (e.g. an earlier run's output). |
+| `{{ ref:<path> }}` | The **contents** of an existing file in the working directory (e.g. one an earlier turn wrote there). |
 | `{{ ref_path:<path> }}` | That file's **path**. |
 
 Rules:
@@ -183,6 +198,8 @@ Terminal outputs:
 ## Anti-patterns
 
 - **Don't** dispatch sub-agents one at a time in a loop when a DAG expresses the work.
+- **Don't** build a DAG for steps only your own tools can do — nodes reach third-party
+  sub-agents, not your tools. Many steps alone is not a reason.
 - **Don't** inline large upstream content with `{{ <id>.output }}` when you only need to
   pass it along; use `{{ <id>.output_path }}` — unless the agent is `[no-local-files]`.
 - **Don't** reference an id in a template without listing it in that node's `depends_on`.

@@ -632,6 +632,20 @@ def test_spawn_tool_no_agent_param_when_none(tmp_path: Path) -> None:
     assert "agent" not in tool.parameters["properties"]
 
 
+def test_spawn_tool_points_at_the_dag_when_a_roster_exists(tmp_path: Path) -> None:
+    """Repeated spawns for one task are the shape a DAG expresses, and this
+    description is where the model is standing when it makes that mistake."""
+    cli = ThirdPartyCliSubagentConfig(name="claude_code", command="claude -p {prompt}")
+    assert "run_subagent_dag" in SpawnTool(manager=_mgr(tmp_path, [cli])).description
+
+
+def test_spawn_tool_omits_the_dag_pointer_without_a_roster(tmp_path: Path) -> None:
+    """``run_subagent_dag`` is registered off the same enabled roster this
+    listing is built from, so an empty roster means the pointer would name a
+    tool the model cannot call."""
+    assert "run_subagent_dag" not in SpawnTool(manager=_mgr(tmp_path, [])).description
+
+
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
     cli = ThirdPartyCliSubagentConfig(name="claude_code", command="cat")
     mgr = _mgr(tmp_path, [cli])

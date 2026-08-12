@@ -87,7 +87,14 @@ class ToolSearchController:
         self._index = ToolIndex()
 
     def _catalog_tools(self) -> list[Tool]:
-        """All registered tools except the meta-tools (never self-searchable)."""
+        """All registered tools except the meta-tools (never self-searchable).
+
+        Deliberately not channel-filtered: the BM25 index is keyed on this set
+        and shared by every concurrent turn, so making it channel-dependent
+        would have web and IM turns swapping the index out from under each
+        other. The channel filter belongs on the reads instead -- ``search``
+        and ``target_tool``.
+        """
         out = []
         for name in self._registry.tool_names:
             if name in META_TOOL_NAMES:
@@ -106,12 +113,25 @@ class ToolSearchController:
 
     def search(self, query: str, limit: int | None = None) -> list[dict[str, Any]]:
         """Hits carry name + description + parameter schema, so the model can go
-        straight to tool_call without a separate describe round-trip."""
-        names = self._index.search(query, limit or self.search_result_limit)
+        straight to tool_call without a separate describe round-trip.
+
+        Rank, then filter, then truncate -- in that order. Truncating first lets
+        a tool this channel cannot use consume a result slot, so a usable
+        lower-ranked hit is dropped and the model is told nothing matched.
+        Reading that many names is free: the index scores and sorts the whole
+        catalog either way, and only the final slice is bounded. The bound is
+        the registry's current size, not the index's -- it stays >= the indexed
+        catalog because ``refresh()`` runs at the top of every
+        ``before_llm_call``, ahead of any search. Unregistering a tool after the
+        last refresh is the one state that inverts that and truncates the
+        ranking ahead of the filter.
+        """
+        cap = limit or self.search_result_limit
+        ranked = self._index.search(query, len(self._registry.tool_names) or cap)
         hits = []
-        for name in names:
+        for name in ranked:
             tool = self._registry.get(name)
-            if tool is None:
+            if tool is None or not self._registry.offers_on_this_channel(tool):
                 continue
             hits.append(
                 {
@@ -120,17 +140,25 @@ class ToolSearchController:
                     "parameters": tool.parameters,
                 }
             )
+            if len(hits) >= cap:
+                break
         return hits
 
     def target_tool(self, name: Any) -> Tool | None:
         """The tool ``tool_call`` would forward to, or None when there is none.
 
         A meta-tool target is refused by :meth:`call`, so it resolves to None
-        here too rather than recursing back into this controller.
+        here too rather than recursing back into this controller. A tool this
+        turn's channel cannot use resolves to None for the same reason it never
+        appears in ``search``: naming it directly must not be the way around the
+        filter.
         """
         if not isinstance(name, str) or name in META_TOOL_NAMES:
             return None
-        return self._registry.get(name)
+        tool = self._registry.get(name)
+        if tool is not None and not self._registry.offers_on_this_channel(tool):
+            return None
+        return tool
 
     def target_is_blocking(self, name: Any) -> bool:
         """Whether the tool ``tool_call`` would forward to is a blocking interaction.
@@ -156,7 +184,10 @@ class ToolSearchController:
                 return "Error: 'arguments' must be a JSON object."
         if name in META_TOOL_NAMES:
             return f"Error: '{name}' cannot be invoked via tool_call."
-        if not self._registry.has(name):
+        # ``target_tool`` rather than ``has``: it applies the channel filter, so
+        # a tool withheld from this channel reads as absent here too instead of
+        # being reachable by naming it directly.
+        if self.target_tool(name) is None:
             return f"Error: tool '{name}' not found. Use tool_search to find it."
         return await self._registry.execute(name, arguments or {})
 

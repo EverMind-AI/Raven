@@ -95,6 +95,14 @@ class Tool(ABC):
     # auto-resolution instead of being killed mid-wait.
     blocking_interaction: bool = False
 
+    # Channels this tool works on; None means every channel. One gateway process
+    # serves the web channel and every enabled IM channel from a single registry,
+    # so a tool whose effect exists on only one of them (deliver_files needs the
+    # web UI's download box) would otherwise be advertised everywhere and refuse
+    # only once called. Declaring the set withholds it from the schema instead,
+    # per turn -- see ToolRegistry.set_channel.
+    channels: frozenset[str] | None = None
+
     def blocking_for(self, params: dict[str, Any]) -> bool:
         """This call's blocking verdict. Defaults to the class flag.
 

@@ -1,6 +1,7 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+from contextvars import ContextVar
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
@@ -21,6 +22,32 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        # Turn-local, not an attribute: one gateway registry serves concurrent
+        # turns from different channels, and a plain field would let whichever
+        # turn set it last decide what the others are shown.
+        self._channel: ContextVar[str | None] = ContextVar("tool_registry_channel", default=None)
+
+    def set_channel(self, channel: str | None) -> None:
+        """Record the channel this turn is answering on (turn-local).
+
+        Set alongside the per-tool contexts, before the schema is assembled, so
+        ``offers_on_this_channel`` can withhold a channel-bound tool. Left unset
+        the registry advertises everything, which is what a surface with a
+        single channel (the sub-agent and curator registries) wants.
+        """
+        self._channel.set(channel)
+
+    def offers_on_this_channel(self, tool: Tool) -> bool:
+        """Whether this turn's channel may see ``tool`` at all.
+
+        The one predicate behind both surfaces a tool can be reached through --
+        the schema and tool-search -- so a channel-bound tool cannot be hidden
+        from one and found through the other.
+        """
+        if tool.channels is None:
+            return True
+        channel = self._channel.get()
+        return channel is None or channel in tool.channels
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -63,8 +90,8 @@ class ToolRegistry:
         return tool.metadata_owner(params or {}).take_metadata()
 
     def get_definitions(self) -> list[dict[str, Any]]:
-        """Get all tool definitions in OpenAI format."""
-        return [tool.to_schema() for tool in self._tools.values()]
+        """Tool definitions in OpenAI format, minus those this channel cannot use."""
+        return [tool.to_schema() for tool in self._tools.values() if self.offers_on_this_channel(tool)]
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(self, name: str, params: dict[str, Any]) -> str:
