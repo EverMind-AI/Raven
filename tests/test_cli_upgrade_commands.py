@@ -326,6 +326,29 @@ def test_fetch_latest_version_stays_off_the_api_and_sends_no_head(
     assert requested == [f"GET {upgrade_commands.LATEST_RELEASE_WEB}"]
 
 
+def test_request_timeouts_follow_the_caller_not_the_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The notice makes one request and can afford the full budget; the upgrade fallback
+    # is the second and third of three and must not triple the wait.
+    monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
+    timeouts: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions.get("timeout", {}).get("connect"))
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_API:
+            return _quota_exhausted_response()
+        if str(request.url) == upgrade_commands.LATEST_RELEASE_WEB:
+            return httpx.Response(302, headers={"location": f"{upgrade_commands.RELEASE_TAG_PREFIX}v0.1.4"})
+        return httpx.Response(200)
+
+    with httpx.Client(transport=httpx.MockTransport(handler), timeout=upgrade_commands._REQUEST_TIMEOUT) as client:
+        upgrade_commands._fetch_latest_release(client)
+        upgrade_commands.fetch_latest_version(client)
+
+    fallback = upgrade_commands._FALLBACK_TIMEOUT
+    request_timeout = upgrade_commands._REQUEST_TIMEOUT
+    assert timeouts == [request_timeout, fallback, fallback, request_timeout]
+
+
 def test_release_page_requests_identify_raven(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.3")
     agents: list[str] = []

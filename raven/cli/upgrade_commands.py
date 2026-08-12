@@ -305,13 +305,17 @@ def _fetch_latest_release_via_api(client: httpx.Client) -> ReleaseInfo:
     return _parse_release_payload(payload)
 
 
-def _fetch_latest_version_via_redirect(client: httpx.Client) -> str:
-    """Read the latest stable version off the release page, which no API quota applies to."""
+def _fetch_latest_version_via_redirect(client: httpx.Client, *, timeout: float = _REQUEST_TIMEOUT) -> str:
+    """Read the latest stable version off the release page, which no API quota applies to.
+
+    The timeout belongs to the caller: this is one of three sequential requests when
+    `raven upgrade` falls back, but the only request the update notice makes.
+    """
     response = client.get(
         LATEST_RELEASE_WEB,
         headers={"User-Agent": _user_agent()},
         follow_redirects=False,
-        timeout=_FALLBACK_TIMEOUT,
+        timeout=timeout,
     )
     location = response.headers.get("location", "")
     tag = location[len(RELEASE_TAG_PREFIX) :] if location.startswith(RELEASE_TAG_PREFIX) else ""
@@ -321,7 +325,7 @@ def _fetch_latest_version_via_redirect(client: httpx.Client) -> str:
 
 
 def _fetch_latest_release_via_redirect(client: httpx.Client) -> ReleaseInfo:
-    version = _fetch_latest_version_via_redirect(client)
+    version = _fetch_latest_version_via_redirect(client, timeout=_FALLBACK_TIMEOUT)
     wheel_url = _release_wheel_url(version)
     try:
         client.head(
