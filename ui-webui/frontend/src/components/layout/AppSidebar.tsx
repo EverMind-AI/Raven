@@ -29,6 +29,7 @@ import IconChat from '~icons/solar/chat-round-dots-bold-duotone';
 import IconChannels from '~icons/solar/chat-square-bold-duotone';
 import IconCompass from '~icons/solar/compass-bold-duotone';
 import IconCpu from '~icons/solar/cpu-bold-duotone';
+import IconEverOS from '~icons/solar/database-bold-duotone';
 import IconGlobal from '~icons/solar/global-bold-duotone';
 import IconKey from '~icons/solar/key-bold-duotone';
 import IconSkills from '~icons/solar/magic-stick-3-bold-duotone';
@@ -195,6 +196,12 @@ export function AppSidebar() {
 								label={t('nav.ravenChannels')}
 								isActive={location.pathname === '/raven-channels'}
 								onClick={() => navigate('/raven-channels')}
+							/>
+							<RailItem
+								icon={<IconEverOS />}
+								label={t('nav.everOS')}
+								isActive={location.pathname === '/everos'}
+								onClick={() => navigate('/everos')}
 							/>
 							<RailItem
 								icon={<IconSkills />}

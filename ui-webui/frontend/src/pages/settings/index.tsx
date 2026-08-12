@@ -5,6 +5,7 @@ import { SkillForgeSettingsPanel } from './SkillForgeSettingsPanel';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 import { CredentialPage } from '@/pages/credential';
+import { EverOSPage } from '@/pages/everos';
 import { KnowledgePage } from '@/pages/knowledge';
 import { RavenChannelsPage } from '@/pages/raven-channels';
 import { RavenCronPage } from '@/pages/raven-cron';
@@ -13,6 +14,7 @@ import IconAlarm from '~icons/solar/alarm-bold-duotone';
 import IconBook from '~icons/solar/book-2-bold-duotone';
 import IconChannels from '~icons/solar/chat-square-bold-duotone';
 import IconCpu from '~icons/solar/cpu-bold-duotone';
+import IconEverOS from '~icons/solar/database-bold-duotone';
 import IconKey from '~icons/solar/key-bold-duotone';
 import IconSkills from '~icons/solar/magic-stick-3-bold-duotone';
 import IconSettings from '~icons/solar/settings-bold-duotone';
@@ -32,6 +34,7 @@ const TABS = [
 		labelKey: 'settings.tabSkills',
 	},
 	{ key: 'knowledge', Icon: IconBook, Node: KnowledgePage, labelKey: 'settings.tabKnowledge' },
+	{ key: 'everos', Icon: IconEverOS, Node: EverOSPage, labelKey: 'settings.tabEverOS' },
 	{ key: 'subagents', Icon: IconCpu, Node: SubAgentsPage, labelKey: 'settings.tabSubagents' },
 	{
 		key: 'channels',

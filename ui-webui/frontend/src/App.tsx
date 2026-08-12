@@ -11,6 +11,7 @@ import { UploadProvider } from '@/context/UploadContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { ChatPage } from '@/pages/chat';
 import { CredentialPage } from '@/pages/credential';
+import { EverOSPage } from '@/pages/everos';
 import { KnowledgePage } from '@/pages/knowledge';
 import { RavenChannelsPage } from '@/pages/raven-channels';
 import { RavenCronPage } from '@/pages/raven-cron';
@@ -44,6 +45,7 @@ const router = createBrowserRouter([
 					{ path: '/subagents', element: <SubAgentsPage /> },
 					{ path: '/raven-cron', element: <RavenCronPage /> },
 					{ path: '/raven-channels', element: <RavenChannelsPage /> },
+						{ path: '/everos', element: <EverOSPage /> },
 					{ path: '/raven-skills', element: <RavenSkillsPage /> },
 					{ path: '/raven-skills/detail', element: <SkillDetailPage /> },
 					{ path: '/settings', element: <SettingsPage /> },

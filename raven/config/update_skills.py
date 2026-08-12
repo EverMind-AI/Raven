@@ -16,7 +16,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.loader import get_config_path, load_config, read_raw_or_raise
-from raven.config.raven import SkillForgeConfig
+from raven.config.raven import EverOSConfig, SkillForgeConfig
 
 _WEIGHTS = ("local", "everos", "hub")
 
@@ -42,6 +42,10 @@ def get_skillforge(*, config_path: Path | None = None) -> dict:
     d = SkillForgeConfig.model_validate(sf).model_dump(by_alias=True)  # raises if malformed
     router = d.get("router") or {}
     hub = router.get("hub") or {}
+    # Defaults come from the model rather than being spelled out again: they
+    # already live on EverOSConfig, and the frontend's presets carry a third
+    # copy, so a literal here is one more place for the three to drift apart.
+    ev = {**EverOSConfig().model_dump(by_alias=True), **(d.get("everos") or {})}
     return {
         "enabled": d.get("enabled", True),
         "router": {
@@ -53,7 +57,7 @@ def get_skillforge(*, config_path: Path | None = None) -> dict:
                 "timeoutS": hub.get("timeoutS"),
             },
         },
-        "everos": {"enabled": (d.get("everos") or {}).get("enabled", True)},
+        "everos": ev,
         "localDirs": d.get("localDirs") or [],
     }
 
@@ -92,9 +96,20 @@ def set_skillforge(fields: dict, *, config_path: Path | None = None) -> None:
             router["hub"] = h
         sf["router"] = router
 
-    if "everos" in fields and "enabled" in (fields["everos"] or {}):
+    if "everos" in fields:
+        evin = fields["everos"] or {}
         ev = dict(sf.get("everos") or {})
-        ev["enabled"] = bool(fields["everos"]["enabled"])
+        if "enabled" in evin:
+            ev["enabled"] = bool(evin["enabled"])
+        # Ranges are declared on EverOSConfig, so the model_validate at the end
+        # rejects an out-of-range value here the same way it does for a
+        # hand-edited config.json. Only the coercion belongs in this layer.
+        for k in ("maxSkillsTopK", "complexTaskToolCallThreshold"):
+            if k in evin:
+                ev[k] = int(evin[k])
+        for k in ("retireConfidence", "minQualityForSkillExtract"):
+            if k in evin:
+                ev[k] = float(evin[k])
         sf["everos"] = ev
 
     if "localDirs" in fields:

@@ -186,8 +186,56 @@ export interface RavenSkillForge {
 		weights: { local?: number; everos?: number; hub?: number };
 		hub: { endpoint?: string; apiKey?: string | null; minSafety?: number; timeoutS?: number };
 	};
-	everos: { enabled: boolean };
+	everos: {
+		enabled: boolean;
+		// Skill-extraction knobs (surface B). Optional so existing callers that
+		// only toggle `enabled` stay valid.
+		maxSkillsTopK?: number;
+		retireConfidence?: number;
+		minQualityForSkillExtract?: number;
+		complexTaskToolCallThreshold?: number;
+	};
 	localDirs: RavenLocalDir[];
+}
+
+/** One EverOS memory role's model config (llm/embedding/rerank/multimodal),
+ *  stored in ~/.everos/raven/everos.toml. `api_key` reads back redacted
+ *  (`****set****` / `(empty)`); send it unchanged to keep the stored key. */
+export interface EverOSModelConfig {
+	model?: string;
+	base_url?: string;
+	api_key?: string;
+	provider?: string;
+	[k: string]: unknown;
+}
+
+export type EverOSSection = 'llm' | 'embedding' | 'rerank' | 'multimodal';
+
+/** One curated memory-model provider: its base URL, which roles it serves, and
+ *  (for rerank) the service protocol + endpoint override. Mirrors the onboard
+ *  wizard's list so the page can offer a provider picker that pre-fills URLs. */
+export interface EverOSProvider {
+	name: string;
+	label: string;
+	label_zh: string;
+	base_url: string;
+	supports: EverOSSection[];
+	rerank_provider?: string | null;
+	rerank_base_url?: string | null;
+	/** The registry's curated shortlist for this provider, already stripped of
+	 *  the provider prefix. Chat-only, so it seeds the llm and multimodal
+	 *  pickers; embedding and rerank have no catalogue and rely on a live fetch. */
+	chat_models?: string[];
+	/** True when the Credentials page already holds a key for this provider, so
+	 *  the memory roles can borrow it instead of asking for the same secret. */
+	has_credential?: boolean;
+}
+
+export interface EverOSMemoryConfig {
+	llm: EverOSModelConfig;
+	embedding: EverOSModelConfig;
+	rerank: EverOSModelConfig;
+	multimodal: EverOSModelConfig;
 }
 
 export interface RavenSkillEntry {
@@ -318,6 +366,49 @@ export const ravenConfigApi = {
 			connected: boolean;
 			running: boolean;
 		}>(`/raven/channels/${name}/qr`),
+
+	// EverOS long-term memory models (llm/embedding/rerank/multimodal). Changes
+	// take effect on the next gateway restart (restart_required is returned).
+	everos: {
+		// `backend` is the memory backend actually in force; these models are
+		// inert unless it is 'everos'.
+		get: () =>
+			client.get<{ everos: EverOSMemoryConfig; backend?: string | null }>('/raven/everos'),
+		// `reuseKeyFrom` names another role whose stored key this one should
+		// borrow. The web only ever sees a redacted key, so the copy happens on
+		// the gateway rather than by sending one back down.
+		set: (
+			section: EverOSSection,
+			fields: EverOSModelConfig,
+			borrow: { reuseKeyFrom?: EverOSSection; credentialProvider?: string } = {},
+		) =>
+			client.put<{ ok: boolean; restart_required: boolean }>(`/raven/everos/${section}`, {
+				fields,
+				reuse_key_from: borrow.reuseKeyFrom,
+				credential_provider: borrow.credentialProvider,
+			}),
+		clear: (section: EverOSSection) =>
+			client.delete<{ ok: boolean; restart_required: boolean }>(`/raven/everos/${section}`),
+		test: (
+			section: EverOSSection,
+			fields: EverOSModelConfig,
+			borrow: { reuseKeyFrom?: EverOSSection; credentialProvider?: string } = {},
+		) =>
+			client.post<{ ok: boolean; detail: string }>(`/raven/everos/${section}/test`, {
+				fields,
+				reuse_key_from: borrow.reuseKeyFrom,
+				credential_provider: borrow.credentialProvider,
+			}),
+		providers: () => client.get<{ providers: EverOSProvider[] }>('/raven/everos/providers'),
+		models: (body: {
+			section: EverOSSection;
+			base_url?: string;
+			api_key?: string;
+			provider_name?: string;
+			reuse_key_from?: EverOSSection;
+			credential_provider?: string;
+		}) => client.post<{ models: string[] }>('/raven/everos/models', body),
+	},
 
 	skills: {
 		get: () => client.get<{ skillforge: RavenSkillForge }>('/raven/skills'),

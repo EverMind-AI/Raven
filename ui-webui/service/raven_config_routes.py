@@ -372,4 +372,78 @@ def build_raven_config_router() -> APIRouter:
             headers={"Content-Disposition": f'attachment; filename="{safe}.zip"'},
         )
 
+    @router.get("/everos")
+    async def get_everos() -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call("raven.everos.get", {})
+        except Exception as exc:  # transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/everos/providers")
+    async def everos_providers() -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call("raven.everos.providers", {})
+        except Exception as exc:  # transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/everos/models")
+    async def everos_models(body: dict = Body(...)) -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call(
+                "raven.everos.models",
+                {
+                    "section": body.get("section", "llm"),
+                    "base_url": body.get("base_url"),
+                    "api_key": body.get("api_key"),
+                    "provider_name": body.get("provider_name"),
+                    "reuse_key_from": body.get("reuse_key_from"),
+                    "credential_provider": body.get("credential_provider"),
+                },
+            )
+        except Exception as exc:  # transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.put("/everos/{section}")
+    async def set_everos(section: str, body: dict = Body(...)) -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call(
+                "raven.everos.set",
+                {
+                    "section": section,
+                    "fields": body.get("fields") or {},
+                    "reuse_key_from": body.get("reuse_key_from"),
+                    "credential_provider": body.get("credential_provider"),
+                },
+            )
+        except Exception as exc:  # unknown section / validation / transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.delete("/everos/{section}")
+    async def clear_everos(section: str) -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call("raven.everos.clear", {"section": section})
+        except Exception as exc:  # unknown section / transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/everos/{section}/test")
+    async def test_everos(section: str, body: dict = Body(...)) -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call(
+                "raven.everos.test",
+                {
+                    "section": section,
+                    "fields": body.get("fields") or {},
+                    "reuse_key_from": body.get("reuse_key_from"),
+                    "credential_provider": body.get("credential_provider"),
+                },
+            )
+        except Exception as exc:  # transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return router
