@@ -75,6 +75,29 @@ def _no_update_check(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_oauth_credentials(tmp_path, monkeypatch):
+    """Point every OAuth credential lookup at a temp dir for the whole suite.
+
+    ``import_litellm`` publishes these variables so LiteLLM's drivers and raven
+    agree on one location, and they outlive the test that triggered the import:
+    a later test that fakes the home directory still reads whatever the first one
+    resolved. On a developer machine that is a real signed-in credential, which
+    makes providers report themselves configured, sends the Codex catalog lookup
+    to the network, and puts a real credential file in reach of a test that
+    deletes one. All four families are covered, not only the two LiteLLM reads by
+    variable: the other two derive their path from the home directory, which a
+    test may or may not have faked. Tests that exercise a credential set these
+    themselves.
+    """
+    for name in ("CHATGPT_TOKEN_DIR", "CHATGPT_AUTH_FILE", "GITHUB_COPILOT_TOKEN_DIR", "MINIMAX_OAUTH_TOKEN_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "oauth" / "chatgpt"))
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path / "oauth" / "github_copilot"))
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path / "oauth"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_openrouter_network(tmp_path):
     """Keep the OpenRouter catalog fetch off the network and off the real disk.
 
@@ -84,16 +107,16 @@ def _no_openrouter_network(tmp_path):
     and mock the transport. The disk cache path is also redirected to a temp
     file so the real ~/.raven/cache/ is never read or written.
     """
-    from raven.token_wise import model_catalog_cache, pricing
+    from raven.providers import model_catalog_cache, rates
 
-    original_fetch = pricing._fetch_openrouter_models
+    original_fetch = rates._fetch_openrouter_models
     original_path = model_catalog_cache._CACHE_PATH
-    pricing._fetch_openrouter_models = lambda: {}
+    rates._fetch_openrouter_models = lambda: {}
     model_catalog_cache._CACHE_PATH = tmp_path / "model-catalog.json"
     try:
         yield
     finally:
-        pricing._fetch_openrouter_models = original_fetch
+        rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
-        pricing._OPENROUTER_CACHE.clear()
-        pricing._OPENROUTER_CACHE_TIME = 0.0
+        rates._OPENROUTER_CACHE.clear()
+        rates._OPENROUTER_CACHE_TIME = 0.0

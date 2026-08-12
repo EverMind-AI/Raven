@@ -503,6 +503,9 @@ Raven is early, and useful contributions are welcome across runtime
 architecture, TUI polish, provider support, memory workflows, proactivity,
 benchmarks, documentation, and issue reports.
 
+Model vendors interested in a first-party integration or an open-source
+partnership (as MiniMax already has) are welcome to open an issue and say so.
+
 Before opening a PR:
 
 1. Read [AGENTS.md](AGENTS.md).

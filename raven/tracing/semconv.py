@@ -131,7 +131,10 @@ def _llm_input_payload(
       - ``prompt``: the latest user message (the current input to this call),
       - ``historyMessages``: the prior turns only — everything EXCEPT the system
         message and that latest user message (so it doesn't duplicate them).
-    ``messages`` keeps the full raw list as the ground truth of what was sent.
+    ``messages`` keeps the full raw list as handed to the provider, which is not
+    what went on the wire: the provider adds or removes prompt-cache breakpoints
+    on copies (``providers.prompt_cache``) after this is recorded. Neither the
+    presence nor the absence of ``cache_control`` here says what was sent.
     """
     msgs = messages if isinstance(messages, list) else []
     system_prompt = ""

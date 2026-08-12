@@ -49,8 +49,14 @@ def register(app: typer.Typer) -> None:
                     api_base = (section.api_base if section else None) or info["api_base"]
                     state = f"[green]✓ {api_base}[/green]" if api_base else "[dim]not set[/dim]"
                 else:
-                    configured = bool(section and section.api_key) or info["configured"]
-                    state = "[green]✓[/green]" if configured else "[dim]not set[/dim]"
+                    # `providers.auth`, like every other gate. Reading `api_key`
+                    # here made this the one place that called Azure configured
+                    # with a key and no address, and missed a Gemini section
+                    # holding only `api_key_list`.
+                    from raven.providers.auth import credential_status
+
+                    status = credential_status(info["name"], section, include_external=True)
+                    state = "[green]✓[/green]" if status.ok else "[dim]not set[/dim]"
                 console.print(f"{label}: {state}")
 
 

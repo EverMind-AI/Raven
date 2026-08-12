@@ -1723,6 +1723,11 @@ class MemoryConsolidator:
         self.enable_foresight = enable_foresight
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built."""
+        self.provider = provider
+        self.model = model
+
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())

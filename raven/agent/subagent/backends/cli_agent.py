@@ -23,7 +23,7 @@ import signal
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -35,6 +35,9 @@ from raven.agent.subagent.backends.transcript import (
     parse_opencode_json,
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
+
+if TYPE_CHECKING:
+    from raven.providers.base import LLMProvider
 
 
 class CliAgentTimeoutError(RuntimeError):
@@ -192,7 +195,11 @@ class CliAgentBackend:
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> str:
+        # The parent's provider/model are accepted and ignored: this backend
+        # shells out to an agent that authenticates and picks a model itself.
         skey = session_key or "default"
         handle = instance or task_id
         cwd = self.cwd or str(workspace)

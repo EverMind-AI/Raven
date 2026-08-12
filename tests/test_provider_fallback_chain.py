@@ -7,13 +7,19 @@ Covers:
 - non-fallback fatal error (invalid request / context length) → no switch
 - a later model succeeding stops the chain
 - chain exhausted → last error surfaces
+- a fallback hop this provider instance cannot serve (wrong vendor
+  credentials) is skipped rather than sent, unless the instance is a gateway
 """
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from loguru import logger as _logger
 
 from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.litellm_provider import LiteLLMProvider
 
 
 class _ScriptedProvider(LLMProvider):
@@ -213,6 +219,136 @@ async def test_chat_timeout_is_retried_then_succeeds():
     assert resp.finish_reason == "stop"
     assert resp.content == "ok"
     assert provider.calls == 3  # two timeouts retried, third succeeds
+
+
+@pytest.mark.asyncio
+async def test_direct_provider_skips_fallback_hop_resolved_to_another_vendor(monkeypatch):
+    # A direct (non-gateway) instance carries one vendor's credentials. A
+    # fallback hop that ``find_by_model`` resolves to a *different* vendor's
+    # spec must not be sent on this wire -- can_serve() should skip it, and
+    # the chain then exhausts on the primary's own error since no other hop
+    # remains.
+    provider = LiteLLMProvider(
+        api_key="sk-ant-test", default_model="anthropic/claude-opus-4-5", provider_name="anthropic"
+    )
+    assert provider._gateway is None
+
+    calls: list[str | None] = []
+
+    async def fake_chat(messages, tools=None, model=None, **kwargs):
+        calls.append(model)
+        return LLMResponse(content="model not found", finish_reason="error")
+
+    monkeypatch.setattr(provider, "chat", fake_chat)
+
+    captured = io.StringIO()
+    sink_id = _logger.add(captured, level="WARNING")
+    try:
+        resp = await provider.chat_with_retry(
+            messages=[],
+            model="anthropic/claude-opus-4-5",
+            fallback_models=["openai/gpt-4o"],
+        )
+    finally:
+        _logger.remove(sink_id)
+
+    assert resp.finish_reason == "error"
+    assert resp.content == "model not found"
+    # The openai hop is never dispatched -- can_serve() vetoed it.
+    assert calls == ["anthropic/claude-opus-4-5"]
+    assert "openai/gpt-4o" in captured.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_gateway_provider_does_not_skip_cross_vendor_fallback_hop(monkeypatch):
+    # A gateway instance (OpenRouter, AiHubMix, ...) routes any model on the
+    # caller's behalf, so can_serve() must return True unconditionally --
+    # unlike a direct instance, it must not skip a fallback hop just because
+    # that hop resolves to a different upstream vendor's spec.
+    provider = LiteLLMProvider(
+        api_key="sk-or-test", default_model="openrouter/anthropic/claude-opus-4-5", provider_name="openrouter"
+    )
+    assert provider._gateway is not None
+
+    calls: list[str | None] = []
+
+    async def fake_chat(messages, tools=None, model=None, **kwargs):
+        calls.append(model)
+        if model == "openrouter/anthropic/claude-opus-4-5":
+            return LLMResponse(content="model not found", finish_reason="error")
+        return LLMResponse(content="ok", finish_reason="stop")
+
+    monkeypatch.setattr(provider, "chat", fake_chat)
+
+    resp = await provider.chat_with_retry(
+        messages=[],
+        model="openrouter/anthropic/claude-opus-4-5",
+        fallback_models=["openai/gpt-4o"],
+    )
+
+    assert resp.content == "ok"
+    assert calls == ["openrouter/anthropic/claude-opus-4-5", "openai/gpt-4o"]
+
+
+@pytest.mark.asyncio
+async def test_chain_of_unserviceable_hops_returns_primary_error(monkeypatch):
+    # When every fallback hop is unserviceable (all resolve to a different
+    # vendor than this direct instance's own), the chain skips all of them
+    # and the caller gets back the primary model's own last error -- the same
+    # outcome as an ordinary exhausted chain, not a None or a crash.
+    provider = LiteLLMProvider(
+        api_key="sk-ant-test", default_model="anthropic/claude-opus-4-5", provider_name="anthropic"
+    )
+    assert provider._gateway is None
+
+    calls: list[str | None] = []
+
+    async def fake_chat(messages, tools=None, model=None, **kwargs):
+        calls.append(model)
+        return LLMResponse(content="model not found", finish_reason="error")
+
+    monkeypatch.setattr(provider, "chat", fake_chat)
+
+    resp = await provider.chat_with_retry(
+        messages=[],
+        model="anthropic/claude-opus-4-5",
+        fallback_models=["openai/gpt-4o", "gemini/gemini-2.5-flash"],
+    )
+
+    assert resp.finish_reason == "error"
+    assert resp.content == "model not found"
+    assert calls == ["anthropic/claude-opus-4-5"]
+
+
+def test_empty_provider_name_does_not_skip_resolvable_fallback():
+    # provider_name="" (the real construction site default: neither
+    # _proactive_stack.py nor evolver/launch/models.py passes provider_name)
+    # resolves to no spec at all, so this instance's own identity is unknown
+    # -- can_serve must let every resolvable model through rather than
+    # comparing an unknown identity against a known one and rejecting.
+    provider = LiteLLMProvider(api_key="test-key", default_model="anthropic/claude-opus-4-5", provider_name="")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
+    assert provider.can_serve("openai/gpt-4o") is True
+
+
+def test_oauth_identity_does_not_skip_cross_vendor_model():
+    # github_copilot is a single OAuth grant that can serve several upstream
+    # vendors (OpenAI, Anthropic, Google), so a spec mismatch says nothing
+    # about whether this instance can serve the model.
+    provider = LiteLLMProvider(default_model="github_copilot/gpt-4o", provider_name="github_copilot")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
+
+
+def test_custom_passthrough_identity_does_not_skip_resolvable_fallback():
+    # "fireworks" has no ProviderSpec -- it is a direct-connect vendor LiteLLM
+    # supports natively under its own routing prefix. This instance's own
+    # identity does not resolve to a spec, so it cannot be compared against
+    # the fallback model's resolved spec.
+    provider = LiteLLMProvider(api_key="test-key", default_model="fireworks/some-model", provider_name="fireworks")
+    assert provider._gateway is None
+    assert provider.can_serve("anthropic/claude-opus-4-5") is True
 
 
 @pytest.mark.asyncio

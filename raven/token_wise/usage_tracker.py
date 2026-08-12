@@ -117,7 +117,10 @@ class UsageTracker(TokenStrategy):
         acc.cache_read_tokens += add.cache_read_tokens
         acc.cache_write_tokens += add.cache_write_tokens
         acc.reasoning_tokens += add.reasoning_tokens
-        acc.estimated_cost_usd += add.estimated_cost_usd
+        if add.estimated_cost_usd is not None:
+            # A plan-billed call contributes tokens but no money; summing it as
+            # zero would read as "these calls were free".
+            acc.estimated_cost_usd = (acc.estimated_cost_usd or 0.0) + add.estimated_cost_usd
 
     @staticmethod
     def _copy(src: UsageSnapshot) -> UsageSnapshot:

@@ -42,7 +42,7 @@ class RoutingInfo:
     model: str
     provider: Optional[str]
     max_tokens: int
-    context_window_tokens: int
+    context_window_tokens: Optional[int]
 
 
 @dataclass
@@ -328,7 +328,7 @@ def _render_human_output(report: DoctorReport) -> None:
         else:
             console.print("  Routes to:    [red]<unresolved>[/red]")
         console.print(f"  Max tokens:   {routing.max_tokens}")
-        console.print(f"  Context win:  {routing.context_window_tokens}")
+        console.print(f"  Context win:  {routing.context_window_tokens if routing.context_window_tokens else 'auto'}")
 
     features = report.features
     if features is not None:

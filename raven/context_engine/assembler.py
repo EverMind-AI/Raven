@@ -37,6 +37,7 @@ from raven.memory_engine.base import AssembledContext, TokenBudget
 
 if TYPE_CHECKING:
     from raven.context_engine.curator import TurnContext
+    from raven.providers.base import LLMProvider
 
 
 class ContextAssembler(ContextEngine):
@@ -64,6 +65,15 @@ class ContextAssembler(ContextEngine):
         # the full append-only log and skips the host MemoryConsolidator.
         return True
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        # Duck-typed on purpose: only the builders that actually call an LLM
+        # implement it, and putting it on the SegmentBuilder protocol would
+        # force an empty override onto every purely textual builder.
+        for builder in self._builders:
+            setter = getattr(builder, "set_provider", None)
+            if callable(setter):
+                setter(provider, model)
+
     async def assemble(
         self,
         session_key: str,
@@ -76,6 +86,8 @@ class ContextAssembler(ContextEngine):
             session_key=session_key,
             current_message=turn.current_message,
             media=turn.media,
+            can_see_images=turn.can_see_images,
+            describe_tool=turn.describe_tool,
             channel=turn.channel,
             chat_id=turn.chat_id,
             session_messages=session_messages,
@@ -141,10 +153,23 @@ class ContextAssembler(ContextEngine):
             if hook is not None:
                 await hook(session_key, outcome, usage)
 
+    def set_context_window(self, tokens: int) -> None:
+        # Delegate to any builder that sized itself against the window at
+        # construction (only the Curator does; seg1-5 carry no budget).
+        for builder in self._builders:
+            setter = getattr(builder, "set_context_window", None)
+            if setter is not None:
+                setter(tokens)
+
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
         """The single structural user message: runtime context + content."""
         runtime_ctx = render.build_runtime_context(self._now_fn, ctx.channel, ctx.chat_id)
-        user_content = render.build_user_content(ctx.current_message, ctx.media)
+        user_content = render.build_user_content(
+            ctx.current_message,
+            ctx.media,
+            can_see_images=ctx.can_see_images,
+            describe_tool=ctx.describe_tool,
+        )
         if isinstance(user_content, str):
             merged: Any = f"{runtime_ctx}\n\n{user_content}"
         else:

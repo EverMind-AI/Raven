@@ -114,6 +114,8 @@ class RavenLoopBackend:
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         try:
@@ -124,6 +126,8 @@ class RavenLoopBackend:
                 executor=executor,
                 session_key=session_key,
                 instance=instance,
+                provider=provider,
+                model=model,
             )
         finally:
             IN_SUBAGENT_RUN.reset(token)
@@ -137,7 +141,14 @@ class RavenLoopBackend:
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> str:
+        # The spawn's snapshot wins over the pair this backend was built with;
+        # see ``SubagentBackend.run``. The constructor pair remains the fallback
+        # for callers that drive a backend directly.
+        provider = provider or self.provider
+        model = model or self.model
         # Build subagent tools (no message tool, no spawn tool).
         tools = ToolRegistry()
         # Two roots, matching the main loop: the session directory the run works
@@ -176,10 +187,10 @@ class RavenLoopBackend:
         final_result: str | None = None
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
-            response = await self.provider.chat_with_retry(
+            response = await provider.chat_with_retry(
                 messages=messages,
                 tools=tools.get_definitions(),
-                model=self.model,
+                model=model,
             )
             if response.has_tool_calls:
                 tool_call_dicts = [tc.to_openai_tool_call() for tc in response.tool_calls]
