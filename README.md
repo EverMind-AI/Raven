@@ -37,7 +37,7 @@ task needs deeper investigation.
 
 Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
-https://github.com/user-attachments/assets/8d152190-2253-489c-9efb-abc0161e6348
+https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
 Install Raven, run `raven` in your terminal, and this is the welcome screen you will see:
 
