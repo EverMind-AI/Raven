@@ -257,6 +257,29 @@ def _loop_break_nudge(tool: str, n: int) -> str:
     )
 
 
+def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
+    """A tool's own label for its transcript row, or None if it cannot give one.
+
+    ``display_call`` is handed the model's raw arguments: the registry's cast
+    and validation run later, on the execute path, so this sees whatever the
+    model emitted, including shapes the schema forbids. Its entire job is to
+    label a row, so a failure here has to cost the label and nothing else.
+
+    Without the guard the exception leaves the tool-event emit and ends the
+    turn, and the user gets no reply at all -- an array argument arriving as a
+    JSON string did exactly that, raising ``AttributeError`` on a character of
+    it. Guarding one tool leaves the trap set for the next one written; the
+    call site is where it closes for all of them.
+    """
+    if tool is None:
+        return None
+    try:
+        return tool.display_call(arguments)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("display_call failed for {}: {}", getattr(tool, "name", "?"), exc)
+        return None
+
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -2064,7 +2087,7 @@ class AgentLoop:
                                 "arguments": tool_call.arguments,
                                 "blocking": self.tools.is_blocking(tool_call.name, tool_call.arguments),
                                 # Tool-authored call label; None -> UI derives one.
-                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
+                                "display": _display_label(_tool, tool_call.arguments),
                             },
                         )
                     # A tool whose output also reaches the UI on a side channel
