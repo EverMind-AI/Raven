@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 import typer
 
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
+from raven.utils.helpers import project_slug
 
 tui_app = typer.Typer(name="tui", help="Launch Raven native TUI (Ink+React).")
 
@@ -339,7 +340,7 @@ def _build_cron_callback_spine(base_on_cron, emitter):
     return wrapped
 
 
-def _build_tui_agent_loop():
+def _build_tui_agent_loop(workspace: str | None = None, home: str | None = None):
     """Construct the AgentLoop singleton served by ``turn.send``.
 
     Mirrors the minimal slice of ``raven agent`` setup needed to handle
@@ -364,6 +365,7 @@ def _build_tui_agent_loop():
     try:
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.cli._helpers import build_model_routing, load_runtime_config, make_lazy_provider
         from raven.cli._plugin_stack import (
             build_plugin_registry,
@@ -376,7 +378,7 @@ def _build_tui_agent_loop():
         from raven.proactive_engine.schedulers.cron.tool import CronTool
         from raven.session.manager import SessionManager
 
-        config = load_runtime_config(None, None)
+        config = load_runtime_config(None, home=home)
         ec_config = load_raven_config()
         skill_forge_cfg = ec_config.skill_forge
 
@@ -385,7 +387,21 @@ def _build_tui_agent_loop():
         # knn wrapper only reads the lazy provider's plain fields, so deferring
         # the litellm build survives it.
         router, provider = build_model_routing(config, provider)
-        session_manager = SessionManager(config.workspace_path)
+        # Sessions group by launch directory here, the way Claude Code groups
+        # by project: one terminal session belongs to the checkout it was
+        # started in. The gateway passes no slug -- one daemon serves every
+        # project, so its grouping is the channel instead.
+        launch_dir = Path.cwd()
+        session_manager = SessionManager(
+            config.workspace_path, project_slug=project_slug(launch_dir), project_dir=launch_dir
+        )
+        workdir_resolver = WorkdirResolver(
+            WorkdirPolicy.LAUNCH_DIR,
+            agent_home=config.workspace_path,
+            launch_dir=Path.cwd(),
+            explicit_workdir=validate_override(workspace, config.workspace_path) if workspace else None,
+            sessions=session_manager,
+        )
 
         cron = CronService(
             get_cron_dir() / "jobs.json",
@@ -423,6 +439,7 @@ def _build_tui_agent_loop():
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
+            workdir_resolver=workdir_resolver,
             mcp_servers=config.tools.mcp_servers,
             disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,
@@ -492,6 +509,8 @@ async def _run_rpc_server_until_done(
     auth_token: str,
     handshake_deadline_s: float,
     proc_done: asyncio.Event,
+    workspace: str | None = None,
+    home: str | None = None,
 ) -> bool:
     """Run RpcServer until the child exits or we abort on handshake timeout.
 
@@ -555,7 +574,7 @@ async def _run_rpc_server_until_done(
     agent_loop = None
     build_error: RpcError | None = None
     try:
-        agent_loop = _build_tui_agent_loop()
+        agent_loop = _build_tui_agent_loop(workspace=workspace, home=home)
     except RpcError as e:
         build_error = e
 
@@ -789,6 +808,8 @@ def run_subprocess_with_rpc(
     args: list[str],
     cwd: Path,
     forward_signals: bool = True,
+    workspace: str | None = None,
+    home: str | None = None,
 ) -> int:
     """Spawn Node child with a per-session TCP-loopback socket; run RpcServer; enforce handshake.
 
@@ -871,7 +892,9 @@ def run_subprocess_with_rpc(
         # ownership of this one socket and closes it on teardown, so the outer
         # cleanup must not double-close it.
         _flags["handed_off"] = True
-        return await _run_rpc_server_until_done(conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done)
+        return await _run_rpc_server_until_done(
+            conn, auth_token, _RPC_HANDSHAKE_TIMEOUT_S, proc_done, workspace=workspace, home=home
+        )
 
     waiter = threading.Thread(target=_waiter, daemon=True)
     waiter.start()
@@ -985,10 +1008,34 @@ def tui(
         "--preview-colors",
         help="Preview color tokens in their real UI contexts and exit (no TTY needed).",
     ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        "-w",
+        help="Working directory for this run (default: current directory)",
+    ),
+    home: str | None = typer.Option(
+        None,
+        "--home",
+        help="Agent home directory (memory, skills, transcripts)",
+    ),
 ) -> None:
     """Launch Raven native TUI."""
     if ctx.invoked_subcommand is not None:
         return
+
+    # Validate -w before Node ever spawns. _build_tui_agent_loop performs the
+    # same check, but by then it runs inside the RPC server's blanket
+    # except-Exception handler, which would turn a bad flag into a -32603
+    # surfaced on the user's first chat message instead of a launch-time error.
+    if workspace is not None:
+        from raven.agent.workdir import validate_override
+        from raven.cli._helpers import load_runtime_config
+
+        try:
+            validate_override(workspace, load_runtime_config(None, home=home).workspace_path)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
 
     # Startup gate: launch the onboarding wizard first when the required
     # config (a provider key + default model) is missing. Skipped for the
@@ -1097,7 +1144,7 @@ def tui(
         if no_rpc:
             exit_code = run_subprocess(npx, tsx_args, cwd=_UI_TUI_DIR)
         else:
-            exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR)
+            exit_code = run_subprocess_with_rpc(npx, tsx_args, cwd=_UI_TUI_DIR, workspace=workspace, home=home)
     else:
         dist_entry = resolve_dist_entry()
         if dist_entry is None and not check:
@@ -1122,7 +1169,9 @@ def tui(
         if no_rpc:
             exit_code = run_subprocess(node_path, [str(dist_entry)], cwd=dist_cwd)
         else:
-            exit_code = run_subprocess_with_rpc(node_path, [str(dist_entry)], cwd=dist_cwd)
+            exit_code = run_subprocess_with_rpc(
+                node_path, [str(dist_entry)], cwd=dist_cwd, workspace=workspace, home=home
+            )
         if _is_abnormal_child_exit(exit_code):
             _diagnose_crash(node_path, dist_entry, dist_cwd)
 

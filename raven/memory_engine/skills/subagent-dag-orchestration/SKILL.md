@@ -160,7 +160,7 @@ The tool returns text like:
 
 ```
 DAG run 20260729T031500Z-1a2b3c4d finished: 3 completed, 0 failed, 0 skipped (of 3).
-Run dir: <workspace>/.ravenx_dag/20260729T031500Z-1a2b3c4d
+Run dir: <session history>/mas_dag/20260729T031500Z-1a2b3c4d
 
 Node output files:
 - research_web [completed]: <run-dir>/research_web.out.md

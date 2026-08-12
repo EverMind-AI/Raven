@@ -621,3 +621,47 @@ def test_disabled_deep_research_survives_the_promotion_path(tmp_path: Path, monk
     loop._maybe_promote_deep_research()
 
     assert loop.tools.get("deep_research") is None
+
+
+# ── report location: the session working directory, not agent home ──
+
+
+async def test_report_lands_in_the_bound_working_directory(tmp_path: Path, monkeypatch):
+    """A research report is a file the user asked for, so it belongs where the
+    turn works, not in agent home."""
+    from raven.agent.workdir import bind
+
+    home = tmp_path / "home"
+    home.mkdir()
+    session = tmp_path / "session"
+    session.mkdir()
+    tool = DeepResearchTool(DeepResearchToolConfig(api_key="sk-test"), workspace=home)
+    _patch(monkeypatch, lambda req: httpx.Response(200, content=_sse(ANSWER)))
+
+    with bind(session):
+        result = json.loads(await tool.execute(query="q"))
+
+    assert Path(result["report_ref"]).parent == session / "deep_research"
+    assert not (home / "deep_research").exists()
+
+
+async def test_async_report_uses_the_directory_captured_at_start(tmp_path: Path, monkeypatch):
+    """The poll task outlives the turn, so the directory has to be captured
+    while the binding is still live rather than read inside the task."""
+    from raven.agent.workdir import bind
+
+    home = tmp_path / "home"
+    home.mkdir()
+    session = tmp_path / "session"
+    session.mkdir()
+    tool = _async_tool(home, submit=lambda req: None)
+    _patch(monkeypatch, _responses_handler())
+
+    with bind(session):
+        ack = json.loads(await tool.execute(query="q"))
+
+    assert ack["status"] == "started"
+    await tool._mgr._active["weixin:chat1"]
+
+    assert (session / "deep_research").is_dir()
+    assert not (home / "deep_research").exists()

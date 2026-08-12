@@ -79,10 +79,10 @@ describe('foldDagEvent', () => {
       type: 'dag.run_completed',
       payload: {
         run_id: 'dag-1',
-        dir: '/w/.ravenx_dag/dag-1',
+        dir: '/w/mas_dag/dag-1',
         summary: { total: 2, completed: 1, failed: 1, skipped: 0 },
         files: [
-          { node: 'a', status: 'completed', output_file: '/w/.ravenx_dag/dag-1/a.out.md' },
+          { node: 'a', status: 'completed', output_file: '/w/mas_dag/dag-1/a.out.md' },
           { node: 'b', status: 'failed', error: 'boom' }
         ]
       }
@@ -90,9 +90,9 @@ describe('foldDagEvent', () => {
     const run = foldDagEvent(foldDagEvent(null, started(CHAIN)), completed)
 
     expect(run?.done).toBe(true)
-    expect(run?.dir).toBe('/w/.ravenx_dag/dag-1')
+    expect(run?.dir).toBe('/w/mas_dag/dag-1')
     expect(run?.summary).toEqual({ total: 2, completed: 1, failed: 1, skipped: 0 })
-    expect(run?.nodes.find(n => n.id === 'a')?.outputFile).toBe('/w/.ravenx_dag/dag-1/a.out.md')
+    expect(run?.nodes.find(n => n.id === 'a')?.outputFile).toBe('/w/mas_dag/dag-1/a.out.md')
     expect(run?.nodes.find(n => n.id === 'b')?.error).toBe('boom')
   })
 
@@ -103,7 +103,7 @@ describe('foldDagEvent', () => {
       type: 'dag.run_completed',
       payload: {
         run_id: 'dag-1',
-        dir: '/w/.ravenx_dag/dag-1',
+        dir: '/w/mas_dag/dag-1',
         summary: { total: 2, completed: 2, failed: 0, skipped: 0 },
         files: [
           { node: 'a', status: 'completed' },
@@ -123,7 +123,7 @@ describe('foldDagEvent', () => {
       type: 'dag.run_completed',
       payload: {
         run_id: 'dag-1',
-        dir: '/w/.ravenx_dag/dag-1',
+        dir: '/w/mas_dag/dag-1',
         summary: { total: 2, completed: 1, failed: 0, skipped: 0 },
         files: [{ node: 'a', status: 'completed' }]
       }
@@ -147,7 +147,7 @@ describe('foldDagEvent', () => {
 describe('foldDagSnapshot', () => {
   const snapshot = (files: DagRunSnapshot['files'], over: Partial<DagRunSnapshot> = {}): DagRunSnapshot => ({
     run_id: 'dag-1',
-    dir: '/w/.ravenx_dag/dag-1',
+    dir: '/w/mas_dag/dag-1',
     finalized: true,
     files,
     summary: { total: files.length, completed: 0, failed: 0, skipped: 0 },

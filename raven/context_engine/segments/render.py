@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from raven.agent import workdir
 from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import detect_image_mime, image_block
 
@@ -86,9 +87,16 @@ def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> 
     return names or None
 
 
-def identity_text(workspace: Path) -> str:
-    """Segment 1 — the core identity / runtime block."""
-    workspace_path = str(workspace.expanduser().resolve())
+def identity_text(agent_home: Path, work_dir: Path | None = None) -> str:
+    """Segment 1 — the core identity / runtime block.
+
+    ``work_dir`` defaults to the directory bound for the running turn, and
+    falls back to ``agent_home`` when nothing is bound — the single-directory
+    behaviour a loop built without a workdir resolver still has.
+    """
+    home_path = str(agent_home.expanduser().resolve())
+    bound = work_dir or workdir.current()
+    work_path = str(Path(bound).expanduser().resolve()) if bound else home_path
     system = platform.system()
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -111,11 +119,12 @@ You are Raven, a helpful AI assistant.
 ## Runtime
 {runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
-- User profile: {workspace_path}/user_memory/profile/user.md (preferences, identity, project context)
-- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+## Directories
+- Working directory: {work_path} — files you produce go here; relative paths resolve here.
+- Agent home: {home_path} — your own memory and skills, not a place for user artifacts.
+  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)
+  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+  - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
 

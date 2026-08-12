@@ -95,7 +95,7 @@ class _DiscoveryStubProvider:
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     ws.mkdir()
     (ws / "memory").mkdir()
     return ws

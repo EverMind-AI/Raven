@@ -9,6 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
+from raven.agent import workdir
 from raven.agent.tools.base import Tool, ToolResult
 from raven.agent.tools.shell_policy import CommandDecision, ShellCommandPolicy
 from raven.sandbox import DirectExecutor, SandboxExecutor
@@ -60,6 +61,9 @@ class ExecTool(Tool):
         path_append: str = "",
         executor: SandboxExecutor | None = None,
         extra_deny_patterns: list[str] | None = None,
+        extra_allowed_dirs: tuple[Path, ...] = (),
+        *,
+        follow_binding: bool = True,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -83,6 +87,15 @@ class ExecTool(Tool):
         self._policy = ShellCommandPolicy(deny_patterns=self.deny_patterns)
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
+        self.extra_allowed_dirs = extra_allowed_dirs
+        # A sub-agent run is a background asyncio task that can outlive the turn
+        # that spawned it, since SubagentManager.spawn captures the workspace at
+        # spawn time; its ExecTool must resolve cwd from the directory captured
+        # for that run, never from the ambient binding, or it disagrees with its
+        # own fs tools about which directory it is in (the same follow_binding
+        # convention as the filesystem tools). The main loop's ExecTool keeps
+        # following the live binding as normal.
+        self.follow_binding = follow_binding
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
         self._approval_turn: ContextVar[_ApprovalTurn] = ContextVar(
@@ -165,7 +178,8 @@ class ExecTool(Tool):
         timeout: int | None = None,
         **kwargs: Any,
     ) -> str | ToolResult:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        bound = str(workdir.current() or "") if self.follow_binding else ""
+        cwd = working_dir or bound or self.working_dir or os.getcwd()
 
         if not self._executor.is_sandboxed:
             # Non-sandboxed: full guard — deny-list patterns AND workspace restriction.
@@ -277,14 +291,18 @@ class ExecTool(Tool):
             return "Error: Command blocked by safety guard (path traversal detected)"
 
         cwd_path = Path(cwd).resolve()
+        roots = [cwd_path, *(Path(d).resolve() for d in self.extra_allowed_dirs)]
         for raw in self._extract_absolute_paths(cmd):
             try:
                 expanded = os.path.expandvars(raw.strip())
                 p = Path(expanded).expanduser().resolve()
             except Exception:
                 continue
-            if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
-                return "Error: Command blocked by safety guard (path outside working dir)"
+            if not p.is_absolute():
+                continue
+            if any(root == p or root in p.parents for root in roots):
+                continue
+            return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
 

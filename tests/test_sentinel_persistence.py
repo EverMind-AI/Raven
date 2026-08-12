@@ -277,7 +277,7 @@ def test_session_manager_find_most_recent_chat_id(tmp_state_dir: Path):
 
     from raven.session.manager import SessionManager
 
-    workspace = tmp_state_dir / "ws"
+    workspace = tmp_state_dir / "chanwork"
     sessions_dir = workspace / "sessions"
     (sessions_dir / "feishu").mkdir(parents=True)
     (sessions_dir / "telegram").mkdir(parents=True)

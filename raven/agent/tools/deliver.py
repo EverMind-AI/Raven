@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from raven.agent import workdir
 from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.base import Tool
-from raven.agent.tools.filesystem import _resolve_path
+from raven.agent.tools.filesystem import _resolve_path, _with_current_root
 
 _WEB_CHANNEL = "web"
 
@@ -45,11 +46,11 @@ class DeliverFilesTool(Tool):
         store: DeliverableStore,
         *,
         workspace: Path | None = None,
-        allowed_dir: Path | None = None,
+        allowed_dirs: tuple[Path, ...] = (),
     ) -> None:
         self._store = store
         self._workspace = workspace
-        self._allowed_dir = allowed_dir
+        self._allowed_dirs = allowed_dirs
         self._ctx: ContextVar[_DeliverCtx | None] = ContextVar("deliver_files_ctx", default=None)
         self._default = _DeliverCtx(channel="cli", chat_id="direct", session_key="cli:direct")
         # Written by execute (which may run in a child context) and popped by
@@ -140,7 +141,8 @@ class DeliverFilesTool(Tool):
                 invalid.append({"path": raw, "reason": "empty path"})
                 continue
             try:
-                resolved = _resolve_path(raw, self._workspace, self._allowed_dir)
+                bound = workdir.current()
+                resolved = _resolve_path(raw, bound or self._workspace, _with_current_root(self._allowed_dirs, bound))
             except PermissionError as exc:
                 invalid.append({"path": raw, "reason": str(exc)})
                 continue

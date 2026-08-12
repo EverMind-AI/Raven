@@ -33,6 +33,12 @@ export interface DagRunsState {
 	dagRuns: Record<string, DagRunLive>;
 	latestRunId: string | null;
 	runIdByToolCallId: Record<string, string>;
+	/** The chat's session key. A run dir lives under *that session's* working
+	 *  directory, so an on-demand node read has to name the session; without it
+	 *  the gateway falls back to the agent home and finds nothing. Carried here
+	 *  rather than as a prop because the renderer registry between `ChatViewport`
+	 *  and `DagGraph` is generic over tool name and threads no chat context. */
+	sessionKey?: string;
 }
 
 /**

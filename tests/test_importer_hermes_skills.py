@@ -360,7 +360,7 @@ async def test_pristine_skipped_others_installed(tmp_path: Path) -> None:
         usage={"byagent": {"created_by": "agent"}},
     )
     (home / "skills" / ".bundled_manifest").write_text(f"pristine:{package_hash(made['pristine'])}\n", encoding="utf-8")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
     assert landed == {"keepme", "byagent"}
@@ -374,7 +374,7 @@ async def test_category_level_is_dropped_and_attachments_kept(tmp_path: Path) ->
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "health-fitness", "coach", extra={"references/plan.md": "keep me"})
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     dest = ws / "skills" / "hermes" / "coach"
     assert (dest / "SKILL.md").exists()
@@ -387,7 +387,7 @@ async def test_source_label_resolves_to_hermes(tmp_path: Path) -> None:
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "cat", "coach")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     metas = SkillRegistry(workspace=ws).list_all()
     assert ("hermes", "coach") in {(m.source, m.name) for m in metas}
@@ -397,7 +397,7 @@ async def test_existing_target_is_not_overwritten(tmp_path: Path) -> None:
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "cat", "coach")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     dest = ws / "skills" / "hermes" / "coach"
     dest.mkdir(parents=True)
     (dest / "SKILL.md").write_text("mine", encoding="utf-8")
@@ -415,7 +415,7 @@ async def test_flatten_collision_falls_back_to_category_prefix(tmp_path: Path) -
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "apple", "notes", body="---\nname: apple-notes\n---\nbody\n")
     _skill(home / "skills" / "productivity", "notes", body="---\nname: productivity-notes\n---\nbody\n")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
     assert "notes" in landed
@@ -430,7 +430,7 @@ async def test_uncategorised_collision_uses_a_numeric_suffix(tmp_path: Path) -> 
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "apple", "notes", body="---\nname: apple-notes\n---\nbody\n")
     _skill(home / "skills", "notes", body="---\nname: root-notes\n---\nbody\n")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     landed = {p.name for p in (ws / "skills" / "hermes").iterdir()}
     assert landed == {"notes", "notes-2"}
@@ -447,7 +447,7 @@ async def test_two_skills_declaring_one_name_do_not_both_land(tmp_path: Path) ->
         d = sk / directory
         d.mkdir()
         (d / "SKILL.md").write_text("---\nname: shared\n---\nbody\n", encoding="utf-8")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     summary = await install_skills(HermesSkillSource(hermes_home=home), ws, ImportState(path=tmp_path / "state.json"))
     assert summary.installed == 1
     assert summary.skipped == 1
@@ -458,7 +458,7 @@ async def test_rerun_is_idempotent(tmp_path: Path) -> None:
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "cat", "coach")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     state = ImportState(path=tmp_path / "state.json")
     first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
     second = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
@@ -473,7 +473,7 @@ async def test_a_name_the_pool_already_holds_is_not_installed_again(tmp_path: Pa
     returns. Checking only the current run left that collision undetected -- the
     exact loss the check exists to report.
     """
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     pool = ws / "skills" / "hermes"
     pool.mkdir(parents=True)
     _skill(pool, "mine", body="---\nname: shared-name\n---\nthe one already in the pool\n")
@@ -500,7 +500,7 @@ async def test_a_rerun_does_not_collide_with_its_own_earlier_install(tmp_path: P
     home = tmp_path / ".hermes"
     (home / "skills").mkdir(parents=True)
     _skill(home / "skills" / "cat", "coach", body="---\nname: display-name\n---\nbody\n")
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     state = ImportState(path=tmp_path / "state.json")
 
     first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)
@@ -524,7 +524,7 @@ async def test_partial_copy_is_removed_so_the_next_run_retries(tmp_path: Path) -
     unreadable.parent.mkdir()
     unreadable.write_text("secret", encoding="utf-8")
     unreadable.chmod(0o000)
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     state = ImportState(path=tmp_path / "state.json")
     try:
         first = await install_skills(HermesSkillSource(hermes_home=home), ws, state)

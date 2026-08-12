@@ -650,7 +650,7 @@ class TestRealBuiltinSmokeTest:
     """Quick sanity check against the actual shipped skills."""
 
     def test_real_builtin_has_known_skills(self, tmp_path):
-        workspace = tmp_path / "ws"
+        workspace = tmp_path / "chanwork"
         workspace.mkdir()
         store = SkillRegistry(workspace)  # default builtin dir
         metas = {m.name: m for m in store.list_all()}

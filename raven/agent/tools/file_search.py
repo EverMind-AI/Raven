@@ -1,6 +1,6 @@
 """Search tools: grep (content search) and find (file lookup).
 
-Both run host-side and reuse ``_FsTool``'s workspace/allowed_dir resolution so
+Both run host-side and reuse ``_FsTool``'s workspace/allowed_dirs resolution so
 they share the exact same path boundary as read_file/write_file/list_dir — never
 the SandboxExecutor (avoids shuttling large result sets across a VM edge).
 

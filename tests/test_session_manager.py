@@ -329,7 +329,7 @@ def test_legacy_global_sessions_shim_removed(tmp_path: Path, monkeypatch):
         raising=False,
     )
 
-    session = SessionManager(tmp_path / "ws").get_or_create("tui:x")
+    session = SessionManager(tmp_path / "chanwork").get_or_create("tui:x")
     assert session.messages == []
     assert legacy_file.exists()
 

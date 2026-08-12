@@ -12,14 +12,15 @@ from raven.agent.tools._deliverables import DeliverableStore
 from raven.agent.tools.deliver import DeliverFilesTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.tool_search import TOOL_CALL_NAME, ToolCallTool, ToolSearchController
+from raven.agent.workdir import bind
 
 
 @pytest.fixture
 def tool(tmp_path):
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     store = DeliverableStore(tmp_path / "deliverables.json")
-    t = DeliverFilesTool(store, workspace=workspace, allowed_dir=None)
+    t = DeliverFilesTool(store, workspace=workspace, allowed_dirs=())
     t.set_context("web", "default", "web:s1")
     return t
 
@@ -35,7 +36,7 @@ def test_name_is_snake_case(tool) -> None:
 
 
 async def test_happy_path_manifest_shape(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "report.pdf", b"12345")
+    _write(tmp_path / "chanwork", "report.pdf", b"12345")
 
     summary = await tool.execute(
         files=[{"path": "report.pdf", "title": "Q3 report", "description": "final"}],
@@ -59,7 +60,7 @@ async def test_happy_path_manifest_shape(tool, tmp_path) -> None:
 
 
 async def test_take_metadata_is_consumed_once(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "a.txt")
+    _write(tmp_path / "chanwork", "a.txt")
 
     await tool.execute(files=[{"path": "a.txt"}])
 
@@ -70,7 +71,7 @@ async def test_take_metadata_is_consumed_once(tool, tmp_path) -> None:
 async def test_non_web_channel_refuses_without_touching_the_filesystem(tool, tmp_path) -> None:
     """The refusal must not depend on the path being bad: an existing, valid
     file is still refused, and nothing is registered."""
-    _write(tmp_path / "ws", "real.txt")
+    _write(tmp_path / "chanwork", "real.txt")
     tool.set_context("whatsapp", "123", "whatsapp:123")
 
     result = await tool.execute(files=[{"path": "real.txt"}])
@@ -92,7 +93,7 @@ async def test_missing_file_yields_an_error_and_no_manifest(tool) -> None:
 
 
 async def test_mixed_valid_and_invalid(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "good.txt")
+    _write(tmp_path / "chanwork", "good.txt")
 
     summary = await tool.execute(files=[{"path": "good.txt"}, {"path": "bad.txt"}])
 
@@ -104,7 +105,7 @@ async def test_mixed_valid_and_invalid(tool, tmp_path) -> None:
 
 
 async def test_directory_is_invalid(tool, tmp_path) -> None:
-    (tmp_path / "ws" / "sub").mkdir()
+    (tmp_path / "chanwork" / "sub").mkdir()
 
     result = await tool.execute(files=[{"path": "sub"}])
 
@@ -112,7 +113,7 @@ async def test_directory_is_invalid(tool, tmp_path) -> None:
 
 
 async def test_duplicate_paths_are_deduplicated(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "a.txt")
+    _write(tmp_path / "chanwork", "a.txt")
 
     await tool.execute(files=[{"path": "a.txt"}, {"path": "./a.txt"}])
 
@@ -121,7 +122,7 @@ async def test_duplicate_paths_are_deduplicated(tool, tmp_path) -> None:
 
 
 async def test_redelivery_in_same_conversation_reuses_token(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "a.txt")
+    _write(tmp_path / "chanwork", "a.txt")
 
     await tool.execute(files=[{"path": "a.txt"}])
     first = tool.take_metadata()["raven_delivery"]["files"][0]["token"]
@@ -132,12 +133,12 @@ async def test_redelivery_in_same_conversation_reuses_token(tool, tmp_path) -> N
 
 
 async def test_path_outside_allowed_dir_is_invalid_when_restricted(tmp_path) -> None:
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     outside = tmp_path / "secret.txt"
     outside.write_bytes(b"nope")
     store = DeliverableStore(tmp_path / "deliverables.json")
-    restricted = DeliverFilesTool(store, workspace=workspace, allowed_dir=workspace)
+    restricted = DeliverFilesTool(store, workspace=workspace, allowed_dirs=(workspace,))
     restricted.set_context("web", "default", "web:s1")
 
     result = await restricted.execute(files=[{"path": str(outside)}])
@@ -146,9 +147,27 @@ async def test_path_outside_allowed_dir_is_invalid_when_restricted(tmp_path) -> 
     assert restricted.take_metadata() is None
 
 
+async def test_bound_session_dir_is_allowed_even_when_only_home_is_static(tmp_path) -> None:
+    """Mirrors AgentLoop._register_default_tools: constructed once with only agent
+    home in allowed_dirs, a later-bound session dir outside home must still work."""
+    home = tmp_path / "home"
+    session = tmp_path / "session"
+    home.mkdir()
+    session.mkdir()
+    _write(session, "report.pdf", b"12345")
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    restricted = DeliverFilesTool(store, workspace=home, allowed_dirs=(home,))
+    restricted.set_context("web", "default", "web:s1")
+
+    with bind(session):
+        result = await restricted.execute(files=[{"path": "report.pdf"}])
+
+    assert result.startswith("Delivered"), result
+
+
 async def test_two_different_files_get_different_tokens(tool, tmp_path) -> None:
-    _write(tmp_path / "ws", "a.txt")
-    _write(tmp_path / "ws", "b.txt")
+    _write(tmp_path / "chanwork", "a.txt")
+    _write(tmp_path / "chanwork", "b.txt")
 
     await tool.execute(files=[{"path": "a.txt"}, {"path": "b.txt"}])
 
@@ -161,7 +180,7 @@ async def test_a_failed_call_does_not_inherit_the_previous_manifest(tool, tmp_pa
     """A manifest nobody collected must not outlive its call: an all-invalid
     delivery that pops the earlier one would hang another call's files off a
     failure, and the UI would show files that this call never delivered."""
-    _write(tmp_path / "ws", "a.txt")
+    _write(tmp_path / "chanwork", "a.txt")
     await tool.execute(files=[{"path": "a.txt"}])
 
     result = await tool.execute(files=[{"path": "gone.txt"}])
@@ -174,12 +193,12 @@ async def test_concurrent_turns_keep_their_own_manifest(tmp_path) -> None:
     """Two sessions delivering at once must not cross manifests. The failure is
     silent when it happens — one turn's file list rendered in another turn's
     card — so it needs a guard rather than a manual check."""
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     (workspace / "a.txt").write_bytes(b"A")
     (workspace / "b.txt").write_bytes(b"B")
     store = DeliverableStore(tmp_path / "deliverables.json")
-    shared = DeliverFilesTool(store, workspace=workspace, allowed_dir=None)
+    shared = DeliverFilesTool(store, workspace=workspace, allowed_dirs=())
 
     async def turn(session: str, filename: str) -> dict:
         shared.set_context("web", session, f"web:{session}")
@@ -196,7 +215,7 @@ async def test_manifest_survives_the_tool_call_forwarder(tool, tmp_path) -> None
     """Above ``compaction_threshold`` the model reaches deliver_files through
     ``tool_call``, so the loop asks the registry about a tool that owns no
     manifest. Resolving the owner first is what keeps the delivery visible."""
-    _write(tmp_path / "ws", "report.pdf", b"12345")
+    _write(tmp_path / "chanwork", "report.pdf", b"12345")
     registry = ToolRegistry()
     registry.register(tool)
     controller = ToolSearchController(registry, always_visible=set())

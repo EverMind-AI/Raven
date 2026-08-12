@@ -133,8 +133,6 @@ async def test_subagent_stops_after_terminal_shell_decision(monkeypatch, tmp_pat
     executor = _RecordingExecutor()
     announcements: list[dict[str, str]] = []
 
-    monkeypatch.setattr(manager, "_build_subagent_prompt", lambda: "system")
-
     async def _capture_announcement(task_id, label, task, result, origin, status) -> None:
         announcements.append({"result": result, "status": status})
 
@@ -306,11 +304,12 @@ async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
     assert submitted[0].conversation == "whatsapp:12345"
 
 
-def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
-    """_build_subagent_prompt uses a transient ContextBuilder just for
+def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch, tmp_path):
+    """build_subagent_prompt uses a transient ContextBuilder just for
     _build_runtime_context; it must not leave a skill-catalog file watcher
     running behind it (one leaked watchfiles/inotify thread per spawn)."""
     import raven.agent.context as context_mod
+    from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
     calls = []
     real_init = context_mod.ContextBuilder.__init__
@@ -321,8 +320,7 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch):
 
     monkeypatch.setattr(context_mod.ContextBuilder, "__init__", _spy_init)
 
-    mgr = _make_manager(max_concurrent=1)
-    mgr._build_subagent_prompt()
+    build_subagent_prompt(tmp_path, tmp_path / "session")
 
     assert calls == [False]
 
@@ -333,7 +331,7 @@ def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     the reader to call run_subagent_dag, which only the main agent has."""
     from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
-    prompt = build_subagent_prompt(tmp_path, ["read_file", "exec"])
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session", ["read_file", "exec"])
 
     assert "subagent-dag-orchestration" not in prompt
     assert "run_subagent_dag" not in prompt
@@ -347,7 +345,7 @@ def test_build_subagent_prompt_gates_on_the_declaration_not_a_skill_name(tmp_pat
     tool-gated skill is covered without editing this backend."""
     from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
-    prompt = build_subagent_prompt(tmp_path, ["read_file", "run_subagent_dag"])
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session", ["read_file", "run_subagent_dag"])
 
     assert "subagent-dag-orchestration" in prompt
 
@@ -358,7 +356,7 @@ def test_build_subagent_prompt_without_a_tool_list_gates_everything_tool_bound(t
     unanswerable tool lookup has to degrade to showing everything."""
     from raven.agent.subagent.backends.raven_loop import build_subagent_prompt
 
-    prompt = build_subagent_prompt(tmp_path)
+    prompt = build_subagent_prompt(tmp_path, tmp_path / "session")
 
     assert "subagent-dag-orchestration" not in prompt
     assert "weather" in prompt  # declares no requires.tools
@@ -394,7 +392,7 @@ async def test_raven_loop_backend_marks_the_subagent_context(tmp_path):
     from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
-    backend = RavenLoopBackend(provider=object(), model="m")
+    backend = RavenLoopBackend(provider=object(), model="m", agent_home=tmp_path)
     seen: list[bool] = []
 
     async def _probe(task, **kwargs):

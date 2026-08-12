@@ -8,7 +8,7 @@ import type { DagRunLive } from '@/components/chat/DagRunsContext';
  * reads the surviving outputs of the earlier run instead of recomputing them,
  * as a cross-run file reference:
  *
- *   "inputs": {"geo": {"file": ".ravenx_dag/<run_id>/geo_plan.out.md"}}
+ *   "inputs": {"geo": {"file": ".../subagents/mas_dag/<run_id>/geo_plan.out.md"}}
  *
  * Those referenced nodes are not in the retry's own graph, so nothing drew
  * them and the retry looked like it invented its inputs. This module recovers
@@ -21,12 +21,16 @@ import type { DagRunLive } from '@/components/chat/DagRunsContext';
  *  origin run may well hold a node named the same as one in this run. */
 const REUSED_ID_PREFIX = 'reused:';
 
-/** `<workdir>/.ravenx_dag/<run_id>/<node_id>.out.md`, the only path shape that
- *  names a DAG node's output. Both ids have fixed charsets (`make_run_id` and
- *  the graph schema's name pattern), so the split is unambiguous. A path that
- *  points anywhere else is an ordinary file reference, not a reuse. */
+/** `<session history>/mas_dag/<run_id>/<node_id>.out.md`, the only path shape
+ *  that names a DAG node's output. Both ids have fixed charsets (`make_run_id`
+ *  and the graph schema's name pattern), so the split is unambiguous. A path
+ *  that points anywhere else is an ordinary file reference, not a reuse.
+ *
+ *  Anchored on `mas_dag/` rather than the whole history path: the parent is
+ *  `sessions/<group>/<chat_id>/subagents/`, whose chat id is opaque
+ *  and whose agent home the browser never sees. */
 const OUTPUT_REF_RE =
-	/(?:^|\/)\.ravenx_dag\/(\d{8}T\d{6}Z-[0-9a-f]{8})\/([A-Za-z0-9_-]+)\.out\.md$/;
+	/(?:^|\/)mas_dag\/(\d{8}T\d{6}Z-[0-9a-f]{8})\/([A-Za-z0-9_-]+)\.out\.md$/;
 
 /** `{{ ref: <path> }}` / `{{ ref_path: <path> }}` — the placeholder form that
  *  reads a file by path rather than through a declared input. */

@@ -38,7 +38,8 @@ class ServiceLocator:
     """
 
     workspace: Path
-    """Root workspace path (``~/.raven/<workspace>``)."""
+    """Agent home (``~/.raven/<workspace>``): the global memory, skills and
+    transcript root, not the per-session working directory a turn writes in."""
 
     user_id: str
     """User-track owner identity.

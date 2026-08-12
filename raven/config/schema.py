@@ -17,7 +17,23 @@ class Base(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
-class WhatsAppConfig(Base):
+class ChannelBase(Base):
+    """Fields every chat channel carries, whatever transport it speaks."""
+
+    # One directory per channel rather than per conversation: a channel is the
+    # unit the user configures, and its chats are the same kind of work.
+    # Declared once here so a newly added channel cannot forget it.
+    workspace: str = Field(
+        default="",
+        description=(
+            "Absolute path this channel's chats read and write files in. Leave empty for the default, "
+            "~/.raven/tmp/<channel>. Must not be the agent home directory or anything inside its "
+            "memory, skills or session trees."
+        ),
+    )
+
+
+class WhatsAppConfig(ChannelBase):
     """WhatsApp channel configuration."""
 
     enabled: bool = False
@@ -27,7 +43,7 @@ class WhatsAppConfig(Base):
     group_policy: Literal["open", "mention"] = "open"  # "open" responds to all, "mention" only when @mentioned
 
 
-class TelegramConfig(Base):
+class TelegramConfig(ChannelBase):
     """Telegram channel configuration."""
 
     enabled: bool = False
@@ -40,7 +56,7 @@ class TelegramConfig(Base):
     )
 
 
-class FeishuConfig(Base):
+class FeishuConfig(ChannelBase):
     """Feishu/Lark channel configuration using WebSocket long connection."""
 
     enabled: bool = False
@@ -53,7 +69,7 @@ class FeishuConfig(Base):
     group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned, "open" responds to all
 
 
-class DingTalkConfig(Base):
+class DingTalkConfig(ChannelBase):
     """DingTalk channel configuration using Stream mode."""
 
     enabled: bool = False
@@ -62,7 +78,7 @@ class DingTalkConfig(Base):
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed staff_ids; ['*'] = anyone
 
 
-class DiscordConfig(Base):
+class DiscordConfig(ChannelBase):
     """Discord channel configuration."""
 
     enabled: bool = False
@@ -73,7 +89,7 @@ class DiscordConfig(Base):
     group_policy: Literal["mention", "open"] = "mention"
 
 
-class MatrixConfig(Base):
+class MatrixConfig(ChannelBase):
     """Matrix (Element) channel configuration."""
 
     enabled: bool = False
@@ -94,7 +110,7 @@ class MatrixConfig(Base):
     allow_room_mentions: bool = False
 
 
-class EmailConfig(Base):
+class EmailConfig(ChannelBase):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
     enabled: bool = False
@@ -138,7 +154,7 @@ class MochatGroupRule(Base):
     require_mention: bool = False
 
 
-class MochatConfig(Base):
+class MochatConfig(ChannelBase):
     """Mochat channel configuration."""
 
     enabled: bool = False
@@ -173,7 +189,7 @@ class SlackDMConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
 
 
-class SlackConfig(Base):
+class SlackConfig(ChannelBase):
     """Slack channel configuration."""
 
     enabled: bool = False
@@ -192,7 +208,7 @@ class SlackConfig(Base):
     dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
 
 
-class QQConfig(Base):
+class QQConfig(ChannelBase):
     """QQ channel configuration using botpy SDK."""
 
     enabled: bool = False
@@ -201,7 +217,7 @@ class QQConfig(Base):
     allow_from: list[str] = Field(default_factory=lambda: ["*"])  # Allowed user openids; ['*'] = public access
 
 
-class WecomConfig(Base):
+class WecomConfig(ChannelBase):
     """WeCom (Enterprise WeChat) AI Bot channel configuration."""
 
     enabled: bool = False
@@ -211,7 +227,7 @@ class WecomConfig(Base):
     welcome_message: str = ""  # Welcome message for enter_chat event
 
 
-class WeixinConfig(Base):
+class WeixinConfig(ChannelBase):
     """Personal WeChat channel configuration."""
 
     enabled: bool = False
@@ -590,7 +606,7 @@ class GatewayLogConfig(Base):
     console_level: str = "INFO"
 
 
-class GatewayWebConfig(Base):
+class GatewayWebConfig(ChannelBase):
     """Web-app channel for the gateway: a local WebSocket JSON-RPC endpoint the
     web backend connects to as a client (ui-webui P1).
 
@@ -989,6 +1005,25 @@ class Config(BaseSettings):
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
         return Path(self.agents.defaults.workspace).expanduser()
+
+    def channel_workspaces(self) -> dict[str, str]:
+        """Every channel that names its own working directory.
+
+        Keyed by the channel name as it appears in a session key
+        (``web:<chat_id>``, ``qq:<open_id>``), which is the field name under
+        ``channels`` -- plus ``web``, whose config lives under ``gateway``
+        because the web channel is hosted by the gateway rather than dialled
+        out to. Channels that left ``workspace`` empty are omitted, so the
+        resolver falls back to ``<root>/<channel>`` for them.
+        """
+        found: dict[str, str] = {}
+        for name, channel in self.channels:
+            configured = getattr(channel, "workspace", "")
+            if isinstance(configured, str) and configured.strip():
+                found[name] = configured.strip()
+        if self.gateway.web.workspace.strip():
+            found["web"] = self.gateway.web.workspace.strip()
+        return found
 
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.

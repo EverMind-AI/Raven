@@ -244,7 +244,7 @@ class _FakeBackend:
 
 async def test_render_output_and_inputs() -> None:
     be = _FakeBackend()
-    out_path = "/w/.ravenx_dag/run/a.out.md"
+    out_path = "/hist/mas_dag/run/a.out.md"
     be.files[out_path] = b"RESULT_A"
 
     spec = parse_dag_spec(
@@ -291,7 +291,7 @@ async def test_store_roundtrip() -> None:
 
 def _seed_run(be: "_FakeBackend", run_id: str, *, finalized: bool) -> None:
     """Write a two-node run dir the way DagRunStore/_finalize would."""
-    rdir = f"/w/.ravenx_dag/{run_id}"
+    rdir = f"/hist/mas_dag/{run_id}"
     graph = {
         "nodes": [
             {"id": "a", "subagent": "x", "prompt_template": "do {{ inputs.k }}", "depends_on": [], "instance": None},
@@ -333,7 +333,7 @@ async def test_read_run_rebuilds_a_finalized_manifest() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    run = await read_run(be, "/w", "20260730T060242Z-6b0b89a3")
+    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3")
 
     assert run["finalized"] is True
     assert run["summary"] == {"total": 2, "completed": 1, "failed": 1, "skipped": 0}
@@ -348,7 +348,7 @@ async def test_read_run_of_an_unfinalized_run_falls_back_to_the_graph() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=False)
 
-    run = await read_run(be, "/w", "20260730T060242Z-6b0b89a3")
+    run = await read_run(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3")
 
     # Structure survives without manifest.json; state does not, so every node
     # reads back pending and the caller is expected to overlay live state.
@@ -374,14 +374,14 @@ async def test_read_node_rejects_a_malformed_node_id(node_id: str) -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
     with pytest.raises(DagReadError):
-        await read_node(be, "/w", "20260730T060242Z-6b0b89a3", node_id)
+        await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", node_id)
 
 
 async def test_read_node_returns_the_rendered_prompt_and_output() -> None:
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    node = await read_node(be, "/w", "20260730T060242Z-6b0b89a3", "a")
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "a")
 
     assert node["prompt"] == "do LITERAL"
     assert node["output"] == "OUTPUT_A"
@@ -393,9 +393,9 @@ async def test_read_node_truncates_a_long_output_and_says_so() -> None:
     be = _FakeBackend()
     run_id = "20260730T060242Z-6b0b89a3"
     _seed_run(be, run_id, finalized=True)
-    be.files[f"/w/.ravenx_dag/{run_id}/a.out.md"] = b"x" * 5000
+    be.files[f"/hist/mas_dag/{run_id}/a.out.md"] = b"x" * 5000
 
-    node = await read_node(be, "/w", run_id, "a", max_output_chars=100)
+    node = await read_node(be, "/hist/mas_dag", run_id, "a", max_output_chars=100)
 
     assert len(node["output"]) == 100
     assert node["output_chars"] == 5000
@@ -406,7 +406,7 @@ async def test_read_node_of_a_node_that_never_ran_is_empty_not_an_error() -> Non
     be = _FakeBackend()
     _seed_run(be, "20260730T060242Z-6b0b89a3", finalized=True)
 
-    node = await read_node(be, "/w", "20260730T060242Z-6b0b89a3", "b")
+    node = await read_node(be, "/hist/mas_dag", "20260730T060242Z-6b0b89a3", "b")
 
     assert node["prompt"] is None
     assert node["output"] is None

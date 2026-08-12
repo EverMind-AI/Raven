@@ -84,7 +84,8 @@ export const dagCommands: SlashCommand[] = [
         .rpc<DagNodeResult>('dag.node', {
           max_output_chars: NODE_OUTPUT_CHARS,
           node,
-          run_id: owner.runId
+          run_id: owner.runId,
+          session_key: ui.sid
         })
         .then(
           ctx.guarded<DagNodeResult>(result => {

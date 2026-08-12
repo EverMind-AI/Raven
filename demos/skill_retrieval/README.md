@@ -21,6 +21,7 @@ demos/skill_retrieval/
 ├── skills/
 │   └── image-gen/
 │       └── SKILL.md       ← agent-facing how-to for Nano Banana on OpenRouter
+├── output/                ← working directory of a run (created on demand)
 └── example_output.png     ← image from a previous run (committed as proof)
 ```
 
@@ -61,9 +62,10 @@ A successful run looks roughly like::
     colors.
 
 The agent picks the output filename from your prompt, so a custom
-prompt usually writes a differently-named PNG. ``example_output.png``
-in this repo is the result of one default-prompt run — sample output,
-not a fixed contract.
+prompt usually writes a differently-named PNG. Relative paths land in
+``demos/skill_retrieval/output/``, the working directory the script
+gives the run. ``example_output.png`` in this repo is the result of one
+default-prompt run — sample output, not a fixed contract.
 
 ## What this proves
 

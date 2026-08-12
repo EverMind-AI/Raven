@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from raven.agent import workdir
 from raven.memory_engine.consolidate.consolidator import MemoryStore
 from raven.memory_engine.skill_forge import LocalSkillCatalog
 from raven.memory_engine.skill_local.types import SkillMeta
@@ -178,8 +179,14 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self) -> str:
-        """Get the core identity section."""
-        workspace_path = str(self.workspace.expanduser().resolve())
+        """Get the core identity section.
+
+        Kept in lockstep with ``context_engine.segments.render.identity_text``,
+        which renders this block on the live request path.
+        """
+        home_path = str(self.workspace.expanduser().resolve())
+        bound = workdir.current()
+        work_path = str(bound.expanduser().resolve()) if bound else home_path
         system = platform.system()
         runtime = (
             f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
@@ -205,11 +212,12 @@ You are Raven, a helpful AI assistant.
 ## Runtime
 {runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
-- User profile: {workspace_path}/user_memory/profile/user.md (preferences, identity, project context)
-- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+## Directories
+- Working directory: {work_path} — files you produce go here; relative paths resolve here.
+- Agent home: {home_path} — your own memory and skills, not a place for user artifacts.
+  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)
+  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+  - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
 

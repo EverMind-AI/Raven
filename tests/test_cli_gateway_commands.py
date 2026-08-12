@@ -37,6 +37,28 @@ def test_gateway_help_works() -> None:
     assert "--config" in r.stdout
 
 
+def test_gateway_help_describes_the_channel_workspace_root():
+    """``-w`` names a root, and the root it names must exist.
+
+    This assertion previously pinned "per-session workspaces (default:
+    <agent home>/ws)", which is why that wording outlived the design it
+    described -- it was load-bearing for a test rather than for a reader. The
+    gateway isolates per channel now and `<agent home>/ws` was removed, so
+    `raven gateway --help` must not send anyone looking for it.
+
+    Pinned at 80 columns because Typer truncates help it cannot fit, and a
+    half-printed path is worse than none -- the first replacement wording was
+    long enough to be cut off exactly there.
+    """
+    r = runner.invoke(app, ["gateway", "--help"], env={"COLUMNS": "80"})
+    assert r.exit_code == 0
+    output = " ".join(r.output.split())
+    assert "per-session" not in output
+    assert "/ws" not in output
+    assert "per-channel working directories" in output
+    assert "~/.raven/tmp" in output
+
+
 def test_gateway_config_short_alias_removed() -> None:
     """``-c`` no longer binds ``--config`` (UN-41); only the long form remains."""
     bad = runner.invoke(app, ["gateway", "-c", "/tmp/whatever.json"])

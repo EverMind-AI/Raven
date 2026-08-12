@@ -11,7 +11,7 @@ from typing import Any
 from loguru import logger
 
 from raven.utils.atomic_io import atomic_replace, locked_append
-from raven.utils.helpers import ensure_dir, safe_filename
+from raven.utils.helpers import ensure_dir, safe_filename, safe_path_segment
 
 
 def new_chat_id(now: datetime | None = None) -> str:
@@ -141,27 +141,94 @@ class SessionManager:
     Sessions are stored as JSONL files in the sessions directory.
     """
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, project_slug: str | None = None, project_dir: Path | None = None):
+        """
+        Args:
+            workspace: Agent home; sessions live under ``<workspace>/sessions``.
+            project_slug: Groups this process's sessions under one directory
+                (``raven tui`` / ``raven agent`` pass the slugged launch
+                directory, so a project's conversations stay together). Leave
+                unset on the gateway, where the grouping directory is the
+                channel name instead -- one daemon serves every project, so a
+                launch directory would say nothing about a conversation.
+            project_dir: The unslugged directory behind ``project_slug``,
+                stamped into each new session's metadata. The slug is lossy, so
+                this is what identifies the project; the directory name is only
+                a bucket.
+        """
         self.workspace = workspace
+        self.project_slug = project_slug
+        self.project_dir = project_dir
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self._cache: dict[str, Session] = {}
 
+    def _group_dir(self, key: str) -> Path:
+        """The directory grouping this session: project slug, or channel.
+
+        An empty channel falls back to ``_`` rather than the empty string, which
+        would collapse to ``sessions_dir`` itself -- putting the transcript at
+        ``sessions/.jsonl``, where the ``*/*.jsonl`` scans cannot see it.
+        """
+        channel = key.partition(":")[0]
+        return self.sessions_dir / (self.project_slug or safe_path_segment(channel) or "_")
+
     def _get_session_path(self, key: str) -> Path:
-        """Get the file path for a session: sessions/{channel}/{chat_id}.jsonl."""
-        channel, _, chat_id = key.partition(":")
-        return self.sessions_dir / safe_filename(channel) / f"{safe_filename(chat_id)}.jsonl"
+        """The file path for a session: ``sessions/<group>/<chat_id>.jsonl``.
+
+        A session opened before this process's grouping applied -- a transcript
+        still under its channel directory, from before project grouping, or
+        from a run started in a different directory -- keeps its existing file.
+        Without that, resuming by id would silently open an empty session next
+        to the real transcript rather than continuing it.
+        """
+        chat_id = safe_filename(key.partition(":")[2])
+        path = self._group_dir(key) / f"{chat_id}.jsonl"
+        if self.project_slug and not path.exists():
+            for existing in self.sessions_dir.glob(f"*/{chat_id}.jsonl"):
+                return existing
+        return path
+
+    def session_dir(self, key: str) -> Path:
+        """This session's metadata directory, beside its transcript.
+
+        ``sessions/<group>/<chat_id>/`` holds what belongs to the conversation
+        but not in its message log -- the sub-agent call history today. Named
+        the same as the transcript minus the suffix, so the pair sits together
+        and neither the ``*.jsonl`` globs nor this directory sees the other.
+
+        The group comes from :meth:`_get_session_path` so a pre-grouping
+        transcript's metadata lands beside the transcript rather than under the
+        slug this process would otherwise pick.
+
+        The name is re-derived with ``safe_path_segment`` rather than taken off
+        the transcript's stem: ``safe_filename`` leaves ``.`` and ``..`` intact
+        because a suffix always follows it, which is not true here.
+        ``with_suffix("")`` on ``<group>/...jsonl`` yields ``<group>/..`` --
+        pointing out of the group directory -- and on ``<group>/..jsonl`` it
+        raises ``ValueError``.
+        """
+        chat_id = safe_path_segment(key.partition(":")[2]) or "_"
+        return self._get_session_path(key).parent / chat_id
 
     @staticmethod
     def key_from_path(path: Path) -> str:
-        """Best-effort reverse of the nested filename encoding for a session
-        file: channel is the parent directory, chat_id is the stem.
+        """Best-effort reverse of the nested filename encoding for a session file.
 
         The on-disk ``_type:metadata`` key is authoritative when present and
         wins over this; callers use it only as the fallback for metadata-less
         files. ``safe_filename`` is non-invertible, so any character it folds
         to ``_`` (``/``, ``:``, ...) is not recovered here.
+
+        The parent directory names the channel only under channel grouping. A
+        project slug always begins with ``-`` (the leading path separator) and
+        a channel name never does, so a slug parent is recognisable -- and
+        there the channel is simply not knowable from the path. Reporting
+        ``unknown`` rather than the slug matters because callers compare the
+        channel half against real channel names: a slug would look like a
+        channel that no session key can ever match.
         """
-        return f"{path.parent.name}:{path.stem}"
+        parent = path.parent.name
+        return f"{'unknown' if parent.startswith('-') else parent}:{path.stem}"
 
     def resolve_key(self, value: str) -> SessionResolution:
         """Resolve a session id to a full ``channel:chat_id`` key across channels.
@@ -189,7 +256,7 @@ class SessionManager:
             return SessionResolution("resolved", key=matches[0]["key"])
         return SessionResolution("not_found")
 
-    def find_most_recent_chat_id(self, channel: str) -> str | None:
+    def find_most_recent_chat_id(self, channel: str, *, this_project_only: bool = False) -> str | None:
         """Return the chat_id of the most-recently-updated session on this
         channel, or None if no such session exists.
 
@@ -201,14 +268,34 @@ class SessionManager:
         to get the authoritative session key ``<channel>:<chat_id>`` and
         ``updated_at``; recency is decided by ``updated_at``, falling back
         to file mtime for files that lack it.
-        """
-        channel_dir = self.sessions_dir / safe_filename(channel)
-        if not channel_dir.is_dir():
-            return None
 
+        ``this_project_only`` narrows the scan, which is what resuming wants:
+        ``--continue`` in one checkout must not reopen a conversation started in
+        another, and the glob fallback would then append this project's turns to
+        a transcript filed under that one. Delivery callers want the opposite --
+        the gateway forwards to whichever session is live regardless of where it
+        was started -- so the wide scan stays the default. Without a
+        ``project_slug`` there is no narrower scan to make and the flag is a
+        no-op.
+
+        Narrowed still means two directories, not one: this project's group, and
+        the channel-named group holding sessions written before grouping
+        existed. Those carry no project attribution, and ``_get_session_path``
+        already lets any project adopt one, so excluding them here would strand
+        every pre-upgrade conversation with no way to reach it from ``-c``.
+        """
         best_chat_id: str | None = None
         best_updated = ""
-        for p in channel_dir.glob("*.jsonl"):
+        # Either way the directory name is never trusted to name the channel:
+        # under project grouping a `cli` session lives under a slugged launch
+        # path, so the authoritative channel is the one in each file's metadata
+        # (re-checked below).
+        if this_project_only and self.project_slug:
+            groups = {self.project_slug, safe_path_segment(channel) or "_"}
+            candidates = (p for g in groups for p in (self.sessions_dir / g).glob("*.jsonl"))
+        else:
+            candidates = self.sessions_dir.glob("*/*.jsonl")
+        for p in candidates:
             meta, _count = self._scan_file(p)
             if meta is None:
                 continue
@@ -218,6 +305,14 @@ class SessionManager:
             ch, chat_id = key_val.split(":", 1)
             if ch != channel or not chat_id:
                 continue
+            if this_project_only and self.project_dir is not None:
+                # The slug is lossy, so one group can hold two projects
+                # (`/srv/a_b` and `/srv/a/b`). Where the real launch directory
+                # was recorded, use it; sessions predating that field have no
+                # attribution to contradict and stay eligible.
+                origin = (meta.get("metadata") or {}).get("project_dir")
+                if origin is not None and origin != str(self.project_dir):
+                    continue
             updated = meta.get("updated_at")
             if not isinstance(updated, str) or not updated:
                 try:
@@ -274,6 +369,13 @@ class SessionManager:
         session = self._load(key)
         if session is None:
             session = Session(key=key)
+        # The group directory is a lossy label -- two projects whose paths
+        # differ only in punctuation slug the same way. Record the real
+        # directory so anything that needs the project's identity reads it from
+        # here rather than from the directory name. Set once, on the session
+        # that introduced it; a later run elsewhere must not rewrite history.
+        if self.project_dir is not None and not session.metadata.get("project_dir"):
+            session.metadata["project_dir"] = str(self.project_dir)
 
         self._cache[key] = session
         return session
@@ -470,12 +572,15 @@ class SessionManager:
         sessions = []
 
         for path in self.sessions_dir.glob("*/*.jsonl"):
-            if channel is not None and path.parent.name != channel:
-                continue
             data, message_count = self._scan_file(path)
             if data is None:
                 continue
             key = data.get("key") or self.key_from_path(path)
+            # Filter on the key, not the parent directory: under project
+            # grouping the directory is a slugged launch path, so it no longer
+            # names the channel.
+            if channel is not None and key.partition(":")[0] != channel:
+                continue
             sessions.append(
                 {
                     "key": key,

@@ -88,6 +88,24 @@ def _error_delta(payload: dict) -> str:
     return f"{head}: {detail}" if detail else head
 
 
+def _rpc_error_message(method: str, error: object) -> str:
+    """Render a JSON-RPC error frame as text safe to show a user directly.
+
+    A handler that raises ``RpcError`` puts its whole point -- the readable
+    validation message -- in ``data.detail``; without this, the caller only
+    sees that dict's ``repr()`` wrapped in ``gateway rpc ... error: ...``, and
+    the message the handler wrote is buried inside it. Anything else (a raw
+    ``internal_error`` with a traceback tail, or a malformed frame) has no
+    clean text to pull out, so it keeps the original verbose form.
+    """
+    if isinstance(error, dict):
+        data = error.get("data")
+        detail = data.get("detail") if isinstance(data, dict) else None
+        if isinstance(detail, str) and detail:
+            return detail
+    return f"gateway rpc {method} error: {error}"
+
+
 class GatewayClient:
     """One shared WS connection to the gateway web channel, multiplexed."""
 
@@ -184,7 +202,7 @@ class GatewayClient:
             # future and every timed-out call would leak one forever.
             self._pending.pop(rid, None)
         if "error" in frame:
-            raise RuntimeError(f"gateway rpc {method} error: {frame['error']}")
+            raise RuntimeError(_rpc_error_message(method, frame["error"]))
         return frame.get("result", {})
 
     async def subscribe(self, session_key: str) -> asyncio.Queue:

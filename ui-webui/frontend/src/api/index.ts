@@ -11,6 +11,7 @@ export { filesApi } from './files';
 export { ravenConfigApi } from './ravenConfig';
 export { ravenProvidersApi } from './ravenProviders';
 export * from './ravenSessionModel';
+export * from './ravenSessionWorkdir';
 export type {
 	RavenThirdPartySubagent,
 	RavenCliSubagent,

@@ -63,6 +63,7 @@ async def dag_node(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             params.get("run_id", ""),
             params.get("node", ""),
             max_output_chars=int(params.get("max_output_chars") or 20000),
+            session_key=params.get("session_key"),
         )
     except (DagReadError, DagValidationError) as exc:
         raise InternalError(str(exc)) from exc

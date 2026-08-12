@@ -91,12 +91,12 @@ describe('DagPanel', () => {
     const run: DagRunState = {
       runId: 'dag-1',
       done: true,
-      dir: '/w/.ravenx_dag/dag-1',
+      dir: '/w/mas_dag/dag-1',
       summary: { total: 1, completed: 1, failed: 0, skipped: 0 },
       nodes: [node('a', 'completed')]
     }
 
-    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('/w/.ravenx_dag/dag-1')
+    expect(frame(<DagPanel run={run} t={DEFAULT_THEME} />)).toContain('/w/mas_dag/dag-1')
   })
 
   it('renders nothing for a run with no nodes', () => {
