@@ -9,9 +9,34 @@ from pathlib import Path
 
 import pytest
 
-from raven.config import update_channels, update_skills, update_subagents
+from raven.config import update_channels, update_everos, update_skills, update_subagents
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_loaded_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``raven.everos.get`` off the developer's own ``~/.raven/config.json``.
+
+    It falls back to a load whenever the dispatcher was registered without one,
+    which is every everos test but one, so the backend those tests report came
+    from whatever machine ran them.
+
+    Substitute a real ``RavenConfig``, not a stand-in shaped like one. An
+    earlier version of this fixture handed over ``class _Cfg: memory = _Mem()``,
+    a shape no production config has, and pinned it in front of the loader the
+    code was reading -- which is exactly why the suite stayed green while
+    ``backend`` was in fact always None. Anything asserted against an invented
+    shape only proves the invention.
+    """
+    from raven.config.raven import RavenConfig
+
+    # Spelled out rather than left to the defaults: ``RavenConfig()`` is settings
+    # -backed and picks up the running machine's config and environment, which is
+    # the very thing this fixture exists to shut out.
+    pinned = RavenConfig.model_validate({"memory": {"backend": None}})
+    assert pinned.memory.backend is None
+    monkeypatch.setattr("raven.config.raven.load_raven_config", lambda *a, **k: pinned)
 
 
 class _FakeAgent:
@@ -250,6 +275,684 @@ async def test_skills_get_set_list(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     res = await _dispatch(d, "raven.skills.list", {})
     assert "skills" in res["result"]
     assert isinstance(res["result"]["skills"], list)
+
+
+async def test_skills_exposes_everos_knobs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(update_skills, "get_config_path", lambda: tmp_path / "config.json")
+    p = tmp_path / "config.json"
+    p.write_text('{"skillForge": {"enabled": true}}', encoding="utf-8")
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(
+        d,
+        "raven.skills.set",
+        {"fields": {"everos": {"enabled": True, "maxSkillsTopK": 8, "retireConfidence": 0.25}}},
+    )
+    assert res["result"] == {"ok": True, "restart_required": True}
+
+    got = await _dispatch(d, "raven.skills.get", {})
+    ev = got["result"]["skillforge"]["everos"]
+    assert ev["enabled"] is True
+    assert ev["maxSkillsTopK"] == 8
+    assert ev["retireConfidence"] == 0.25
+    # Untouched knobs keep their schema defaults.
+    assert ev["complexTaskToolCallThreshold"] == 20
+
+
+async def test_skills_set_rejects_out_of_range_everos_confidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(update_skills, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"skillForge": {"enabled": true}}', encoding="utf-8")
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.skills.set", {"fields": {"everos": {"retireConfidence": 5}}})
+    assert "error" in res
+
+
+async def test_everos_get_set_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    # Nothing configured yet: every section present, secret shown as empty.
+    got = await _dispatch(d, "raven.everos.get", {})
+    assert set(got["result"]["everos"]) == {"llm", "embedding", "rerank", "multimodal"}
+    assert got["result"]["everos"]["llm"]["api_key"] == "(empty)"
+
+    res = await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"model": "m", "base_url": "http://x", "api_key": "sk-secret"}},
+    )
+    assert res["result"] == {"ok": True, "restart_required": True}
+
+    # Read back: secret redacted, non-secret fields intact.
+    got = await _dispatch(d, "raven.everos.get", {})
+    llm = got["result"]["everos"]["llm"]
+    assert llm["model"] == "m"
+    assert llm["api_key"] == "****set****"
+
+    # A redacted placeholder on write leaves the stored key untouched.
+    await _dispatch(
+        d, "raven.everos.set", {"section": "llm", "fields": {"model": "m2", "api_key": "****set****"}}
+    )
+    raw = (tmp_path / "everos.toml").read_text(encoding="utf-8")
+    assert "sk-secret" in raw and "m2" in raw
+
+    res = await _dispatch(d, "raven.everos.clear", {"section": "llm"})
+    assert res["result"] == {"ok": True, "restart_required": True}
+    got = await _dispatch(d, "raven.everos.get", {})
+    assert got["result"]["everos"]["llm"]["api_key"] == "(empty)"
+
+
+async def test_everos_set_borrows_a_sibling_roles_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The web only ever sees a redacted key, so "reuse the llm key here" has to
+    resolve on the gateway rather than by round-tripping the secret.
+
+    Both roles sit on a catalog endpoint: borrowing is refused for a host the
+    caller names freely, since that is how a key typed for one destination gets
+    redirected to another."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {
+                "model": "m",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "sk-shared",
+            },
+        },
+    )
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "embedding",
+            "fields": {"model": "e", "base_url": "https://openrouter.ai/api/v1"},
+            "reuse_key_from": "llm",
+        },
+    )
+
+    got = (await _dispatch(d, "raven.everos.get", {}))["result"]["everos"]
+    assert got["embedding"]["api_key"] == "****set****"
+    assert (tmp_path / "everos.toml").read_text(encoding="utf-8").count("sk-shared") == 2
+
+    # An explicitly typed key still wins over the borrowed one.
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "rerank", "fields": {"api_key": "sk-own"}, "reuse_key_from": "llm"},
+    )
+    raw = (tmp_path / "everos.toml").read_text(encoding="utf-8")
+    assert "sk-own" in raw
+
+
+async def test_everos_set_rejects_unknown_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+    d = Dispatcher()
+    register_config_methods(d)
+    res = await _dispatch(d, "raven.everos.set", {"section": "bogus", "fields": {"model": "m"}})
+    assert "error" in res
+
+
+async def test_everos_test_probes_the_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda model, **_: (True, "ok"))
+    monkeypatch.setattr(
+        onboard_commands,
+        "_probe_embedding_dim",
+        lambda url, headers, model: onboard_commands._REQUIRED_EMBEDDING_DIM,
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(
+        d, "raven.everos.test", {"section": "llm", "fields": {"model": "m", "base_url": "http://x"}}
+    )
+    assert res["result"]["ok"] is True
+
+    res = await _dispatch(
+        d,
+        "raven.everos.test",
+        {"section": "embedding", "fields": {"model": "e", "base_url": "http://x"}},
+    )
+    assert res["result"]["ok"] is True
+
+
+async def test_everos_borrows_the_credentials_page_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider already set up under Credentials should not be asked for the
+    same secret again, and the web must never receive it to pass along."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "get_provider_config",
+        lambda name, **kw: {"api_key": "sk-from-credentials"} if name == "openrouter" else {},
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {"model": "m", "base_url": "https://openrouter.ai/api/v1"},
+            "credential_provider": "openrouter",
+        },
+    )
+    assert "sk-from-credentials" in (tmp_path / "everos.toml").read_text(encoding="utf-8")
+
+    # Never handed back out: the read stays redacted.
+    got = (await _dispatch(d, "raven.everos.get", {}))["result"]["everos"]
+    assert got["llm"]["api_key"] == "****set****"
+
+    # A sibling role's key still wins over the credential.
+    await _dispatch(
+        d, "raven.everos.set", {"section": "embedding", "fields": {"api_key": "sk-own"}}
+    )
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "rerank",
+            "fields": {"model": "r", "base_url": "https://openrouter.ai/api/v1"},
+            "reuse_key_from": "embedding",
+            "credential_provider": "openrouter",
+        },
+    )
+    import tomllib
+
+    data = tomllib.loads((tmp_path / "everos.toml").read_text(encoding="utf-8"))
+    assert data["rerank"]["api_key"] == "sk-own"
+
+
+async def test_everos_test_refuses_to_send_a_stored_key_to_an_unlisted_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probes take base_url from the caller and the key from storage, so an
+    arbitrary host would turn "can edit the config" into "can read the key"."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    probed: list = []
+
+    def _never(*a, **kw):
+        probed.append(kw)
+        return True, "ok"
+
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", _never)
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(d, "raven.everos.set", {"section": "llm", "fields": {"api_key": "sk-secret", "model": "m"}})
+
+    res = await _dispatch(
+        d,
+        "raven.everos.test",
+        {"section": "llm", "fields": {"model": "m", "base_url": "https://attacker.example"}},
+    )
+
+    assert res["result"]["ok"] is False
+    assert not probed, "the stored key was sent to a host outside the catalog"
+
+
+async def test_everos_test_uses_a_roles_own_key_at_its_own_stored_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-hosted endpoint is unlisted by nature and is how EverOS usually
+    runs, so gating the probe on the catalog made the primary deployment
+    unprobeable -- and left ``set`` accepting exactly what ``test`` refused.
+    The key and the address already sit next to each other on disk and the
+    backend delivers one to the other on every boot, so the probe discloses
+    nothing the stored config does not already commit to."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    seen: dict = {}
+
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_probe_everos_chat",
+        lambda model, **kw: (seen.update(kw), (True, "ok"))[1],
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"api_key": "sk-own", "model": "m", "base_url": "http://10.0.0.9:8000/v1"}},
+    )
+
+    res = await _dispatch(
+        d,
+        "raven.everos.test",
+        {"section": "llm", "fields": {"model": "m", "base_url": "http://10.0.0.9:8000/v1"}},
+    )
+
+    assert res["result"]["ok"] is True
+    assert seen["api_key"] == "sk-own"
+
+
+async def test_everos_test_refuses_a_roles_own_key_at_a_different_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exemption is for the pairing that already exists, not for the key.
+    Re-aiming a role's own key at some other address is the original leak."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    probed: list = []
+
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_probe_everos_chat",
+        lambda model, **kw: (probed.append(kw), (True, "ok"))[1],
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"api_key": "sk-own", "model": "m", "base_url": "http://10.0.0.9:8000/v1"}},
+    )
+
+    res = await _dispatch(
+        d,
+        "raven.everos.test",
+        {"section": "llm", "fields": {"model": "m", "base_url": "https://attacker.example"}},
+    )
+
+    assert res["result"]["ok"] is False
+    assert not probed, "a role's own key was re-aimed at a host it was never stored against"
+
+
+async def test_everos_test_still_uses_a_stored_key_for_a_catalog_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard must not cost the ordinary case its saved key."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    seen: dict = {}
+
+    from raven.cli import onboard_commands
+
+    monkeypatch.setattr(
+        onboard_commands,
+        "_probe_everos_chat",
+        lambda model, **kw: (seen.update(kw), (True, "ok"))[1],
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(d, "raven.everos.set", {"section": "llm", "fields": {"api_key": "sk-secret", "model": "m"}})
+
+    await _dispatch(
+        d,
+        "raven.everos.test",
+        {
+            "section": "llm",
+            "fields": {"model": "m", "base_url": "https://openrouter.ai/api/v1"},
+        },
+    )
+
+    assert seen["api_key"] == "sk-secret"
+
+
+async def test_everos_set_refuses_to_store_a_borrowed_key_for_an_unlisted_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Guarding the probe closed the immediate leak and left a deferred one: the
+    write path pairs a borrowed key with a caller-named base_url, and the memory
+    backend sends it there on the next gateway boot."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"}
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    resp = await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {"model": "x", "base_url": "https://attacker.example"},
+            "credential_provider": "anthropic",
+        },
+    )
+
+    assert "error" in resp
+    written = (tmp_path / "everos.toml").read_text(encoding="utf-8") if (tmp_path / "everos.toml").exists() else ""
+    assert "sk-credential" not in written
+
+
+async def test_everos_set_still_borrows_for_a_catalog_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard must not cost the ordinary case its borrowed key."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"}
+    )
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {"model": "x", "base_url": "https://openrouter.ai/api/v1"},
+            "credential_provider": "openrouter",
+        },
+    )
+
+    assert "sk-credential" in (tmp_path / "everos.toml").read_text(encoding="utf-8")
+
+
+async def test_everos_set_accepts_a_typed_key_for_any_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-hosted endpoint is configured by typing its key, and that secret is
+    the caller's own to spend."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"model": "x", "base_url": "http://localhost:8902/v1", "api_key": "mine"}},
+    )
+
+    assert "mine" in (tmp_path / "everos.toml").read_text(encoding="utf-8")
+
+
+async def test_everos_set_refuses_to_re_aim_a_stored_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No borrowing needed: writing base_url alone keeps the section's own key
+    and repoints it, so the next gateway boot ships it to the new host."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {
+                "model": "m",
+                "base_url": "https://openrouter.ai/api/v1",
+                "api_key": "sk-user-secret",
+            },
+        },
+    )
+
+    resp = await _dispatch(
+        d, "raven.everos.set", {"section": "llm", "fields": {"base_url": "https://attacker.example"}}
+    )
+
+    assert "error" in resp
+    raw = (tmp_path / "everos.toml").read_text(encoding="utf-8")
+    assert "attacker.example" not in raw
+    assert "sk-user-secret" in raw
+
+
+async def test_everos_set_keeps_editing_a_self_hosted_endpoint_working(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local vLLM is unlisted by nature. Changing the model on one leaves the
+    pairing the user already established, so it must not be refused."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {
+            "section": "llm",
+            "fields": {"model": "m", "base_url": "http://localhost:8902/v1", "api_key": "EMPTY"},
+        },
+    )
+
+    resp = await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"model": "m2", "base_url": "http://localhost:8902/v1"}},
+    )
+
+    assert "error" not in resp
+    import tomllib
+
+    llm = tomllib.loads((tmp_path / "everos.toml").read_text(encoding="utf-8"))["llm"]
+    assert llm["model"] == "m2" and llm["api_key"] == "EMPTY"
+
+
+async def test_everos_set_allows_a_move_when_the_key_is_supplied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Typing the key is what makes the destination the caller's own choice."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"base_url": "https://openrouter.ai/api/v1", "api_key": "old"}},
+    )
+
+    resp = await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"base_url": "https://my-box.internal/v1", "api_key": "new"}},
+    )
+
+    assert "error" not in resp
+    raw = (tmp_path / "everos.toml").read_text(encoding="utf-8")
+    assert "my-box.internal" in raw and "new" in raw
+
+
+async def test_borrowing_is_limited_to_the_writable_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The writer rejects an unknown section; a reader that does not lets
+    reuse_key_from name any table that happens to sit in everos.toml."""
+    path = tmp_path / "everos.toml"
+    path.write_text('[secrets]\napi_key = "sk-not-a-role"\n', encoding="utf-8")
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: path)
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"model": "m"}, "reuse_key_from": "secrets"},
+    )
+
+    import tomllib
+
+    assert "api_key" not in tomllib.loads(path.read_text(encoding="utf-8"))["llm"]
+
+
+async def test_an_empty_api_key_removes_only_the_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Blanking it used to be indistinguishable from not retyping it, so the
+    only way to drop a key was deleting the section and its model with it."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"api_key": "sk-secret", "model": "m", "base_url": "http://x"}},
+    )
+
+    await _dispatch(d, "raven.everos.set", {"section": "llm", "fields": {"api_key": ""}})
+
+    import tomllib
+
+    llm = tomllib.loads((tmp_path / "everos.toml").read_text(encoding="utf-8"))["llm"]
+    assert "api_key" not in llm
+    assert llm["model"] == "m" and llm["base_url"] == "http://x"
+
+
+async def test_clearing_a_key_does_not_substitute_a_credential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty string is a request to remove, not an absent field to fill in."""
+    monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
+
+    from raven.config import update_providers
+
+    monkeypatch.setattr(update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"})
+
+    d = Dispatcher()
+    register_config_methods(d)
+    await _dispatch(d, "raven.everos.set", {"section": "llm", "fields": {"api_key": "sk-secret", "model": "m"}})
+
+    await _dispatch(
+        d,
+        "raven.everos.set",
+        {"section": "llm", "fields": {"api_key": ""}, "credential_provider": "openrouter"},
+    )
+
+    import tomllib
+
+    assert "api_key" not in tomllib.loads((tmp_path / "everos.toml").read_text(encoding="utf-8"))["llm"]
+
+
+async def test_everos_get_reports_the_active_memory_backend() -> None:
+    """Configuring these models is inert unless memory.backend is everos, so the
+    page has to be told which backend is really in force.
+
+    Built from the real ``RavenConfig``: ``memory`` is an extension block that
+    only exists there, so a test that invents an object carrying the attribute
+    proves nothing about what the gateway can actually read.
+    """
+    from raven.config.raven import RavenConfig
+
+    active = RavenConfig.model_validate({"memory": {"backend": "everos"}})
+    d = Dispatcher()
+    register_config_methods(d, raven_config=active)
+    assert (await _dispatch(d, "raven.everos.get", {}))["result"]["backend"] == "everos"
+
+
+async def test_everos_get_does_not_read_the_backend_off_the_base_config(tmp_path: Path) -> None:
+    """The regression this replaces: ``memory`` is in ``loader.EXTENSION_KEYS``,
+    so it is stripped before the base ``Config`` validates and that class never
+    declares it. Reading the backend off the object the gateway passes as
+    ``config`` therefore always answered None, and the readiness card the
+    feature exists to provide could never leave "markdown".
+
+    ``config`` is a real ``Config`` -- loaded from a path that does not exist,
+    so it is the genuine class with genuine defaults and no dependency on the
+    config file of whoever runs this.
+    """
+    from raven.config.loader import load_config
+    from raven.config.raven import RavenConfig
+
+    base = load_config(tmp_path / "absent.json")
+    assert not hasattr(type(base), "memory"), "base Config gained a memory field; this test is moot"
+
+    d = Dispatcher()
+    register_config_methods(d, config=base, raven_config=RavenConfig.model_validate({"memory": {"backend": "everos"}}))
+    assert (await _dispatch(d, "raven.everos.get", {}))["result"]["backend"] == "everos"
+
+
+async def test_everos_providers_strip_the_registry_prefix() -> None:
+    """Registry ids are provider-qualified; an endpoint wants what follows its
+    own slug, so a stale prefix would be sent as part of the model name."""
+    d = Dispatcher()
+    register_config_methods(d)
+    provs = {p["name"]: p for p in (await _dispatch(d, "raven.everos.providers", {}))["result"]["providers"]}
+
+    for name, p in provs.items():
+        for m in p["chat_models"]:
+            assert not m.startswith(f"{name}/"), f"{name} still carries its own prefix: {m}"
+    # OpenRouter keeps the upstream vendor prefix, which is part of its id.
+    assert any(m.startswith("anthropic/") for m in provs["openrouter"]["chat_models"])
+
+
+async def test_everos_providers_lists_the_catalog() -> None:
+    d = Dispatcher()
+    register_config_methods(d)
+    res = await _dispatch(d, "raven.everos.providers", {})
+    provs = res["result"]["providers"]
+    assert any(p["name"] == "openrouter" for p in provs)
+    row = next(p for p in provs if p["name"] == "openrouter")
+    assert row["base_url"].startswith("https://")
+    assert isinstance(row["supports"], list) and "llm" in row["supports"]
+
+
+async def test_everos_models_delegates_to_the_fetcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.cli import onboard_commands
+
+    captured: dict = {}
+
+    def _fake_fetch(base_url, api_key, *, section, provider_name):
+        captured.update(
+            base_url=base_url, api_key=api_key, section=section, provider_name=provider_name
+        )
+        return ["m-a", "m-b"]
+
+    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", _fake_fetch)
+
+    d = Dispatcher()
+    register_config_methods(d)
+    res = await _dispatch(
+        d,
+        "raven.everos.models",
+        {"section": "embedding", "base_url": "http://x", "api_key": "k", "provider_name": "deepinfra"},
+    )
+    assert res["result"]["models"] == ["m-a", "m-b"]
+    assert captured == {
+        "base_url": "http://x",
+        "api_key": "k",
+        "section": "embedding",
+        "provider_name": "deepinfra",
+    }
 
 
 async def test_skills_body_and_hub_ops(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -24,6 +24,7 @@ COMMON_MODELS: dict[str, list[str]] = {
     # direct -- so a model picked from this list would quietly leave OpenRouter
     # as soon as the user also held that vendor's key.
     "openrouter": [
+        "openrouter/anthropic/claude-opus-5",
         "openrouter/anthropic/claude-opus-4.8",
         "openrouter/anthropic/claude-opus-4.7",
         "openrouter/anthropic/claude-sonnet-5",
@@ -55,6 +56,7 @@ COMMON_MODELS: dict[str, list[str]] = {
         "openai/gpt-4o-mini",
     ],
     "anthropic": [
+        "anthropic/claude-opus-5",
         "anthropic/claude-sonnet-5",
         "anthropic/claude-opus-4-8",
         "anthropic/claude-opus-4-7",

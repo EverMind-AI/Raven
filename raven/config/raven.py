@@ -763,22 +763,25 @@ class EverOSConfig(_Base):
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
     # budget for supporting_cases scales with this number.
-    max_skills_top_k: int = 5
+    # Bounds live here rather than on the writers: the web RPC is one of three
+    # ways in (onboard/CLI and a hand-edited config.json are the others), and
+    # only a schema constraint covers all of them.
+    max_skills_top_k: int = Field(default=5, ge=1)
     # Confidence floor: skills falling below this after a downward
     # adjustment are soft-deleted on the spot.
-    retire_confidence: float = 0.1
+    retire_confidence: float = Field(default=0.1, ge=0.0, le=1.0)
     # Skip the skill_extractor LLM call when ``case.quality_score`` is
     # below this floor. Low-quality distillations tend to produce noisy
     # / contradictory skills more often than reusable ones; the case is
     # still persisted (useful for retrieval / audit).
-    min_quality_for_skill_extract: float = 0.2
+    min_quality_for_skill_extract: float = Field(default=0.2, ge=0.0, le=1.0)
     # 3-tier value gate placed before case extraction (in _flush_segment).
     # Only segments that pass at least one tier are extracted:
     #   Tier 1 (fast-pass): has_user_feedback AND >=2 user messages in segment
     #   Tier 2 (fast-pass): total tool_calls > complex_task_tool_call_threshold
     #   Tier 3 (cheap LLM): detect_llm asked whether trajectory is worth
     #                        learning from; false → skip, true → extract
-    complex_task_tool_call_threshold: int = 20
+    complex_task_tool_call_threshold: int = Field(default=20, ge=0)
 
 
 class LocalDirConfig(_Base):

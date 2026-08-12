@@ -72,6 +72,7 @@ def register_config_methods(
     cron: Any = None,
     config: Any = None,
     channel_manager: Any = None,
+    raven_config: Any = None,
 ) -> None:
     """Register Raven config-admin methods on the dispatcher.
 
@@ -392,6 +393,294 @@ def register_config_methods(
     dispatcher.register("raven.skills.get", _skills_get)
     dispatcher.register("raven.skills.set", _skills_set)
     dispatcher.register("raven.skills.list", _skills_list)
+
+    # EverOS memory models (llm/embedding/rerank/multimodal). These live in
+    # ``~/.everos/raven/everos.toml`` (a channel EverOS owns), not raven's
+    # config.json, so they get their own reader/writer. Applied when the memory
+    # backend boots, i.e. on the next gateway restart. ``test`` reuses the
+    # onboard wizard's headless probes (never raise) to validate a key + model.
+    from raven.config.update_everos import (
+        WRITABLE_SECTIONS,
+        clear_everos_section,
+        load_everos_config,
+        set_everos_section,
+    )
+
+    _everos_redact_set = "****set****"
+    _everos_redact_empty = "(empty)"
+
+    def _everos_redacted() -> dict:
+        cfg = load_everos_config()
+        out: dict[str, Any] = {}
+        for section in WRITABLE_SECTIONS:
+            sec = dict(cfg.get(section) or {})
+            sec["api_key"] = _everos_redact_set if sec.get("api_key") else _everos_redact_empty
+            out[section] = sec
+        return out
+
+    async def _everos_get(params: dict) -> dict:
+        """Model sections plus the backend actually in force. Configuring these
+        models is inert while ``memory.backend`` names something else (or None,
+        which is native Markdown memory), so the caller must be able to say so
+        rather than call a fully-filled form ready.
+
+        The backend must come from ``RavenConfig``, not from ``config``.
+        ``memory`` is one of ``loader.EXTENSION_KEYS``, so it is popped before
+        the base ``Config`` validates and that class never declares it -- read
+        off the object the gateway passes, the answer is always None and the
+        readiness card can never leave "markdown". The gateway hands its own
+        already-loaded copy in as ``raven_config``, which is the one it built
+        the live backend from.
+        """
+        active = raven_config
+        if active is None:
+            from raven.config.raven import load_raven_config
+
+            active = load_raven_config()
+        backend = getattr(getattr(active, "memory", None), "backend", None)
+        return {"everos": _everos_redacted(), "backend": backend}
+
+    def _borrowed_key(section: str | None) -> str | None:
+        """A sibling role's stored key. The web never sees a key in the clear
+        (reads are redacted), so copying one across roles has to happen here.
+
+        Restricted to the sections the writer accepts. ``set_everos_section``
+        raises on anything else, and a reader more permissive than the writer
+        lets ``reuse_key_from`` name any table that happens to sit in
+        everos.toml rather than only the four roles this page owns.
+        """
+        if not section or section not in WRITABLE_SECTIONS:
+            return None
+        return (load_everos_config().get(section) or {}).get("api_key")
+
+    def _credential_key(slug: str | None) -> str | None:
+        """The key the Credentials page already holds for this provider, so a
+        user who configured it there is not asked for the same secret twice."""
+        if not slug:
+            return None
+        from raven.config.update_providers import get_provider_config
+
+        try:
+            return (get_provider_config(slug, redact_secrets=False) or {}).get("api_key") or None
+        except KeyError:
+            return None
+
+    def _trusted_endpoint(base_url: str | None) -> bool:
+        """Whether a *stored* key may be sent to this endpoint.
+
+        The probes take ``base_url`` from the request and the key from
+        server-side storage, so without this a caller who can reach the config
+        API can name any host and have a key it never supplied delivered there
+        as a Bearer token -- turning "can edit the config" into "can read the
+        provider key". Reads are redacted precisely so that cannot happen.
+
+        Both catalog URL fields count: a vendor's rerank endpoint sometimes
+        sits on a different host from its chat endpoint. A caller that supplies
+        its own key is not restricted -- the only secret at risk is its own.
+        """
+        from raven.cli.onboard_commands import _EVEROS_PROVIDERS
+
+        target = (base_url or "").rstrip("/")
+        if not target:
+            return False
+        return any(
+            (provider.get(field) or "").rstrip("/") == target
+            for provider in _EVEROS_PROVIDERS
+            for field in ("base_url", "rerank_base_url")
+        )
+
+    def _stored_key(params: dict, section: str) -> str | None:
+        """Whichever stored key this request is entitled to: the role's own
+        first, then a sibling role, then the provider's credential."""
+        return (
+            _borrowed_key(section)
+            or _borrowed_key(params.get("reuse_key_from"))
+            or _credential_key(params.get("credential_provider"))
+        )
+
+    def _resolve_key(params: dict, section: str, base_url: str | None) -> str | None:
+        """The stored key, withheld when it would leave for an unlisted host.
+
+        Only an actual key triggers the guard: an endpoint with no key to send
+        -- a local vLLM, say -- has nothing to leak and must stay probeable at
+        whatever address it lives on. See :func:`_trusted_endpoint`.
+
+        The pairing that is not new is exempt, matching the predicate
+        :func:`_everos_set` already uses. A role's own key sent to that role's
+        own stored ``base_url`` reveals nothing: the two already sit next to
+        each other on disk and the memory backend delivers one to the other on
+        every boot. Gating it on the catalog instead made a self-hosted
+        deployment -- unlisted by nature, and the primary way EverOS runs --
+        unprobeable, and left ``set`` accepting what ``test`` refused. The
+        guard still applies in full to a sibling key, a credential key, and any
+        ``base_url`` that differs from the stored one.
+        """
+        target = str(base_url or "").rstrip("/")
+        own = _borrowed_key(section)
+        if own and target:
+            stored_url = str((load_everos_config().get(section) or {}).get("base_url") or "").rstrip("/")
+            if stored_url and target == stored_url:
+                return own
+        stored = _stored_key(params, section)
+        if stored and not _trusted_endpoint(base_url):
+            return None
+        return stored
+
+    async def _everos_set(params: dict) -> dict:
+        fields = dict(params.get("fields") or {})
+        # A redacted placeholder means "leave the stored key untouched", and so
+        # does a null; both reduce to "the request carries no key".
+        if fields.get("api_key") in (_everos_redact_set, _everos_redact_empty, None):
+            fields.pop("api_key", None)
+        # An explicit empty string is a request to remove the key, so it must
+        # not be read as "none supplied" and quietly filled from elsewhere --
+        # that turned "clear it" into "swap in the credentials page's key".
+        section = params.get("section", "")
+        stored = load_everos_config().get(section) or {}
+        typed = "api_key" in fields
+        borrowed = ""
+        if not typed:
+            borrowed = _borrowed_key(params.get("reuse_key_from")) or _credential_key(params.get("credential_provider"))
+            if borrowed:
+                fields["api_key"] = borrowed
+
+        # The probe guard closed the immediate leak; this closes the one a
+        # restart later. Whatever the section holds after this write is what the
+        # memory backend sends to its base_url on the next boot, so a key the
+        # caller never supplied must not come to rest against an endpoint the
+        # caller chose -- whether it arrives by borrowing, or by re-aiming a key
+        # that was already stored.
+        #
+        # Gated on the pairing being *new*, not on the endpoint being unlisted:
+        # a self-hosted deployment is unlisted by nature, and editing the model
+        # on one has to keep working. Supplying the key in the same request
+        # lifts the guard, since that secret is the caller's own to spend.
+        target = fields.get("base_url", stored.get("base_url"))
+        moved = "base_url" in fields and str(target or "").rstrip("/") != str(stored.get("base_url") or "").rstrip("/")
+        if not typed and (borrowed or moved) and (fields.get("api_key") or stored.get("api_key")):
+            if not _trusted_endpoint(target):
+                raise RuntimeError("enter the api key: a key you did not supply is only written for a catalog endpoint")
+        set_everos_section(section, fields)
+        return {"ok": True, "restart_required": True}
+
+    async def _everos_clear(params: dict) -> dict:
+        clear_everos_section(params.get("section", ""))
+        return {"ok": True, "restart_required": True}
+
+    async def _everos_test(params: dict) -> dict:
+        section = params.get("section", "")
+        fields = params.get("fields") or {}
+        model = fields.get("model")
+        base_url = fields.get("base_url")
+        api_key = fields.get("api_key")
+        # A redacted key means "probe with whatever is stored", falling back to
+        # the role this one is set to borrow from when it has none of its own.
+        if api_key in (_everos_redact_set, _everos_redact_empty, None):
+            api_key = _resolve_key(params, section, base_url)
+            if api_key is None and _stored_key(params, section):
+                # Said plainly rather than probing unauthenticated and echoing
+                # the endpoint's 401, which reads as "the key is wrong".
+                return {
+                    "ok": False,
+                    "detail": "enter the api key: a stored key is only sent to a catalog endpoint",
+                }
+
+        # Probes run blocking httpx; keep them off the event loop.
+        from raven.cli.onboard_commands import (
+            _REQUIRED_EMBEDDING_DIM,
+            _probe_embedding_dim,
+            _probe_everos_chat,
+            _probe_rerank,
+        )
+
+        if section == "embedding":
+            if not base_url or not model:
+                return {"ok": False, "detail": "no base_url or model configured"}
+            url = base_url.rstrip("/") + "/embeddings"
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            result = await asyncio.to_thread(_probe_embedding_dim, url, headers, model)
+            if result == _REQUIRED_EMBEDDING_DIM:
+                return {"ok": True, "detail": f"ok ({result}-dim)"}
+            if isinstance(result, int):
+                return {"ok": False, "detail": f"dimension {result}, EverOS requires {_REQUIRED_EMBEDDING_DIM}"}
+            return {"ok": False, "detail": str(result)}
+        if section == "rerank":
+            ok, detail = await asyncio.to_thread(
+                _probe_rerank, model, api_key=api_key, base_url=base_url, rerank_provider=fields.get("provider")
+            )
+            return {"ok": ok, "detail": detail}
+        # llm / multimodal both speak chat/completions.
+        ok, detail = await asyncio.to_thread(_probe_everos_chat, model, api_key=api_key, base_url=base_url)
+        return {"ok": ok, "detail": detail}
+
+    async def _everos_providers(params: dict) -> dict:
+        """The curated provider catalog (name, base_url, which roles it serves,
+        rerank specifics) so the web page can offer a provider picker that
+        pre-fills the base URL — mirrors the onboard wizard's list.
+
+        ``chat_models`` is the registry's hand-maintained shortlist for that
+        provider, so the llm and multimodal pickers start with ids that belong
+        to the chosen endpoint instead of one global suggestion borrowed from
+        some other provider. That catalogue is chat-only, so the embedding and
+        rerank roles have nothing to seed from and rely on a live fetch.
+        """
+
+        def _catalog() -> list[dict]:
+            # common_models_for imports LiteLLM on first use (seconds), so the
+            # whole list is built off the event loop.
+            from raven.cli.onboard_commands import _EVEROS_PROVIDERS
+            from raven.providers.common_models import common_models_for
+
+            def _shortlist(slug: str) -> list[str]:
+                # Registry ids are provider-qualified ("openai/gpt-5.5"); an
+                # endpoint wants what follows its own slug, which for a gateway
+                # like OpenRouter is itself a vendor-qualified id.
+                return [m.removeprefix(f"{slug}/") for m in common_models_for(slug)]
+
+            return [
+                {
+                    "name": p["name"],
+                    "label": p["label"],
+                    "label_zh": p.get("label_zh", p["label"]),
+                    "base_url": p["base_url"],
+                    "supports": sorted(p.get("supports", [])),
+                    "rerank_provider": p.get("rerank_provider"),
+                    "rerank_base_url": p.get("rerank_base_url"),
+                    "chat_models": _shortlist(p["name"]),
+                    "has_credential": bool(_credential_key(p["name"])),
+                }
+                for p in _EVEROS_PROVIDERS
+            ]
+
+        return {"providers": await asyncio.to_thread(_catalog)}
+
+    async def _everos_models(params: dict) -> dict:
+        """Live model ids a provider exposes for one role, so the page can turn
+        the model field into a dropdown. Empty list on any failure (never
+        raises); the caller keeps its recommended default and custom entry."""
+        section = params.get("section", "llm")
+        base_url = params.get("base_url")
+        api_key = params.get("api_key")
+        if api_key in (_everos_redact_set, _everos_redact_empty, None):
+            api_key = _resolve_key(params, section, base_url)
+
+        from raven.cli.onboard_commands import _fetch_everos_models
+
+        models = await asyncio.to_thread(
+            _fetch_everos_models,
+            base_url,
+            api_key,
+            section=section,
+            provider_name=params.get("provider_name"),
+        )
+        return {"models": models or []}
+
+    dispatcher.register("raven.everos.get", _everos_get)
+    dispatcher.register("raven.everos.set", _everos_set)
+    dispatcher.register("raven.everos.clear", _everos_clear)
+    dispatcher.register("raven.everos.test", _everos_test)
+    dispatcher.register("raven.everos.providers", _everos_providers)
+    dispatcher.register("raven.everos.models", _everos_models)
 
     # Skill operations (Req2/Req3, phase 1): view body + Skill Hub test/search/
     # install. Fetch/read only — no config write, so no restart_required.

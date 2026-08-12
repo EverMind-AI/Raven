@@ -706,6 +706,7 @@
 		"ravenSkills": "技能",
 		"ravenCron": "定时任务",
 		"ravenChannels": "消息渠道",
+		"everOS": "记忆",
 		"expand": "展开导航栏",
 		"collapse": "收起导航栏"
 	},
@@ -804,6 +805,7 @@
 		"tabModels": "模型与凭据",
 		"tabSkills": "技能设置",
 		"tabKnowledge": "知识库",
+		"tabEverOS": "记忆 (EverOS)",
 		"tabSubagents": "子agent",
 		"tabChannels": "渠道",
 		"tabCron": "定时任务",
@@ -815,6 +817,112 @@
 		"prefConnectionHint": "可选覆盖项，留空则使用占位符中自动探测到的地址。",
 		"prefServerUrl": "服务器地址",
 		"prefSaved": "已保存"
+	},
+	"everOS": {
+		"kicker": "配置 · 记忆",
+		"titleLead": "EverOS ",
+		"titleAccent": "记忆",
+		"subtitle": "驱动长期记忆的模型，以及技能抽取的调参。改动在网关重启后生效。",
+		"loadFailed": "加载 EverOS 配置失败",
+		"restartBanner": "记忆配置已保存但尚未生效。重启网关以应用。",
+		"restartNow": "重启网关",
+		"restarting": "网关重启中，本页稍后会自动重连……",
+		"modelsTitle": "记忆模型",
+		"required": "必填",
+		"optional": "可选",
+		"baseUrl": "Base URL",
+		"model": "模型",
+		"apiKey": "API 密钥",
+		"provider": "服务商",
+		"providerCustom": "自定义 (OpenAI 兼容)",
+		"baseUrlAuto": "Base URL",
+		"baseUrlCustom": "Base URL (需包含 /v1)",
+		"rerankProtocol": "Rerank 协议",
+		"fetchModels": "获取模型",
+		"fetching": "获取中...",
+		"noModels": "未获取到模型；请选「自定义模型」手动填写模型 ID。",
+		"selectModel": "选择模型",
+		"modelCustom": "自定义模型...",
+		"modelEmptyHint": "尚未载入模型。填好 API 密钥后点「获取模型」，或选「自定义模型」手动填写 ID。",
+		"modelFetchFailedHint": "无法连接该端点获取模型列表。请检查 Base URL 和 API 密钥后重新点「获取模型」，或选「自定义模型」手动填写 ID。",
+		"recommended": "推荐",
+		"apiKeySetPlaceholder": "已设置密钥，留空则保持不变。",
+		"apiKeyPlaceholder": "粘贴 API 密钥",
+		"apiKeyCredentialPlaceholder": "将复用「凭据」页的密钥，如需覆盖请填写。",
+		"credentialReused": "已复用「凭据」页中该服务商的密钥。",
+		"embeddingHint": "需输出 >= 1024 维向量。",
+		"statusReady": "记忆已就绪",
+		"statusReadyHint": "两个必填模型都配好了，Raven 可以存取长期记忆。",
+		"statusIncomplete": "记忆尚未配好",
+		"statusIncompleteHint": "还缺：{{roles}}。在此之前 Raven 会退回自带的 Markdown 记忆。",
+		"statusBackendOff": "记忆模型已配置，但当前启用的记忆后端是「{{backend}}」，这些模型不会生效。需把后端切换为 everos。",
+		"reuseLlm": "复用",
+		"reuseLlmHint": "和推理 LLM 用同一家？直接复用它的地址和密钥。",
+		"reusingLlm": "将复用推理 LLM 的密钥。",
+		"apiKeyClear": "清除密钥",
+		"apiKeyCleared": "已删除存储的密钥。",
+		"apiKeyReusePlaceholder": "将复用推理 LLM 的密钥，如需覆盖请填写。",
+		"levelLabel": "抽取力度",
+		"levels": {
+			"selective": {
+				"label": "严格",
+				"desc": "只抽取明确、高质量的经验。技能更少，噪声更低。"
+			},
+			"balanced": {
+				"label": "均衡",
+				"desc": "默认档位，适合大多数对话。"
+			},
+			"eager": {
+				"label": "激进",
+				"desc": "几乎每次有实质内容的对话都挖掘。技能更多，噪声也更多。"
+			},
+			"custom": {
+				"label": "自定义",
+				"desc": "自己设定四个阈值。"
+			}
+		},
+		"save": "保存",
+		"test": "测试",
+		"testing": "测试中……",
+		"clear": "清除",
+		"saved": "已保存 {{role}}",
+		"saveFailed": "保存失败",
+		"cleared": "已清除 {{role}}",
+		"savedBadge": "保存成功",
+		"testOk": "连接成功",
+		"testFail": "测试失败",
+		"sections": {
+			"llm": {
+				"label": "推理 LLM",
+				"purpose": "从对话中提炼、整理记忆。"
+			},
+			"embedding": {
+				"label": "Embedding",
+				"purpose": "将记忆向量化，以便按语义检索。"
+			},
+			"rerank": {
+				"label": "Rerank",
+				"purpose": "对检索到的记忆按相关性重排。"
+			},
+			"multimodal": {
+				"label": "多模态",
+				"purpose": "理解消息中附带的图片。"
+			}
+		},
+		"knobsTitle": "技能抽取",
+		"knobsDesc": "调节 EverOS 从已完成对话中挖掘可复用技能的方式。",
+		"extractEnabled": "启用技能抽取",
+		"extractEnabledDesc": "将每个完成的回合送入本地技能抽取管线。",
+		"maxSkillsTopK": "提供给抽取器的候选技能数",
+		"maxSkillsTopKDesc": "作为更新候选提供的相似已有技能数量。默认 5。",
+		"retireConfidence": "淘汰置信度下限",
+		"retireConfidenceDesc": "下调后低于此值的技能会被软删除。范围 0-1，默认 0.1。",
+		"minQuality": "抽取的最低质量分",
+		"minQualityDesc": "案例质量分低于此值时跳过抽取。范围 0-1，默认 0.2。",
+		"complexThreshold": "复杂任务工具调用阈值",
+		"complexThresholdDesc": "工具调用数超过此值的轨迹一定会被挖掘。默认 20。",
+		"saveKnobs": "保存抽取设置",
+		"knobsSaved": "抽取设置已保存"
 	},
 	"ravenSkills": {
 		"kicker": "配置 · SkillForge",

@@ -706,6 +706,7 @@
 		"ravenSkills": "Skills",
 		"ravenCron": "Cron Jobs",
 		"ravenChannels": "Channels",
+		"everOS": "Memory",
 		"expand": "Expand navigation",
 		"collapse": "Collapse navigation"
 	},
@@ -804,6 +805,7 @@
 		"tabModels": "Models & Credentials",
 		"tabSkills": "Skill retrieval",
 		"tabKnowledge": "Knowledge Bases",
+		"tabEverOS": "Memory (EverOS)",
 		"tabSubagents": "Subagents",
 		"tabChannels": "Channels",
 		"tabCron": "Schedules",
@@ -815,6 +817,112 @@
 		"prefConnectionHint": "Optional override. Leave blank to use the auto-detected server shown as the placeholder.",
 		"prefServerUrl": "Server URL",
 		"prefSaved": "Saved"
+	},
+	"everOS": {
+		"kicker": "Config · Memory",
+		"titleLead": "EverOS ",
+		"titleAccent": "memory",
+		"subtitle": "Models powering long-term memory, plus the skill-extraction knobs. Changes apply after a gateway restart.",
+		"loadFailed": "Failed to load EverOS config",
+		"restartBanner": "Memory changes are saved but not live yet. Restart the gateway to apply them.",
+		"restartNow": "Restart gateway",
+		"restarting": "Gateway restarting, this page will reconnect shortly...",
+		"modelsTitle": "Memory models",
+		"required": "required",
+		"optional": "optional",
+		"baseUrl": "Base URL",
+		"model": "Model",
+		"apiKey": "API key",
+		"provider": "Provider",
+		"providerCustom": "Custom (OpenAI-compatible)",
+		"baseUrlAuto": "Base URL",
+		"baseUrlCustom": "Base URL (must include /v1)",
+		"rerankProtocol": "Rerank protocol",
+		"fetchModels": "Load models",
+		"fetching": "Loading...",
+		"noModels": "No models returned; pick Custom and enter the model id.",
+		"selectModel": "Select a model",
+		"modelCustom": "Custom model...",
+		"modelEmptyHint": "No models loaded yet. Fill in the API key, then use Load models -- or pick Custom model and type the id.",
+		"modelFetchFailedHint": "Could not reach the endpoint to list models. Check the base URL and the API key, then use Load models again -- or pick Custom model and type the id.",
+		"recommended": "recommended",
+		"apiKeySetPlaceholder": "A key is set. Leave blank to keep it.",
+		"apiKeyPlaceholder": "Paste the API key",
+		"apiKeyCredentialPlaceholder": "Using the key from Credentials. Type one to override.",
+		"credentialReused": "Reusing the key from the Credentials page.",
+		"embeddingHint": "Must output >= 1024-dim vectors.",
+		"statusReady": "Memory is ready",
+		"statusReadyHint": "Both required models are set up. Raven can store and recall long-term memory.",
+		"statusIncomplete": "Memory is not set up yet",
+		"statusIncompleteHint": "Still needed: {{roles}}. Until then Raven falls back to its built-in Markdown memory.",
+		"statusBackendOff": "Memory models are set, but the active memory backend is \"{{backend}}\", so they are not in use. Switch the backend to everos to enable them.",
+		"reuseLlm": "Reuse",
+		"reuseLlmHint": "Same provider as the reasoning LLM? Reuse its endpoint and key.",
+		"reusingLlm": "Reusing the reasoning LLM's key.",
+		"apiKeyClear": "Clear key",
+		"apiKeyCleared": "Stored key removed.",
+		"apiKeyReusePlaceholder": "Reusing the reasoning LLM's key. Type one to override.",
+		"levelLabel": "How much to extract",
+		"levels": {
+			"selective": {
+				"label": "Selective",
+				"desc": "Only clear, high-quality lessons. Fewer skills, less noise."
+			},
+			"balanced": {
+				"label": "Balanced",
+				"desc": "The default. A sensible bar for most conversations."
+			},
+			"eager": {
+				"label": "Eager",
+				"desc": "Mine almost every substantial turn. More skills, more noise."
+			},
+			"custom": {
+				"label": "Custom",
+				"desc": "Set the four thresholds yourself."
+			}
+		},
+		"save": "Save",
+		"test": "Test",
+		"testing": "Testing...",
+		"clear": "Clear",
+		"saved": "{{role}} saved",
+		"saveFailed": "Save failed",
+		"cleared": "{{role}} cleared",
+		"savedBadge": "Saved",
+		"testOk": "Connected",
+		"testFail": "Test failed",
+		"sections": {
+			"llm": {
+				"label": "Reasoning LLM",
+				"purpose": "Distills and organizes memories from your conversations."
+			},
+			"embedding": {
+				"label": "Embedding",
+				"purpose": "Vectorizes memories so they can be retrieved by meaning."
+			},
+			"rerank": {
+				"label": "Rerank",
+				"purpose": "Re-orders retrieved memories for relevance."
+			},
+			"multimodal": {
+				"label": "Multimodal",
+				"purpose": "Understands images attached to your messages."
+			}
+		},
+		"knobsTitle": "Skill extraction",
+		"knobsDesc": "Tune how EverOS mines reusable skills from completed conversations.",
+		"extractEnabled": "Enable skill extraction",
+		"extractEnabledDesc": "Funnel each completed turn into the local skill-extraction pipeline.",
+		"maxSkillsTopK": "Candidate skills shown to the extractor",
+		"maxSkillsTopKDesc": "How many similar existing skills are offered as update candidates. Default 5.",
+		"retireConfidence": "Retire confidence floor",
+		"retireConfidenceDesc": "Skills falling below this after a downward adjustment are soft-deleted. Range 0-1, default 0.1.",
+		"minQuality": "Min quality to extract",
+		"minQualityDesc": "Skip extraction when the case quality score is below this. Range 0-1, default 0.2.",
+		"complexThreshold": "Complex-task tool-call threshold",
+		"complexThresholdDesc": "A trajectory with more tool calls than this is always mined. Default 20.",
+		"saveKnobs": "Save extraction settings",
+		"knobsSaved": "Extraction settings saved"
 	},
 	"ravenSkills": {
 		"kicker": "Config · SkillForge",

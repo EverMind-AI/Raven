@@ -438,7 +438,12 @@ def register(app: typer.Typer) -> None:
                     from raven.web_rpc.methods_config import register_config_methods
 
                     register_config_methods(
-                        web_dispatcher, agent=agent, cron=cron, config=config, channel_manager=channels
+                        web_dispatcher,
+                        agent=agent,
+                        cron=cron,
+                        config=config,
+                        channel_manager=channels,
+                        raven_config=ec_config,
                     )
                     web_server.bind(web_dispatcher)
 
