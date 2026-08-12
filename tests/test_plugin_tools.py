@@ -250,10 +250,16 @@ class TestRenderAttachments:
 
         pdf = tmp_path / "report.pdf"
         pdf.write_bytes(b"%PDF-1.4 data")
-        out = render.build_user_content("summarize this", [str(pdf)])
+        # Named explicitly: the hint is only emitted when a description tool
+        # is actually registered, and it is absent on a default install.
+        out = render.build_user_content("summarize this", [str(pdf)], describe_tool="understand_media")
         assert isinstance(out, str)
         assert "report.pdf" in out
         assert "understand_media" in out
+
+        bare = render.build_user_content("summarize this", [str(pdf)])
+        assert "report.pdf" in bare and f"(path: {pdf})" in bare
+        assert "understand_media" not in bare
         assert "summarize this" in out
 
     def test_image_inlined_as_block(self, tmp_path: Path) -> None:
@@ -292,7 +298,7 @@ class TestRenderAttachments:
         )
         pdf = tmp_path / "d.pdf"
         pdf.write_bytes(b"%PDF-1.4")
-        out = render.build_user_content("q", [str(png), str(pdf)])
+        out = render.build_user_content("q", [str(png), str(pdf)], describe_tool="understand_media")
         assert isinstance(out, list)
         assert out[0]["type"] == "image_url"
         text_block = out[-1]["text"]
@@ -302,6 +308,31 @@ class TestRenderAttachments:
         from raven.context_engine.segments import render
 
         assert render.build_user_content("hi", None) == "hi"
+
+    def test_image_becomes_a_note_when_the_model_cannot_see(self, tmp_path: Path) -> None:
+        """A text-only model must be told the picture exists and how to read it.
+
+        Inlining it instead is the one outcome with no recovery: the endpoint
+        either rejects the request or drops the image and answers from the text
+        alone, which reads as a correct reply built on nothing.
+        """
+        import base64 as _b64
+
+        from raven.context_engine.segments import render
+
+        png = tmp_path / "a.png"
+        png.write_bytes(
+            _b64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+            )
+        )
+        out = render.build_user_content("look", [str(png)], can_see_images=False, describe_tool="understand_media")
+
+        assert isinstance(out, str)
+        assert "base64" not in out
+        assert f"(path: {png})" in out
+        assert "understand_media" in out
+        assert out.startswith("look\n\n")
 
     def test_legacy_builder_names_the_image_path_too(self, tmp_path: Path) -> None:
         """There are two content builders (context engine and legacy

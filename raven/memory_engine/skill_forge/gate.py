@@ -61,6 +61,21 @@ class LLMGateFilter:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
+    def set_provider(self, provider: "LLMProvider", model: str) -> None:
+        """Adopt the provider a live ``/model`` switch just built.
+
+        Unset, ``_model`` follows whatever the new provider defaults to.
+
+        Set, it is a pin, and this leaves it pinned -- which is what a
+        restart on the new model would produce, since the gate is built
+        with the agent's provider and the pin regardless of which vendor
+        the pin names. Note that a pin is only a model id: the credential
+        comes from the provider, so a pin naming a vendor the provider does
+        not serve was already broken at boot, and stays broken here.
+        """
+        del model
+        self._provider = provider
+
     @trace.instrument("skill.gate", kind="skill", extract=semconv.skill_gate)
     async def filter(
         self,

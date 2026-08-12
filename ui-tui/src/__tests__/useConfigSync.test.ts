@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { $uiState, resetUiState } from '../app/uiStore.js'
+import { $uiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import {
   applyDisplay,
   hydrateFullConfig,
@@ -85,6 +85,20 @@ describe('applyDisplay', () => {
 
     applyDisplay({ config: { display: { show_reasoning: true } } }, setBell)
     expect($uiState.get().showReasoning).toBe(true)
+  })
+
+  it('leaves mouse tracking alone when the config does not mention it', () => {
+    // Its default comes from RAVEN_TUI_DISABLE_MOUSE, not from this function, and
+    // the gateway serves no `display` block at all -- so normalizing a silent
+    // config to `true` turned the environment's opt-out back on at startup.
+    const setBell = vi.fn()
+    patchUiState({ mouseTracking: false })
+
+    applyDisplay({ config: { display: {} } }, setBell)
+    expect($uiState.get().mouseTracking).toBe(false)
+
+    applyDisplay(null, setBell)
+    expect($uiState.get().mouseTracking).toBe(false)
   })
 
   it('uses documented mouse_tracking with legacy tui_mouse fallback', () => {

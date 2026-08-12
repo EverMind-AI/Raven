@@ -260,3 +260,163 @@ async def test_turn_send_dispatcher_returns_minus_32003_on_concurrent_send(
     assert "error" in resp
     assert resp["error"]["code"] == -32003
     assert resp["error"]["message"] == "turn_in_progress"
+
+
+# --- Attachments ---
+#
+# ``media`` carries paths, not bytes: the front end has already put the file in
+# the workspace. What these cover is the resolution policy, because the failure
+# mode downstream is silent -- ``build_user_content`` drops a path that is not a
+# file without a word, so a wrong resolve loses the attachment with no error
+# anywhere in the stack.
+
+
+def _workspace_cfg(tmp_path, *, restrict: bool = True):
+    """Patch load_config so the resolver sees ``tmp_path`` as the workspace."""
+    from unittest.mock import MagicMock
+
+    cfg = MagicMock()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.tools.restrict_to_workspace = restrict
+    return patch("raven.config.load_config", return_value=cfg)
+
+
+async def test_turn_send_resolves_a_workspace_relative_attachment(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    (tmp_path / "uploads").mkdir()
+    shot = tmp_path / "uploads" / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(tmp_path):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": ["uploads/shot.png"]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    # Resolved against the workspace, not the process cwd -- the front end sends
+    # back exactly what fs.upload returned, which is workspace-relative.
+    assert [m.path for m in scheduler.submitted[0].media] == [str(shot)]
+
+
+async def test_turn_send_accepts_an_absolute_attachment(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(tmp_path):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(shot)]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(shot)]
+
+
+async def test_turn_send_drops_a_missing_attachment_without_failing_the_turn(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    kept = tmp_path / "kept.png"
+    kept.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(tmp_path):
+        result = await turn_send(
+            {
+                "session_key": "tui:default",
+                "content": "look",
+                "media": ["uploads/gone.png", str(kept)],
+            },
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    # One bad path must not cost the user the whole message.
+    assert result["accepted"] is True
+    assert [m.path for m in scheduler.submitted[0].media] == [str(kept)]
+
+
+async def test_turn_send_refuses_an_attachment_outside_the_workspace(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(ws):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(outside)]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    # The viewer and the file tools refuse this path; the attachment lane may
+    # not become the way around them.
+    assert scheduler.submitted[0].media == ()
+
+
+async def test_turn_send_without_media_submits_none(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
+    assert scheduler.submitted[0].media == ()
+
+
+async def test_turn_send_accepts_an_absolute_path_when_the_workspace_is_not_enforced(tmp_path) -> None:
+    """`restrict_to_workspace` defaults to False, so this is the shipped path.
+
+    The attachment lane deliberately matches the filesystem tools rather than
+    inventing a second policy: a file the agent may read is a file the user may
+    hand it.
+    """
+    scheduler = FakeScheduler()
+    outside = tmp_path / "elsewhere.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    with _workspace_cfg(ws, restrict=False):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(outside)]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(outside)]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "with\x00null.png",  # ValueError from the OS layer
+        "~nosuchuser42/x.png",  # RuntimeError from expanduser
+        "x" * 300 + ".png",  # OSError: name too long
+    ],
+)
+async def test_a_path_the_os_rejects_drops_the_attachment_not_the_turn(tmp_path, bad) -> None:
+    """Every rejection shape has to be caught here. Escaping this function turns
+    one unusable attachment into a turn that never runs at all."""
+    scheduler = FakeScheduler()
+    kept = tmp_path / "kept.png"
+    kept.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(tmp_path):
+        result = await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [bad, str(kept)]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    assert result["accepted"] is True
+    assert [m.path for m in scheduler.submitted[0].media] == [str(kept)]
+
+
+async def test_a_broken_config_drops_attachments_without_failing_the_turn(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    with patch("raven.config.load_config", side_effect=RuntimeError("config on fire")):
+        result = await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": ["uploads/x.png"]},
+            scheduler=scheduler,
+            turn_ids={},
+        )
+
+    assert result["accepted"] is True
+    assert scheduler.submitted[0].media == ()

@@ -47,10 +47,35 @@ def test_no_bedrock_provider_in_registry():
     assert find_by_model("bedrock/amazon.titan-text-express-v1") is None
 
 
-def test_only_bedrock_touchpoint_is_the_helpers_key_gate_bypass():
+def test_the_key_gate_tolerates_bedrock_without_asking_for_a_key():
+    """Bedrock is admitted, and the reason is declared rather than string-matched.
+
+    The gate used to let it through on ``model.startswith("bedrock/")`` written
+    into the CLI helper. The tolerance is real -- AWS credentials come from the
+    environment, so demanding an ``api_key`` would demand something the user does
+    not have in that form -- but stating it as a prefix test put a fact about how
+    a vendor authenticates inside a startup check, where nothing else could see
+    it. It is now one entry in ``providers.auth``, alongside the other shapes.
+
+    Still a stub, not a backend: this says the gate does not stand in the way,
+    not that Raven routes Bedrock traffic (see the registry test above).
+    """
+    import typer
+
+    from raven.config.schema import Config
+    from raven.providers.auth import KIND_AMBIENT, credential_status
+
+    assert credential_status("bedrock", None).kind == KIND_AMBIENT
+
+    config = Config.model_validate(
+        {"providers": {}, "agents": {"defaults": {"model": "bedrock/amazon.titan-text-express-v1"}}}
+    )
+    try:
+        helpers_mod.check_provider_credentials(config)
+    except typer.Exit:  # pragma: no cover - the failure message is the point
+        raise AssertionError("the key gate rejected a bedrock model id") from None
+
     source = Path(helpers_mod.__file__).read_text(encoding="utf-8")
-    # The sole bedrock reference: the key-gate bypass in make_provider.
-    assert source.count("bedrock") == 1
-    assert 'model.startswith("bedrock/")' in source
+    assert "bedrock" not in source, "the prefix test belongs in providers.auth, not the startup gate"
     # No Bedrock Converse backend has been wired in.
     assert "converse" not in source

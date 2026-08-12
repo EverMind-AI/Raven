@@ -185,6 +185,7 @@ def set_language(
 def set_default_model(
     model: str,
     *,
+    provider: str | None = None,
     config_path: Path | None = None,
 ) -> str | None:
     """Patch ``agents.defaults.model`` on the on-disk config. Returns previous value.
@@ -193,14 +194,22 @@ def set_default_model(
     needs to swap the default model to one that matches the chosen provider
     (otherwise ``raven agent`` would still route to whatever the freshly
     created ``Config()`` baked in, which is typically a different vendor).
+
+    ``provider`` writes ``agents.defaults.provider`` in the same patch. That field
+    overrides what a model id says, so leaving it behind lets a stale pin route
+    the new model to the old vendor -- with the old vendor's key -- while the
+    write that was just reported as successful changes nothing. Callers that do
+    not know which provider serves the model pass None and leave it alone.
     """
     path = config_path or get_config_path()
     data = read_raw_or_raise(path)
     defaults = data.setdefault("agents", {}).setdefault("defaults", {})
     prev = defaults.get("model")
     defaults["model"] = model
+    if provider is not None:
+        defaults["provider"] = provider
     _write_atomic(path, data)
-    logger.info("config/update: default model set to {} (was {})", model, prev)
+    logger.info("config/update: default model set to {} (was {}), provider={}", model, prev, provider)
     return prev
 
 

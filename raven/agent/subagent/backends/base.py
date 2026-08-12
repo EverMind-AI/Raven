@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from raven.providers.base import LLMProvider
 
 IN_SUBAGENT_RUN: ContextVar[bool] = ContextVar("raven_in_subagent_run", default=False)
 """True while an in-process backend is executing a sub-agent task.
@@ -52,4 +55,6 @@ class SubagentBackend(Protocol):
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> str: ...

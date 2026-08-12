@@ -9,10 +9,13 @@ provider extension fields survive.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from loguru import logger
+
+if TYPE_CHECKING:
+    from raven.providers.base import LLMProvider
 
 
 class OpenAIApiBackend:
@@ -48,7 +51,11 @@ class OpenAIApiBackend:
         executor: Any,
         session_key: str | None = None,
         instance: str | None = None,
+        provider: LLMProvider | None = None,
+        model: str | None = None,
     ) -> str:
+        # The parent's provider/model are accepted and ignored: this backend
+        # posts to its own configured endpoint under its own ``self.model``.
         url = self.base_url.rstrip("/") + "/chat/completions"
         messages: list[dict[str, Any]] = []
         if self.system_prompt:

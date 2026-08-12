@@ -143,3 +143,10 @@ async def test_tools_block_absent_when_tools_none() -> None:
     await LLMGateFilter(provider).filter("task", [_hit("local/a", "a")])
     prompt = provider.calls[0]["messages"][0]["content"]
     assert "# Agent Tools" not in prompt
+
+
+async def test_filter_passes_explicit_model_to_provider() -> None:
+    provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
+    gate = LLMGateFilter(provider, model="gpt-4o")
+    await gate.filter("task", [_hit("local/a", "a")])
+    assert provider.calls[0]["model"] == "gpt-4o"

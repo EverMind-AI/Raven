@@ -47,7 +47,7 @@ class _RecordingBackend:
         self.workspace: Path | None = None
         self._gate = gate
 
-    async def run(self, task: str, *, task_id, workspace, executor, session_key=None, instance=None) -> str:
+    async def run(self, task: str, *, task_id, workspace, executor, session_key=None, instance=None, **_) -> str:
         if self._gate is not None:
             await self._gate.wait()
         self.workspace = workspace

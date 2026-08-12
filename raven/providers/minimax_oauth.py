@@ -17,7 +17,6 @@ from urllib.parse import urlparse
 
 import httpx
 import portalocker
-from platformdirs import user_data_dir
 
 CLIENT_ID = "coding-plan-cli"
 DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
@@ -91,10 +90,11 @@ def _resource_url(value: object, config: MiniMaxOAuthConfig) -> str:
 
 
 def token_path(region: str) -> Path:
+    from raven.config.paths import get_oauth_dir
+
     config = oauth_config(region)
     base_dir = os.environ.get(OAUTH_STORAGE_DIR_ENV)
-    auth_dir = Path(base_dir) if base_dir else Path(user_data_dir("oauth-cli-kit", appauthor=False)) / "auth"
-    return auth_dir / f"{config.provider}.json"
+    return (Path(base_dir) if base_dir else get_oauth_dir()) / f"{config.provider}.json"
 
 
 def _normalize_expiry(value: object, now_ms: int | None = None) -> int:

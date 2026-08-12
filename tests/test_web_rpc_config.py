@@ -408,13 +408,13 @@ async def test_everos_set_rejects_unknown_section(tmp_path: Path, monkeypatch: p
 async def test_everos_test_probes_the_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
 
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", lambda model, **_: (True, "ok"))
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", lambda model, **_: (True, "ok"))
     monkeypatch.setattr(
-        onboard_commands,
+        onboard_everos,
         "_probe_embedding_dim",
-        lambda url, headers, model: onboard_commands._REQUIRED_EMBEDDING_DIM,
+        lambda url, headers, model: onboard_everos._REQUIRED_EMBEDDING_DIM,
     )
 
     d = Dispatcher()
@@ -493,9 +493,9 @@ async def test_everos_test_refuses_to_send_a_stored_key_to_an_unlisted_host(
         probed.append(kw)
         return True, "ok"
 
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
-    monkeypatch.setattr(onboard_commands, "_probe_everos_chat", _never)
+    monkeypatch.setattr(onboard_everos, "_probe_everos_chat", _never)
 
     d = Dispatcher()
     register_config_methods(d)
@@ -524,10 +524,10 @@ async def test_everos_test_uses_a_roles_own_key_at_its_own_stored_endpoint(
 
     seen: dict = {}
 
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
     monkeypatch.setattr(
-        onboard_commands,
+        onboard_everos,
         "_probe_everos_chat",
         lambda model, **kw: (seen.update(kw), (True, "ok"))[1],
     )
@@ -559,10 +559,10 @@ async def test_everos_test_refuses_a_roles_own_key_at_a_different_host(
 
     probed: list = []
 
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
     monkeypatch.setattr(
-        onboard_commands,
+        onboard_everos,
         "_probe_everos_chat",
         lambda model, **kw: (probed.append(kw), (True, "ok"))[1],
     )
@@ -593,10 +593,10 @@ async def test_everos_test_still_uses_a_stored_key_for_a_catalog_host(
 
     seen: dict = {}
 
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
     monkeypatch.setattr(
-        onboard_commands,
+        onboard_everos,
         "_probe_everos_chat",
         lambda model, **kw: (seen.update(kw), (True, "ok"))[1],
     )
@@ -903,7 +903,7 @@ async def test_everos_providers_lists_the_catalog() -> None:
 
 
 async def test_everos_models_delegates_to_the_fetcher(monkeypatch: pytest.MonkeyPatch) -> None:
-    from raven.cli import onboard_commands
+    from raven.cli import onboard_everos
 
     captured: dict = {}
 
@@ -911,7 +911,7 @@ async def test_everos_models_delegates_to_the_fetcher(monkeypatch: pytest.Monkey
         captured.update(base_url=base_url, api_key=api_key, section=section, provider_name=provider_name)
         return ["m-a", "m-b"]
 
-    monkeypatch.setattr(onboard_commands, "_fetch_everos_models", _fake_fetch)
+    monkeypatch.setattr(onboard_everos, "_fetch_everos_models", _fake_fetch)
 
     d = Dispatcher()
     register_config_methods(d)

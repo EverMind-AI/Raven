@@ -9,7 +9,7 @@ authoritative network source, so a lost write race just costs one extra refetch
 Named after what it persists (the model catalog), not its source: the storage
 layer is source-agnostic, so a future catalog source reuses it unchanged. This
 is the storage layer only; freshness (TTL), the in-process tier, and the actual
-fetch are the caller's concern (see ``pricing._fetch_openrouter_models``).
+fetch are the caller's concern (see ``providers.rates._fetch_openrouter_models``).
 """
 
 from __future__ import annotations
@@ -24,7 +24,12 @@ from loguru import logger
 from raven.config.paths import get_cache_dir
 
 # Bump to force-invalidate every on-disk file after a schema change.
-CACHE_VERSION = 1
+# v2 added input_modalities to each entry: a v1 file carries no modality data,
+# and reading its silence as "no modalities" would read as "cannot see images".
+# v3 dropped the punctuation-stripped join keys v2 also filed, which a
+# case-folded lookup can now match against a deployment name -- exactly the
+# false "cannot see images" the key was removed to prevent.
+CACHE_VERSION = 3
 CACHE_FILENAME = "model-catalog.json"
 
 # Test seam: when set, overrides the on-disk location so tests never touch the
@@ -51,6 +56,10 @@ def load() -> tuple[dict[str, dict], float] | None:
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
+        return None
+    # Valid JSON is not necessarily a dict: a file holding [] / null / 42
+    # made raw.get raise into the cost path this function promises never to.
+    if not isinstance(raw, dict):
         return None
     if raw.get("version") != CACHE_VERSION:
         return None

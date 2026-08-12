@@ -179,9 +179,6 @@ def sentinel_tick(
     base_config = ec_config.base
     ws = Path(workspace) if workspace else get_workspace_path()
     provider = make_provider(base_config)
-    # make_provider returns a tuple in some versions; normalise.
-    if isinstance(provider, tuple):
-        provider = provider[0]
     model = provider.get_default_model()
 
     # Frozen clock for eval. ``_kwargs`` is unpacked into every constructor
@@ -1139,8 +1136,7 @@ def sentinel_behaviors_rebuild(
             "[yellow]behaviors_extract.enabled is False in config — "
             "rebuild will run but no future ticks will refresh.[/yellow]",
         )
-    provider_pair = make_provider(cfg.base)
-    provider = provider_pair[0] if isinstance(provider_pair, tuple) else provider_pair
+    provider = make_provider(cfg.base)
     model = cfg.sentinel.behaviors_extract.model or cfg.sentinel.evaluator_model or provider.get_default_model()
     store = MemoryStore(ws)
     session_manager = SessionManager(ws)

@@ -144,3 +144,41 @@ async def test_snapshot_returns_copy_not_internal_reference(tmp_path: Path):
     snap.input_tokens = 99999
     snap_again = tracker.snapshot("sess1")
     assert snap_again.input_tokens == 10
+
+
+async def test_a_plan_billed_call_adds_tokens_but_no_money(tmp_path: Path):
+    """Summing it as zero would read as "these calls were free"."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, persist=False)
+
+    await tracker.after_llm_call({}, _snap(input_tokens=100, estimated_cost_usd=None))
+
+    snap = tracker.snapshot("sess1")
+    assert snap.input_tokens == 100
+    assert snap.estimated_cost_usd is None
+
+    await tracker.after_llm_call({}, _snap(input_tokens=10, estimated_cost_usd=0.25))
+
+    snap = tracker.snapshot("sess1")
+    assert snap.input_tokens == 110
+    assert snap.estimated_cost_usd == pytest.approx(0.25)
+
+
+def test_a_plan_billed_model_gets_no_cost_on_its_snapshot() -> None:
+    """The snapshot is where a fabricated zero would enter the pipeline.
+
+    Everything downstream treats the field as optional -- the status bar renders
+    it only when it is a number -- so collapsing None here is what would put a
+    price on a subscription.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.loop.main import AgentLoop
+
+    response = SimpleNamespace(usage={"prompt_tokens": 100, "completion_tokens": 20})
+
+    plan = AgentLoop._build_usage_snapshot(response, "github_copilot/gpt-4o", "sess1")
+    metered = AgentLoop._build_usage_snapshot(response, "deepseek/deepseek-chat", "sess1")
+
+    assert plan.input_tokens == 100
+    assert plan.estimated_cost_usd is None
+    assert metered.estimated_cost_usd is not None

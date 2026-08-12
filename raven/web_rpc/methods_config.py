@@ -528,7 +528,7 @@ def register_config_methods(
         sits on a different host from its chat endpoint. A caller that supplies
         its own key is not restricted -- the only secret at risk is its own.
         """
-        from raven.cli.onboard_commands import _EVEROS_PROVIDERS
+        from raven.cli.onboard_everos import _EVEROS_PROVIDERS
 
         target = (base_url or "").rstrip("/")
         if not target:
@@ -636,7 +636,7 @@ def register_config_methods(
                 }
 
         # Probes run blocking httpx; keep them off the event loop.
-        from raven.cli.onboard_commands import (
+        from raven.cli.onboard_everos import (
             _REQUIRED_EMBEDDING_DIM,
             _probe_embedding_dim,
             _probe_everos_chat,
@@ -678,7 +678,7 @@ def register_config_methods(
         def _catalog() -> list[dict]:
             # common_models_for imports LiteLLM on first use (seconds), so the
             # whole list is built off the event loop.
-            from raven.cli.onboard_commands import _EVEROS_PROVIDERS
+            from raven.cli.onboard_everos import _EVEROS_PROVIDERS
             from raven.providers.common_models import common_models_for
 
             def _shortlist(slug: str) -> list[str]:
@@ -714,7 +714,7 @@ def register_config_methods(
         if api_key in (_everos_redact_set, _everos_redact_empty, None):
             api_key = _resolve_key(params, section, base_url)
 
-        from raven.cli.onboard_commands import _fetch_everos_models
+        from raven.cli.onboard_everos import _fetch_everos_models
 
         models = await asyncio.to_thread(
             _fetch_everos_models,

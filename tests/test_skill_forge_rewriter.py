@@ -97,3 +97,15 @@ async def test_analyze_finish_reason_error_defaults_to_retrieval() -> None:
     provider = _StubProvider(_Resp(content="", finish_reason="error"))
     result = await QueryRewriter(provider).analyze("q")
     assert result.need_retrieval is True
+
+
+async def test_analyze_passes_model_to_provider() -> None:
+    provider = _StubProvider(json.dumps({"need_retrieval": False}))
+    await QueryRewriter(provider, model="gpt-4o").analyze("hello there")
+    assert provider.calls[0]["model"] == "gpt-4o"
+
+
+async def test_analyze_no_model_passes_none() -> None:
+    provider = _StubProvider(json.dumps({"need_retrieval": False}))
+    await QueryRewriter(provider).analyze("hello there")
+    assert provider.calls[0]["model"] is None

@@ -754,7 +754,7 @@ async def test_manager_forwards_instance_to_backend(tmp_path: Path) -> None:
     seen: dict[str, Any] = {}
 
     class _Recorder:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             seen["session_key"] = session_key
             seen["instance"] = instance
             return "ok"
@@ -1668,7 +1668,7 @@ async def test_manager_records_and_cancels_one_instance(tmp_path: Path) -> None:
     started = asyncio.Event()
 
     class _Hang:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             started.set()
             await asyncio.sleep(3600)
             return "never"
@@ -1698,13 +1698,13 @@ async def test_manager_cancel_releases_the_concurrency_slot(tmp_path: Path) -> N
         def __init__(self, ev: asyncio.Event) -> None:
             self._ev = ev
 
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             self._ev.set()
             await asyncio.sleep(3600)
             return "never"
 
     class _Canary:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             canary_started.set()
             await asyncio.sleep(3600)
             return "never"
@@ -1742,14 +1742,14 @@ async def test_manager_two_spawns_on_one_handle_both_cancelled_and_gate_freed(tm
         def __init__(self) -> None:
             self._n = 0
 
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             hang_started[self._n].set()
             self._n += 1
             await asyncio.sleep(3600)
             return "never"
 
     class _Canary:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             canary_started.set()
             await asyncio.sleep(3600)
             return "never"
@@ -1791,17 +1791,17 @@ async def test_manager_spawn_writes_pending_row_before_the_gate(tmp_path: Path) 
     canary_started = asyncio.Event()
 
     class _Hang:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             hang_started.set()
             await asyncio.sleep(3600)
             return "never"
 
     class _Queued:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             raise AssertionError("must never run: cancelled while still queued on the gate")
 
     class _Canary:
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             canary_started.set()
             await asyncio.sleep(3600)
             return "never"
@@ -1846,7 +1846,7 @@ async def test_manager_cancel_all_cancels_every_running_spawn(tmp_path: Path) ->
         def __init__(self) -> None:
             self._n = 0
 
-        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None):
+        async def run(self, task, *, task_id, workspace, executor, session_key=None, instance=None, **_):
             started[self._n].set()
             self._n += 1
             await asyncio.sleep(3600)
