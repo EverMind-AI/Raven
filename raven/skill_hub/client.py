@@ -95,11 +95,26 @@ class SkillHubClient:
         self._source = source
         self._cache_dir = cache_dir or (Path.home() / ".raven" / "skills" / "hub")
         self._owns_client = client is None
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout_s))
+        self._timeout = httpx.Timeout(timeout_s)
+        self._client = client or httpx.AsyncClient(timeout=self._timeout)
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _http(self) -> httpx.AsyncClient:
+        """The transport, rebuilt if a previous ``aclose`` retired it.
+
+        One instance is shared by the router's Hub source and the read_skill /
+        use_skill tools, and ``AgentLoop.close_executor`` closes it on any turn
+        that raises -- which the loop then recovers from. Without this the
+        holders keep a permanently closed transport and every later Hub call
+        fails for the life of the process. An injected client belongs to its
+        owner, so it is never replaced.
+        """
+        if self._owns_client and self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self._timeout)
+        return self._client
 
     def _headers(self) -> dict[str, str]:
         h = {"X-Request-ID": uuid.uuid4().hex}
@@ -137,7 +152,7 @@ class SkillHubClient:
             params["category"] = category
         if sort:
             params["sort"] = sort
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills",
             params=params,
             headers=self._headers(),
@@ -148,7 +163,7 @@ class SkillHubClient:
 
     # ── Read body (skill_md) — no download ──────────────────────────
     async def get(self, skill_id: str) -> dict[str, Any]:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{skill_id}",
             headers=self._headers(),
         )
@@ -157,7 +172,7 @@ class SkillHubClient:
 
     # ── Bundle (zip with scripts/assets) ────────────────────────────
     async def download(self, skill_id: str) -> bytes:
-        r = await self._client.get(
+        r = await self._http().get(
             f"{self._base}/openapi/v1/skills/{skill_id}/download",
             params={"source": self._source},
             headers=self._headers(),

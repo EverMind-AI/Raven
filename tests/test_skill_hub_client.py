@@ -7,6 +7,7 @@ import io
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 
 from raven.skill_hub.client import SkillHubClient, SkillHubError
@@ -82,3 +83,46 @@ def test_safe_extract_rejects_path_traversal(tmp_path: Path) -> None:
         zf.writestr("../escape.md", "owned")
     with pytest.raises(SkillHubError, match="unsafe zip path"):
         SkillHubClient._safe_extract(buf.getvalue(), tmp_path)
+
+
+# ── transport reuse after aclose ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_rebuilds_the_transport_after_aclose(monkeypatch: pytest.MonkeyPatch) -> None:
+    # AgentLoop.close_executor() closes this client on any turn that raises,
+    # while the router's Hub source and the read_skill / use_skill tools keep
+    # holding the same instance -- so a closed transport used to make every
+    # later Hub call fail for the life of the process.
+    calls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"error": "ok", "status": 0, "result": {"items": [{"id": "1"}]}})
+
+    real_async_client = httpx.AsyncClient
+
+    def _mock_async_client(**kwargs: object) -> httpx.AsyncClient:
+        return real_async_client(transport=httpx.MockTransport(_handler))
+
+    monkeypatch.setattr(httpx, "AsyncClient", _mock_async_client)
+
+    client = SkillHubClient("https://hub.example")
+    assert await client.search("tmux") == [{"id": "1"}]
+
+    await client.aclose()
+    assert client._client.is_closed
+
+    assert await client.search("tmux") == [{"id": "1"}]
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_injected_transport_is_never_replaced() -> None:
+    injected = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    client = SkillHubClient("https://hub.example", client=injected)
+
+    await injected.aclose()
+    await client.aclose()
+
+    assert client._http() is injected
