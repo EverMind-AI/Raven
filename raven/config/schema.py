@@ -735,9 +735,8 @@ class ExecToolConfig(Base):
 class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
-    Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
-    / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (Nano Banana for images).
+    Empty fields fall back at call time according to the configured model and
+    tool backend. A missing model uses the tool's default.
     """
 
     api_key: str = ""
@@ -748,8 +747,8 @@ class MediaToolConfig(Base):
 class MediaGenConfig(Base):
     """Multimodal generation tools configuration.
 
-    OpenRouter is the only backend: image + speech via chat-completions output
-    modalities, and video via the async ``/videos`` endpoint (Kling).
+    Image, speech, and video tools resolve their backend from the configured
+    model. Video generation supports both regional MiniMax API endpoints.
     """
 
     image: MediaToolConfig = Field(default_factory=MediaToolConfig)
@@ -849,21 +848,29 @@ class Config(BaseSettings):
 
         A media tool (image/speech/video) counts as configured only when the
         user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. For
-        each configured tool we default a missing key to
-        ``providers.openrouter.apiKey`` so the chat key can be reused without
-        re-declaring it. Tools the user did not configure are left untouched
-        (no key, no model) — ``AgentLoop`` registers a media tool only when it
-        has a key or model, so an OpenRouter key set for chat alone never
-        surfaces image/speech/video to the agent. Returns a copy so this
-        resolution never mutates the raw config.
+        each configured tool we default a missing key from its matching provider
+        section so the key can be reused without re-declaring it. Tools the user
+        did not configure are left untouched (no key, no model) — ``AgentLoop``
+        registers a media tool only when it has a key or model, so a provider key
+        set for chat alone never surfaces image/speech/video to the agent. Returns
+        a copy so this resolution never mutates the raw config.
         """
         media = self.tools.media.model_copy(deep=True)
         openrouter = self.providers.get("openrouter")
         or_key = openrouter.api_key if openrouter else ""
-        for tool in (media.image, media.speech, media.video):
+        for tool in (media.image, media.speech):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
                 tool.api_key = or_key
+
+        video_configured = bool(media.video.api_key or media.video.model)
+        uses_minimax = media.video.model.startswith(("MiniMax-", "T2V-"))
+        video_provider = self.providers.get("minimax" if uses_minimax else "openrouter")
+        if video_configured and video_provider:
+            if not media.video.api_key:
+                media.video.api_key = video_provider.effective_api_key
+            if uses_minimax and not media.video.api_base and video_provider.api_base:
+                media.video.api_base = video_provider.api_base
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
