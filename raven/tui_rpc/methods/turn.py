@@ -309,6 +309,11 @@ async def turn_cancel(
     # handle.result() returns None on cancellation (does not raise).
     await handle.result()
 
+    # Defensive clear: the sink drops the slot via on_turn_end at turn exit,
+    # but a cancelled turn can resolve before that callback runs. Clear here
+    # so the next turn.send does not race into a phantom -32003.
+    clear_active(parsed.session_key)
+
     return {"cancelled": True}
 
 
