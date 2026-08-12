@@ -35,6 +35,7 @@ from raven.agent.tools.media_gen import (
     ImageGenerateTool,
     SpeechGenerateTool,
     VideoGenerateTool,
+    VoiceCloneTool,
 )
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
@@ -790,6 +791,7 @@ class AgentLoop:
         media_tools = (
             (ImageGenerateTool, media.image),
             (SpeechGenerateTool, media.speech),
+            (VoiceCloneTool, media.voice_clone),
             (VideoGenerateTool, media.video),
         )
         for cls, tool_cfg in media_tools:

@@ -754,6 +754,7 @@ class MediaGenConfig(Base):
 
     image: MediaToolConfig = Field(default_factory=MediaToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    voice_clone: MediaToolConfig = Field(default_factory=MediaToolConfig)
     video: MediaToolConfig = Field(default_factory=MediaToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
@@ -864,6 +865,13 @@ class Config(BaseSettings):
             configured = bool(tool.api_key or tool.model)
             if configured and or_key and not tool.api_key:
                 tool.api_key = or_key
+
+        voice_clone = media.voice_clone
+        voice_clone_configured = bool(voice_clone.api_key or voice_clone.api_base or voice_clone.model)
+        if voice_clone_configured and not voice_clone.api_key:
+            provider = self.providers.get("minimax")
+            if provider and provider.api_key:
+                voice_clone.api_key = provider.api_key
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:

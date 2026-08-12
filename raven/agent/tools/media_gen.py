@@ -54,6 +54,21 @@ if TYPE_CHECKING:
     from raven.config.schema import MediaToolConfig
 
 _DEFAULT_BASE = "https://openrouter.ai/api/v1"
+_MINIMAX_VOICE_CLONE_ENDPOINTS = {
+    "global_en": "https://api.minimax.io/v1/voice_clone",
+    "cn_zh": "https://api.minimaxi.com/v1/voice_clone",
+}
+_MINIMAX_VOICE_CLONE_DEFAULT_ENDPOINT = _MINIMAX_VOICE_CLONE_ENDPOINTS["global_en"]
+_MINIMAX_VOICE_CLONE_MODELS = frozenset(
+    {
+        "speech-2.8-hd",
+        "speech-2.6-hd",
+        "speech-02-hd",
+        "speech-01-hd",
+    }
+)
+_MINIMAX_VOICE_CLONE_DEFAULT_MODEL = "speech-2.8-hd"
+_MINIMAX_VOICE_CLONE_AUDIO_FORMATS = frozenset({"mp3", "m4a", "wav"})
 
 _EXT_MIME = {
     ".png": "image/png",
@@ -420,6 +435,196 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
             return wav_path, "wav", f"ffmpeg transcode to {fmt} failed; saved as wav"
         wav_path.unlink(missing_ok=True)
         return out, fmt, ""
+
+
+class VoiceCloneTool(_OpenRouterMediaTool):
+    """Create a reusable MiniMax voice from a local audio sample."""
+
+    name = "voice_clone"
+    default_model = _MINIMAX_VOICE_CLONE_DEFAULT_MODEL
+    description = (
+        "Clone a voice from a local MP3, M4A, or WAV sample. Optionally upload a "
+        "second short prompt sample to improve similarity."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "audio_path": {"type": "string", "description": "Local path to the voice sample"},
+            "voice_id": {"type": "string", "description": "Unique identifier to assign to the cloned voice"},
+            "model": {
+                "type": "string",
+                "enum": sorted(_MINIMAX_VOICE_CLONE_MODELS),
+                "default": _MINIMAX_VOICE_CLONE_DEFAULT_MODEL,
+                "description": "Speech model used to validate the cloned voice",
+            },
+            "prompt_audio_path": {
+                "type": "string",
+                "description": "Optional local path to a prompt sample shorter than eight seconds",
+            },
+            "prompt_text": {
+                "type": "string",
+                "description": "Transcript of prompt_audio_path, including ending punctuation",
+            },
+            "text": {"type": "string", "description": "Optional text for a preview audio sample"},
+            "text_validation": {
+                "type": "string",
+                "description": "Optional expected transcript for validating the source audio",
+            },
+            "accuracy": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "default": 0.7,
+                "description": "Minimum transcript similarity when text_validation is provided",
+            },
+            "need_noise_reduction": {"type": "boolean", "default": False},
+            "need_volume_normalization": {"type": "boolean", "default": False},
+            "aigc_watermark": {"type": "boolean", "default": False},
+        },
+        "required": ["audio_path", "voice_id"],
+    }
+
+    @property
+    def _minimax_api_key(self) -> str:
+        cfg_key = getattr(self._config, "api_key", "") if self._config else ""
+        return cfg_key or os.environ.get("MINIMAX_API_KEY", "")
+
+    @property
+    def _clone_endpoint(self) -> str:
+        cfg_base = getattr(self._config, "api_base", "") if self._config else ""
+        if not cfg_base:
+            return _MINIMAX_VOICE_CLONE_DEFAULT_ENDPOINT
+        base = cfg_base.rstrip("/")
+        return base if base.endswith("/voice_clone") else f"{base}/voice_clone"
+
+    @property
+    def _upload_endpoint(self) -> str:
+        return f"{self._clone_endpoint.rsplit('/voice_clone', 1)[0]}/files/upload"
+
+    def _no_minimax_key_error(self) -> str:
+        return json.dumps(
+            {
+                "error": (
+                    "voice_clone: no API key configured. Set it under "
+                    "tools.media.voiceClone.apiKey or providers.minimax.apiKey, "
+                    "or export MINIMAX_API_KEY, then restart the gateway."
+                )
+            },
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _response_error(response: dict[str, Any]) -> str:
+        base_resp = response.get("base_resp") or {}
+        status_code = base_resp.get("status_code")
+        if status_code in (None, 0):
+            return ""
+        return str(base_resp.get("status_msg") or f"status_code={status_code}")
+
+    async def _upload_audio(
+        self,
+        client: httpx.AsyncClient,
+        path: Path,
+        purpose: str,
+        headers: dict[str, str],
+    ) -> int | str:
+        suffix = path.suffix.lower().lstrip(".")
+        if suffix not in _MINIMAX_VOICE_CLONE_AUDIO_FORMATS:
+            supported = ", ".join(sorted(_MINIMAX_VOICE_CLONE_AUDIO_FORMATS))
+            raise ValueError(f"unsupported audio format: {suffix or 'unknown'}; expected one of {supported}")
+        response = await client.post(
+            self._upload_endpoint,
+            headers=headers,
+            data={"purpose": purpose},
+            files={"file": (path.name, path.read_bytes(), "application/octet-stream")},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if error := self._response_error(payload):
+            raise ValueError(error)
+        file_id = (payload.get("file") or {}).get("file_id")
+        if file_id in (None, ""):
+            raise ValueError("file upload did not return file.file_id")
+        return file_id
+
+    async def execute(
+        self,
+        audio_path: str,
+        voice_id: str,
+        model: str | None = None,
+        prompt_audio_path: str | None = None,
+        prompt_text: str | None = None,
+        text: str | None = None,
+        text_validation: str | None = None,
+        accuracy: float = 0.7,
+        need_noise_reduction: bool = False,
+        need_volume_normalization: bool = False,
+        aigc_watermark: bool = False,
+        **kwargs: Any,
+    ) -> str:
+        if not self._minimax_api_key:
+            return self._no_minimax_key_error()
+        if bool(prompt_audio_path) != bool(prompt_text):
+            return json.dumps(
+                {"error": "prompt_audio_path and prompt_text must be provided together"},
+                ensure_ascii=False,
+            )
+
+        model_id = self._model(model)
+        if model_id not in _MINIMAX_VOICE_CLONE_MODELS:
+            return json.dumps({"error": f"unsupported voice cloning model: {model_id}"}, ensure_ascii=False)
+
+        source = Path(audio_path).expanduser()
+        prompt_source = Path(prompt_audio_path).expanduser() if prompt_audio_path else None
+        for path in (source, prompt_source):
+            if path is not None and not path.is_file():
+                return json.dumps({"error": f"audio file not found: {path}"}, ensure_ascii=False)
+
+        headers = {"Authorization": f"Bearer {self._minimax_api_key}"}
+        try:
+            async with httpx.AsyncClient(proxy=self._proxy, timeout=180.0) as client:
+                file_id = await self._upload_audio(client, source, "voice_clone", headers)
+                payload: dict[str, Any] = {
+                    "file_id": file_id,
+                    "voice_id": voice_id,
+                    "model": model_id,
+                    "accuracy": accuracy,
+                    "need_noise_reduction": need_noise_reduction,
+                    "need_volume_normalization": need_volume_normalization,
+                    "aigc_watermark": aigc_watermark,
+                }
+                if prompt_source is not None:
+                    prompt_file_id = await self._upload_audio(client, prompt_source, "prompt_audio", headers)
+                    payload["clone_prompt"] = {
+                        "prompt_audio": prompt_file_id,
+                        "prompt_text": prompt_text,
+                    }
+                if text is not None:
+                    payload["text"] = text
+                if text_validation is not None:
+                    payload["text_validation"] = text_validation
+
+                response = await client.post(
+                    self._clone_endpoint,
+                    headers={**headers, "Content-Type": "application/json"},
+                    json=payload,
+                )
+                response.raise_for_status()
+                result = response.json()
+                if error := self._response_error(result):
+                    return json.dumps({"error": error, "voice_id": voice_id}, ensure_ascii=False)
+        except httpx.HTTPStatusError as e:
+            return self._format_http_error(e)
+        except Exception as e:
+            logger.error("voice_clone error: {}", e)
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+        result_voice_id = result.get("voice_id") or voice_id
+        logger.info("voice_clone: created {} via {}", result_voice_id, model_id)
+        return json.dumps(
+            {"success": True, "voice_id": result_voice_id, "model": model_id},
+            ensure_ascii=False,
+        )
 
 
 def _find_video_url(obj: Any) -> str | None:
