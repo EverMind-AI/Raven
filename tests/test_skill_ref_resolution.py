@@ -16,7 +16,7 @@ from raven.memory_engine.skill_local.types import SkillMeta
 
 @pytest.fixture
 def svc(tmp_path: Path) -> LocalSkillCatalog:
-    workspace = tmp_path / "chanwork"
+    workspace = tmp_path / "ws"
     workspace.mkdir()
     builtin = tmp_path / "builtin"
     builtin.mkdir()

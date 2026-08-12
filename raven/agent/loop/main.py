@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
-from raven.agent import workdir
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
@@ -23,7 +22,6 @@ from raven.agent.loop.recovery import (
     classify_empty_response,
 )
 from raven.agent.subagent import SubagentManager
-from raven.agent.subagent.backends import enabled_third_party
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
     DeepResearchManager,
@@ -71,11 +69,7 @@ _ABORTED_ACTION_REPLY = (
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
-    from raven.agent.loop.checkpoint import CheckpointService
-    from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
-    from raven.agent.tools.mcp_manager import MCPConnectionManager
-    from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,
         MemoryConfig,
@@ -87,13 +81,13 @@ if TYPE_CHECKING:
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.routing.router import ModelRouter
-    from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
+    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass
@@ -259,29 +253,6 @@ def _loop_break_nudge(tool: str, n: int) -> str:
     )
 
 
-def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
-    """A tool's own label for its transcript row, or None if it cannot give one.
-
-    ``display_call`` is handed the model's raw arguments: the registry's cast
-    and validation run later, on the execute path, so this sees whatever the
-    model emitted, including shapes the schema forbids. Its entire job is to
-    label a row, so a failure here has to cost the label and nothing else.
-
-    Without the guard the exception leaves the tool-event emit and ends the
-    turn, and the user gets no reply at all -- an array argument arriving as a
-    JSON string did exactly that, raising ``AttributeError`` on a character of
-    it. Guarding one tool leaves the trap set for the next one written; the
-    call site is where it closes for all of them.
-    """
-    if tool is None:
-        return None
-    try:
-        return tool.display_call(arguments)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("display_call failed for {}: {}", getattr(tool, "name", "?"), exc)
-        return None
-
-
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -309,9 +280,6 @@ class AgentLoop:
     # the model is currently reasoning about is worth keeping, older ones are the
     # cheapest thing to give up.
     _SHRINK_KEEP_RECENT_IMAGES = 1
-    # Reconnects allowed for a streamed call that failed before its first delta
-    # (after one, the caller has output that a retry would duplicate).
-    _MAX_STREAM_RECONNECTS = 1
     # Tool-failure-loop break: nudge after the same tool fails deterministically
     # this many times running; cap the nudges per turn so it can't itself loop.
     _LOOP_BREAK_THRESHOLD = 2
@@ -333,7 +301,6 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         sandbox_config: SandboxConfig | None = None,
         channels_config: ChannelsConfig | None = None,
-        deliverables: "DeliverableStore | None" = None,
         router: "ModelRouter | None" = None,
         strategies: "StrategyRegistry | None" = None,
         skill_forge_config: Any = None,
@@ -346,9 +313,8 @@ class AgentLoop:
         runtime_config: "RuntimeConfig | None" = None,
         interactive: bool = True,
         jina_api_key: str | None = None,
-        max_concurrent_subagents: int = 8,
+        max_concurrent_subagents: int = 4,
         max_subagent_spawns_per_hour: int = 30,
-        third_party_subagents: list | None = None,
         media_config: Any = None,
         deep_research_config: Any = None,
         disabled_tools: list[str] | None = None,
@@ -371,7 +337,6 @@ class AgentLoop:
         # tools, default behavior unchanged.
         plugin_tools: "list[Tool] | None" = None,
         empty_recovery: RecoveryLimits | None = None,
-        workdir_resolver: "WorkdirResolver | None" = None,
     ):
         from raven.agent.hook import (
             CompositeHook,
@@ -401,10 +366,8 @@ class AgentLoop:
         # Returning None means "fall through to normal flow".
         self.decision_consumer = decision_consumer
         self.channels_config = channels_config
-        self._deliverables = deliverables
         self.provider = provider
         self.workspace = workspace
-        self._workdir_resolver = workdir_resolver
         self.model = model or provider.get_default_model()
         # Resolved lazily on the first tool result that carries an image. Keyed
         # by model, not a single flag: the loop is a long-lived singleton and
@@ -476,11 +439,6 @@ class AgentLoop:
         # ``None`` means "use the legacy ``_collect_injected_skill_ids``
         # path" — see that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
-        # ``qualified_id -> registry source`` for the ids above. The id's own
-        # prefix is the addressing namespace (``local`` for anything on disk),
-        # so origin reporting needs this side map — see
-        # ``SkillsSegmentBuilder.build``.
-        self._last_injected_skill_sources: dict[str, str] = {}
 
         self.context = ContextBuilder(
             workspace,
@@ -551,13 +509,21 @@ class AgentLoop:
             runtime_config = RuntimeConfig()
         self.runtime_config = runtime_config
         self.interactive = interactive
-        self._checkpoint_enabled = self._checkpoint_active(runtime_config.checkpoint.policy, interactive)
-        # One entry per working directory this process has served, never
-        # evicted: a service is cheap, but each one materialises a shadow repo
-        # under that directory, so a long-lived gateway ends up holding one
-        # repo per session rather than the single agent-home repo it used to.
-        # Reclaim is by deleting the session directory; nothing here prunes.
-        self._checkpoints: dict[Path, "CheckpointService | None"] = {}
+        self._checkpoint = None
+        if self._checkpoint_active(runtime_config.checkpoint.policy, interactive):
+            from raven.agent.loop.checkpoint import CheckpointService
+
+            try:
+                self._checkpoint = CheckpointService(
+                    workspace,
+                    shadow_dir=runtime_config.checkpoint.shadow_dir,
+                )
+            except ValueError as exc:
+                # Bad shadow_dir (e.g. ``../escape`` or absolute path) →
+                # CheckpointService refuses to construct. Don't crash the
+                # whole agent over a config typo; log and disable the
+                # safety net so the turn still runs.
+                logger.warning("runtime.checkpoint disabled — {}", exc)
         # session_key -> {"checkpoint_id", "files"} stashed when a turn is
         # interrupted (max-iter); consumed by the next turn's recovery prompt.
         self._pending_recovery: dict[str, dict] = {}
@@ -577,34 +543,10 @@ class AgentLoop:
             owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
-            third_party_subagents=third_party_subagents,
-            session_dir=self.sessions.session_dir,
         )
-        # Kept for _register_default_tools to build the optional DAG tool (req4)
-        # and for hot-applying web config changes (P4).
-        self._third_party_subagents = third_party_subagents or []
-        self._dag_progress_sink = None
-        # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
-        # the web UI's skill panel (host wires it to the web channel's emitter,
-        # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
-        self._skills_sink = None
 
         # Executor: synchronous construction only; VM starts in _start_executor()
-        # A sandboxed VM mounts one host root at /workspace, not one per
-        # session, so it must be wide enough to cover every working directory
-        # the resolver can hand out. Agent home is usually somewhere else
-        # entirely -- under PER_CHANNEL the root is ``<agent home>/../tmp``, a
-        # sibling, and an explicit ``-w`` cannot be an ancestor of agent home
-        # because ``validate_override`` refuses one -- so it is mounted
-        # separately at /agent-home to keep memory/skills/session state
-        # reachable from inside the VM.
-        #
-        # The check is not dead: under LAUNCH_DIR the root is wherever the user
-        # started raven, and launching from ``~`` puts agent home inside it. A
-        # second mount of a directory already covered is what this avoids.
-        mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
-        home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
-        self._executor: SandboxExecutor = build_executor(sandbox_config, mount_root, self._owned_ids, home_volume)
+        self._executor: SandboxExecutor = build_executor(sandbox_config, workspace, self._owned_ids)
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
@@ -614,8 +556,7 @@ class AgentLoop:
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
-        self._mcp_manager: MCPConnectionManager | None = None
-        self._mcp_event_sink = None
+        self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._mcp_connecting = False
         self._processing_lock = asyncio.Lock()
@@ -740,7 +681,7 @@ class AgentLoop:
 
         The park is the second line of defence, not the first: the RPC
         rejects a switch outright when the caller's own session has a turn
-        in flight (``is_turn_active`` in ``rpc.methods.config``). This
+        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
         covers what that guard cannot see -- a caller that passes no
         ``session_id``, and the proactive turns that run in their own lanes.
         Note the RPC still answers ``applied: True`` and the config file is
@@ -826,15 +767,9 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
+        allowed_dir = self.workspace if self.restrict_to_workspace else None
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
-        if self._deliverables is not None:
-            from raven.agent.tools.deliver import DeliverFilesTool
-
-            self.tools.register(
-                DeliverFilesTool(self._deliverables, workspace=self.workspace, allowed_dirs=allowed_dirs)
-            )
+            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
@@ -843,21 +778,9 @@ class AgentLoop:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
-                extra_allowed_dirs=(self.workspace,),
             )
         )
-        # web_search needs a Serper key it does not have by default, and offering
-        # it anyway is worse than withholding it: the model reaches for it, the
-        # call fails, and the error text -- naming a config file and an env var --
-        # gets relayed to whoever is on the other end of the channel. Ask the tool
-        # rather than the config, because it resolves the key at call time from
-        # either source; gating on `brave_api_key` alone would withdraw the tool
-        # from a deploy that only exports SERPER_API_KEY.
-        web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
-        if web_search.api_key:
-            self.tools.register(web_search)
-        # web_fetch is unconditional by contrast: it works without a key, and the
-        # Jina one only upgrades the extraction.
+        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
@@ -898,26 +821,6 @@ class AgentLoop:
             self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         self.tools.register(SpawnTool(manager=self.subagents))
-        # Sub-agent DAG orchestration (req4): a decoupled, optional tool,
-        # registered only when there is an enabled third-party sub-agent to
-        # dispatch to -- a config whose only entry is disabled must not register
-        # a tool with an empty roster.
-        if enabled_third_party(self._third_party_subagents):
-            from raven.agent.subagent_dag.tool import SubAgentDagTool
-
-            self.tools.register(
-                SubAgentDagTool(
-                    workspace=self.subagents.workspace,
-                    third_party_subagents=self._third_party_subagents,
-                    guide_skill_id=self._dag_guide_skill_id(),
-                    session_dir=self.sessions.session_dir,
-                    is_paused=lambda: self.subagents.paused,
-                    gate=self.subagents.dispatch_gate,
-                    announce=self.subagents.announce_dag_result,
-                    adopt=self.subagents.adopt_background_run,
-                    charge=self.subagents.charge_dag_run,
-                )
-            )
         # The QuestionBroker is a per-transport singleton, late-bound via
         # set_broker once the transport (TUI RPC server / gateway hub) exists.
         self.tools.register(AskUserTool())
@@ -937,12 +840,11 @@ class AgentLoop:
         for tool in self.plugin_tools:
             self.tools.register(tool)
 
-        # Skill retrieval tools (body -> scripts). Both are source-agnostic and
-        # both serve local/everos straight from the registry, so both register
-        # whenever the registry is reachable; a Hub endpoint only adds their
-        # ``hub/`` branch. Gating ``read_skill`` on the client would take the
-        # body-fetch route away from the skills that ship with Raven, whose
-        # ``inject: description`` entry advertises exactly that route.
+        # Skill Hub retrieval tools. ``use_skill`` is source-agnostic — it
+        # resolves local/everos skills on disk too — so it registers whenever
+        # the skill registry is reachable. ``read_skill`` only fetches Hub
+        # bodies (local/everos bodies already ride in context), so it
+        # registers only when a Hub endpoint is configured.
         skill_registry = getattr(
             getattr(self.context, "skills", None),
             "registry",
@@ -952,11 +854,15 @@ class AgentLoop:
             from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
 
             self.tools.register(
-                ReadSkillTool(client=self._skill_hub_client, registry=skill_registry),
-            )
-            self.tools.register(
                 UseSkillTool(client=self._skill_hub_client, registry=skill_registry),
             )
+            if self._skill_hub_client is not None:
+                self.tools.register(
+                    ReadSkillTool(
+                        client=self._skill_hub_client,
+                        registry=skill_registry,
+                    ),
+                )
 
         # Progressive tool disclosure. Registered last so the catalog it
         # searches covers every built-in/plugin tool above; MCP tools join
@@ -990,27 +896,6 @@ class AgentLoop:
                 ),
                 first=True,
             )
-
-    def _dag_guide_skill_id(self) -> str | None:
-        """The orchestration guide's id for the DAG tool description, or None.
-
-        The tool tells the agent to load this skill before its first call, so
-        the pointer must be real: a deployment that removed the builtin skills
-        would otherwise burn a turn on a read_skill that cannot resolve. When
-        the registry itself is unreachable, keep the pointer — the shipped
-        skill is there by default, and losing the instruction is the worse
-        failure of the two.
-        """
-        from raven.agent.subagent_dag.tool import GUIDE_SKILL_ID
-
-        registry = getattr(getattr(self.context, "skills", None), "registry", None)
-        if registry is None:
-            return GUIDE_SKILL_ID
-        try:
-            found = registry.get(GUIDE_SKILL_ID.split("/", 1)[1]) is not None
-        except Exception:  # noqa: BLE001 - a registry hiccup must not unregister the guide
-            return GUIDE_SKILL_ID
-        return GUIDE_SKILL_ID if found else None
 
     @staticmethod
     def _build_skill_hub_client(
@@ -1229,7 +1114,6 @@ class AgentLoop:
         # path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
-        self._last_injected_skill_sources = {}
         session_messages = self._context_messages_for_session(session)
         assembled = await self.context_engine.assemble(
             session_key,
@@ -1252,8 +1136,6 @@ class AgentLoop:
         # to the SkillMeta-based path.
         meta_ids = assembled.metadata.get("injected_skill_ids") if assembled.metadata else None
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
-        meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
-        self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         messages = assembled.messages
         self._inject_recovery_block(session_key, messages)
         return messages
@@ -1272,40 +1154,6 @@ class AgentLoop:
             return True
         return interactive  # policy == "interactive"
 
-    def _turn_checkpoint(self) -> "CheckpointService | None":
-        """The shadow-git service for the directory the running turn works in.
-
-        Keyed on the bound directory rather than on a session key: ``run_turn``
-        already resolved and validated it once for the whole turn, and
-        re-resolving here would both repeat the sandbox-mount check and race a
-        workdir override changed mid-turn (the web UI can rewrite it).
-
-        Nothing bound means no turn is running, so there is nothing to
-        snapshot and the answer is ``None``. Deriving a directory here instead
-        would reintroduce both hazards the binding exists to avoid -- a
-        mount-check refusal raised at end of turn, and an empty session key
-        materializing the ``ws/_`` fallback directory.
-
-        One service per directory: CheckpointService puts its git dir inside
-        the directory it protects, so sharing one across working directories
-        would cross-contaminate their edited-file sets.
-        """
-        target = workdir.current()
-        if target is None or not self._checkpoint_enabled:
-            return None
-        if target not in self._checkpoints:
-            from raven.agent.loop.checkpoint import CheckpointService
-
-            try:
-                self._checkpoints[target] = CheckpointService(
-                    target,
-                    shadow_dir=self.runtime_config.checkpoint.shadow_dir,
-                )
-            except ValueError as exc:
-                logger.warning("runtime.checkpoint disabled for {} -- {}", target, exc)
-                self._checkpoints[target] = None
-        return self._checkpoints[target]
-
     def _stash_recovery(self, session_key: str, outcome: "TurnOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
         session gets a recovery prompt. No-op unless checkpoint is enabled
@@ -1317,7 +1165,7 @@ class AgentLoop:
         edits trajectory to resume (provider 400 etc.) and surfacing
         "Files modified last turn" for them would be misleading.
         """
-        if self._turn_checkpoint() is None or outcome.status != "interrupted":
+        if self._checkpoint is None or outcome.status != "interrupted":
             return
         if outcome.edited_files or outcome.checkpoint_id:
             self._pending_recovery[session_key] = {
@@ -1570,54 +1418,6 @@ class AgentLoop:
                 logger.warning("Error closing Skill Hub client: %s", exc)
             self._skill_hub_client = None
 
-    async def _mcp_executor(self):
-        """The sandbox executor an MCP connect should run under, started."""
-        await self._start_executor()
-        return self._executor
-
-    def set_mcp_event_sink(self, sink) -> None:
-        """Late-bind where per-server MCP events go (same shape as the DAG sink).
-
-        ``sink`` is an async callable ``(method, params)``. Without it the manager
-        still works, but every state change is silent -- and a client waiting on
-        ``mcp.status`` / ``oauth.pending`` has no way to learn that an OAuth
-        connect finished, which is most of what makes a browser round-trip
-        completable at all.
-        """
-        self._mcp_event_sink = sink
-
-    def _emit_mcp_event(self, method: str, params: dict) -> None:
-        """Fire-and-forget bridge: the manager's callbacks are sync, the sink is not."""
-        sink = self._mcp_event_sink
-        if sink is None:
-            return
-        try:
-            asyncio.get_running_loop().create_task(sink(method, params))
-        except RuntimeError:
-            pass  # no loop (a sync CLI path): nothing is listening anyway
-
-    @property
-    def mcp_manager(self) -> "MCPConnectionManager":
-        """The per-server connection lifecycle, created on first use.
-
-        Lazy rather than built in ``__init__`` because a loop with no MCP servers
-        configured should not carry one, and because the registry it writes into
-        is assembled after ``__init__`` in some entry points.
-        """
-        if self._mcp_manager is None:
-            from raven.agent.tools.mcp_manager import MCPConnectionManager
-
-            self._mcp_manager = MCPConnectionManager(
-                self.tools,
-                # MCP servers can register a name that is also blacklisted (e.g.
-                # ``mcp_<server>_search``), and the manager records what survived,
-                # so the blacklist has to be re-applied on every connect.
-                post_connect=self._apply_disabled_tools,
-                on_state_change=lambda snap: self._emit_mcp_event("mcp.status", snap),
-                on_oauth_event=lambda event, payload: self._emit_mcp_event(event, payload),
-            )
-        return self._mcp_manager
-
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
@@ -1626,25 +1426,32 @@ class AgentLoop:
         # context switch occurs here; a lock is not needed for this mutual-exclusion pattern.
         self._mcp_connecting = True
         try:
-            await self.sync_mcp(self._mcp_servers)
+            await self._start_executor()  # ensure executor is live before MCP servers connect
+            from raven.agent.tools.mcp import connect_mcp_servers
+
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(
+                self._mcp_servers,
+                self.tools,
+                self._mcp_stack,
+                executor=self._executor,
+            )
+            # Re-apply blacklist: MCP servers may register tool names that
+            # also appear in ``disabled_tools`` (e.g. ``mcp_<server>_search``).
+            self._apply_disabled_tools()
             self._mcp_connected = True
-        finally:
             self._mcp_connecting = False
-
-    async def sync_mcp(self, cfg_servers: dict) -> dict:
-        """Reconcile live MCP connections with ``cfg_servers``.
-
-        The entry point for everything that changes the server set while the loop
-        runs -- a market install, an uninstall, an enable/disable, a config edit.
-        Each server owns its own transport, so one can be attached or detached
-        without restarting raven, and a disabled server is disconnected here
-        rather than left running with its tools registered.
-        """
-        self._mcp_servers = cfg_servers
-        # The blacklist is re-applied by the manager's post_connect hook, on every
-        # connect rather than only the first -- an MCP server can register a name
-        # that is also in disabled_tools.
-        return await self.mcp_manager.sync(cfg_servers, executor_provider=self._mcp_executor)
+        except Exception:
+            # Reset in-progress flag so a subsequent call can retry.
+            self._mcp_connecting = False
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
+            raise
 
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.
@@ -1704,176 +1511,20 @@ class AgentLoop:
         self._register_real_deep_research(cfg)
         logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
 
-    def session_workdir(self, session_key: str) -> Path:
-        """The directory this session's turn works in, ready to be used.
-
-        The mount check runs before the directory is created, so a refusal
-        leaves nothing behind on disk.
-        """
-        resolved = self.peek_session_workdir(session_key)
-        self.check_workdir_mounted(resolved, session_key)
-        resolved.mkdir(parents=True, exist_ok=True)
-        return resolved
-
-    def peek_session_workdir(self, session_key: str) -> Path:
-        """Where this session would work, with no side effect and no refusal.
-
-        The read-only form, for a caller that only reports the path. Without a
-        resolver the loop keeps its pre-split behaviour: every session shares
-        ``self.workspace``.
-        """
-        if self._workdir_resolver is None:
-            return self.workspace
-        return self._workdir_resolver.resolve(session_key, create=False)
-
-    def check_workdir_mounted(self, path: Path, session_key: str | None = None) -> None:
-        """Refuse a working directory a sandboxed run could not see.
-
-        A VM's volumes are fixed when the box is created, so a directory
-        outside the mount cannot be served by adding one later.
-        """
-        if self._workdir_resolver is None or not self._executor.is_sandboxed:
-            return
-        root = self._workdir_resolver.mount_root()
-        if workdir.is_within(path, root):
-            return
-        subject = f"session {session_key} is pinned to {path}" if session_key else str(path)
-        raise ValueError(
-            f"{subject}, which is outside the sandbox mount {root}; "
-            "clear the override or restart with a wider workspace root"
-        )
-
     def _set_tool_context(
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
         """Update context for all tools that need routing info."""
-        # Before the per-tool contexts because the schema is assembled from this
-        # same turn: a channel-bound tool is withheld by the registry, not by
-        # its own refusal (see ToolRegistry.set_channel).
-        self.tools.set_channel(channel)
-        for name in ("message", "spawn", "cron", "deep_research", "run_subagent_dag", "deliver_files"):
+        for name in ("message", "spawn", "cron", "deep_research"):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
-                elif name in ("spawn", "deep_research", "run_subagent_dag", "deliver_files"):
+                elif name in ("spawn", "deep_research"):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
                     tool.set_context(channel, chat_id)
-
-    def set_dag_progress_sink(self, sink) -> None:
-        """Late-bind the DAG tool's progress sink (host wires it to the web
-        channel's emitter so run_subagent_dag events reach the web UI)."""
-        self._dag_progress_sink = sink
-        if (tool := self.tools.get("run_subagent_dag")) is not None and hasattr(tool, "set_progress_sink"):
-            tool.set_progress_sink(sink)
-
-    def set_skills_sink(self, sink) -> None:
-        """Late-bind the sink that reports SkillForge-injected skills to the web
-        UI (host wires it to the web channel's emitter). ``sink`` is an async
-        callable ``(conversation, name, payload)`` matching the DAG sink."""
-        self._skills_sink = sink
-
-    async def _emit_injected_skills(self, session_key: str) -> None:
-        """Push this turn's SkillForge-injected skills to the web UI's skill
-        panel as a ``skills_injected`` custom event.
-
-        The id's prefix is the *addressing* namespace, which is ``local`` for
-        every on-disk skill, so origin comes from
-        ``_last_injected_skill_sources`` (the registry source the engine
-        reported) and falls back to the prefix only when that is absent. No-op
-        when there is no sink (CLI/IM) or nothing was injected this turn."""
-        if self._skills_sink is None:
-            return
-        ids = self._last_injected_skill_ids or []
-        if not ids:
-            return
-        skills = []
-        for qid in ids:
-            prefix, _, name = str(qid).partition("/")
-            skills.append(
-                {
-                    "id": str(qid),
-                    "source": self._last_injected_skill_sources.get(str(qid)) or prefix,
-                    "name": name or str(qid),
-                    "kind": "injected",
-                }
-            )
-        await self._emit_skills(session_key, skills)
-
-    async def _emit_skills(self, session_key: str, skills: list[dict[str, Any]]) -> None:
-        """Send one ``skills_injected`` payload, swallowing any failure."""
-        try:
-            await self._skills_sink(session_key, "skills_injected", {"skills": skills})
-        except Exception:  # never break a turn on a telemetry/UI push
-            logger.exception("skills_injected emit failed")
-
-    async def _report_skill_read(self, session_key: str, tool_name: str, args: dict[str, Any]) -> None:
-        """Report a skill the model loaded itself to the web UI's skill panel.
-
-        ``read_skill`` / ``use_skill`` are how a skill advertised by description
-        alone actually gets loaded -- notably the builtin orchestration guide,
-        whose id the DAG tool names in its own description. Those never pass
-        through SkillForge injection, so without this the panel shows nothing
-        for a turn that demonstrably used a skill.
-
-        The model passes the addressing id (``local/<name>``); the registry is
-        what knows the real source. An unresolvable id is still reported, with
-        the addressed namespace as source, rather than dropped -- the call
-        happened."""
-        if self._skills_sink is None:
-            return
-        qid = str(args.get("skill_id") or "").strip()
-        if not qid:
-            return
-        namespace, native = qid.partition("/")[0], qid.partition("/")[2]
-        registry = getattr(getattr(self.context, "skills", None), "registry", None)
-        try:
-            # The same split and resolver ``read_skill`` itself uses, so the id
-            # grammar -- including "a bare id addresses the Hub" -- and "local
-            # spans every on-disk source" stay defined in exactly one place.
-            from raven.agent.tools.skill_hub import _lookup_on_disk, _split_qualified_id
-
-            namespace, native = _split_qualified_id(qid)
-            meta = _lookup_on_disk(registry, namespace, native)
-            source = str(meta.source) if meta is not None and getattr(meta, "source", None) else namespace
-        except Exception:  # noqa: BLE001 - a registry hiccup must not lose the report
-            logger.debug("skill source lookup failed for %s", qid)
-            source = namespace
-        name = native or qid
-        await self._emit_skills(
-            session_key,
-            [{"id": qid, "source": source, "name": name, "kind": tool_name}],
-        )
-
-    def apply_third_party_subagents(self, configs: list) -> None:
-        """Hot-apply new third-party sub-agent config to the live runtime (P4):
-        the manager's spawn registry and the DAG tool's node executors, with no
-        restart. Registers the DAG tool on the first non-empty apply (and re-binds
-        the progress sink)."""
-        self._third_party_subagents = list(configs)
-        self.subagents.set_third_party_subagents(configs)
-        tool = self.tools.get("run_subagent_dag")
-        if tool is not None and hasattr(tool, "set_third_party_subagents"):
-            tool.set_third_party_subagents(configs)
-        elif tool is None and enabled_third_party(configs):
-            from raven.agent.subagent_dag.tool import SubAgentDagTool
-
-            new_tool = SubAgentDagTool(
-                workspace=self.subagents.workspace,
-                third_party_subagents=configs,
-                guide_skill_id=self._dag_guide_skill_id(),
-                session_dir=self.sessions.session_dir,
-                is_paused=lambda: self.subagents.paused,
-                gate=self.subagents.dispatch_gate,
-                announce=self.subagents.announce_dag_result,
-                adopt=self.subagents.adopt_background_run,
-                charge=self.subagents.charge_dag_run,
-            )
-            if self._dag_progress_sink is not None:
-                new_tool.set_progress_sink(self._dag_progress_sink)
-            self.tools.register(new_tool)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -1957,12 +1608,9 @@ class AgentLoop:
         per-fragment arguments strings. Multi-tool / out-of-order merging is
         a v0.2 ask.
 
-        A failure that already streamed deltas is not retried — the caller has
-        rendered them, so a second attempt would duplicate its output. Before
-        the first delta there is nothing to duplicate, so a retryable error
-        reconnects up to ``_MAX_STREAM_RECONNECTS`` times. Once the budget is
-        spent the exception propagates: per N-TURNFAILED a mid-turn provider
-        error is the turn's failure, not a text reply about one.
+        No retry on transient errors in v0.1 stream mode — adding retry to
+        a partially-streamed call requires either restarting from scratch
+        (wasteful) or resume-from-offset (provider-specific). Deferred.
         """
         content_buf: list[str] = []
         reasoning_buf: list[str] = []
@@ -1972,75 +1620,48 @@ class AgentLoop:
         error_content: str | None = None
         error_classification: ErrorClassification | None = None
 
-        for attempt in range(self._MAX_STREAM_RECONNECTS + 1):
-            # aclosing() guarantees the async generator (and its underlying stream)
-            # is closed when an error from the per-chunk idle cap or the provider
-            # unwinds the loop, so a stalled or broken stream never hangs or leaks
-            # the connection — and a reconnect starts from a closed socket.
-            try:
-                async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
-                    async for delta in stream:
-                        if delta.finish_reason == "error":
-                            # A non-streaming provider's chat() error, replayed
-                            # through the fallback as its single terminal delta.
-                            # Its content is the error text, not a token to render
-                            # or accumulate -- surface it via error_classification
-                            # instead of the normal success collation below.
-                            had_error = True
-                            error_content = delta.content
-                            error_classification = delta.error_classification
-                            if delta.usage is not None:
-                                final_usage = delta.usage
-                            # No reconnect for it: the fallback already spent
-                            # chat()'s own retries, so the stream ends here and
-                            # ``had_error`` answers for the call.
-                            continue
-                        reasoning_delta = getattr(delta, "reasoning_content", None)
-                        if reasoning_delta:
-                            reasoning_buf.append(reasoning_delta)
-                            if on_reasoning_delta is not None:
-                                await on_reasoning_delta(reasoning_delta)
-                        if delta.content:
-                            content_buf.append(delta.content)
-                            if on_token_delta is not None:
-                                await on_token_delta(delta.content)
-                        if delta.tool_call_delta:
-                            _merge_tool_call_fragments(
-                                tool_call_slots,
-                                delta.tool_call_delta,
-                            )
+        # aclosing() guarantees the async generator (and its underlying stream)
+        # is closed when a TimeoutError from the per-chunk idle cap unwinds the
+        # loop, so a stalled stream terminates with a structured error instead
+        # of hanging or leaking the connection. The stream path has no retry
+        # (see docstring), so the error surfaces as the turn's response.
+        try:
+            async with aclosing(self.provider.chat_stream(messages=messages, tools=tools, model=model)) as stream:
+                async for delta in stream:
+                    if delta.finish_reason == "error":
+                        # A non-streaming provider's chat() error, replayed
+                        # through the fallback as its single terminal delta.
+                        # Its content is the error text, not a token to render
+                        # or accumulate -- surface it via error_classification
+                        # instead of the normal success collation below.
+                        had_error = True
+                        error_content = delta.content
+                        error_classification = delta.error_classification
                         if delta.usage is not None:
                             final_usage = delta.usage
-                break
-            except TimeoutError:
-                # The idle cap already waited the full timeout; reconnecting would
-                # double an already-long stall, so a stall ends the call.
-                return LLMResponse(
-                    content="".join(content_buf),
-                    finish_reason="error",
-                    error_classification=self.provider.classify_error(TimeoutError()),
-                )
-            except Exception as exc:
-                # Every path out of here is a bare `raise` so the provider's own
-                # exception reaches the caller unchanged: per N-TURNFAILED the turn
-                # must fail (the lane emits TurnFailed) rather than resolve into a
-                # "Sorry" text reply.
-                if bool(content_buf or reasoning_buf or tool_call_slots) or attempt >= self._MAX_STREAM_RECONNECTS:
-                    raise
-                # Duck-typed providers need not implement classify_error; treat a
-                # missing classifier as fatal so the real error surfaces instead of
-                # an AttributeError raised from inside this handler.
-                classify = getattr(self.provider, "classify_error", None)
-                classification = classify(exc) if classify is not None else None
-                if classification is None or not classification.retryable:
-                    raise
-                logger.warning(
-                    "Stream LLM error [{}] before first delta (attempt {}/{}), reconnecting: {}",
-                    classification.category,
-                    attempt + 1,
-                    self._MAX_STREAM_RECONNECTS + 1,
-                    exc,
-                )
+                        continue
+                    reasoning_delta = getattr(delta, "reasoning_content", None)
+                    if reasoning_delta:
+                        reasoning_buf.append(reasoning_delta)
+                        if on_reasoning_delta is not None:
+                            await on_reasoning_delta(reasoning_delta)
+                    if delta.content:
+                        content_buf.append(delta.content)
+                        if on_token_delta is not None:
+                            await on_token_delta(delta.content)
+                    if delta.tool_call_delta:
+                        _merge_tool_call_fragments(
+                            tool_call_slots,
+                            delta.tool_call_delta,
+                        )
+                    if delta.usage is not None:
+                        final_usage = delta.usage
+        except TimeoutError:
+            return LLMResponse(
+                content="".join(content_buf),
+                finish_reason="error",
+                error_classification=self.provider.classify_error(TimeoutError()),
+            )
 
         if had_error:
             return LLMResponse(
@@ -2249,7 +1870,6 @@ class AgentLoop:
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
         extraction_session_id: str | None = None,
-        session_key: str | None = None,
         model: str | None = None,
         fallback_models: list[str] | None = None,
         injected_skill_ids: list[str] | None = None,
@@ -2268,20 +1888,13 @@ class AgentLoop:
 
         ``extraction_session_id`` is the session key passed to local
         skill extraction when a turn completes. When ``None``, extraction
-        is skipped (no pipeline wired) -- which is the only case today, so
-        ``extraction_key`` below is always empty. It is not the turn's
-        session key and must not be used as one.
-
-        ``session_key`` is the turn's real session key. It labels the
-        checkpoint commit only; usage attribution deliberately still goes
-        through ``extraction_key``, since widening it would start filling
-        per-session cost buckets that have always been empty.
+        is skipped (no pipeline wired).
         """
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        extraction_key = extraction_session_id or ""
+        session_key = extraction_session_id or ""
         effective_model = model or self.model
 
         # Bug2 / decision B — track whether the turn was a normal exit or a
@@ -2361,7 +1974,7 @@ class AgentLoop:
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
-            usage_snapshot = self._build_usage_snapshot(response, call_model, extraction_key)
+            usage_snapshot = self._build_usage_snapshot(response, call_model, session_key)
             await self.strategies.after_llm_call(
                 {
                     "content": response.content,
@@ -2498,16 +2111,14 @@ class AgentLoop:
                                 "tool_call_id": tool_call.id,
                                 "name": tool_call.name,
                                 "arguments": tool_call.arguments,
-                                "blocking": self.tools.is_blocking(tool_call.name, tool_call.arguments),
                                 # Tool-authored call label; None -> UI derives one.
-                                "display": _display_label(_tool, tool_call.arguments),
+                                "display": _tool.display_call(tool_call.arguments) if _tool else None,
                             },
                         )
-                    # A tool whose output also reaches the UI on a side channel
-                    # (exec's inline diff, run_subagent_dag's progress events)
-                    # needs this call's id to correlate with the row the UI drew.
-                    if (setter := getattr(self.tools.get(tool_call.name), "set_tool_call_id", None)) is not None:
-                        setter(tool_call.id)
+                    if tool_call.name == "exec":
+                        exec_tool = self.tools.get("exec")
+                        if isinstance(exec_tool, ExecTool):
+                            exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
@@ -2528,21 +2139,14 @@ class AgentLoop:
                         preview.replace("\n", " ")[:200],
                     )
                     if emit_tool_event:
-                        tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
                         await on_tool_event(
                             "complete",
                             {
                                 "tool_call_id": tool_call.id,
                                 "result_preview": preview,
                                 "truncated": len(display_src) > 200,
-                                "metadata": tool_metadata,
                             },
                         )
-                    # A skill the model loaded itself never passes through
-                    # SkillForge injection, so report it here or the skill panel
-                    # misses the whole class (builtin guides in particular).
-                    if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
-                        await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
                     model_text, blocks, attach_blocks = self._route_result_images(
                         model_text, getattr(result, "blocks", None), call_model or effective_model
                     )
@@ -2749,18 +2353,12 @@ class AgentLoop:
         # ``outcome.status`` so that pipeline can gate on completion later.
 
         outcome = TurnOutcome(status=status)
-        checkpoint = self._turn_checkpoint()
-        if checkpoint is not None:
+        if self._checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
             # for both normal and interrupted exits (matches Claude Code/Cursor
             # granularity). Best-effort — commit_turn never raises.
-            # The label is read in ``git log`` inside the shadow repo by
-            # someone recovering a file. The repo already implies the
-            # directory, so the session key is what disambiguates -- several
-            # sessions share one shadow repo whenever they resolve to the same
-            # directory (LAUNCH_DIR, or an explicit workdir override).
-            label = f"turn {session_key} [{status}]" if session_key else f"turn [{status}]"
-            cid, changed = await checkpoint.commit_turn(label)
+            label = f"turn {session_key or 'anon'} [{status}]"
+            cid, changed = await self._checkpoint.commit_turn(label)
             outcome.checkpoint_id = cid
             if status == "interrupted":
                 outcome.edited_files = changed
@@ -2826,12 +2424,12 @@ class AgentLoop:
 
     async def close_mcp(self) -> None:
         """Close MCP connections and the sandbox executor."""
-        if self._mcp_manager is not None:
+        if self._mcp_stack:
             try:
-                await self._mcp_manager.aclose()
+                await self._mcp_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass  # MCP SDK cancel scope cleanup is noisy but harmless
-            self._mcp_manager = None
+            self._mcp_stack = None
         self._mcp_connected = False  # reset so _connect_mcp() can reconnect after close
         self._mcp_connecting = False  # reset so a concurrent caller isn't permanently blocked
         await self.close_executor()  # always runs, even when no MCP servers are configured
@@ -3056,19 +2654,15 @@ class AgentLoop:
             content,
             context_messages,
         )
-        # ── Model selection: the session's own pick, else the router ─────────
+        # ── Model routing (EcoClaw-style) ────────────────────────────────────
         # Ahead of assembly, not after it: assembly decides whether an
         # attachment is inlined as a picture or described in text, and that
         # question is about the model the request will actually reach. Routing
         # needs only ``content``, so asking first costs nothing and stops one
         # model's verdict from shaping a message another model receives.
-        # A per-session model is an explicit user choice, so it outranks the
-        # router's heuristic and suppresses its fallback chain.
-        routed_model: str | None = session.metadata.get("model")
+        routed_model: str | None = None
         fallback_models: list[str] = []
-        if routed_model is not None:
-            logger.info("Session model: {} → {}", self.model, routed_model)
-        elif self.router is not None:
+        if self.router is not None:
             routed_model, fallback_models = await self.router.select_model_chain(content)
             if routed_model and routed_model != self.model:
                 logger.info("Router: {} → {}", self.model, routed_model)
@@ -3085,9 +2679,6 @@ class AgentLoop:
             selected_skills=selected_skills or None,
             model=routed_model,
         )
-        # Surface the skills SkillForge injected this turn to the web UI's skill
-        # panel (populated into _last_injected_skill_ids by the assemble above).
-        await self._emit_injected_skills(key)
 
         extraction_sid = None  # Phase B-1: embedded extraction removed; always None now.
         turn_start_idx = len(initial_messages) - 1
@@ -3095,7 +2686,6 @@ class AgentLoop:
             initial_messages,
             on_progress=on_progress,
             extraction_session_id=extraction_sid,
-            session_key=key,
             model=routed_model,
             fallback_models=fallback_models,
             injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
@@ -3389,7 +2979,6 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         name=info["name"],
                         arguments=info["arguments"],
-                        blocking=bool(info.get("blocking")),
                         display=info.get("display"),
                     )
                 )
@@ -3400,7 +2989,6 @@ class AgentLoop:
                         tool_call_id=info["tool_call_id"],
                         result_preview=info["result_preview"],
                         truncated=info["truncated"],
-                        metadata=info.get("metadata"),
                     )
                 )
 
@@ -3485,39 +3073,23 @@ class AgentLoop:
         if usage_sink is None:
             usage_sink = {}
         try:
-            # Resolve inside the try so a bad persisted override (deleted
-            # directory, permission change) still releases the cron token
-            # below via the outer finally, instead of stranding it.
-            try:
-                turn_workdir = self.session_workdir(cid)
-            except Exception as exc:
-                raise RuntimeError(
-                    "Session working directory is invalid; clear this session's working "
-                    "directory override from the web UI to recover."
-                ) from exc
-            # Bind the session's working directory around the whole turn body (not
-            # just the _set_tool_context call inside _process_message) so every
-            # path-aware tool sees it, including on the exception and cancellation
-            # paths below -- workdir.bind's finally always resets the ContextVar.
-            with workdir.bind(turn_workdir):
-                try:
-                    await self._start_executor()
-                    await self._connect_mcp()
-                    out = await self._process_message(
-                        req,
-                        session_key=cid,
-                        on_progress=on_progress,
-                        on_token_delta=on_token if stream else None,
-                        on_reasoning_delta=on_reasoning if stream else None,
-                        on_tool_event=on_tool,
-                        on_episode_start=on_episode if stream else None,
-                        usage_sink=usage_sink,
-                        origin=req.origin,
-                        drain=drain,
-                    )
-                except Exception:
-                    await self.close_executor()
-                    raise
+            await self._start_executor()
+            await self._connect_mcp()
+            out = await self._process_message(
+                req,
+                session_key=cid,
+                on_progress=on_progress,
+                on_token_delta=on_token if stream else None,
+                on_reasoning_delta=on_reasoning if stream else None,
+                on_tool_event=on_tool,
+                on_episode_start=on_episode if stream else None,
+                usage_sink=usage_sink,
+                origin=req.origin,
+                drain=drain,
+            )
+        except Exception:
+            await self.close_executor()
+            raise
         finally:
             if cron_token is not None and isinstance(cron_tool, CronTool):
                 cron_tool.reset_cron_context(cron_token)

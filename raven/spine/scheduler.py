@@ -276,10 +276,6 @@ class Lane:
                 await self._sink(TurnFailed(error="cancelled", cancelled=True, conversation_id=self._conversation_id))
             raise
         except Exception as exc:
-            # The event carries only str(exc) to the front-end, so this is the
-            # only place the traceback is ever recorded — without it a failed
-            # turn leaves no trace on the process side at all.
-            logger.opt(exception=exc).error("Turn failed on {}: {}", self._conversation_id, exc)
             if started:
                 await self._sink(TurnFailed(error=str(exc), cancelled=False, conversation_id=self._conversation_id))
             return None

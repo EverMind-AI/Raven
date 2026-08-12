@@ -89,24 +89,6 @@ class ContextConfig(_Base):
     protect_first_n: int = 3
     """Number of head exchanges always preserved in context."""
 
-    pinned_skill_ids: list[str] = Field(default_factory=lambda: ["local/subagent-dag-orchestration"])
-    """Skills whose fetched body is pinned into every later context window.
-
-    A skill body arrives as a ``use_skill`` / ``read_skill`` tool result, which
-    is an ordinary history message: only the first ``protect_first_n`` exchanges
-    are protected, so a body read mid-session is dropped like any other old one.
-    For instruction material that is usually fine -- re-fetch it. It is not fine
-    when a tool's own description says "unless the guide is already in your
-    context": the agent cannot observe whether it still is, so it either
-    re-fetches every turn or builds from the memory of a body that is gone.
-
-    Pinning keeps that fetch (the assistant tool_call and its results) in every
-    later window of the session, at the cost of those tokens of history budget.
-    Only for bodies whose absence is silently wrong; the default is the sub-agent
-    DAG guide, whose wiring rules the tool description cannot restate in full.
-    Re-fetching the same id supersedes the earlier pin, so one body is never
-    pinned twice. Set to ``[]`` to disable."""
-
     archive_dir: str = "memory/.curator/archive"
     """Relative path under workspace for lossless message archives."""
 
@@ -763,25 +745,22 @@ class EverOSConfig(_Base):
     # LLM as candidates for ``update``. 5 is enough — overlap between
     # turn-derived candidates above this rank is rare, and the prompt
     # budget for supporting_cases scales with this number.
-    # Bounds live here rather than on the writers: the web RPC is one of three
-    # ways in (onboard/CLI and a hand-edited config.json are the others), and
-    # only a schema constraint covers all of them.
-    max_skills_top_k: int = Field(default=5, ge=1)
+    max_skills_top_k: int = 5
     # Confidence floor: skills falling below this after a downward
     # adjustment are soft-deleted on the spot.
-    retire_confidence: float = Field(default=0.1, ge=0.0, le=1.0)
+    retire_confidence: float = 0.1
     # Skip the skill_extractor LLM call when ``case.quality_score`` is
     # below this floor. Low-quality distillations tend to produce noisy
     # / contradictory skills more often than reusable ones; the case is
     # still persisted (useful for retrieval / audit).
-    min_quality_for_skill_extract: float = Field(default=0.2, ge=0.0, le=1.0)
+    min_quality_for_skill_extract: float = 0.2
     # 3-tier value gate placed before case extraction (in _flush_segment).
     # Only segments that pass at least one tier are extracted:
     #   Tier 1 (fast-pass): has_user_feedback AND >=2 user messages in segment
     #   Tier 2 (fast-pass): total tool_calls > complex_task_tool_call_threshold
     #   Tier 3 (cheap LLM): detect_llm asked whether trajectory is worth
     #                        learning from; false → skip, true → extract
-    complex_task_tool_call_threshold: int = Field(default=20, ge=0)
+    complex_task_tool_call_threshold: int = 20
 
 
 class LocalDirConfig(_Base):

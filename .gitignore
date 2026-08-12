@@ -45,7 +45,6 @@ tmp.sh
 .work_context/
 # Runtime-discipline shadow checkpoint repo (Bug2) — never commit snapshots
 .raven/
-.hermes/
 
 # SkillForge dense retrieval cache (auto-built per-deployment, never tracked)
 .skill_index/
@@ -86,18 +85,3 @@ benchmarks/proactivity_eval/data/discovery/*/auth_*.py
 benchmarks/proactivity_eval/data/discovery/*/cache_*.md
 benchmarks/proactivity_eval/data/discovery/*/rate_limit_*.py
 benchmarks/proactivity_eval/data/discovery/*/weekly_status_*.md
-
-# Skill-retrieval demo: the working directory and agent-home trees a local run writes.
-demos/skill_retrieval/output/
-demos/skill_retrieval/sessions/
-demos/skill_retrieval/user_memory/
-demos/skill_retrieval/agent_memory/
-
-# Scratch workspace for local sub-agent / DAG testing (see ui-webui chat workspace picker).
-/tmp/
-.omo/*
-.ruff_cache/
-subagents/
-
-# Playwright MCP session artifacts (console logs, page snapshots, screenshots)
-.playwright-mcp/

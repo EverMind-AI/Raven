@@ -1,7 +1,5 @@
 import asyncio
 
-from loguru import logger
-
 from raven.spine import (
     ChatType,
     Notice,
@@ -242,41 +240,6 @@ async def test_run_exception_yields_turn_failed_and_resolves_future():
     failed = next(e for e in events if isinstance(e, TurnFailed))
     assert failed.cancelled is False
     assert "boom" in failed.error
-
-
-async def test_run_exception_is_logged_with_a_traceback():
-    # The failure event carries only str(exc) to the front-end, so without a log
-    # here the process side of a failed turn is completely silent.
-    runner = FailingRunner()
-    events, sink = _collector()
-    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="tg:11")
-    lines: list[str] = []
-    sink_id = logger.add(lambda m: lines.append(str(m)), level="ERROR", format="{message}")
-    try:
-        await lane.submit(_req())
-    finally:
-        logger.remove(sink_id)
-    matched = [line for line in lines if "boom" in line]
-    assert matched, f"the failed turn logged nothing at ERROR; captured={lines}"
-    assert "tg:11" in matched[0]  # which conversation died
-    assert "ValueError" in matched[0]  # the traceback, not just str(exc)
-
-
-async def test_cancelled_turn_is_not_logged_as_an_error():
-    # A user /stop is a normal outcome, not a failure worth an ERROR line.
-    runner = HangingRunner()
-    events, sink = _collector()
-    lane = Lane(runner=runner, pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
-    lines: list[str] = []
-    sink_id = logger.add(lambda m: lines.append(str(m)), level="ERROR", format="{message}")
-    try:
-        fut = lane.submit(_req())
-        await runner.started.wait()
-        lane.cancel()
-        await asyncio.wait_for(fut, timeout=1.0)
-    finally:
-        logger.remove(sink_id)
-    assert lines == []
 
 
 async def test_cancel_resolves_future_with_cancelled_terminal():

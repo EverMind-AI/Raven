@@ -158,28 +158,14 @@ def everos_role_configured(section: str) -> bool:
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:
     """Merge ``fields`` into ``[section]`` of the user-level toml.
 
-    Three states, because two are not enough to express "remove this":
-
-    - absent or ``None`` -- leave whatever is stored alone;
-    - ``""`` -- delete the key from the section;
-    - anything else -- store it.
-
-    Without the middle one, dropping only an api_key meant deleting the whole
-    section and losing its model and base_url with it. Every other section is
-    preserved either way.
+    ``None`` values are dropped (treated as "leave unset"); existing keys in
+    the section and every other section are preserved.
     """
     if section not in WRITABLE_SECTIONS:
         raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
     data = load_everos_config()
-    merged = dict(data.get(section, {}))
-    for key, value in fields.items():
-        if value is None:
-            continue
-        if value == "":
-            merged.pop(key, None)
-        else:
-            merged[key] = value
-    data[section] = merged
+    clean = {k: v for k, v in fields.items() if v is not None}
+    data[section] = {**data.get(section, {}), **clean}
     _write_atomic(get_everos_config_path(), data)
 
 

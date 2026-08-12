@@ -37,16 +37,3 @@ class CustomBuildHook(BuildHookInterface):
                 "`npm --prefix ui-tui ci && npm --prefix ui-tui run build` before "
                 "building a release wheel."
             )
-
-        # The same conditional treatment for the served page. `raven serve` looks
-        # for the packaged copy first (resolve_ui_dist), so without this a wheel
-        # answers `/` with the placeholder even though the source tree has a page.
-        ui_dist = Path(self.root) / "ui" / "dist"
-        if ui_dist.is_dir() and (ui_dist / "index.html").is_file():
-            build_data.setdefault("force_include", {})[str(ui_dist)] = "raven/ui/dist"
-        else:
-            self.app.display_warning(
-                "ui/dist/index.html not found — building WITHOUT the bundled page. "
-                "`raven serve` from this wheel will answer / with the placeholder; "
-                "run `python ui/build.py` before building a release wheel."
-            )

@@ -20,8 +20,7 @@ import {
   pasteTokenLabel,
   sameToolTrailGroup,
   splitToolDuration,
-  thinkingPreview,
-  toolResultPreview
+  thinkingPreview
 } from '../lib/text.js'
 
 describe('isToolTrailResultLine', () => {
@@ -130,30 +129,6 @@ describe('boundedHistoryRenderText', () => {
 
     expect(out).toContain('[showing tail; omitted')
     expect(out).not.toContain('live tail')
-  })
-})
-
-describe('toolResultPreview', () => {
-  it('keeps a short result whole', () => {
-    expect(toolResultPreview('two\nlines')).toBe('two\nlines')
-  })
-
-  it('drops the line the budget cut in half instead of leaving a stump', () => {
-    // The real symptom: a directory listing whose last entry read "updat".
-    const listing = ['a-file', 'b-file', 'c-file', 'd-file', 'updated-file'].join('\n')
-    const budget = listing.indexOf('updated-file') + 5
-
-    const out = toolResultPreview(listing, budget)
-
-    expect(out).toBe('a-file\nb-file\nc-file\nd-file')
-    expect(out).not.toContain('updat')
-  })
-
-  it('falls back to an ellipsis when the whole result is one unbreakable line', () => {
-    const out = toolResultPreview('x'.repeat(300), 40)
-
-    expect(out).toHaveLength(40)
-    expect(out.endsWith('…')).toBe(true)
   })
 })
 

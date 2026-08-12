@@ -37,28 +37,6 @@ def test_gateway_help_works() -> None:
     assert "--config" in r.stdout
 
 
-def test_gateway_help_describes_the_channel_workspace_root():
-    """``-w`` names a root, and the root it names must exist.
-
-    This assertion previously pinned "per-session workspaces (default:
-    <agent home>/ws)", which is why that wording outlived the design it
-    described -- it was load-bearing for a test rather than for a reader. The
-    gateway isolates per channel now and `<agent home>/ws` was removed, so
-    `raven gateway --help` must not send anyone looking for it.
-
-    Pinned at 80 columns because Typer truncates help it cannot fit, and a
-    half-printed path is worse than none -- the first replacement wording was
-    long enough to be cut off exactly there.
-    """
-    r = runner.invoke(app, ["gateway", "--help"], env={"COLUMNS": "80"})
-    assert r.exit_code == 0
-    output = " ".join(r.output.split())
-    assert "per-session" not in output
-    assert "/ws" not in output
-    assert "per-channel working directories" in output
-    assert "~/.raven/tmp" in output
-
-
 def test_gateway_config_short_alias_removed() -> None:
     """``-c`` no longer binds ``--config`` (UN-41); only the long form remains."""
     bad = runner.invoke(app, ["gateway", "-c", "/tmp/whatever.json"])
@@ -238,7 +216,7 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
 
 from types import SimpleNamespace
 
-from raven.cli._helpers import build_model_routing
+from raven.cli.gateway_commands import build_model_routing
 from raven.config.schema import ModelEndpoint, ProvidersConfig, RoutingConfig
 from raven.providers.base import GenerationSettings
 from raven.providers.per_model_provider import PerModelProvider
@@ -297,65 +275,3 @@ def test_build_routing_ecoclaw_no_key_disabled():
     router, out = build_model_routing(_routing_config_obj(routing), prov)
     assert router is None
     assert out is prov
-
-
-def _config(default_model: str = "deepseek/deepseek-v3"):
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.agents.defaults.model = default_model
-    cfg.providers.deepseek.api_key = "KD"
-    cfg.providers.anthropic.api_key = "KA"
-    return cfg
-
-
-def test_gateway_provider_resolves_vendors_per_call():
-    """The gateway serves many sessions at once, so the provider it ends up
-    holding must resolve a vendor per call rather than bake in the default
-    model's vendor. Asserted on the actual composed object, not on source text."""
-    from raven.cli._helpers import make_resolving_provider
-
-    cfg = _config()
-    router, provider = build_model_routing(cfg, make_resolving_provider(cfg))
-
-    assert router is None  # routing.enabled defaults False
-    anthropic = provider._pick("anthropic/claude-opus-4-5")
-    deepseek = provider._pick("deepseek/deepseek-v3")
-    assert anthropic is not deepseek
-    assert anthropic.get_default_model() == "anthropic/claude-opus-4-5"
-    assert deepseek.get_default_model() == "deepseek/deepseek-v3"
-
-
-# ---------------------------------------------------------------------------
-# _build_deliverable_store — deliver_files is gated on the web channel
-# ---------------------------------------------------------------------------
-#
-# The gateway's build path (agent + channel + cron + heartbeat stack) hangs
-# under unit-level mocking (see the note above test_gateway_refuses_second_instance),
-# so ``_build_deliverable_store`` is extracted as a small, directly-testable
-# helper rather than asserted on through the full ``gateway()`` command.
-
-
-def test_gateway_builds_deliverables_store_when_web_enabled(tmp_config: Path) -> None:
-    """The web channel is the only surface that can render a delivery box, so it
-    is the only one that constructs the store that enables the tool."""
-    from raven.agent.tools._deliverables import DeliverableStore
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = True
-
-    store = _build_deliverable_store(cfg)
-
-    assert isinstance(store, DeliverableStore)
-
-
-def test_gateway_passes_no_store_when_web_disabled(tmp_config: Path) -> None:
-    from raven.cli.gateway_commands import _build_deliverable_store
-    from raven.config.schema import Config
-
-    cfg = Config()
-    cfg.gateway.web.enabled = False
-
-    assert _build_deliverable_store(cfg) is None

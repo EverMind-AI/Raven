@@ -66,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: make install-deps
 
-      - name: Python lint
+      - name: Focused Python lint
         run: make lint-python
 
   unit:
@@ -92,15 +92,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --all-extras --dev
-
-      # Stdlib only, and the only place outside the release job that runs it:
-      # `ui/build.py` matches two exact literals into a 476 KB base.html and
-      # hard-exits on either, so an edit that reflows the file or appends a
-      # script leaves CI green and blocks the release at `git push v1.2.3`.
-      - name: Build served page
-        run: |
-          python3 ui/build.py
-          test -f ui/dist/index.html
 
       - name: Unit tests (integration + e2e deselected by norecursedirs + addopts)
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is
@@ -151,7 +142,6 @@ jobs:
         run: |
           npm run lint
           npm run lint:rpc
-          npm run lint:i18n
           npm run type-check
           npm test
           npm run build

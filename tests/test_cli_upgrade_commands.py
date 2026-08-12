@@ -589,7 +589,7 @@ def test_upgrade_helper_waits_on_parent_process_handle(
         handle=1234,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
 
     status = wait_for_parent(4321)
 
@@ -611,7 +611,7 @@ def test_upgrade_helper_treats_missing_parent_as_already_exited(
         error=87,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
 
     status = wait_for_parent(4321)
 
@@ -632,7 +632,7 @@ def test_upgrade_helper_closes_parent_handle_when_wait_fails(
         wait_status=wait_status,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
 
     status = wait_for_parent(4321)
 
@@ -650,57 +650,13 @@ def test_upgrade_helper_rejects_parent_open_errors(
         error=5,
     )
     helper_main = _load_upgrade_helper()
-    wait_for_parent = helper_main.__globals__["wait_for_parent_windows"]
+    wait_for_parent = helper_main.__globals__["wait_for_parent"]
 
     status = wait_for_parent(4321)
 
     assert status == 1
     wait_for_single_object.assert_not_called()
     close_handle.assert_not_called()
-
-
-def test_upgrade_helper_polls_parent_pid_on_posix() -> None:
-    """POSIX has no waitable handle for a non-child process, so the helper polls
-    ``os.kill(pid, 0)`` until it raises. Exercised directly because the platform
-    split means the Windows tests above never reach this branch."""
-    helper_main = _load_upgrade_helper()
-    wait_for_parent_posix = helper_main.__globals__["wait_for_parent_posix"]
-    os_module = helper_main.__globals__["os"]
-
-    calls: list[int] = []
-
-    def fake_kill(pid: int, sig: int) -> None:
-        calls.append(pid)
-        if len(calls) >= 3:
-            raise ProcessLookupError
-        return None
-
-    original = os_module.kill
-    os_module.kill = fake_kill
-    try:
-        assert wait_for_parent_posix(4321) == 0
-    finally:
-        os_module.kill = original
-
-    assert calls == [4321, 4321, 4321]
-
-
-def test_upgrade_helper_treats_recycled_parent_pid_as_exited() -> None:
-    """A pid that now belongs to someone else raises PermissionError; the parent
-    is gone either way, so the helper proceeds instead of timing out."""
-    helper_main = _load_upgrade_helper()
-    wait_for_parent_posix = helper_main.__globals__["wait_for_parent_posix"]
-    os_module = helper_main.__globals__["os"]
-
-    def fake_kill(pid: int, sig: int) -> None:
-        raise PermissionError
-
-    original = os_module.kill
-    os_module.kill = fake_kill
-    try:
-        assert wait_for_parent_posix(4321) == 0
-    finally:
-        os_module.kill = original
 
 
 def test_handoff_replaces_process_with_isolated_base_python(

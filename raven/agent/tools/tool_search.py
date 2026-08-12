@@ -39,15 +39,8 @@ if TYPE_CHECKING:
 # search for these. Beyond the file/search/exec primitives, ``message``,
 # ``ask_user`` and ``spawn`` are interaction/orchestration primitives the agent
 # must reach on any turn (reply, unblock via a question, delegate a subagent) —
-# hiding them risks the model not thinking to search for them at all.
-#
-# Deliberately NOT here: ``run_subagent_dag`` (a fan-out of minute-scale
-# sub-agent runs is a deliberate act, not a per-turn primitive; it should be
-# reached through ``tool_search`` like any other optional capability) and
-# ``read_skill``. Under compaction that costs a ``tool_search`` hop before a
-# ``inject: description`` skill's body can be loaded — accepted, since the
-# alternative is keeping every progressive-disclosure entry point resident.
-# Config ``tools.tool_search.always_visible`` adds either one back per deploy.
+# hiding them risks the model not thinking to search for them at all. Config
+# ``tools.tool_search.always_visible`` extends this set.
 DEFAULT_ALWAYS_VISIBLE: tuple[str, ...] = (
     "read_file",
     "write_file",
@@ -87,14 +80,7 @@ class ToolSearchController:
         self._index = ToolIndex()
 
     def _catalog_tools(self) -> list[Tool]:
-        """All registered tools except the meta-tools (never self-searchable).
-
-        Deliberately not channel-filtered: the BM25 index is keyed on this set
-        and shared by every concurrent turn, so making it channel-dependent
-        would have web and IM turns swapping the index out from under each
-        other. The channel filter belongs on the reads instead -- ``search``
-        and ``target_tool``.
-        """
+        """All registered tools except the meta-tools (never self-searchable)."""
         out = []
         for name in self._registry.tool_names:
             if name in META_TOOL_NAMES:
@@ -113,25 +99,12 @@ class ToolSearchController:
 
     def search(self, query: str, limit: int | None = None) -> list[dict[str, Any]]:
         """Hits carry name + description + parameter schema, so the model can go
-        straight to tool_call without a separate describe round-trip.
-
-        Rank, then filter, then truncate -- in that order. Truncating first lets
-        a tool this channel cannot use consume a result slot, so a usable
-        lower-ranked hit is dropped and the model is told nothing matched.
-        Reading that many names is free: the index scores and sorts the whole
-        catalog either way, and only the final slice is bounded. The bound is
-        the registry's current size, not the index's -- it stays >= the indexed
-        catalog because ``refresh()`` runs at the top of every
-        ``before_llm_call``, ahead of any search. Unregistering a tool after the
-        last refresh is the one state that inverts that and truncates the
-        ranking ahead of the filter.
-        """
-        cap = limit or self.search_result_limit
-        ranked = self._index.search(query, len(self._registry.tool_names) or cap)
+        straight to tool_call without a separate describe round-trip."""
+        names = self._index.search(query, limit or self.search_result_limit)
         hits = []
-        for name in ranked:
+        for name in names:
             tool = self._registry.get(name)
-            if tool is None or not self._registry.offers_on_this_channel(tool):
+            if tool is None:
                 continue
             hits.append(
                 {
@@ -140,36 +113,7 @@ class ToolSearchController:
                     "parameters": tool.parameters,
                 }
             )
-            if len(hits) >= cap:
-                break
         return hits
-
-    def target_tool(self, name: Any) -> Tool | None:
-        """The tool ``tool_call`` would forward to, or None when there is none.
-
-        A meta-tool target is refused by :meth:`call`, so it resolves to None
-        here too rather than recursing back into this controller. A tool this
-        turn's channel cannot use resolves to None for the same reason it never
-        appears in ``search``: naming it directly must not be the way around the
-        filter.
-        """
-        if not isinstance(name, str) or name in META_TOOL_NAMES:
-            return None
-        tool = self._registry.get(name)
-        if tool is not None and not self._registry.offers_on_this_channel(tool):
-            return None
-        return tool
-
-    def target_is_blocking(self, name: Any) -> bool:
-        """Whether the tool ``tool_call`` would forward to is a blocking interaction.
-
-        A meta-tool target is refused by :meth:`call`, so it reports non-blocking
-        here too — which also stops the registry lookup recursing back into this
-        controller.
-        """
-        if not isinstance(name, str) or name in META_TOOL_NAMES:
-            return False
-        return self._registry.is_blocking(name)
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -184,10 +128,7 @@ class ToolSearchController:
                 return "Error: 'arguments' must be a JSON object."
         if name in META_TOOL_NAMES:
             return f"Error: '{name}' cannot be invoked via tool_call."
-        # ``target_tool`` rather than ``has``: it applies the channel filter, so
-        # a tool withheld from this channel reads as absent here too instead of
-        # being reachable by naming it directly.
-        if self.target_tool(name) is None:
+        if not self._registry.has(name):
             return f"Error: tool '{name}' not found. Use tool_search to find it."
         return await self._registry.execute(name, arguments or {})
 
@@ -271,12 +212,6 @@ class ToolCallTool(Tool):
             },
             "required": ["name"],
         }
-
-    def blocking_for(self, params: dict[str, Any]) -> bool:
-        return self._ctrl.target_is_blocking(params.get("name"))
-
-    def metadata_owner(self, params: dict[str, Any]) -> Tool:
-        return self._ctrl.target_tool(params.get("name")) or self
 
     async def execute(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         return await self._ctrl.call(name, arguments)

@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import os
 import threading
 import time
 from pathlib import Path
@@ -1616,13 +1615,14 @@ def test_an_attachment_that_cannot_be_prepared_is_named_not_dropped(tmp_path: Pa
     assert "could not be prepared" in out
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")
 def test_an_attachment_that_cannot_be_read_costs_a_note_not_the_turn(tmp_path: Path) -> None:
     """Resolution only proved the path pointed at a file. Permissions can change
     between then and the read, and the file can be gone -- and this renderer runs
     deep inside turn assembly, where an ``OSError`` reaches the caller as a failed
     turn rather than as a message about one attachment.
     """
+    import os
+
     from raven.context_engine.segments import render
 
     locked = _write_image(tmp_path / "locked.png", (60, 40))
@@ -1968,7 +1968,7 @@ def test_turn_send_refuses_an_unbounded_attachment_list() -> None:
     tokens, so the schema is where an absurd one is refused."""
     import pydantic
 
-    from raven.rpc.models import TurnSendParams
+    from raven.tui_rpc.models import TurnSendParams
 
     ok = TurnSendParams(session_key="cli:local", content="hi", media=["a.png"] * 64)
     assert len(ok.media) == 64

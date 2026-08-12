@@ -483,7 +483,7 @@ async def test_spawn_snapshots_before_the_task_queues(tmp_path) -> None:
     manager._gate = asyncio.Semaphore(0)
 
     original_build = manager_mod.build_executor
-    manager_mod.build_executor = lambda *a, **k: _StubExecutor()
+    manager_mod.build_executor = lambda cfg, workspace, owned_ids=None: _StubExecutor()
     try:
         await manager.spawn("do the thing", label="thing", session_key="s")
         manager.set_provider(_RecordingProvider("switched-to"), NEW_MODEL)

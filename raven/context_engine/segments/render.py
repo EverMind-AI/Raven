@@ -1,12 +1,10 @@
-"""Shared low-level helpers for segment builders.
+"""Shared low-level rendering helpers for segment builders.
 
-Mostly the pure(ish) render functions formerly living as
+These are the pure(ish) render functions formerly living as
 ``ContextBuilder`` methods. Keeping them here lets each
 :class:`SegmentBuilder` (and the ``UserBuilder`` inside
 :class:`ContextAssembler`) share one implementation without a
-``ContextBuilder`` instance. :func:`collect_tool_names` is the one
-non-render entry, shared by the two builders that gate content on which
-tools the agent actually holds.
+``ContextBuilder`` instance.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
-from raven.agent import workdir
 from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import detect_image_mime, image_block
 
@@ -79,44 +76,9 @@ def _language_directive() -> str:
     return ""
 
 
-def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> list[str] | None:
-    """Names in the agent's live tool list, or ``None`` when unknowable.
-
-    ``None`` is not "no tools" — it means the caller was built without tool
-    awareness, or the lookup raised. Callers must read it as "do not gate",
-    never as an empty set, so a wiring gap degrades to showing too much
-    rather than silently suppressing content.
-    """
-    if get_tool_definitions is None:
-        return None
-    try:
-        defs = get_tool_definitions()
-    except Exception:
-        return None
-    names: list[str] = []
-    for d in defs or []:
-        if not isinstance(d, dict):
-            continue
-        # OpenAI function-call schema → name lives under ``function.name``;
-        # also accept a flat ``name``.
-        fn = d.get("function") if isinstance(d.get("function"), dict) else None
-        if fn and isinstance(fn.get("name"), str):
-            names.append(fn["name"])
-        elif isinstance(d.get("name"), str):
-            names.append(d["name"])
-    return names or None
-
-
-def identity_text(agent_home: Path, work_dir: Path | None = None) -> str:
-    """Segment 1 — the core identity / runtime block.
-
-    ``work_dir`` defaults to the directory bound for the running turn, and
-    falls back to ``agent_home`` when nothing is bound — the single-directory
-    behaviour a loop built without a workdir resolver still has.
-    """
-    home_path = str(agent_home.expanduser().resolve())
-    bound = work_dir or workdir.current()
-    work_path = str(Path(bound).expanduser().resolve()) if bound else home_path
+def identity_text(workspace: Path) -> str:
+    """Segment 1 — the core identity / runtime block."""
+    workspace_path = str(workspace.expanduser().resolve())
     system = platform.system()
     runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -139,12 +101,11 @@ You are Raven, a helpful AI assistant.
 ## Runtime
 {runtime}
 
-## Directories
-- Working directory: {work_path} — files you produce go here; relative paths resolve here.
-- Agent home: {home_path} — your own memory and skills, not a place for user artifacts.
-  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)
-  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-  - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
+## Workspace
+Your workspace is at: {workspace_path}
+- User profile: {workspace_path}/user_memory/profile/user.md (preferences, identity, project context)
+- Episodic log: {workspace_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
 

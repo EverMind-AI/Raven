@@ -146,13 +146,6 @@ const dispatch = (
       }
       return
     }
-    case 'dag.run_started':
-    case 'dag.node_updated':
-    case 'dag.run_completed':
-      // run_subagent_dag's fan-out progress. One controller call per frame keeps
-      // the fold in one place (see turnController.recordDagEvent).
-      turnController.recordDagEvent(event)
-      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.

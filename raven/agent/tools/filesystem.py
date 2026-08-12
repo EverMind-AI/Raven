@@ -5,77 +5,33 @@ import mimetypes
 from pathlib import Path
 from typing import Any
 
-from raven.agent import workdir
 from raven.agent.tools.base import Tool, ToolResult
 from raven.utils.helpers import detect_image_mime
 
 
-def _resolve_path(
-    path: str,
-    workspace: Path | None = None,
-    allowed_dirs: tuple[Path, ...] = (),
-) -> Path:
-    """Resolve path against workspace (if relative) and enforce the allowed roots."""
+def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
+    """Resolve path against workspace (if relative) and enforce directory restriction."""
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
-    if allowed_dirs:
-        for allowed in allowed_dirs:
-            try:
-                resolved.relative_to(Path(allowed).resolve())
-                return resolved
-            except ValueError:
-                continue
-        roots = ", ".join(str(d) for d in allowed_dirs)
-        raise PermissionError(f"Path {path} is outside allowed directories {roots}")
+    if allowed_dir:
+        try:
+            resolved.relative_to(allowed_dir.resolve())
+        except ValueError:
+            raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
     return resolved
-
-
-def _with_current_root(allowed_dirs: tuple[Path, ...], bound: Path | None) -> tuple[Path, ...]:
-    """Add the turn's *live* working-directory binding to the fence, when the fence is on.
-
-    Tools are constructed once for the loop's whole lifetime, before any turn's
-    working directory exists, so ``allowed_dirs`` can only ever carry the static
-    roots (agent home). The per-turn root reaches the fence here, at resolve
-    time, the same way ``ExecTool`` folds its per-call ``cwd`` into its roots.
-
-    ``bound`` must be the raw result of ``workdir.current()`` (or ``None`` for
-    a tool that does not follow the ambient binding at all) -- never a value
-    that already fell back to the tool's own ``workspace``. Folding in that
-    fallback would silently widen the fence to a root the operator never put
-    in ``allowed_dirs``. An empty ``allowed_dirs`` must stay empty regardless
-    -- that is the "fence disabled" signal ``_resolve_path`` checks for.
-    """
-    if not allowed_dirs or bound is None:
-        return allowed_dirs
-    return (bound, *allowed_dirs)
 
 
 class _FsTool(Tool):
     """Shared base for filesystem tools — common init and path resolution."""
 
-    def __init__(
-        self,
-        workspace: Path | None = None,
-        allowed_dirs: tuple[Path, ...] = (),
-        *,
-        follow_binding: bool = True,
-    ):
+    def __init__(self, workspace: Path | None = None, allowed_dir: Path | None = None):
         self._workspace = workspace
-        self._allowed_dirs = allowed_dirs
-        # A sub-agent run is a background asyncio task that can outlive the turn
-        # that spawned it, since SubagentManager.spawn captures the workspace at
-        # spawn time; its tools must fence on the directory captured for that
-        # run, not on whatever the ambient ContextVar happens to hold when the
-        # task finally executes. The main loop's tools keep following the live
-        # binding as normal.
-        self._follow_binding = follow_binding
+        self._allowed_dir = allowed_dir
 
     def _resolve(self, path: str) -> Path:
-        bound = workdir.current() if self._follow_binding else None
-        current_root = bound or self._workspace
-        return _resolve_path(path, current_root, _with_current_root(self._allowed_dirs, bound))
+        return _resolve_path(path, self._workspace, self._allowed_dir)
 
 
 # ---------------------------------------------------------------------------

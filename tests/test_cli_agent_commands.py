@@ -39,20 +39,6 @@ def test_agent_help_works() -> None:
     assert "--markdown" in r.stdout
 
 
-def test_home_flag_moves_agent_home(tmp_config: Path, tmp_path: Path):
-    from raven.cli._helpers import load_runtime_config
-
-    config = load_runtime_config(None, home=str(tmp_path / "elsewhere"))
-    assert config.agents.defaults.workspace == str(tmp_path / "elsewhere")
-
-
-def test_agent_help_documents_both_directories():
-    r = runner.invoke(app, ["agent", "--help"])
-    assert r.exit_code == 0
-    assert "--home" in r.output
-    assert "Working directory" in r.output
-
-
 def test_agent_without_api_key_exits_cleanly(tmp_config: Path) -> None:
     """With no provider configured, the command must exit non-zero — and
     crucially must not raise a *crash* exception (NameError / AttributeError /
@@ -95,7 +81,7 @@ def test_agent_help_shows_resume_flag() -> None:
 
 
 def _invoke_agent_capturing_session(
-    monkeypatch: pytest.MonkeyPatch, home: Path, extra_args: list[str]
+    monkeypatch: pytest.MonkeyPatch, workspace: Path, extra_args: list[str]
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
@@ -152,7 +138,7 @@ def _invoke_agent_capturing_session(
         "raven.cli.agent_commands.build_plugin_tools",
         lambda *a, **k: [],
     )
-    r = runner.invoke(app, ["agent", "-m", "hi", "--home", str(home), *extra_args])
+    r = runner.invoke(app, ["agent", "-m", "hi", "-w", str(workspace), *extra_args])
     return r, captured
 
 
@@ -160,7 +146,7 @@ def test_agent_default_mints_fresh_session(tmp_config: Path, tmp_path: Path, mon
     """Bare ``agent -m`` mints a fresh ``cli:{chat_id}`` per invocation."""
     import re
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
 
     r1, cap1 = _invoke_agent_capturing_session(monkeypatch, ws, [])
@@ -180,7 +166,7 @@ def test_agent_continue_binds_most_recent_cli_session(
     """``-c`` binds the agent to the most-recent persisted cli session."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     mgr = SessionManager(ws)
     seeded = "20990101_000000_aaaaaa"
@@ -197,7 +183,7 @@ def test_agent_resume_binds_resolved_session(tmp_config: Path, tmp_path: Path, m
     """``--resume <prefix>`` resolves and binds that cli session."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     mgr = SessionManager(ws)
     seeded = "20990101_000000_bbbbbb"
@@ -212,7 +198,7 @@ def test_agent_resume_binds_resolved_session(tmp_config: Path, tmp_path: Path, m
 
 def test_agent_session_key_passthrough(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--session <key>`` passes a full key through unchanged (any channel)."""
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
 
     r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["--session", "feishu:ou_xyz"])
@@ -227,7 +213,7 @@ def test_agent_bare_session_resolves_cross_channel(
     channel — it must NOT be mis-routed to a colon-less/malformed key."""
     from raven.session.manager import SessionManager
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     mgr = SessionManager(ws)
     cid = "20990101_000000_cccccc"
@@ -245,7 +231,7 @@ def test_agent_unknown_bare_session_falls_back_to_cli(
 ) -> None:
     """``--session <bare id>`` with no matching session falls back to a proper
     ``cli:<id>`` key — never a colon-less/malformed path."""
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     cid = "20990101_000000_dddddd"
 
@@ -276,7 +262,7 @@ def test_agent_continue_without_prior_session_starts_fresh(
     """``-c`` with no stored cli session prints a notice and mints fresh."""
     import re
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
 
     r, captured = _invoke_agent_capturing_session(monkeypatch, ws, ["-c"])
@@ -300,7 +286,7 @@ def test_agent_fake_now_threads_now_fn_into_cron(
     """
     import raven.proactive_engine.schedulers.cron.service as cron_mod
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     captured: dict[str, object] = {}
     orig_init = cron_mod.CronService.__init__
@@ -324,7 +310,7 @@ def test_agent_without_fake_now_leaves_cron_on_wall_clock(
     real-clock default (production must be unaffected by the fake-clock wiring)."""
     import raven.proactive_engine.schedulers.cron.service as cron_mod
 
-    ws = tmp_path / "chanwork"
+    ws = tmp_path / "ws"
     ws.mkdir()
     captured: dict[str, object] = {"now_fn": "unset"}
     orig_init = cron_mod.CronService.__init__

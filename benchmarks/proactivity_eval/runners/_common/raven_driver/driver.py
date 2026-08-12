@@ -10,8 +10,8 @@ Why subprocess instead of in-process:
 - Decouples eval from internal module reorgs in ``raven``.
 - Lets us evaluate any agent that exposes a comparable CLI surface
   (hermes / openclaw / future entrants) with one driver shape.
-- Per-case isolation comes for free — each case points the CLI at its
-  own agent home and reads back the on-disk state.
+- Per-case workspace isolation comes for free — each case points the
+  CLI at its own ``--workspace <dir>`` and reads back the on-disk state.
 
 Why one process per operation rather than a long-lived REPL pipe:
 
@@ -95,9 +95,8 @@ class RavenDriver:
         Path to the ``raven`` checkout (the one containing
         ``raven/__main__.py``).
     workspace
-        Per-case sandbox dir, used as the agent home every subcommand
-        reads and writes (``--home`` on ``agent``, ``--workspace`` on
-        ``sentinel``). The driver does NOT create this directory or seed
+        Per-case sandbox dir. Passed as ``--workspace`` to every
+        subcommand. The driver does NOT create this directory or seed
         any fixtures — that's the case-setup step's responsibility.
     config
         Optional ``--config <path>`` override for ``raven {agent,
@@ -306,29 +305,17 @@ class RavenDriver:
     )
 
     def _base_cmd(self, *subcommands: str) -> list[str]:
-        """Build ``python -m raven <subcommand...>`` with the sandbox flags
+        """Build ``python -m raven <subcommand...>`` with --workspace
         and (if set) --config baked in.
 
-        The flags are passed at the TOP-LEVEL subcommand position — they must
-        come AFTER the subcommand path because typer is strict about flag
-        placement.
-
-        ``raven agent`` and ``raven sentinel *`` no longer spell the sandbox
-        the same way. On ``agent``, ``--workspace`` is the directory a turn
-        writes files in and ``--home`` is the agent home ``read_state`` reads
-        back; on ``sentinel``, ``-w`` still means agent home. Passing
-        ``--workspace`` to ``agent`` would send memory and sessions to the
-        developer's real ``~/.raven/workspace`` while the eval read an empty
-        sandbox.
+        Both ``--workspace`` and ``--config`` are passed at the TOP-LEVEL
+        subcommand position — they must come AFTER the subcommand path
+        because typer is strict about flag placement.
         """
         cmd: list[str] = [str(self.python_exe), "-m", "raven", *subcommands]
-        if subcommands[0] == "agent":
-            cmd.extend(["--home", str(self.workspace)])
-            # Keep file artifacts inside the persona sandbox too; the default
-            # would be this subprocess's cwd, which is the raven checkout.
-            cmd.extend(["--workspace", str(self.workspace / "cwd")])
-        else:
-            cmd.extend(["--workspace", str(self.workspace)])
+        # All commands that accept --workspace use the same flag name,
+        # so we can append uniformly.
+        cmd.extend(["--workspace", str(self.workspace)])
         # --config: thread through to every config-aware subcommand so
         # the per-persona data dir (sentinel/state.json, cron/jobs.json,
         # etc.) is honored across the whole subprocess set, not just

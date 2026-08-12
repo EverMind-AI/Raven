@@ -5,12 +5,10 @@ Two tools that complete the Skill Hub integration's progressive disclosure
 the ``# Skills`` catalog) already lands the candidate list each turn; these
 tools are the on-demand fetch the LLM drives after seeing it.
 
-``read_skill`` is the **body** route, for every source. A Hub candidate's
-catalog entry is metadata-only; a local skill declaring ``inject: description``
-is advertised by its digest entry alone and is excluded from BM25 routing, so
-for both the body exists nowhere in context until this tool fetches it. Local
-and Everos ids resolve straight from the registry, which is why this tool
-registers wherever the registry does and needs no Hub endpoint.
+``read_skill`` is **Hub-driven**. Local and Everos candidates already ship
+their ``content`` in the ``RouterHit`` (rendered into the ``# Skills`` /
+``# Active Skills`` context), so the body round-trip only matters for Hub
+candidates (``hub/<slug>``) whose catalog entry is metadata-only.
 
 ``use_skill`` is **source-agnostic**. The LLM sees one fused, source-tagged
 catalog, so it should not reason about provenance — it calls ``use_skill`` with
@@ -50,22 +48,6 @@ def _split_qualified_id(skill_id: str) -> tuple[str, str]:
     return source, native
 
 
-def _lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
-    """Resolve a router-namespaced id against the physical-layer registry.
-
-    The two carry different vocabularies and must be translated, not passed
-    through: ``local`` is a router namespace spanning every on-disk layer
-    (``workspace`` / ``builtin`` / ``external`` / ``mirror/*``) and is never
-    itself a layer, so it resolves to the layer-priority winner. ``everos`` is
-    both a namespace and a layer, and keeps its exact compound-key lookup.
-    """
-    if registry is None:
-        return None
-    if source == "local":
-        return registry.get(native)
-    return registry.get(native, source=source)
-
-
 class ReadSkillTool(Tool):
     """Fetch a candidate skill's full SKILL.md body for fine-selection."""
 
@@ -84,13 +66,12 @@ class ReadSkillTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read a skill's full SKILL.md body — its actual instructions. Pass "
-            "the qualified id exactly as shown in the '# Skills' or '# Active "
-            "Skills' context (e.g. 'local/my-skill', 'hub/my-skill'). This does "
-            "NOT download or run anything. Call it for any skill listed by "
-            "description alone, whether to judge if it fits or because you have "
-            "decided to follow it; a skill whose body is already shown in "
-            "context needs no fetch."
+            "Read the full SKILL.md body of a candidate skill from the "
+            "'# Skills' catalog so you can decide whether it fits before using "
+            "it. Pass the skill's qualified id exactly as shown in brackets in "
+            "the catalog (e.g. 'hub/my-skill'). This does NOT download or run "
+            "anything — it only returns the instructions. For local/everos "
+            "skills the body is usually already in your context."
         )
 
     @property
@@ -101,9 +82,8 @@ class ReadSkillTool(Tool):
                 "skill_id": {
                     "type": "string",
                     "description": (
-                        "The skill's qualified id, with its '<source>/' prefix, "
-                        "exactly as the context shows it (e.g. 'local/my-skill', "
-                        "'hub/my-skill')."
+                        "The skill's qualified id, exactly as shown in the "
+                        "'# Skills' catalog brackets (e.g. 'hub/my-skill')."
                     ),
                 },
             },
@@ -112,11 +92,11 @@ class ReadSkillTool(Tool):
 
     async def execute(self, skill_id: Any = None, **_: Any) -> str:
         if not skill_id or not isinstance(skill_id, str):
-            return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
+            return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = _split_qualified_id(skill_id)
 
         if source in ("local", "everos"):
-            meta = _lookup_on_disk(self._registry, source, native)
+            meta = self._registry.get(native, source=source) if self._registry else None
             if meta is None:
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
@@ -125,13 +105,7 @@ class ReadSkillTool(Tool):
             return f"## {meta.name}\n{meta.content}"
 
         if self._client is None:
-            # A bare id (no '<source>/') lands here, so name the local form:
-            # this tool now serves on-disk skills too, and a dropped prefix is
-            # the likelier mistake than a genuine Hub read without a Hub.
-            return (
-                f"Error: cannot read {skill_id!r} — Skill Hub is not configured. Only on-disk skills are "
-                f"readable here; pass the qualified id with its prefix, e.g. 'local/{native}'."
-            )
+            return "Error: Skill Hub is not configured; cannot read a remote skill body."
         try:
             meta = await self._client.get(native)
         except Exception as e:  # noqa: BLE001 — surface as tool error, not a crash
@@ -202,7 +176,7 @@ class UseSkillTool(Tool):
 
     def _use_on_disk(self, source: str, native: str) -> str:
         """Resolve an already-materialized local/everos skill dir."""
-        meta = _lookup_on_disk(self._registry, source, native)
+        meta = self._registry.get(native, source=source) if self._registry else None
         if meta is None:
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "

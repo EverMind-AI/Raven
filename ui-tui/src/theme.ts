@@ -15,7 +15,6 @@ export interface ThemeColors {
   completionCurrentBg: string
   completionMetaBg: string
   completionMetaCurrentBg: string
-  detailBg: string
 
   label: string
   ok: string
@@ -211,7 +210,6 @@ export const DARK_THEME: Theme = {
     completionCurrentBg: '#2a260c',
     completionMetaBg: '#080808',
     completionMetaCurrentBg: '#221d08',
-    detailBg: '#161b22',
 
     label: '#858482',
     ok: '#3ee07a',
@@ -258,7 +256,6 @@ export const LIGHT_THEME: Theme = {
     completionCurrentBg: '#fff8e7',
     completionMetaBg: '#eef1f4',
     completionMetaCurrentBg: '#ffefc2',
-    detailBg: '#f6f8fa',
 
     label: '#6e7681',
     ok: '#1f7a33',
@@ -303,7 +300,6 @@ const DARK_256_COLORS: ThemeColors = {
   completionCurrentBg: 'ansi256(234)',
   completionMetaBg: 'ansi256(232)',
   completionMetaCurrentBg: 'ansi256(234)',
-  detailBg: 'ansi256(234)',
   label: 'ansi256(102)',
   ok: 'ansi256(78)',
   error: 'ansi256(203)',
@@ -326,7 +322,6 @@ const DARK_256_COLORS: ThemeColors = {
 }
 
 const LIGHT_256_COLORS: ThemeColors = {
-  detailBg: 'ansi256(255)',
   primary: 'ansi256(136)',
   accent: 'ansi256(136)',
   border: 'ansi256(188)',
@@ -366,7 +361,6 @@ const LIGHT_256_COLORS: ThemeColors = {
 //     color), leaving it `red` like the spec's base.
 
 const DARK_16_COLORS: ThemeColors = {
-  detailBg: 'ansi:black',
   primary: 'ansi:yellowBright',
   accent: 'ansi:yellowBright',
   border: 'ansi:blackBright',
@@ -398,7 +392,6 @@ const DARK_16_COLORS: ThemeColors = {
 }
 
 const LIGHT_16_COLORS: ThemeColors = {
-  detailBg: 'ansi:white',
   primary: 'ansi:yellow',
   accent: 'ansi:yellow',
   border: 'ansi:blackBright',
@@ -704,7 +697,6 @@ function skinColors(colors: Record<string, string>): ThemeColors {
     (hasSkinColors ? completionCurrentBg : base.completionMetaCurrentBg)
 
   return {
-    detailBg: c('ui_detail_bg') ?? base.detailBg,
     primary: c('ui_primary') ?? c('banner_title') ?? base.primary,
     accent,
     border: c('ui_border') ?? c('banner_border') ?? base.border,

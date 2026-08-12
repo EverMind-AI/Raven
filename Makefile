@@ -1,7 +1,7 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files ci clean
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge check-commits check-pr-title check-large-files ci clean
 
 PYTHON ?= python3
-PYTHON_LINT_TARGETS ?= raven tests scripts
+PYTHON_LINT_TARGETS ?= scripts/check_commit_file.py scripts/check_commit_messages.py scripts/check_pr_title.py scripts/check_large_files.py scripts/commit_lint.py tests/test_commit_lint.py tests/test_large_file_check.py
 COMMIT_RANGE ?= origin/main..HEAD
 
 help:
@@ -9,7 +9,7 @@ help:
 	@echo "  install        Install Python deps, Node deps, and git hooks"
 	@echo "  install-deps   Install Python deps only (CI uses this)"
 	@echo "  lint           Run Python, TUI, and bridge lint gates"
-	@echo "  lint-python    Ruff check + format gate over raven/, tests/, scripts/"
+	@echo "  lint-python    Ruff-check the current lint target set"
 	@echo "  lint-tui       TypeScript lint + RPC drift check"
 	@echo "  lint-bridge    Bridge package build check"
 	@echo "  test           Run focused Python checks and TUI tests"
@@ -38,7 +38,6 @@ lint-python:
 lint-tui:
 	npm run lint --prefix ui-tui
 	npm run lint:rpc --prefix ui-tui
-	npm run lint:i18n --prefix ui-tui
 	npm run type-check --prefix ui-tui
 
 lint-bridge:
@@ -52,13 +51,10 @@ test-python:
 test-tui:
 	npm test --prefix ui-tui
 
-build: build-tui build-bridge build-ui
+build: build-tui build-bridge
 
 build-tui:
 	npm run build --prefix ui-tui
-
-build-ui:
-	python3 ui/build.py
 
 build-bridge:
 	npm run build --prefix bridge
@@ -79,5 +75,4 @@ clean:
 	rm -rf .pytest_cache .ruff_cache .uv-cache .mypy_cache htmlcov dist build
 	rm -rf ui-tui/dist ui-tui/coverage ui-tui/.vitest-cache ui-tui/packages/hermes-ink/dist
 	rm -rf bridge/dist
-	rm -rf ui/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

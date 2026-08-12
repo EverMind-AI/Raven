@@ -128,7 +128,6 @@ class CuratorSegmentBuilder:
                 "budget": asdict(ctx.budget),
                 "message_count": len(ctx.session_messages),
                 "max_steps": self.max_steps,
-                "pinned_message_ids": [item.id for item in manifest if item.pinned],
             },
         )
 

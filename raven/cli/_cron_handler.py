@@ -116,7 +116,7 @@ def make_on_cron_job(
     spine ``submit`` as a CRON-origin turn.
 
     ``submit`` (required) is the spine entry (build_gateway / build_repl /
-    build_rpc_spine scheduler). A single-target delivering job (deliver=True, the
+    build_tui scheduler). A single-target delivering job (deliver=True, the
     user-facing reminder the cron tool creates) rides the hub to its one outlet.
     A broadcast (more than one resolved target) or a silent job (deliver=False)
     submits with the job's own (ephemeral) channel as the source so the hub drops
