@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.config import update_channels, update_everos, update_skills, update_subagents
+from raven.config import update_channels, update_everos, update_mcp, update_skills, update_subagents
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
 
@@ -339,9 +339,7 @@ async def test_everos_get_set_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert llm["api_key"] == "****set****"
 
     # A redacted placeholder on write leaves the stored key untouched.
-    await _dispatch(
-        d, "raven.everos.set", {"section": "llm", "fields": {"model": "m2", "api_key": "****set****"}}
-    )
+    await _dispatch(d, "raven.everos.set", {"section": "llm", "fields": {"model": "m2", "api_key": "****set****"}})
     raw = (tmp_path / "everos.toml").read_text(encoding="utf-8")
     assert "sk-secret" in raw and "m2" in raw
 
@@ -351,9 +349,7 @@ async def test_everos_get_set_clear(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert got["result"]["everos"]["llm"]["api_key"] == "(empty)"
 
 
-async def test_everos_set_borrows_a_sibling_roles_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_set_borrows_a_sibling_roles_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The web only ever sees a redacted key, so "reuse the llm key here" has to
     resolve on the gateway rather than by round-tripping the secret.
 
@@ -401,9 +397,7 @@ async def test_everos_set_borrows_a_sibling_roles_key(
     assert "sk-own" in raw
 
 
-async def test_everos_set_rejects_unknown_section(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_set_rejects_unknown_section(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
     d = Dispatcher()
     register_config_methods(d)
@@ -411,9 +405,7 @@ async def test_everos_set_rejects_unknown_section(
     assert "error" in res
 
 
-async def test_everos_test_probes_the_endpoint(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_test_probes_the_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
 
     from raven.cli import onboard_commands
@@ -428,9 +420,7 @@ async def test_everos_test_probes_the_endpoint(
     d = Dispatcher()
     register_config_methods(d)
 
-    res = await _dispatch(
-        d, "raven.everos.test", {"section": "llm", "fields": {"model": "m", "base_url": "http://x"}}
-    )
+    res = await _dispatch(d, "raven.everos.test", {"section": "llm", "fields": {"model": "m", "base_url": "http://x"}})
     assert res["result"]["ok"] is True
 
     res = await _dispatch(
@@ -441,9 +431,7 @@ async def test_everos_test_probes_the_endpoint(
     assert res["result"]["ok"] is True
 
 
-async def test_everos_borrows_the_credentials_page_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_borrows_the_credentials_page_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A provider already set up under Credentials should not be asked for the
     same secret again, and the web must never receive it to pass along."""
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
@@ -475,9 +463,7 @@ async def test_everos_borrows_the_credentials_page_key(
     assert got["llm"]["api_key"] == "****set****"
 
     # A sibling role's key still wins over the credential.
-    await _dispatch(
-        d, "raven.everos.set", {"section": "embedding", "fields": {"api_key": "sk-own"}}
-    )
+    await _dispatch(d, "raven.everos.set", {"section": "embedding", "fields": {"api_key": "sk-own"}})
     await _dispatch(
         d,
         "raven.everos.set",
@@ -641,9 +627,7 @@ async def test_everos_set_refuses_to_store_a_borrowed_key_for_an_unlisted_host(
 
     from raven.config import update_providers
 
-    monkeypatch.setattr(
-        update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"}
-    )
+    monkeypatch.setattr(update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"})
 
     d = Dispatcher()
     register_config_methods(d)
@@ -663,17 +647,13 @@ async def test_everos_set_refuses_to_store_a_borrowed_key_for_an_unlisted_host(
     assert "sk-credential" not in written
 
 
-async def test_everos_set_still_borrows_for_a_catalog_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_set_still_borrows_for_a_catalog_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard must not cost the ordinary case its borrowed key."""
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
 
     from raven.config import update_providers
 
-    monkeypatch.setattr(
-        update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"}
-    )
+    monkeypatch.setattr(update_providers, "get_provider_config", lambda name, **kw: {"api_key": "sk-credential"})
 
     d = Dispatcher()
     register_config_methods(d)
@@ -691,9 +671,7 @@ async def test_everos_set_still_borrows_for_a_catalog_host(
     assert "sk-credential" in (tmp_path / "everos.toml").read_text(encoding="utf-8")
 
 
-async def test_everos_set_accepts_a_typed_key_for_any_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_set_accepts_a_typed_key_for_any_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A self-hosted endpoint is configured by typing its key, and that secret is
     the caller's own to spend."""
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
@@ -710,9 +688,7 @@ async def test_everos_set_accepts_a_typed_key_for_any_host(
     assert "mine" in (tmp_path / "everos.toml").read_text(encoding="utf-8")
 
 
-async def test_everos_set_refuses_to_re_aim_a_stored_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_everos_set_refuses_to_re_aim_a_stored_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No borrowing needed: writing base_url alone keeps the section's own key
     and repoints it, so the next gateway boot ships it to the new host."""
     monkeypatch.setattr(update_everos, "get_everos_config_path", lambda: tmp_path / "everos.toml")
@@ -932,9 +908,7 @@ async def test_everos_models_delegates_to_the_fetcher(monkeypatch: pytest.Monkey
     captured: dict = {}
 
     def _fake_fetch(base_url, api_key, *, section, provider_name):
-        captured.update(
-            base_url=base_url, api_key=api_key, section=section, provider_name=provider_name
-        )
+        captured.update(base_url=base_url, api_key=api_key, section=section, provider_name=provider_name)
         return ["m-a", "m-b"]
 
     monkeypatch.setattr(onboard_commands, "_fetch_everos_models", _fake_fetch)
@@ -2053,3 +2027,144 @@ async def test_subagents_test_records_a_verdict_the_probe_then_returns(
     assert row["lastTest"] is not None
     assert row["lastTest"]["ok"] is True
     assert row["lastTest"]["testedAtMs"] > 0
+
+
+async def test_mcp_list_reports_config_plus_live_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The panel needs both halves: what is configured, and whether the agent
+    actually connected it (MCP connects lazily, on the first turn that needs it)."""
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    p = tmp_path / "config.json"
+    p.write_text(
+        '{"tools": {"mcpServers": {"browser": {"command": "npx"}, "api": {"url": "https://x.test/mcp"}}}}',
+        encoding="utf-8",
+    )
+
+    class _Tools:
+        tool_names = ["mcp_browser_click", "mcp_browser_navigate", "read_file"]
+
+    class _Agent:
+        tools = _Tools()
+        _mcp_connected = True
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert "error" not in res, res
+    assert res["result"]["connected"] is True
+    servers = {s["name"]: s for s in res["result"]["servers"]}
+    assert servers["browser"]["connected"] is True
+    # Reported without the mcp_<server>_ prefix the registry adds.
+    assert servers["browser"]["tools"] == ["click", "navigate"]
+    # Configured but contributed no tools: not connected, not an error either.
+    assert servers["api"]["connected"] is False
+    assert servers["api"]["tools"] == []
+
+
+async def test_mcp_list_adds_no_live_key_the_write_path_would_persist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel round-trips this response into ``raven.mcp.set``, which drops
+    exactly ``MCP_RUNTIME_KEYS`` before writing. A live key added here without
+    being listed there would silently start landing in the user's config, so
+    pin the two lists to each other rather than trusting them to stay in step."""
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(
+        '{"tools": {"mcpServers": {"browser": {"command": "npx"}}}}', encoding="utf-8"
+    )
+
+    class _Agent:
+        tools = type("_Tools", (), {"tool_names": ["mcp_browser_click"]})()
+        _mcp_connected = True
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    listed = set(res["result"]["servers"][0])
+    configured = set(update_mcp.get_mcp_servers(config_path=tmp_path / "config.json")[0])
+    assert listed - configured <= update_mcp.MCP_RUNTIME_KEYS
+
+
+async def test_mcp_list_without_an_agent_reports_nothing_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {"mcpServers": {"a": {"command": "x"}}}}', encoding="utf-8")
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert res["result"]["connected"] is False
+    assert res["result"]["servers"][0]["connected"] is False
+
+
+async def test_mcp_set_writes_and_asks_for_a_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    p = tmp_path / "config.json"
+    p.write_text('{"tools": {}}', encoding="utf-8")
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "browser", "command": "npx"}]})
+    assert res["result"] == {"ok": True, "restart_required": True}
+    assert "browser" in p.read_text(encoding="utf-8")
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert [s["name"] for s in res["result"]["servers"]] == ["browser"]
+
+
+async def test_mcp_set_surfaces_a_rejected_server_as_an_rpc_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text('{"tools": {}}', encoding="utf-8")
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.mcp.set", {"servers": [{"name": "broken"}]})
+    assert "error" in res
+
+
+async def test_mcp_list_attributes_a_tool_to_the_longest_matching_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``mcp_<server>_<tool>`` puts no reserved character between the two, so a
+    plain prefix match lets a short server name claim a longer one's tools."""
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    p = tmp_path / "config.json"
+    p.write_text(
+        '{"tools": {"mcpServers": {"foo": {"command": "a"}, "foo_bar": {"command": "b"}}}}',
+        encoding="utf-8",
+    )
+
+    class _Tools:
+        tool_names = ["mcp_foo_ping", "mcp_foo_bar_query", "read_file"]
+
+    class _Agent:
+        tools = _Tools()
+        _mcp_connected = True
+
+    d = Dispatcher()
+    register_config_methods(d, agent=_Agent())
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    servers = {s["name"]: s for s in res["result"]["servers"]}
+    assert servers["foo"]["tools"] == ["ping"]
+    assert servers["foo_bar"]["tools"] == ["query"]
+
+
+async def test_mcp_list_still_lists_the_good_servers_beside_a_broken_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(update_mcp, "get_config_path", lambda: tmp_path / "config.json")
+    (tmp_path / "config.json").write_text(
+        '{"tools": {"mcpServers": {"ok": {"command": "npx"}, "bad": {"command": 123}}}}',
+        encoding="utf-8",
+    )
+    d = Dispatcher()
+    register_config_methods(d)
+
+    res = await _dispatch(d, "raven.mcp.list", {})
+    assert "error" not in res, res
+    servers = {s["name"]: s for s in res["result"]["servers"]}
+    assert servers["ok"]["command"] == "npx"
+    assert servers["bad"]["error"]

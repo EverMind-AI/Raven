@@ -2,7 +2,13 @@ import type { Msg } from '@agentscope-ai/agentscope/message';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { deriveInstances, mergeRegistryRows, transportOf, type Exchange } from './deriveInstances';
+import {
+	deriveInstances,
+	mergeRegistryRows,
+	transportOf,
+	type Exchange,
+	type MonitorInstance,
+} from './deriveInstances';
 import type { RavenDagNodeDetail, RavenSubagentInstance, RavenThirdPartySubagent } from '@/api';
 import { ravenConfigApi } from '@/api';
 import { useDagRuns } from '@/components/chat/DagRunsContext';
@@ -138,6 +144,24 @@ function ExchangeCard({ exchange, sessionKey }: { exchange: Exchange; sessionKey
 			</div>
 		</div>
 	);
+}
+
+/**
+ * One-line subtitle for a collapsed row: what this instance was last asked to
+ * do.
+ *
+ * Both sources are present from the moment the call is issued — they are read
+ * off the call arguments — but the full text lives in the expanded detail, so
+ * a row that had never been clicked said only which sub-agent it was, never
+ * what it was doing. `spawn` supplies a `label` written for display; a DAG
+ * node has no equivalent, so the prompt's first line stands in. CSS truncates,
+ * so no length cap is needed here.
+ */
+function rowSummary(inst: MonitorInstance): string {
+	const last = inst.exchanges[inst.exchanges.length - 1];
+	if (!last) return '';
+	const text = last.label || last.prompt;
+	return (text.split('\n').find((line) => line.trim()) ?? '').trim();
 }
 
 /**
@@ -321,10 +345,11 @@ export function SubagentInstanceMonitor({
 								}
 							}}
 							className={cn(
-								'flex cursor-pointer items-center gap-2 rounded-sm border px-2 py-1 text-left hover:bg-accent',
+								'flex cursor-pointer flex-col gap-0.5 rounded-sm border px-2 py-1 text-left hover:bg-accent',
 								expanded && 'bg-accent',
 							)}
 						>
+							<span className="flex w-full items-center gap-2">
 							<Bot className="size-4 shrink-0" />
 							<span className="min-w-0 flex-1 truncate text-sm">{inst.handle}</span>
 							<span className="text-xs text-muted-foreground">{inst.prototype}</span>
@@ -368,6 +393,16 @@ export function SubagentInstanceMonitor({
 								>
 									<Square className="size-3.5" />
 								</Button>
+							)}
+							</span>
+							{/* Its own full-width line rather than a second column: the
+							    badges to the right are not shrinkable, so a summary
+							    sharing that row was squeezed to ~74px of a 310px dock
+							    -- present, but too narrow to read. */}
+							{rowSummary(inst) && (
+								<span className="w-full truncate text-[11px] font-normal text-muted-foreground">
+									{rowSummary(inst)}
+								</span>
 							)}
 						</div>
 						{expanded && (

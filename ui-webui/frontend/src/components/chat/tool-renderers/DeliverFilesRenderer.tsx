@@ -1,9 +1,8 @@
 import { toolLabelClass } from './_shared';
-import type { ToolRenderer, ToolCallWithResult } from './types';
+import type { TFunction, ToolRenderer, ToolCallWithResult } from './types';
 import { DeliveredFileRow } from '@/components/delivery/DeliveredFileRow';
 import { downloadAllDeliverables, readManifest } from '@/components/delivery/deriveDeliverables';
 import { Button } from '@/components/ui/button';
-import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 import Package from '~icons/solar/box-bold-duotone';
 
@@ -18,9 +17,13 @@ import Package from '~icons/solar/box-bold-duotone';
  * it). Returns the rendered manifest, or ``undefined`` when there is
  * no manifest yet (still streaming / no result yet / a different
  * error state), letting the caller render a fallback.
+ *
+ * ``t`` is a prop, not a ``useTranslation()`` call: the caller invokes
+ * this as a plain function (it needs the ``undefined`` return to decide
+ * on a fallback), so a hook here would join the caller's hook sequence
+ * and change its length the render a deliverable first appears.
  */
-export function DeliverFilesInlineCard({ pair }: { pair: ToolCallWithResult }) {
-	const { t } = useTranslation();
+export function DeliverFilesInlineCard({ pair, t }: { pair: ToolCallWithResult; t: TFunction }) {
 	const manifest = readManifest(pair.result?.metadata);
 	if (!manifest || manifest.files.length === 0) return undefined;
 	return (

@@ -51,6 +51,7 @@
 	},
 	"tool": {
 		"callGeneric": "调用工具",
+		"callInput": "入参",
 		"callSubagent": "调用子智能体",
 		"subagentPrompt": "提示词",
 		"subagentResponse": "回复",
@@ -649,23 +650,30 @@
 			"emptyDescription": "智能体规划的任务会显示在这里。"
 		},
 		"mcp": {
-			"description": "工作区中配置的 MCP 服务器。",
-			"searchPlaceholder": "在工作区中搜索 MCP",
+			"description": "智能体可以调用的 MCP 服务器。修改后需重启 gateway 生效。",
+			"searchPlaceholder": "搜索 MCP 服务器",
 			"add": "添加 MCP",
 			"tools": "{{count}} 个工具",
+			"notConnected": "未连接",
+			"pending": "首次调用时连接",
+			"restartRequired": "已保存，重启 gateway 后生效。",
+			"restartRequiredRemove": "已从配置中移除，其工具在 gateway 重启前仍处于加载状态。",
+			"invalid": "配置无效 — {{detail}}",
+			"loadFailed": "无法加载 MCP 服务器，此列表并非当前配置 — {{detail}}",
 			"emptyTitle": "暂无 MCP 服务器",
-			"emptyDescription": "添加 MCP 服务器为工作区配备工具。"
+			"emptyDescription": "添加 MCP 服务器，为智能体接入其工具。"
 		},
 		"skill": {
 			"title": "技能",
-			"description": "工作区中配置的技能。",
-			"searchPlaceholder": "在工作区中搜索技能",
-			"add": "添加技能",
+			"description": "raven 技能库中智能体可以调用的技能。",
+			"searchPlaceholder": "搜索可用技能",
 			"emptyTitle": "暂无技能",
-			"emptyDescription": "添加技能为工作区配备能力。",
+			"emptyDescription": "从技能中心安装一个技能即可被调用。",
 			"usedTitle": "本对话调用过的技能",
-			"usedHint": "由 SkillForge 门控注入",
-			"workspaceTitle": "常驻可用"
+			"usedByModel": "智能体自行加载",
+			"poolTitle_one": "智能体可用（{{count}}）",
+			"poolTitle_other": "智能体可用（{{count}}）",
+			"manage": "管理技能"
 		},
 		"subagent": {
 			"entity": "子智能体"

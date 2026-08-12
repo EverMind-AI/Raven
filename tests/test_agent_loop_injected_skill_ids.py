@@ -124,3 +124,150 @@ def test_collect_returns_empty_when_no_skill_service() -> None:
         [_meta("alpha")],
     )
     assert out == []
+
+
+# ---------------------------------------------------------------------------
+# Skill reporting to the web UI's skill panel
+# ---------------------------------------------------------------------------
+
+
+class _Sink:
+    """Records what the skills sink was handed."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict]] = []
+
+    async def __call__(self, conversation: str, name: str, payload: dict) -> None:
+        self.calls.append((conversation, name, payload))
+
+
+class _Registry:
+    """Registry stand-in keyed by native name."""
+
+    def __init__(self, by_name: dict[str, str]) -> None:
+        self._by_name = by_name
+
+    def get(self, name: str, source: str | None = None) -> SimpleNamespace | None:
+        del source
+        found = self._by_name.get(name)
+        return SimpleNamespace(name=name, source=found) if found else None
+
+
+def _reporter(
+    sink: _Sink | None,
+    *,
+    ids: list[str] | None = None,
+    sources: dict[str, str] | None = None,
+    registry: _Registry | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        _skills_sink=sink,
+        _last_injected_skill_ids=ids,
+        _last_injected_skill_sources=sources or {},
+        context=SimpleNamespace(skills=SimpleNamespace(registry=registry)),
+        _emit_skills=None,
+    )
+
+
+async def _emit_injected(fake_self: SimpleNamespace) -> None:
+    """Bind both helpers to the stand-in: ``_emit_injected_skills`` calls
+    ``_emit_skills``, which is a real method on the class."""
+    fake_self._emit_skills = lambda key, skills: AgentLoop._emit_skills(fake_self, key, skills)
+    await AgentLoop._emit_injected_skills(fake_self, "web:s1")
+
+
+async def test_injected_reports_registry_source_not_the_id_prefix() -> None:
+    """Every on-disk skill is addressed as ``local/``, so the prefix cannot
+    say where it came from. The panel must show the registry source."""
+    sink = _Sink()
+    fake_self = _reporter(
+        sink,
+        ids=["local/subagent-dag-orchestration"],
+        sources={"local/subagent-dag-orchestration": "builtin"},
+    )
+    await _emit_injected(fake_self)
+    assert sink.calls[0][1] == "skills_injected"
+    assert sink.calls[0][2]["skills"] == [
+        {
+            "id": "local/subagent-dag-orchestration",
+            "source": "builtin",
+            "name": "subagent-dag-orchestration",
+            "kind": "injected",
+        }
+    ]
+
+
+async def test_injected_falls_back_to_the_prefix_without_a_source_map() -> None:
+    sink = _Sink()
+    fake_self = _reporter(sink, ids=["hub/echo"])
+    await _emit_injected(fake_self)
+    assert sink.calls[0][2]["skills"][0]["source"] == "hub"
+
+
+async def test_injected_is_a_noop_without_a_sink_or_ids() -> None:
+    await _emit_injected(_reporter(None, ids=["local/x"]))  # no sink: must not raise
+    sink = _Sink()
+    await _emit_injected(_reporter(sink, ids=[]))
+    assert sink.calls == []
+
+
+async def test_read_skill_is_reported_with_its_real_source() -> None:
+    """A skill the model loads itself never passes through injection; the
+    panel would otherwise show nothing for the turn that used it."""
+    sink = _Sink()
+    fake_self = _reporter(
+        sink,
+        registry=_Registry({"subagent-dag-orchestration": "builtin"}),
+    )
+    fake_self._emit_skills = lambda key, skills: AgentLoop._emit_skills(fake_self, key, skills)
+    await AgentLoop._report_skill_read(
+        fake_self,
+        "web:s1",
+        "read_skill",
+        {"skill_id": "local/subagent-dag-orchestration"},
+    )
+    assert sink.calls[0][2]["skills"] == [
+        {
+            "id": "local/subagent-dag-orchestration",
+            "source": "builtin",
+            "name": "subagent-dag-orchestration",
+            "kind": "read_skill",
+        }
+    ]
+
+
+async def test_read_skill_reports_even_when_the_registry_cannot_resolve() -> None:
+    """The call happened; an unresolvable id keeps the prefix as source
+    rather than dropping the report."""
+    sink = _Sink()
+    fake_self = _reporter(sink, registry=_Registry({}))
+    fake_self._emit_skills = lambda key, skills: AgentLoop._emit_skills(fake_self, key, skills)
+    await AgentLoop._report_skill_read(fake_self, "web:s1", "use_skill", {"skill_id": "hub/echo"})
+    entry = sink.calls[0][2]["skills"][0]
+    assert entry["source"] == "hub"
+    assert entry["kind"] == "use_skill"
+
+
+async def test_read_skill_ignores_a_missing_skill_id() -> None:
+    sink = _Sink()
+    fake_self = _reporter(sink, registry=_Registry({}))
+    await AgentLoop._report_skill_read(fake_self, "web:s1", "read_skill", {})
+    assert sink.calls == []
+
+
+async def test_read_skill_resolves_a_bare_id_the_way_read_skill_itself_does() -> None:
+    """``read_skill`` treats an id with no ``<source>/`` prefix as a Hub id.
+    Splitting it any other way makes the panel badge the skill's own name as
+    its source."""
+    sink = _Sink()
+    fake_self = _reporter(sink, registry=_Registry({}))
+    fake_self._emit_skills = lambda key, skills: AgentLoop._emit_skills(fake_self, key, skills)
+    await AgentLoop._report_skill_read(fake_self, "web:s1", "read_skill", {"skill_id": "orchestration-guide"})
+    assert sink.calls[0][2]["skills"] == [
+        {
+            "id": "orchestration-guide",
+            "source": "hub",
+            "name": "orchestration-guide",
+            "kind": "read_skill",
+        }
+    ]

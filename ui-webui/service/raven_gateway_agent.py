@@ -315,6 +315,7 @@ class RavenGatewayAgent:
         open_id: str | None = None
         cur_tool: str | None = None
         cur_tool_blocking = False
+        cur_tool_display: str | None = None
 
         def _close_block():
             nonlocal open_kind, open_id
@@ -389,6 +390,11 @@ class RavenGatewayAgent:
                 tname = payload.get("name") or "tool"
                 cur_tool = tcid
                 cur_tool_blocking = bool(payload.get("blocking"))
+                # The tool-authored call label rides out on the result event's
+                # metadata: ToolCallBlock comes from the published
+                # @agentscope-ai/agentscope package and has no field for it,
+                # while ToolResultBlock.metadata is already plumbed end to end.
+                cur_tool_display = str(payload.get("display") or "") or None
                 yield ToolCallStartEvent(reply_id=reply_id, tool_call_id=tcid, tool_call_name=tname)
                 yield ToolCallDeltaEvent(
                     reply_id=reply_id,
@@ -409,11 +415,13 @@ class RavenGatewayAgent:
                     state=ToolResultState.SUCCESS,
                     metadata={
                         "truncated": bool(payload.get("truncated")),
+                        **({"display": cur_tool_display} if cur_tool_display else {}),
                         **(payload.get("metadata") or {}),
                     },
                 )
                 cur_tool = None
                 cur_tool_blocking = False
+                cur_tool_display = None
 
             elif etype == "custom":
                 # Out-of-band CustomEvent (DAG progress / subagent instances):

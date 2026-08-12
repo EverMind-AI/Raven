@@ -317,6 +317,28 @@ def build_raven_config_router() -> APIRouter:
         except Exception as exc:  # not found / not removable / transport
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.get("/mcp")
+    async def list_mcp() -> dict:
+        """Raven's own MCP servers, with live connection state and tool names.
+
+        Not to be confused with ``/workspace/mcp``, which is the AgentScope
+        workspace's list -- that store is not wired to the gateway agent, so it
+        describes servers this chat cannot reach.
+        """
+        client = await GatewayClient.shared()
+        return await client.call("raven.mcp.list", {})
+
+    @router.put("/mcp")
+    async def set_mcp(body: dict = Body(...)) -> dict:
+        """Replace the MCP server list. Returns ``restart_required``: MCP tools
+        are registered once at connect time, so the change lands on the next
+        gateway restart rather than immediately."""
+        client = await GatewayClient.shared()
+        try:
+            return await client.call("raven.mcp.set", {"servers": body.get("servers") or []})
+        except Exception as exc:  # validation / transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.get("/skills/download-local")
     async def download_local(name: str = "", source: str = "", id: str = "") -> Response:
         """Download an installed/builtin skill's folder as a .zip (parity with the

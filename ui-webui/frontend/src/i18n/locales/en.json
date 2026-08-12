@@ -51,6 +51,7 @@
 	},
 	"tool": {
 		"callGeneric": "Call tool",
+		"callInput": "Input",
 		"callSubagent": "Call Subagent",
 		"subagentPrompt": "Prompt",
 		"subagentResponse": "Response",
@@ -649,23 +650,30 @@
 			"emptyDescription": "Tasks the agent plans will show up here."
 		},
 		"mcp": {
-			"description": "The MCP servers equipped in the workspace.",
-			"searchPlaceholder": "Search MCP in the workspace",
+			"description": "MCP servers the agent can reach. A change needs a gateway restart.",
+			"searchPlaceholder": "Search MCP servers",
 			"add": "Add MCP",
 			"tools": "{{count}} tools",
+			"notConnected": "not connected",
+			"pending": "connects on first use",
+			"restartRequired": "Saved. Restart the gateway for it to take effect.",
+			"restartRequiredRemove": "Removed from the config. Its tools stay loaded until the gateway restarts.",
+			"invalid": "Invalid config — {{detail}}",
+			"loadFailed": "Could not load MCP servers, so this list is not what is configured — {{detail}}",
 			"emptyTitle": "No MCP servers",
-			"emptyDescription": "Add an MCP server to equip the workspace with tools."
+			"emptyDescription": "Add an MCP server to give the agent its tools."
 		},
 		"skill": {
 			"title": "Skills",
-			"description": "The skills equipped in the workspace.",
-			"searchPlaceholder": "Search skills in the workspace",
-			"add": "Add Skill",
+			"description": "Skills the agent can reach, from raven's registry.",
+			"searchPlaceholder": "Search available skills",
 			"emptyTitle": "No skills",
-			"emptyDescription": "Add a skill to equip the workspace.",
+			"emptyDescription": "Install a skill from the hub to make it reachable.",
 			"usedTitle": "Skills used in this conversation",
-			"usedHint": "Injected by SkillForge",
-			"workspaceTitle": "Equipped in workspace"
+			"usedByModel": "loaded by agent",
+			"poolTitle_one": "Available to the agent ({{count}})",
+			"poolTitle_other": "Available to the agent ({{count}})",
+			"manage": "Manage skills"
 		},
 		"subagent": {
 			"entity": "subagent"

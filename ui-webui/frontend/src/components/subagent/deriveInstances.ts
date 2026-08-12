@@ -15,6 +15,10 @@ export interface Exchange {
 	prompt: string;
 	output: string;
 	action: 'create' | 'resume' | 'unknown';
+	/** The model's own short title for this invocation — `spawn`'s `label`
+	 *  argument, which the tool documents as being for display. A DAG node has
+	 *  no equivalent, so those rows fall back to the prompt's first line. */
+	label?: string;
 	/** Set for a DAG-node invocation. The rendered prompt and the output text
 	 *  live in the run dir, not the transcript, so the row fetches them on
 	 *  demand from `raven.subagents.dag.node` when it is expanded. */
@@ -131,7 +135,11 @@ export function deriveInstances(
 				agentId: typeof meta.agent_id === 'string' ? meta.agent_id : undefined,
 				stateful: true,
 			},
-			{ prompt: typeof input.task === 'string' ? input.task : '', output: '' },
+			{
+				prompt: typeof input.task === 'string' ? input.task : '',
+				output: '',
+				label: typeof input.label === 'string' ? input.label : undefined,
+			},
 		);
 	}
 

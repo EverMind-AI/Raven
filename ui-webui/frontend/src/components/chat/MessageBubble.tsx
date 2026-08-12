@@ -17,6 +17,8 @@ import { renderToolCall } from './tool-renderers';
 import { countDiffStats, DiffStats, getResultDiff } from './tool-renderers/_shared';
 import { DeliverFilesInlineCard } from './tool-renderers/DeliverFilesRenderer';
 import { RunSubagentDagInlineCard } from './tool-renderers/RunSubagentDagRenderer';
+import { SpawnInlineCard } from './tool-renderers/SpawnInlineCard';
+import { isSubagentCall, SPAWN_TOOL } from './tool-renderers/subagentCalls';
 import { SubagentInlineCard } from './tool-renderers/SubagentInlineCard';
 import type { TFunction, ToolCallWithResult } from './tool-renderers/types';
 import { RUN_SUBAGENT_DAG_TOOL } from '@/components/dag/deriveDag';
@@ -143,7 +145,7 @@ function groupToolCalls(
 		// name — is what makes the call inline-worthy.
 		const isInline =
 			INLINE_TOOL_NAMES.has(entry.call.name) ||
-			subagentNames.has(entry.call.name) ||
+			isSubagentCall(entry.call.name, subagentNames) ||
 			readManifest(entry.result?.metadata) !== null;
 		if (isInline && entry.call.state !== 'asking') {
 			flush();
@@ -370,7 +372,7 @@ function summarizeToolGroup(calls: ToolCallWithResult[], t: TFunction, subagentN
 
 	for (const { call, result } of calls) {
 		const name = call.name;
-		if (subagentNames.has(name)) {
+		if (isSubagentCall(name, subagentNames)) {
 			nSubagent += 1;
 		} else if (name === 'Bash') {
 			nBash += 1;
@@ -452,6 +454,18 @@ function renderBlock(
 					</div>
 				);
 			}
+			// `spawn` is deliberately not a SubagentInlineCard: that card puts the
+			// tool result under a "Response" heading, and `spawn` returns an
+			// acknowledgement, not the sub-agent's reply (which arrives later as
+			// its own announce turn). Its own card shows the delegated task and
+			// leaves the ack labelled as a tool result.
+			if (block.call.call.name === SPAWN_TOOL) {
+				return (
+					<div key={index} className="my-1">
+						<SpawnInlineCard pair={block.call} t={t} />
+					</div>
+				);
+			}
 			if (subagentNames.has(block.call.call.name)) {
 				return (
 					<div key={index} className="my-1">
@@ -459,7 +473,7 @@ function renderBlock(
 					</div>
 				);
 			}
-			const card = DeliverFilesInlineCard({ pair: block.call });
+			const card = DeliverFilesInlineCard({ pair: block.call, t });
 			if (card !== undefined) {
 				return (
 					<div key={index} className="my-1">

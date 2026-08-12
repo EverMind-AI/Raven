@@ -16,6 +16,8 @@ import { GlobRenderer } from './GlobRenderer';
 import { GrepRenderer } from './GrepRenderer';
 import { ReadRenderer } from './ReadRenderer';
 import { RunSubagentDagRenderer } from './RunSubagentDagRenderer';
+import { SpawnRenderer } from './SpawnRenderer';
+import { isSubagentCall, SPAWN_TOOL } from './subagentCalls';
 import { TaskCreateRenderer } from './TaskCreateRenderer';
 import type { TFunction, ToolCallWithResult, ToolRenderer } from './types';
 import { WriteRenderer } from './WriteRenderer';
@@ -31,6 +33,7 @@ const renderers: Record<string, ToolRenderer> = {
 	TaskCreate: TaskCreateRenderer,
 	[DELIVER_FILES_TOOL]: DeliverFilesRenderer,
 	run_subagent_dag: RunSubagentDagRenderer,
+	[SPAWN_TOOL]: SpawnRenderer,
 };
 
 function getRenderer(toolName: string): ToolRenderer {
@@ -59,7 +62,7 @@ export function renderToolCall(
 	subagentNames?: Set<string>,
 ): ReactNode {
 	const r = getRenderer(pair.call.name);
-	const isSubagent = subagentNames?.has(pair.call.name) ?? false;
+	const isSubagent = isSubagentCall(pair.call.name, subagentNames);
 	const header = r.renderHeader?.(pair, t) ?? defaultRenderHeader(pair, t, isSubagent);
 	const body =
 		r.renderBody?.(pair, t) ??

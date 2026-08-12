@@ -246,6 +246,28 @@ export interface RavenSkillEntry {
 	path?: string;
 }
 
+/**
+ * One MCP server raven is configured with. ``connected`` / ``tools`` are live
+ * runtime state, not config: MCP servers connect lazily on the first turn that
+ * needs them, so a valid server reads as not connected until then.
+ */
+export interface RavenMcpServer {
+	name: string;
+	type?: 'stdio' | 'sse' | 'streamableHttp' | null;
+	command?: string;
+	args?: string[];
+	env?: Record<string, string>;
+	url?: string;
+	headers?: Record<string, string>;
+	toolTimeout?: number;
+	connected?: boolean;
+	tools?: string[];
+	/** Set when the config entry does not validate. The server is still listed
+	 *  — a hand-broken entry has to stay visible to be fixable — but its fields
+	 *  come back empty, and saving over it is refused until the config is fixed. */
+	error?: string;
+}
+
 export interface RavenSkillBody {
 	skillMd: string;
 	name: string;
@@ -421,6 +443,17 @@ export const ravenConfigApi = {
 			reuse_key_from?: EverOSSection;
 			credential_provider?: string;
 		}) => client.post<{ models: string[] }>('/raven/everos/models', body),
+	},
+
+	/** Raven's own MCP servers — what the chat agent can reach. Distinct from
+	 *  ``workspaceApi.mcp``, which lists the AgentScope workspace's servers and
+	 *  has no effect on the gateway agent. */
+	mcp: {
+		list: () => client.get<{ servers: RavenMcpServer[]; connected: boolean }>('/raven/mcp'),
+		/** Replaces the whole list. ``restart_required`` is always true: MCP
+		 *  tools are registered once, at connect time. */
+		set: (servers: RavenMcpServer[]) =>
+			client.put<{ ok: boolean; restart_required: boolean }>('/raven/mcp', { servers }),
 	},
 
 	skills: {
