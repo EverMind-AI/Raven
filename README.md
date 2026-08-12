@@ -1,12 +1,12 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/5a99d736-49ee-49c9-8b51-890f14078e78)
+![Raven banner](https://github.com/user-attachments/assets/6c6f585a-21b6-4e7b-9187-acffe59d0c10)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
-  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/🤗_HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge" alt="HuggingFace"></a>
+  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
   <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_社区-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat"></a>
+  <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
 [Website](https://raven.evermind.ai) · [中文](README.zh-CN.md)
@@ -25,253 +25,125 @@ Raven helps agents improve across runs by continuously refining the systems arou
 to give the agent access to MiroThinker-backed, multi-source research when a
 task needs deeper investigation.
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/a4dc5b21-c8e7-4397-95e1-50afeeb826e4" alt="Starting Raven from the command line" width="100%">
-</p>
+> Raven is pre-alpha. Interfaces and configuration may change quickly.
 
-<details>
-  <summary><kbd>Table of Contents</kbd></summary>
+## Benchmarks
 
-<br>
+| Benchmark | Raven Result | Comparison |
+| --- | --- | --- |
+| Efficiency | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
+| Self-evolution | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
+| Proactivity | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
 
-- [Quick Install](#quick-install)
-- [What You Can Do in 2 Minutes](#what-you-can-do-in-2-minutes)
-- [Messaging Gateways](#messaging-gateways)
-- [Why Raven](#why-raven)
-- [What Raven Is Built For](#what-raven-is-built-for)
-- [Agent Templates](#agent-templates)
-- [Useful Commands](#useful-commands)
-- [Docs by Goal](#docs-by-goal)
-- [Architecture](#architecture)
-- [Developer Workflow](#developer-workflow)
-- [Status](#status)
-- [EverMind Ecosystem](#evermind-ecosystem)
-- [Contributing](#contributing)
+Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
-<br>
+https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-</details>
+## Quick Start
 
-## Quick Install
+### Install
 
-### Linux, macOS, WSL2
+Linux, macOS, or WSL2:
 
 ```bash
 curl -fsSL https://raven.evermind.ai/install.sh | bash
 ```
 
-### Windows (native, PowerShell)
-
-> **Heads up:** Native Windows runs Raven without WSL. CLI, TUI, gateway, and
-> tools install natively. If you would rather use WSL2, the Linux/macOS
-> one-liner above works there too.
-
-Run this in PowerShell:
+Native Windows PowerShell:
 
 ```powershell
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
-On **Windows PowerShell 5.1** (the version built into Windows) that command
-fails with `Permanent Redirect`. Use the direct URL instead:
+Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL instead:
 
 ```powershell
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-### After installation
-
-The installer handles everything: uv, Python 3.12, Node.js 22, and Raven.
-
-Open a new terminal. On Linux, macOS, or WSL2, you can also reload your current
-shell:
-
-```bash
-source ~/.bashrc    # or: source ~/.zshrc
-```
-
-Then run:
+### Onboard and run
 
 ```bash
 raven onboard
 raven
 ```
 
-Raven supports OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek, GitHub Copilot,
-OpenAI Codex OAuth, MiniMax Global/CN OAuth, and custom OpenAI-compatible endpoints.
+The bilingual onboarding wizard configures six areas without requiring manual edits to `~/.raven/config.json`:
 
-If setup fails or a provider is not ready, run:
+1. LLM provider and model
+2. Sandbox or execution location
+3. Chat channels
+4. EverOS long-term memory
+5. Deep Research
+6. Cold-start import from other AI tools
+
+Provider setup includes an in-step connectivity check. Optional steps can be skipped and configured later. If setup is incomplete, run:
 
 ```bash
 raven doctor
 ```
 
-### Upgrade an existing installation
+### Upgrade
 
-Check for the latest published stable release:
+```bash
+raven upgrade --check
+raven upgrade
+```
 
-    raven upgrade --check
+Upgrades preserve configuration, sessions, and memory. Raven does not update automatically.
 
-Upgrade Raven without resetting configuration, sessions, or memory:
+## Deep Research
 
-    raven upgrade
+Deep Research gives Raven a dedicated path for open-ended questions that require broad web search, source reading, analysis, and multi-source cross-checking. It uses [MiroThinker](https://miromind.ai/) and returns a self-contained answer with inline citations and references.
 
-Raven upgrades are user-triggered, not automatic. Editable source installs are
-not overwritten; update the checkout and rerun its development setup instead.
-On POSIX systems, the command stays synchronous until the helper reports its
-final result. On native Windows, it schedules an external helper so the running
-executable can exit; wait for the helper's completion message before running
-Raven again.
+Configure it during onboarding or later:
 
-## What You Can Do in 2 Minutes
+```bash
+raven deep-research enable
+raven deep-research get
+```
 
-- Start the Raven harness in a terminal-native TUI with `raven` or `raven tui`.
-- Run a one-shot shell task with `raven agent -m "..."`.
-- Configure providers, sandboxing, channels, and memory with `raven onboard`.
-- Enable the MiroThinker deep_research tool with `raven deep-research enable`.
-- Open captured LLM/tool/memory spans with `raven tracing`.
-- Browse built-in and local SkillForge skills with `raven skill list`.
-- Resume, fork, export, or delete previous work with `raven sessions list`.
-- Check proactive memory and scheduled nudges with `raven sentinel status`.
+Once configured, Raven can invoke `deep_research` when a task needs more than a quick lookup. Before a paid, minute-scale run, interactive surfaces ask whether to use Deep Research or regular search for that query.
 
-## Messaging Gateways
+Delivery adapts to where Raven is running:
 
-Raven currently ships 12 gateway adapters. Use `raven channels list` to see the
-adapters available in your local install and `raven gateway` to run the gateway
-daemon.
+- **CLI and TUI:** progress streams inline while Raven searches, reads pages, and runs analysis. The completed report is shown directly without being rewritten by the main model.
+- **Gateway channels:** the run continues in the background and the completed report is delivered back to the originating conversation.
+- **Local archive:** every completed result is saved under `<workspace>/deep_research/` for later use.
 
-| Gateway | Adapter id | Notes |
-| --- | --- | --- |
-| Telegram | `telegram` | Bot-based messaging |
-| Slack | `slack` | Workspace messaging |
-| Discord | `discord` | Server and bot messaging |
-| WhatsApp | `whatsapp` | Uses the bundled TypeScript bridge |
-| Matrix | `matrix` | Matrix rooms and direct messages |
-| Feishu | `feishu` | Lark/Feishu app integration |
-| WeCom | `wecom` | WeCom group and app messaging |
-| Mochat | `mochat` | API/socket-based messaging |
-| QQ | `qq` | QQ bot integration |
-| DingTalk | `dingtalk` | DingTalk stream integration |
-| Email | `email` | IMAP/SMTP mailbox integration |
-| WeChat | `weixin` | Personal WeChat adapter; `weixin` is the current CLI id |
+Use regular search for a single fact or URL. Use Deep Research for comparisons, landscape reviews, technical investigations, and questions where source agreement matters.
 
-## Why Raven
+## Tracing
 
-Most agent tools stop at "LLM + tools + loop." That works for demos, but it
-breaks down when the agent becomes part of your daily environment:
+Tracing makes Raven's reasoning path inspectable without sending trace data to a hosted service. Open the local dashboard with:
 
-- Long sessions overflow context and lose important details.
-- Every turn re-sends the same system prompt, skills, and tool definitions.
-- The agent waits passively even when it can see something that needs action.
-- Useful workflows stay trapped in chat history instead of becoming reusable
-  skills.
+```bash
+raven tracing
+```
 
-Raven treats the harness around the agent as the product, not a thin wrapper or
-an edge case.
+Each `session.turn` becomes a trace tree containing the work that happened beneath it:
 
-Raven's self-improving harness is built around four product bets:
+- LLM calls, models, token usage, cost, latency, and errors
+- Tool inputs and outputs
+- Subagent runs and parent-child relationships
+- Skill reads and injections
+- Memory recall, storage, extraction, and consolidation
+- Large prompts and results stored as out-of-line artifacts
 
-- **Memory-first harness:** user memory, agent memory, and world knowledge stay
-  separate, durable, and reusable across sessions.
-- **Deep Research as a tool:** long-form, multi-source research can be enabled
-  with `raven deep-research enable` and then used by the agent when the task
-  calls for deeper investigation.
-- **Self-improving skills:** repeated workflows can become skills, collect
-  feedback, and evolve instead of staying buried in chat history.
-- **Agent Templates:** builders can start from Raven, define an agent for a
-  scenario, and share it without rebuilding the harness layer.
+Tracing is enabled by default and is designed to never interrupt Raven's control flow. Spans are stored locally at `~/.raven/traces/logs/audit-spans.log`; set `RAVEN_TRACING_DIR` to move the state directory or `RAVEN_TRACING=0` to disable recording.
 
-<table>
-<tr>
-<th width="28%">Capability</th>
-<th width="36%">Raven</th>
-<th width="36%">Typical tool-based agent</th>
-</tr>
-<tr>
-<td><strong>Native terminal product</strong></td>
-<td>Interactive TUI, CLI, gateway mode, and typed RPC between Python and React/Ink</td>
-<td>Usually a thin command wrapper around a chat loop</td>
-</tr>
-<tr>
-<td><strong>Long memory</strong></td>
-<td>EverOS-backed memory, local skills, session history, and workspace templates</td>
-<td>Usually transient context or provider-side chat history</td>
-</tr>
-<tr>
-<td><strong>Context control</strong></td>
-<td>Curator and legacy context engines with explicit token budgets and fail-safes</td>
-<td>Usually truncation, summarization, or hidden prompt heuristics</td>
-</tr>
-<tr>
-<td><strong>Proactivity</strong></td>
-<td>Sentinel, scheduler, nudge policy, and deferred decision flow</td>
-<td>Usually waits until the user types again</td>
-</tr>
-<tr>
-<td><strong>Deep Research</strong></td>
-<td>Opt-in MiroThinker-backed deep_research tool enabled with <code>raven deep-research enable</code></td>
-<td>Usually external search tabs, ad hoc browser prompts, or one-off research scripts</td>
-</tr>
-<tr>
-<td><strong>Skill evolution</strong></td>
-<td>Detects reusable procedures, materializes skills, tracks feedback, and evolves them</td>
-<td>Usually static markdown prompts or manually installed plugins</td>
-</tr>
-</table>
+The schema follows a small, versioned semantic contract. See the [Tracing Standard API](docs/TRACING_STANDARD_API.md) for span names, attributes, artifact behavior, and extension rules.
 
-<br>
+## Core Systems
 
-## What Raven Is Built For
-
-Raven is designed for the workflows where ordinary chat agents and static tool
-loops feel too small.
-
-### 1. Terminal-Native Daily Work
-
-Raven can run the harness as a native TUI, a direct CLI entry point, or a
-gateway-backed runtime. The TUI is not a web shell: it is a React/Ink
-application talking to Raven's Python runtime through a typed RPC protocol.
-
-### 2. Memory That Becomes Useful
-
-Raven connects the harness to EverOS for long-term user and agent memory.
-Sessions, procedures, and reusable patterns can be turned into local skill
-material instead of disappearing into old transcripts.
-
-### 3. Context That Does Not Collapse Under Pressure
-
-The context stack has a legacy path and a Curator path. Under pressure, the
-harness can archive, retrieve, and assemble context with explicit budgets
-instead of blindly clipping the oldest messages.
-
-### 4. Agents That Can Reach Out First
-
-Sentinel watches events, schedules checks, evaluates whether a nudge is useful,
-and routes proactive actions through guardrails. The point is not noisy
-notifications; the point is an agent harness that can notice.
-
-### 5. Skills That Improve
-
-SkillForge treats skills as procedural memory. It can detect reusable workflows,
-write skill files, track execution feedback, and evolve instructions when they
-stop working.
-
-### 6. A Harness That Evolves Itself
-
-`raven.evolver` runs measured self-evolution against a benchmark: it diagnoses
-failing trajectories, designs candidate harness patches as real git commits,
-and promotes only what passes statistical gates — with a sealed test set for
-an honest generalisation number. One command
-(`python -m raven.evolver run --config <yaml>`), fully resumable. Start at
-[raven/evolver/README.md](raven/evolver/README.md).
-
-### 7. Research and Observability in the Harness
-
-Raven now includes two opt-in surfaces for deeper work. `raven deep-research`
-configures the MiroThinker-backed `deep_research` tool so an agent can run a
-multi-source research pass when the task calls for it. `raven tracing` opens a
-local dashboard for captured LLM, tool, and memory spans, making it easier to
-inspect what happened inside a run without changing the agent workflow.
+| System | What it adds |
+| --- | --- |
+| **EverOS memory** | Durable user memory, agent memory, and world knowledge across sessions |
+| **Context Engine** | Explicit token budgets and a unified assembly pipeline that preserves the most useful context |
+| **Proactivity** | Sentinel observations, scheduled work, nudge policy, and deferred decisions |
+| **SkillForge** | Built-in, workspace, EverOS, and mirrored skills with retrieval, feedback, and evolution |
+| **Evolver** | Reproducible evaluation loops for improving agents and reusable procedures |
+| **Agent Templates** | Shareable starting points for specialized digital workers built on the same harness |
 
 <br>
 <div align="right">
@@ -280,63 +152,46 @@ inspect what happened inside a run without changing the agent workflow.
 
 </div>
 
-## Agent Templates
+## Providers and Gateways
 
-Raven is an Apache-2.0 licensed, self-improving agent harness built by EverMind.
-It provides the runtime, memory layer, tools, and Agent Templates for building
-custom agents and digital workers.
+Raven supports API-key, OAuth, local, and OpenAI-compatible providers. The onboarding catalog includes OpenRouter, OpenAI, Anthropic, Gemini, MiniMax, DeepSeek, Z.ai, DashScope, Moonshot, VolcEngine, SiliconFlow, Groq, AiHubMix, Azure OpenAI, GitHub Copilot OAuth, OpenAI Codex OAuth, Ollama, and hosted vLLM.
 
-Use an Agent Template when you want Raven's harness layer but your own
-scenario, personality, workflow policy, skills, integrations, or distribution
-model. A template can start as one person's agent and later become a repeatable
-digital worker for a team or community.
+Twelve gateway adapters connect Raven to Telegram, Slack, Discord, WhatsApp, Matrix, Feishu, WeCom, Mochat, QQ, DingTalk, Email, and WeChat.
 
-Agents, templates, skills, workflows, and modules created with Raven belong to
-their creators. Builders may use, modify, commercialize, and share agents built
-with Raven or based on Raven Agent Templates under the Apache-2.0 license.
+```bash
+raven channels list
+raven channels enable <adapter>
+raven gateway
+```
 
-We encourage builders to say "Built with Raven" and link back to this
-repository. The Raven and EverMind names and logos may not be used to imply
-official endorsement unless explicitly approved by EverMind.
+## Command Reference
 
-## Useful Commands
-
-| Goal | Command |
+| Command | Purpose |
 | --- | --- |
-| Start the native TUI | `raven` or `raven tui` |
-| Check the TUI runtime | `raven tui --check` |
-| Configure Raven | `raven onboard` |
-| Run a one-shot shell task | `raven agent -m "..."` |
-| Review providers | `raven provider list` |
-| Configure Deep Research | `raven deep-research enable` |
-| Inspect Deep Research config | `raven deep-research get` |
-| Open tracing dashboard | `raven tracing` |
-| List messaging channels | `raven channels list` |
-| Start the messaging gateway | `raven gateway` |
-| Manage sessions | `raven sessions list` |
-| Inspect scheduled jobs | `raven cron list` |
-| Browse skills | `raven skill list` |
-| Inspect proactive state | `raven sentinel status` |
-| Show plugins and memory backend | `raven plugins` |
-| Debug sandbox VMs | `raven sandbox list` |
-| Show local status | `raven status` |
-| Check for Raven updates | `raven upgrade --check` |
-| Upgrade Raven | `raven upgrade` |
-| Diagnose setup | `raven doctor` |
+| `raven` or `raven tui` | Launch the terminal UI |
+| `raven agent -m "..."` | Run a one-shot task |
+| `raven onboard` | Configure providers, sandboxing, channels, memory, research, and import |
+| `raven status` | Show configuration and runtime status |
+| `raven doctor` | Diagnose provider and environment problems |
+| `raven tracing` | Open the local trace dashboard |
+| `raven sessions list` | Browse, resume, fork, export, or delete sessions |
+| `raven skill list` | Inspect the local SkillForge catalog |
+| `raven sentinel status` | Inspect proactive memory and scheduled nudges |
+| `raven cron list` | Inspect scheduled jobs |
+| `raven gateway` | Run messaging gateways |
+| `raven upgrade` | Upgrade a managed installation |
 
-## Docs by Goal
+Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
-| Goal | Start here |
-| --- | --- |
-| First-time install and setup | [Quick Install](#quick-install) |
-| Source-based development | [Developer Workflow](#developer-workflow) and [docs/dev.md](docs/dev.md) |
-| Memory and plugin architecture | [docs/memory-plugin-architecture.md](docs/memory-plugin-architecture.md) |
-| Configure Deep Research | `raven deep-research --help` |
-| Inspect tracing and observability | `raven tracing` and [docs/TRACING_STANDARD_API.md](docs/TRACING_STANDARD_API.md) |
-| Sandbox usage and debugging | [docs/sandbox/usage.md](docs/sandbox/usage.md) |
-| Proactivity design | [docs/Proactivity-Plan.md](docs/Proactivity-Plan.md) |
-| Benchmark self-evolution | [raven/evolver/README.md](raven/evolver/README.md) |
-| Detailed design notes | [docs/README.md](docs/README.md) |
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Developer workflow](docs/dev.md)
+- [Tracing Standard API](docs/TRACING_STANDARD_API.md)
+- [Sandbox usage](docs/sandbox/usage.md)
+- [Memory plugin architecture](docs/memory-plugin-architecture.md)
+- [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
+- [Proactivity implementation](docs/Proactivity-Implementation.md)
 
 <br>
 <div align="right">
@@ -347,94 +202,43 @@ official endorsement unless explicitly approved by EverMind.
 
 ## Architecture
 
-Every turn flows through the Spine: one entry (`submit`), one exit (`emit`),
-and per-conversation lanes for ordering and cancellation. Feature engines plug
-into the agent loop through explicit handoffs instead of importing each other.
-
 ```text
-Channels / TUI / Gateway
-        |
-        v
-   Raven Spine
- submit -> lanes -> emit
-        |
-        v
-   Agent Loop
- tools · skills · providers
-        |
-        +--> Context Engine   legacy / curator
-        +--> Memory Engine    EverOS / local skills / SkillForge
-        +--> Proactive Engine Sentinel / scheduler / nudge policy
-        +--> TokenWise        usage tracking / cache placement / routing
-        +--> Tracing          captured LLM / tool / memory spans
-        +--> Eval Engine      task judgement and coordination
-        +--> Evolver          benchmark-driven harness self-evolution
+CLI / TUI / Messaging Gateways
+              |
+              v
+          TUI-RPC / Spine
+              |
+              v
+           Agent Loop
+      +-------+-------+
+      |       |       |
+  Providers  Tools  Subagents
+      |       |       |
+      +--- Context Engine ---+
+              |
+      +-------+--------+
+      |                |
+ EverOS Memory     SkillForge
+      |                |
+      +--- Proactivity + Evolver
 ```
 
-### Repo Layout
+The Python runtime and React/Ink TUI communicate only through typed TUI-RPC. The Spine carries runtime events, while the Agent Loop coordinates providers, tools, context, memory, skills, subagents, and proactive work.
+
+Key directories:
 
 ```text
-raven/
-├── spine/              # Per-turn backbone: submit -> lanes -> emit
-├── agent/              # Agent loop, tools, hooks, subagents, context builder
-├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
-├── tui_rpc/            # Python side of the native TUI protocol
-├── providers/          # LLM provider adapters
-├── context_engine/     # Context assembly and Curator path
-├── proactive_engine/   # Sentinel, scheduler, nudges, feedback
-├── memory_engine/      # EverOS memory, local skills, SkillForge
-├── token_wise/         # Usage tracking, cache placement, routing
-├── tracing/            # Span capture and local tracing dashboard
-├── evolver/            # Benchmark-driven harness self-evolution
-├── sandbox/            # Isolated command execution
-├── security/           # Trust boundaries and network checks
-├── cli/                # `raven` command line entry point
-└── config/             # Config schema and update helpers
-
-ui-tui/                 # React/Ink native terminal UI
-bridge/                 # WhatsApp TypeScript bridge
-benchmarks/             # Benchmark adapters, including AppWorld evolver wiring
+raven/agent/             agent loop, tools, and subagents
+raven/channels/          messaging adapters
+raven/context_engine/    context assembly and token budgeting
+raven/memory_engine/     EverOS integration and local skill memory
+raven/proactive_engine/  sentinel, scheduling, and nudges
+raven/providers/         model providers and routing
+raven/skill_hub/         external skill retrieval
+raven/tracing/           instrumentation, storage, and viewer
+raven/tui_rpc/           typed runtime-to-TUI boundary
+ui-tui/                  React/Ink terminal interface
 ```
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
-
-## Developer Workflow
-
-Source setup, focused checks, and PR rules live in
-[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/dev.md](docs/dev.md).
-AI-collaboration rules live in [AGENTS.md](AGENTS.md); `CLAUDE.md` is kept as a
-compatibility entry point.
-
-<br>
-<div align="right">
-
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
-
-## Status
-
-Raven is pre-alpha and moving quickly. APIs can change without notice, but the
-core product surfaces are already in the repository.
-
-| Layer | Status |
-| --- | --- |
-| Native TUI + CLI | Functional |
-| Spine runtime | Functional |
-| Base agent loop, tools, providers | Functional |
-| Context engine | Implemented, still evolving |
-| Sentinel proactivity | Implemented, still evolving |
-| TokenWise strategies | Implemented |
-| SkillForge | Implemented |
-| Deep Research tool | Implemented, opt-in configuration |
-| Tracing dashboard | Implemented |
-| Evolver pipeline | Implemented, benchmark adapters still evolving |
-| Eval engine | Partial |
 
 <br>
 <div align="right">
@@ -445,50 +249,7 @@ core product surfaces are already in the repository.
 
 ## EverMind Ecosystem
 
-EverMind is an open-source ecosystem for long-term memory, self-evolving
-agents, AI-native interfaces, and memory evaluation.
-
-<table>
-<tr>
-<th colspan="2">EverMind Open-Source Ecosystem</th>
-</tr>
-<tr>
-<td><strong>Self-Improving Agent Harness</strong></td>
-<td><a href="https://github.com/EverMind-AI/raven">Raven</a> - the terminal-native agent harness for tools, skills, memory, proactivity, context control, and reusable Agent Templates.</td>
-</tr>
-<tr>
-<td><strong>Memory Runtime</strong></td>
-<td><a href="https://github.com/EverMind-AI/EverOS">EverOS</a> - the memory substrate Raven uses for durable user memory, agent memory, case extraction, skill extraction, and multimodal parsing.</td>
-</tr>
-<tr>
-<td><strong>Algorithm Engine</strong></td>
-<td><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a> - stateless extraction, ranking, parsing, and memory operators that power EverOS.</td>
-</tr>
-<tr>
-<td><strong>Hypergraph Memory</strong></td>
-<td><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a> - hypergraph memory for long-term conversations, with benchmark-backed topic -> episode -> fact retrieval.</td>
-</tr>
-<tr>
-<td><strong>Benchmarks</strong></td>
-<td><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a> · <a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a> - evaluation suites for conversational memory and agent self-evolution.</td>
-</tr>
-<tr>
-<td><strong>Long-Context Research</strong></td>
-<td><a href="https://github.com/EverMind-AI/MSA">MSA</a> - Memory Sparse Attention for scalable latent memory and 100M-token contexts.</td>
-</tr>
-<tr>
-<td><strong>Personal Memory Layer</strong></td>
-<td><a href="https://github.com/EverMind-AI/EverMe">EverMe</a> - CLI and agent plugin suite for cross-device, cross-agent personal memory.</td>
-</tr>
-<tr>
-<td><strong>Developer Integrations</strong></td>
-<td><a href="https://github.com/EverMind-AI/evermem-claude-code">evermem-claude-code</a> · <a href="https://github.com/EverMind-AI/everos-plugins">everos-plugins</a> - plugins, skills, and migration tooling for AI coding agents.</td>
-</tr>
-</table>
-
-Together, these repositories form EverMind's research-to-runtime stack: memory
-methods, reusable algorithms, benchmark evidence, native agent products, and
-practical developer integrations.
+Raven is part of the [EverMind](https://evermind.ai/) open-source ecosystem. Explore [EverOS](https://github.com/EverMind-AI/EverOS), [EverAlgo](https://github.com/EverMind-AI/EverAlgo), [HyperMem](https://github.com/EverMind-AI/HyperMem), [EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench), [EverMemBench](https://github.com/EverMind-AI/EverMemBench), and [EverMe](https://github.com/EverMind-AI/EverMe).
 
 <br>
 <div align="right">
@@ -499,24 +260,8 @@ practical developer integrations.
 
 ## Contributing
 
-Raven is early, and useful contributions are welcome across runtime
-architecture, TUI polish, provider support, memory workflows, proactivity,
-benchmarks, documentation, and issue reports.
+Issues and pull requests are welcome. Start with the [developer workflow](docs/dev.md), follow [AGENTS.md](AGENTS.md) for repository rules, and use [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) for design conversations.
 
-Model vendors interested in a first-party integration or an open-source
-partnership (as MiniMax already has) are welcome to open an issue and say so.
+## License
 
-Before opening a PR:
-
-1. Read [AGENTS.md](AGENTS.md).
-2. Keep the change scoped.
-3. Add or update tests for behavior changes.
-4. Run the relevant `make` targets.
-5. Use a Conventional Commit title.
-
-### License
-
-Raven is licensed under the Apache License 2.0. Portions of the runtime and
-TUI layer originated from MIT-licensed upstream projects; their copyright
-notices and license texts are retained in [NOTICES.md](NOTICES.md) and
-[LICENSES](LICENSES/).
+[Apache License 2.0](LICENSE)
