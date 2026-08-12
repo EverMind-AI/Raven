@@ -26,8 +26,15 @@ from raven.security.trust import wrap_untrusted
 from raven.utils.helpers import build_assistant_message
 
 
-def build_subagent_prompt(workspace: Path, tool_names: Collection[str] = ()) -> str:
+def build_subagent_prompt(agent_home: Path, work_dir: Path, tool_names: Collection[str] = ()) -> str:
     """Build a focused system prompt for an in-process raven subagent.
+
+    ``agent_home`` is where the agent's memory and skills live; ``work_dir`` is
+    the session directory this sub-agent reads and writes files in. They are
+    different directories and only ``agent_home`` may reach the skill catalog
+    or the memory store -- pointing those at ``work_dir`` would build a private
+    raven tree inside the user's own directory and hide every skill the agent
+    actually has.
 
     ``tool_names`` is what this sub-agent's registry actually holds; skills
     declaring a ``requires.tools`` outside it are withheld, so the prompt can
@@ -46,7 +53,7 @@ def build_subagent_prompt(workspace: Path, tool_names: Collection[str] = ()) -> 
 
     # Transient ContextBuilder just for the runtime-context builder; the
     # subagent has no ContextBuilder of its own (and must not start a watcher).
-    time_ctx = ContextBuilder(workspace, start_watcher=False)._build_runtime_context(None, None)
+    time_ctx = ContextBuilder(agent_home, start_watcher=False)._build_runtime_context(None, None)
     parts = [
         f"""# Subagent
 
@@ -55,11 +62,12 @@ def build_subagent_prompt(workspace: Path, tool_names: Collection[str] = ()) -> 
 You are a subagent spawned by the main agent to complete a specific task.
 Stay focused on the assigned task. Your final response will be reported back to the main agent.
 
-## Workspace
-{workspace}"""
+## Directories
+- Working directory: {work_dir} — files you produce go here; relative paths resolve here.
+- Agent home: {agent_home} — the agent's memory and skills."""
     ]
 
-    catalog = LocalSkillCatalog(workspace, start_watcher=False)
+    catalog = LocalSkillCatalog(agent_home, start_watcher=False)
     visible = filter_by_required_tools(catalog.registry.list_all(), tool_names)
     skills_summary = catalog.build_skills_summary(only=visible) if visible else ""
     if skills_summary:
@@ -78,6 +86,7 @@ class RavenLoopBackend:
         *,
         provider: LLMProvider,
         model: str,
+        agent_home: Path,
         restrict_to_workspace: bool = False,
         exec_config: "ExecToolConfig | None" = None,
         brave_api_key: str | None = None,
@@ -86,6 +95,10 @@ class RavenLoopBackend:
     ) -> None:
         self.provider = provider
         self.model = model
+        # Global, unlike the per-run ``workspace``: memory and skills are the
+        # agent's identity and stay in one place whatever directory a session
+        # works in.
+        self.agent_home = Path(agent_home)
         self.restrict_to_workspace = restrict_to_workspace
         self.exec_config = exec_config or ExecToolConfig()
         self.brave_api_key = brave_api_key
@@ -127,11 +140,18 @@ class RavenLoopBackend:
     ) -> str:
         # Build subagent tools (no message tool, no spawn tool).
         tools = ToolRegistry()
-        allowed_dir = workspace if self.restrict_to_workspace else None
-        tools.register(ReadFileTool(workspace=workspace, allowed_dir=allowed_dir))
-        tools.register(WriteFileTool(workspace=workspace, allowed_dir=allowed_dir))
-        tools.register(EditFileTool(workspace=workspace, allowed_dir=allowed_dir))
-        tools.register(ListDirTool(workspace=workspace, allowed_dir=allowed_dir))
+        # Two roots, matching the main loop: the session directory the run works
+        # in, and agent home, whose absolute paths this prompt hands out.
+        allowed_dirs = (workspace, self.agent_home) if self.restrict_to_workspace else ()
+        # follow_binding=False: this run is a background asyncio task that can
+        # outlive the turn that spawned it, since SubagentManager.spawn captures
+        # the workspace at spawn time, so its tools must fence on the directory
+        # captured for this run, not on whatever the ambient workdir binding
+        # holds by the time they actually execute.
+        tools.register(ReadFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        tools.register(WriteFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        tools.register(EditFileTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
+        tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
         tools.register(
             ExecTool(
                 working_dir=str(workspace),
@@ -140,13 +160,15 @@ class RavenLoopBackend:
                 path_append=self.exec_config.path_append,
                 executor=executor,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                extra_allowed_dirs=allowed_dirs,
+                follow_binding=False,
             )
         )
         tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
         tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_subagent_prompt(workspace, tools.tool_names)},
+            {"role": "system", "content": build_subagent_prompt(self.agent_home, workspace, tools.tool_names)},
             {"role": "user", "content": task},
         ]
 

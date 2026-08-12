@@ -11,7 +11,7 @@ import type { DagNodeTiming, DagRunLive } from '@/components/chat/DagRunsContext
  * all-pending, and a reload mid-run left it frozen there.
  *
  * The durable record is the run dir raven writes under
- * `<workspace>/.ravenx_dag/<run_id>/`, reachable via `raven.subagents.dag.get`.
+ * `<session history>/mas_dag/<run_id>/`, reachable via `raven.subagents.dag.get`.
  * Discovering *which* runs belong to this session goes through the instance
  * registry, which is already session-scoped and already survives a reload.
  */

@@ -20,6 +20,7 @@ import { layoutDag } from './layoutDag';
 import type { DagFlowNode, DagVizNode } from './layoutDag';
 import type { RavenDagNodeDetail } from '@/api';
 import { ravenConfigApi } from '@/api';
+import { useDagRuns } from '@/components/chat/DagRunsContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 import CheckCircle2 from '~icons/solar/check-circle-bold-duotone';
@@ -217,6 +218,7 @@ function DagNodeDetail({ node, runId }: { node: DagVizNode; runId?: string }) {
 	const { t } = useTranslation();
 	const [detail, setDetail] = useState<RavenDagNodeDetail | null>(null);
 	const [loading, setLoading] = useState(false);
+	const { sessionKey } = useDagRuns();
 	const sourceRunId = node.reusedFrom?.runId ?? runId;
 	const sourceNodeId = node.reusedFrom?.nodeId ?? node.id;
 
@@ -226,7 +228,7 @@ function DagNodeDetail({ node, runId }: { node: DagVizNode; runId?: string }) {
 		let cancelled = false;
 		setLoading(true);
 		ravenConfigApi
-			.getDagNode(sourceRunId, sourceNodeId, OUTPUT_PREVIEW_CHARS)
+			.getDagNode(sourceRunId, sourceNodeId, OUTPUT_PREVIEW_CHARS, sessionKey)
 			.then((r) => {
 				if (!cancelled) setDetail(r.node);
 			})
@@ -240,7 +242,7 @@ function DagNodeDetail({ node, runId }: { node: DagVizNode; runId?: string }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [sourceRunId, sourceNodeId]);
+	}, [sourceRunId, sourceNodeId, sessionKey]);
 
 	// Only worth showing next to the template when substitution changed it;
 	// for a node with no placeholders the two are the same text.

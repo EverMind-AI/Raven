@@ -24,6 +24,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.subagent.backends import (
     AgentMeta,
     build_third_party_backend,
@@ -40,6 +41,7 @@ from raven.agent.subagent_dag._reader import read_node as _read_node
 from raven.agent.subagent_dag._reader import read_run as _read_run
 from raven.agent.subagent_dag.backend import LocalFileBackend
 from raven.agent.subagent_dag.runner import ProgressPublisher, run_dag
+from raven.agent.subagent_history import dag_root
 from raven.agent.tools.base import Tool, ToolResult
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
@@ -102,9 +104,12 @@ class SubAgentDagTool(Tool):
         progress_publisher: ProgressPublisher | None = None,
         max_concurrency: int = 5,
         guide_skill_id: str | None = GUIDE_SKILL_ID,
+        session_dir: "Callable[[str], Path] | None" = None,
     ) -> None:
         self._guide_skill_id = guide_skill_id
         self._workspace = workspace
+        self._session_dir = session_dir
+        self._fallback_sessions: Any = None
         self._backend = LocalFileBackend()
         self._max_concurrency = max_concurrency
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -174,18 +179,54 @@ class SubAgentDagTool(Tool):
         """Ids of runs currently accepting a cancel request."""
         return list(self._cancels)
 
-    async def read_run(self, run_id: str) -> dict:
+    def _run_root(self, session_key: str | None) -> str:
+        """This session's DAG history root, where run dirs are written and read.
+
+        Derived from the session key alone, so a read lands on exactly what
+        ``execute`` wrote whether or not a turn is running -- reads mostly
+        arrive *between* turns (a reloaded tab, a gateway restarted mid-run).
+        Deliberately independent of the session's working directory: repointing
+        that must not orphan the history already recorded.
+
+        The directory comes from ``SessionManager.session_dir`` so it tracks the
+        transcript's group even where this process would have chosen another
+        (raven/agent/subagent_history.py). Falls back to a slug-less manager --
+        the gateway's grouping -- when no resolver was injected.
+        """
+        key = session_key or self._conversation.get() or ""
+        if self._session_dir is not None:
+            return str(dag_root(self._session_dir(key)))
+        if self._fallback_sessions is None:
+            from raven.session.manager import SessionManager
+
+            self._fallback_sessions = SessionManager(Path(self._workspace))
+        return str(dag_root(self._fallback_sessions.session_dir(key)))
+
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
         """One run's durable structure + per-node state, read back from disk.
 
         The live progress events are not replayed anywhere, so this is the only
         way a consumer that missed them (a reloaded browser tab) can rebuild the
         graph. Serves in-flight runs too -- see :func:`_reader.read_run`.
         """
-        return await _read_run(self._backend, str(self._workspace), run_id)
+        return await _read_run(self._backend, self._run_root(session_key), run_id)
 
-    async def read_node(self, run_id: str, node_id: str, *, max_output_chars: int = 20000) -> dict:
+    async def read_node(
+        self,
+        run_id: str,
+        node_id: str,
+        *,
+        max_output_chars: int = 20000,
+        session_key: str | None = None,
+    ) -> dict:
         """One node's rendered prompt and (truncated) output, read back from disk."""
-        return await _read_node(self._backend, str(self._workspace), run_id, node_id, max_output_chars=max_output_chars)
+        return await _read_node(
+            self._backend,
+            self._run_root(session_key),
+            run_id,
+            node_id,
+            max_output_chars=max_output_chars,
+        )
 
     async def _emit_progress(self, name: str, value: dict) -> None:
         if (call_id := self._tool_call_id.get()) is not None:
@@ -338,7 +379,8 @@ class SubAgentDagTool(Tool):
                 spec,
                 subagents=self._subagents,
                 backend=self._backend,
-                workdir=str(self._workspace),
+                workdir=str(workdir.current() or self._workspace),
+                run_root=self._run_root(self._conversation.get()),
                 progress_publisher=self._emit_progress,
                 max_concurrency=self._max_concurrency,
                 session_key=self._conversation.get(),

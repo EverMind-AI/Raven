@@ -24,7 +24,7 @@ afterEach(() => {
 
 const SNAPSHOT: DagRunSnapshot = {
   run_id: 'dag-1',
-  dir: '/w/.ravenx_dag/dag-1',
+  dir: '/w/mas_dag/dag-1',
   finalized: true,
   files: [
     { node: 'a', status: 'completed', subagent: 'echo', depends_on: [] },

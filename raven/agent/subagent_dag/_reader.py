@@ -21,8 +21,6 @@ import json
 import re
 from typing import Any
 
-_DAG_DIR = ".ravenx_dag"
-
 # Both ids are minted by raven itself (``make_run_id`` / the graph schema's
 # ``_ID_PATTERN``), but they arrive here straight off a web request, so they
 # are re-checked before being joined into a path. Without this a crafted id
@@ -67,12 +65,17 @@ async def _read_text(backend: Any, path: str) -> str | None:
         return None
 
 
-def run_dir_of(backend: Any, workdir: str, run_id: str) -> str:
-    """The run-scoped directory for ``run_id`` (id validated first)."""
-    return backend.join_path(workdir, _DAG_DIR, _check_run_id(run_id))
+def run_dir_of(backend: Any, root: str, run_id: str) -> str:
+    """The run-scoped directory for ``run_id`` under a DAG history ``root``.
+
+    ``root`` is the full ``.../subagents/mas_dag`` path, matching what
+    :class:`~raven.agent.subagent_dag._store.DagRunStore` writes to. The id is
+    validated before it is joined in.
+    """
+    return backend.join_path(root, _check_run_id(run_id))
 
 
-async def read_run(backend: Any, workdir: str, run_id: str) -> dict:
+async def read_run(backend: Any, root: str, run_id: str) -> dict:
     """Rebuild one run's manifest-shaped payload from its run dir.
 
     The returned ``files`` list matches the shape the tool's
@@ -87,7 +90,7 @@ async def read_run(backend: Any, workdir: str, run_id: str) -> dict:
     Raises:
         DagReadError: the id is malformed or the run dir holds no ``graph.json``.
     """
-    rdir = run_dir_of(backend, workdir, run_id)
+    rdir = run_dir_of(backend, root, run_id)
     graph = await _read_json(backend, backend.join_path(rdir, "graph.json"))
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list):
         raise DagReadError(f"no readable DAG run at {rdir}")
@@ -135,7 +138,7 @@ async def read_run(backend: Any, workdir: str, run_id: str) -> dict:
 
 async def read_node(
     backend: Any,
-    workdir: str,
+    root: str,
     run_id: str,
     node_id: str,
     *,
@@ -152,7 +155,7 @@ async def read_node(
     Either field is ``None`` when its file does not exist: a node that never ran
     has no prompt, and a failed one has no output.
     """
-    rdir = run_dir_of(backend, workdir, run_id)
+    rdir = run_dir_of(backend, root, run_id)
     _check_node_id(node_id)
     prompt_file = backend.join_path(rdir, f"{node_id}.prompt.md")
     output_file = backend.join_path(rdir, f"{node_id}.out.md")

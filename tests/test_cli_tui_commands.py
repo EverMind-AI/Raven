@@ -42,7 +42,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda _a, _b: config)
+    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
     monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
@@ -50,7 +50,7 @@ def patched_tui_loop_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     ec_config.runtime = MagicMock()
     monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: ec_config)
 
-    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp: MagicMock())
+    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp, **_kw: MagicMock())
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("raven.config.paths.get_cron_dir", lambda: cron_dir)
@@ -272,7 +272,7 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     config.tools.mcp_servers = []
     config.tools.sandbox = MagicMock()
     config.channels = MagicMock()
-    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda _a, _b: config)
+    monkeypatch.setattr("raven.cli._helpers.load_runtime_config", lambda *a, **kw: config)
     monkeypatch.setattr("raven.cli._helpers.make_provider", lambda _c: MagicMock())
 
     ec_config = MagicMock()
@@ -280,7 +280,7 @@ def test_tui_build_plugin_registry_called_once(monkeypatch: pytest.MonkeyPatch, 
     ec_config.runtime = MagicMock()
     monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: ec_config)
 
-    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp: MagicMock())
+    monkeypatch.setattr("raven.session.manager.SessionManager", lambda _wp, **_kw: MagicMock())
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("raven.config.paths.get_cron_dir", lambda: cron_dir)
@@ -356,7 +356,7 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(
         "raven.cli.tui_commands._build_tui_agent_loop",
-        lambda: fake_agent_loop,
+        lambda *a, **kw: fake_agent_loop,
     )
 
     # Stub RPC machinery so _run_rpc_server_until_done can import + construct
@@ -653,3 +653,19 @@ def test_tui_agent_loop_receives_no_deliverables_store(patched_tui_loop_deps) ->
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert kwargs.get("deliverables") is None
+
+
+# ---------------------------------------------------------------------------
+# --workspace / --home flags
+# ---------------------------------------------------------------------------
+
+
+def test_tui_exposes_a_workspace_flag():
+    from typer.testing import CliRunner
+
+    from raven.cli import tui_commands
+
+    r = CliRunner(mix_stderr=False).invoke(tui_commands.tui_app, ["--help"])
+    assert r.exit_code == 0
+    assert "--workspace" in r.output
+    assert "--home" in r.output

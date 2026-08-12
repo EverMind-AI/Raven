@@ -26,7 +26,8 @@ async def read_run_reconciled(tool: Any, run_id: str, session_key: str | None) -
         run_id (`str`):
             The run to read.
         session_key (`str | None`):
-            Scopes the registry rows consulted for the overlay.
+            Names the session whose working directory holds the run dir, and
+            scopes the registry rows consulted for the overlay.
 
     Returns:
         `dict`:
@@ -34,7 +35,7 @@ async def read_run_reconciled(tool: Any, run_id: str, session_key: str | None) -
             per-node status/timestamps and the summary recomputed from the
             overlay when the run had not finalized.
     """
-    run = await tool.read_run(run_id)
+    run = await tool.read_run(run_id, session_key)
     if run.get("finalized"):
         return run
 

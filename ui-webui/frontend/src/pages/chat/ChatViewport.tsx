@@ -9,7 +9,7 @@ import type {
 	SessionKnowledgeConfig,
 	TTSModelConfig,
 } from '@/api';
-import { ravenConfigApi, ravenSessionModelApi, sessionApi } from '@/api';
+import { ravenConfigApi, ravenSessionModelApi, ravenSessionWorkdirApi, sessionApi } from '@/api';
 import MCPSvg from '@/assets/images/mcp.svg?react';
 import { ChatContent } from '@/components/chat/ChatContent.tsx';
 import { DagRunsContext } from '@/components/chat/DagRunsContext';
@@ -55,6 +55,7 @@ import { useRavenModels } from '@/hooks/useRavenModels';
 import { useSessions } from '@/hooks/useSessions';
 import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useTranslation } from '@/i18n/useI18n';
+import { formatApiErrorForAlert } from '@/lib/api-error';
 import ChevronDown from '~icons/solar/alt-arrow-down-linear';
 import BookText from '~icons/solar/book-2-bold-duotone';
 import Package from '~icons/solar/box-bold-duotone';
@@ -215,6 +216,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		useState<SessionKnowledgeConfig | null>(null);
 	const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>('default');
 	const [selectedWorkDir, setSelectedWorkDir] = useState<string | null>(null);
+	const [workDirError, setWorkDirError] = useState<string | null>(null);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
 	const [permissionContext, setPermissionContext] = useState<PermissionContext | null>(null);
 	// Dock layout: columns laid out left→right, each holding up to 2
@@ -573,8 +575,9 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 			dagRuns,
 			latestRunId: latestDagRunId,
 			runIdByToolCallId: buildRunIdByToolCallId(msgs, dagRuns),
+			sessionKey: sessionId ? `web:${sessionId}` : undefined,
 		}),
-		[dagRuns, latestDagRunId, msgs],
+		[dagRuns, latestDagRunId, msgs, sessionId],
 	);
 
 	const subagentInstancesState = useMemo(
@@ -609,6 +612,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		setSelectedTTSModel(null);
 		setSelectedKnowledgeConfig(null);
 		setSelectedWorkDir(null);
+		setWorkDirError(null);
 		setDagRuns({});
 		setLatestDagRunId(null);
 		setDagRunRestorePending(false);
@@ -704,12 +708,14 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		setPermissionContext(pc ?? null);
 	}, [view]);
 
-	// Sync selectedFallbackModel/TTS/knowledge/workDir from the session
-	// record, and keep `chat_model_config` non-null. AgentScope rejects a
-	// turn whose session has no `chat_model_config` before the gateway-mode
-	// `get_model` shim ever runs, so a session that has none gets the inert
-	// placeholder — the model that actually runs a turn is the session's
-	// raven override, restored below independently of this.
+	// Sync selectedFallbackModel/TTS/knowledge from the session record, and
+	// keep `chat_model_config` non-null. AgentScope rejects a turn whose
+	// session has no `chat_model_config` before the gateway-mode `get_model`
+	// shim ever runs, so a session that has none gets the inert placeholder —
+	// the model that actually routes a turn is the session's raven override,
+	// restored below independently of this. `work_dir` gets the same
+	// treatment: it is only AgentScope's display copy, so it is restored from
+	// raven below rather than read here.
 	//
 	// Important: skip while `view` is still loading. Otherwise the
 	// in-flight window between "agentId changed" and "useSessions
@@ -736,7 +742,6 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 		setSelectedFallbackModel(view.session.config.fallback_chat_model_config ?? null);
 		setSelectedTTSModel(view.session.config.tts_model_config ?? null);
 		setSelectedKnowledgeConfig(view.session.config.knowledge_config ?? null);
-		setSelectedWorkDir(view.session.config.work_dir ?? null);
 	}, [view, sessionId, agentId, t]);
 
 	// Restore selectedModel from raven's per-session override — the value
@@ -756,6 +761,25 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 				setSelectedModel(
 					model ? { type: '', credential_id: 'raven', model, parameters: {} } : null,
 				);
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [sessionId, view]);
+
+	// Restore selectedWorkDir from raven's per-session override, same
+	// reasoning as the model restore above: `work_dir` on the session record
+	// is only AgentScope's display copy, the value that binds the session's
+	// next turn is raven's own override.
+	useEffect(() => {
+		if (!view || !sessionId) return;
+		let cancelled = false;
+		ravenSessionWorkdirApi
+			.get(`web:${sessionId}`)
+			.then(({ workdir }) => {
+				if (cancelled) return;
+				setSelectedWorkDir(workdir);
 			})
 			.catch(() => {});
 		return () => {
@@ -855,15 +879,39 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 
 	/**
 	 * Persist a working-directory override. `null` resets to the default
-	 * session workspace directory.
+	 * session workspace directory. The raven write is the one that actually
+	 * binds the session's next turn, so it goes first and its rejection --
+	 * a relative path, a path inside the agent's protected trees, or a
+	 * session with work still in flight -- is the only failure reported as
+	 * `workDirError` ("the override did not take"). Takes effect on the next
+	 * turn only; it does not move a turn already running.
+	 *
+	 * The AgentScope `work_dir` copy and the session refetch that follow are
+	 * a display-sync step, not the change itself: the raven write already
+	 * succeeded and `selectedWorkDir` already reflects it by the time they
+	 * run, so their failure is reported as a toast (via the API client's
+	 * default error handling) rather than `workDirError` -- conflating the
+	 * two would tell the user their override didn't take when it did.
 	 *
 	 * @param path - New absolute working directory, or `null` to reset.
 	 */
 	const handleWorkDirChange = async (path: string | null) => {
 		if (!sessionId || !agentId) return;
-		setSelectedWorkDir(path);
-		await sessionApi.update(sessionId, agentId, { work_dir: path });
-		await refetchSessions();
+		let workdir: string | null;
+		try {
+			({ workdir } = await ravenSessionWorkdirApi.set(`web:${sessionId}`, path));
+		} catch (err) {
+			setWorkDirError(formatApiErrorForAlert(err));
+			return;
+		}
+		setWorkDirError(null);
+		setSelectedWorkDir(workdir);
+		try {
+			await sessionApi.update(sessionId, agentId, { work_dir: workdir });
+			await refetchSessions();
+		} catch (err) {
+			console.error('failed to sync the work_dir display copy', err);
+		}
 	};
 
 	return (
@@ -1044,6 +1092,7 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 														value={selectedWorkDir}
 														disabled={!sessionId}
 														onChange={handleWorkDirChange}
+														error={workDirError}
 													/>
 												) : null
 											}

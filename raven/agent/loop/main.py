@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
@@ -69,8 +70,10 @@ _ABORTED_ACTION_REPLY = (
 
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
+    from raven.agent.loop.checkpoint import CheckpointService
     from raven.agent.tools._deliverables import DeliverableStore
     from raven.agent.tools.base import Tool
+    from raven.agent.workdir import WorkdirResolver
     from raven.config.raven import (
         ContextConfig,
         MemoryConfig,
@@ -343,6 +346,7 @@ class AgentLoop:
         # tools, default behavior unchanged.
         plugin_tools: "list[Tool] | None" = None,
         empty_recovery: RecoveryLimits | None = None,
+        workdir_resolver: "WorkdirResolver | None" = None,
     ):
         from raven.agent.hook import (
             CompositeHook,
@@ -375,6 +379,7 @@ class AgentLoop:
         self._deliverables = deliverables
         self.provider = provider
         self.workspace = workspace
+        self._workdir_resolver = workdir_resolver
         self.model = model or provider.get_default_model()
         # Resolved lazily on the first tool result that carries an image. Keyed
         # by model, not a single flag: the loop is a long-lived singleton and
@@ -492,21 +497,13 @@ class AgentLoop:
             runtime_config = RuntimeConfig()
         self.runtime_config = runtime_config
         self.interactive = interactive
-        self._checkpoint = None
-        if self._checkpoint_active(runtime_config.checkpoint.policy, interactive):
-            from raven.agent.loop.checkpoint import CheckpointService
-
-            try:
-                self._checkpoint = CheckpointService(
-                    workspace,
-                    shadow_dir=runtime_config.checkpoint.shadow_dir,
-                )
-            except ValueError as exc:
-                # Bad shadow_dir (e.g. ``../escape`` or absolute path) →
-                # CheckpointService refuses to construct. Don't crash the
-                # whole agent over a config typo; log and disable the
-                # safety net so the turn still runs.
-                logger.warning("runtime.checkpoint disabled — {}", exc)
+        self._checkpoint_enabled = self._checkpoint_active(runtime_config.checkpoint.policy, interactive)
+        # One entry per working directory this process has served, never
+        # evicted: a service is cheap, but each one materialises a shadow repo
+        # under that directory, so a long-lived gateway ends up holding one
+        # repo per session rather than the single agent-home repo it used to.
+        # Reclaim is by deleting the session directory; nothing here prunes.
+        self._checkpoints: dict[Path, "CheckpointService | None"] = {}
         # session_key -> {"checkpoint_id", "files"} stashed when a turn is
         # interrupted (max-iter); consumed by the next turn's recovery prompt.
         self._pending_recovery: dict[str, dict] = {}
@@ -527,6 +524,7 @@ class AgentLoop:
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             third_party_subagents=third_party_subagents,
+            session_dir=self.sessions.session_dir,
         )
         # Kept for _register_default_tools to build the optional DAG tool (req4)
         # and for hot-applying web config changes (P4).
@@ -538,7 +536,21 @@ class AgentLoop:
         self._skills_sink = None
 
         # Executor: synchronous construction only; VM starts in _start_executor()
-        self._executor: SandboxExecutor = build_executor(sandbox_config, workspace, self._owned_ids)
+        # A sandboxed VM mounts one host root at /workspace, not one per
+        # session, so it must be wide enough to cover every working directory
+        # the resolver can hand out. Agent home is usually somewhere else
+        # entirely -- under PER_CHANNEL the root is ``<agent home>/../tmp``, a
+        # sibling, and an explicit ``-w`` cannot be an ancestor of agent home
+        # because ``validate_override`` refuses one -- so it is mounted
+        # separately at /agent-home to keep memory/skills/session state
+        # reachable from inside the VM.
+        #
+        # The check is not dead: under LAUNCH_DIR the root is wherever the user
+        # started raven, and launching from ``~`` puts agent home inside it. A
+        # second mount of a directory already covered is what this avoids.
+        mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
+        home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
+        self._executor: SandboxExecutor = build_executor(sandbox_config, mount_root, self._owned_ids, home_volume)
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
@@ -640,13 +652,15 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
-        allowed_dir = self.workspace if self.restrict_to_workspace else None
+        allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
         if self._deliverables is not None:
             from raven.agent.tools.deliver import DeliverFilesTool
 
-            self.tools.register(DeliverFilesTool(self._deliverables, workspace=self.workspace, allowed_dir=allowed_dir))
+            self.tools.register(
+                DeliverFilesTool(self._deliverables, workspace=self.workspace, allowed_dirs=allowed_dirs)
+            )
         self.tools.register(
             ExecTool(
                 working_dir=str(self.workspace),
@@ -655,6 +669,7 @@ class AgentLoop:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_deny_patterns=self.exec_config.extra_deny_patterns,
+                extra_allowed_dirs=(self.workspace,),
             )
         )
         self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
@@ -710,6 +725,7 @@ class AgentLoop:
                     workspace=self.subagents.workspace,
                     third_party_subagents=self._third_party_subagents,
                     guide_skill_id=self._dag_guide_skill_id(),
+                    session_dir=self.sessions.session_dir,
                 )
             )
         # The QuestionBroker is a per-transport singleton, late-bound via
@@ -966,6 +982,40 @@ class AgentLoop:
             return True
         return interactive  # policy == "interactive"
 
+    def _turn_checkpoint(self) -> "CheckpointService | None":
+        """The shadow-git service for the directory the running turn works in.
+
+        Keyed on the bound directory rather than on a session key: ``run_turn``
+        already resolved and validated it once for the whole turn, and
+        re-resolving here would both repeat the sandbox-mount check and race a
+        workdir override changed mid-turn (the web UI can rewrite it).
+
+        Nothing bound means no turn is running, so there is nothing to
+        snapshot and the answer is ``None``. Deriving a directory here instead
+        would reintroduce both hazards the binding exists to avoid -- a
+        mount-check refusal raised at end of turn, and an empty session key
+        materializing the ``ws/_`` fallback directory.
+
+        One service per directory: CheckpointService puts its git dir inside
+        the directory it protects, so sharing one across working directories
+        would cross-contaminate their edited-file sets.
+        """
+        target = workdir.current()
+        if target is None or not self._checkpoint_enabled:
+            return None
+        if target not in self._checkpoints:
+            from raven.agent.loop.checkpoint import CheckpointService
+
+            try:
+                self._checkpoints[target] = CheckpointService(
+                    target,
+                    shadow_dir=self.runtime_config.checkpoint.shadow_dir,
+                )
+            except ValueError as exc:
+                logger.warning("runtime.checkpoint disabled for {} -- {}", target, exc)
+                self._checkpoints[target] = None
+        return self._checkpoints[target]
+
     def _stash_recovery(self, session_key: str, outcome: "TurnOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
         session gets a recovery prompt. No-op unless checkpoint is enabled
@@ -977,7 +1027,7 @@ class AgentLoop:
         edits trajectory to resume (provider 400 etc.) and surfacing
         "Files modified last turn" for them would be misleading.
         """
-        if self._checkpoint is None or outcome.status != "interrupted":
+        if self._turn_checkpoint() is None or outcome.status != "interrupted":
             return
         if outcome.edited_files or outcome.checkpoint_id:
             self._pending_recovery[session_key] = {
@@ -1323,6 +1373,45 @@ class AgentLoop:
         self._register_real_deep_research(cfg)
         logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
 
+    def session_workdir(self, session_key: str) -> Path:
+        """The directory this session's turn works in, ready to be used.
+
+        The mount check runs before the directory is created, so a refusal
+        leaves nothing behind on disk.
+        """
+        resolved = self.peek_session_workdir(session_key)
+        self.check_workdir_mounted(resolved, session_key)
+        resolved.mkdir(parents=True, exist_ok=True)
+        return resolved
+
+    def peek_session_workdir(self, session_key: str) -> Path:
+        """Where this session would work, with no side effect and no refusal.
+
+        The read-only form, for a caller that only reports the path. Without a
+        resolver the loop keeps its pre-split behaviour: every session shares
+        ``self.workspace``.
+        """
+        if self._workdir_resolver is None:
+            return self.workspace
+        return self._workdir_resolver.resolve(session_key, create=False)
+
+    def check_workdir_mounted(self, path: Path, session_key: str | None = None) -> None:
+        """Refuse a working directory a sandboxed run could not see.
+
+        A VM's volumes are fixed when the box is created, so a directory
+        outside the mount cannot be served by adding one later.
+        """
+        if self._workdir_resolver is None or not self._executor.is_sandboxed:
+            return
+        root = self._workdir_resolver.mount_root()
+        if workdir.is_within(path, root):
+            return
+        subject = f"session {session_key} is pinned to {path}" if session_key else str(path)
+        raise ValueError(
+            f"{subject}, which is outside the sandbox mount {root}; "
+            "clear the override or restart with a wider workspace root"
+        )
+
     def _set_tool_context(
         self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
     ) -> None:
@@ -1388,6 +1477,7 @@ class AgentLoop:
                 workspace=self.subagents.workspace,
                 third_party_subagents=configs,
                 guide_skill_id=self._dag_guide_skill_id(),
+                session_dir=self.sessions.session_dir,
             )
             if self._dag_progress_sink is not None:
                 new_tool.set_progress_sink(self._dag_progress_sink)
@@ -1729,6 +1819,7 @@ class AgentLoop:
         initial_messages: list[dict],
         on_progress: Callable[..., Awaitable[None]] | None = None,
         extraction_session_id: str | None = None,
+        session_key: str | None = None,
         model: str | None = None,
         fallback_models: list[str] | None = None,
         injected_skill_ids: list[str] | None = None,
@@ -1747,13 +1838,20 @@ class AgentLoop:
 
         ``extraction_session_id`` is the session key passed to local
         skill extraction when a turn completes. When ``None``, extraction
-        is skipped (no pipeline wired).
+        is skipped (no pipeline wired) -- which is the only case today, so
+        ``extraction_key`` below is always empty. It is not the turn's
+        session key and must not be used as one.
+
+        ``session_key`` is the turn's real session key. It labels the
+        checkpoint commit only; usage attribution deliberately still goes
+        through ``extraction_key``, since widening it would start filling
+        per-session cost buckets that have always been empty.
         """
         messages = initial_messages
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        session_key = extraction_session_id or ""
+        extraction_key = extraction_session_id or ""
         effective_model = model or self.model
 
         # Bug2 / decision B — track whether the turn was a normal exit or a
@@ -1833,7 +1931,7 @@ class AgentLoop:
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
-            usage_snapshot = self._build_usage_snapshot(response, call_model, session_key)
+            usage_snapshot = self._build_usage_snapshot(response, call_model, extraction_key)
             await self.strategies.after_llm_call(
                 {
                     "content": response.content,
@@ -2216,12 +2314,18 @@ class AgentLoop:
         # ``outcome.status`` so that pipeline can gate on completion later.
 
         outcome = TurnOutcome(status=status)
-        if self._checkpoint is not None:
+        checkpoint = self._turn_checkpoint()
+        if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
             # for both normal and interrupted exits (matches Claude Code/Cursor
             # granularity). Best-effort — commit_turn never raises.
-            label = f"turn {session_key or 'anon'} [{status}]"
-            cid, changed = await self._checkpoint.commit_turn(label)
+            # The label is read in ``git log`` inside the shadow repo by
+            # someone recovering a file. The repo already implies the
+            # directory, so the session key is what disambiguates -- several
+            # sessions share one shadow repo whenever they resolve to the same
+            # directory (LAUNCH_DIR, or an explicit workdir override).
+            label = f"turn {session_key} [{status}]" if session_key else f"turn [{status}]"
+            cid, changed = await checkpoint.commit_turn(label)
             outcome.checkpoint_id = cid
             if status == "interrupted":
                 outcome.edited_files = changed
@@ -2550,6 +2654,7 @@ class AgentLoop:
             initial_messages,
             on_progress=on_progress,
             extraction_session_id=extraction_sid,
+            session_key=key,
             model=routed_model,
             fallback_models=fallback_models,
             injected_skill_ids=self._collect_injected_skill_ids(selected_skills),
@@ -2893,23 +2998,39 @@ class AgentLoop:
         if usage_sink is None:
             usage_sink = {}
         try:
-            await self._start_executor()
-            await self._connect_mcp()
-            out = await self._process_message(
-                req,
-                session_key=cid,
-                on_progress=on_progress,
-                on_token_delta=on_token if stream else None,
-                on_reasoning_delta=on_reasoning if stream else None,
-                on_tool_event=on_tool,
-                on_episode_start=on_episode if stream else None,
-                usage_sink=usage_sink,
-                origin=req.origin,
-                drain=drain,
-            )
-        except Exception:
-            await self.close_executor()
-            raise
+            # Resolve inside the try so a bad persisted override (deleted
+            # directory, permission change) still releases the cron token
+            # below via the outer finally, instead of stranding it.
+            try:
+                turn_workdir = self.session_workdir(cid)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Session working directory is invalid; clear this session's working "
+                    "directory override from the web UI to recover."
+                ) from exc
+            # Bind the session's working directory around the whole turn body (not
+            # just the _set_tool_context call inside _process_message) so every
+            # path-aware tool sees it, including on the exception and cancellation
+            # paths below -- workdir.bind's finally always resets the ContextVar.
+            with workdir.bind(turn_workdir):
+                try:
+                    await self._start_executor()
+                    await self._connect_mcp()
+                    out = await self._process_message(
+                        req,
+                        session_key=cid,
+                        on_progress=on_progress,
+                        on_token_delta=on_token if stream else None,
+                        on_reasoning_delta=on_reasoning if stream else None,
+                        on_tool_event=on_tool,
+                        on_episode_start=on_episode if stream else None,
+                        usage_sink=usage_sink,
+                        origin=req.origin,
+                        drain=drain,
+                    )
+                except Exception:
+                    await self.close_executor()
+                    raise
         finally:
             if cron_token is not None and isinstance(cron_tool, CronTool):
                 cron_tool.reset_cron_context(cron_token)

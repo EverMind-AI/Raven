@@ -78,8 +78,10 @@ verbatim `deliver_text` push). Configured via `raven deep-research` or onboardin
 _Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
 
 **Checkpoint** (`agent/loop/checkpoint.py`):
-A once-per-turn commit of the workspace into a shadow git repo (separate from the
-user's `.git`), so an interrupted or failed turn can be rolled back.
+A once-per-turn commit of the session workspace into a shadow git repo (separate from the
+user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
+per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
+the running turn is bound to.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
@@ -450,23 +452,80 @@ writes completed/failed (never unknown) into `HISTORY.md`.
 
 ### Workspace & Onboarding
 
-**Workspace**:
+**Agent home** (`get_workspace_path()`, `raven/config/paths.py`):
 The per-agent filesystem tree (default `~/.raven/workspace`) holding the agent's and user's
-memory, skills, and root task files. Exactly one per running agent.
-_Avoid_: confusing the Workspace (the live instance) with the Workspace Template it is seeded from.
+memory (`MemoryStore`'s `user_memory/`), skills, session transcripts and their metadata
+directories (`SessionManager`'s `sessions/<group>/`), the Skill Hub cache (`skills/hub/`), and the Workspace Template seed. Seeded by
+`sync_workspace_templates()`. Exactly one per agent, never per session. Set by `--home` or
+`agents.defaults.workspace`.
+_Avoid_: "workspace" unqualified — this term used to cover both agent-wide and per-session
+storage; it now names only the agent-wide tree, so an unqualified "workspace" should be
+Agent home or Session workspace, whichever is meant.
+
+**Subagent history** (`raven/agent/subagent_history.py`):
+The per-session audit trail of every delegation to a Subagent, inside that session's
+metadata directory at
+`<agent home>/sessions/<group>/<chat_id>/subagents/`, holding `spawn/<call_id>/`
+(one directory per `spawn` call: `prompt.md`, `out.md` or `error.md`, `meta.json`) and
+`mas_dag/<run_id>/` (one per `run_subagent_dag` run: `graph.json`, `manifest.json`,
+`<node>.prompt.md`, `<node>.out.md`, plus a per-session `mas_dag/index.json`). Both record
+what `SubagentBackend.run()` returned, so both are already truncated to the sub-agent's
+`max_output_chars` — not raw stdout. Failed and cancelled calls are recorded too. Lives
+beside the session transcript rather than in the Session workspace: it has the transcript's
+lifetime, while a working directory can be repointed at any project on disk. `sessions/` is
+a protected subtree, so no working directory can be aimed at it and no tool write can reach
+the history. Append-only: no expiry, no size cap, reclaimed only by deleting the session.
+DAG runs dominate its volume — a node's rendered `prompt.md` inlines each dependency's full
+output, so a chain stores the same text once per hop.
+_Avoid_: `.ravenx_dag/` — the previous location, a naming residue from the RavenX port; it
+sat in whatever directory the run happened to use and had no `spawn` counterpart.
+
+**Working directory** (`raven/agent/workdir.py`):
+The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
+and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.
+`raven tui` and `raven agent` use the process launch directory, so the agent works in the
+checkout you started it from (Workdir policy `LAUNCH_DIR`); intermediate artifacts it
+produces there go under that directory's `.raven/` (the shadow-git repo lives at
+`.raven/shadow.git`). `raven gateway` gives each channel one directory (Workdir policy
+`PER_CHANNEL`), set by `channels.<name>.workspace` — `gateway.web.workspace` for the web
+channel — and defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
+Overridable per invocation via `--workspace`/`-w` (the working directory itself on
+tui/agent, the root the per-channel defaults hang off on gateway), or per running gateway
+session from the web UI, persisted in `Session.metadata["workdir"]` and taking effect on
+the next turn. An override must be absolute, and may be neither Agent home, nor one of its
+memory/skills/transcript subtrees, nor any directory containing Agent home. Each distinct
+working directory grows its own shadow-git repository once a checkpoint runs there; they
+are reclaimed only by deleting those directories.
+_Avoid_: "session workspace" — the gateway's unit is the channel, not the conversation.
+_Avoid_: confusing with Agent home — when `restrict_to_workspace` fences tools, it admits
+both roots, but they stay two different directories with different lifetimes.
+
+**Project slug** (`project_slug()`, `raven/utils/helpers.py`):
+A launch directory flattened into one filesystem-safe segment, following the convention
+Claude Code uses for `~/.claude/projects/`: every run of non-alphanumeric characters becomes
+a single `-` (per character, not per run), and past 200 characters the slug is truncated with
+a base36 hash of the whole path appended. `/srv/work/my_app` is `-srv-work-my-app`. Groups a
+project's sessions on `raven tui` / `raven agent`, where it is the `<group>` directory under
+`sessions/`. Neither reversible nor collision-free — `/srv/a_b` and `/srv/a/b` slug the same,
+as they do in the reference. The project's identity is therefore carried by
+`Session.metadata["project_dir"]`, not by the directory name.
+
+**Workdir policy** (`WorkdirPolicy`, `raven/agent/workdir.py`):
+Which default a `WorkdirResolver` falls back to when a session has no explicit override:
+`LAUNCH_DIR` or `PER_CHANNEL`. Fixed per entrypoint (tui/agent vs. gateway), not user-facing.
 
 **Workspace Template** (`templates/`):
-The bundled markdown seed files copied into a Workspace on first run by
+The bundled markdown seed files copied into Agent home on first run by
 `sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
 `SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
 profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
 (tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
 under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
-`HEARTBEAT.md` / `TOOLS.md` stay at the Workspace root.
+`HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
-The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds the
-Workspace via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
+The first-run wizard (LLM provider → sandbox → channel → EverOS memory → deep_research → cold-start import) that also seeds
+Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
 
 **Bootstrap Files**:
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —

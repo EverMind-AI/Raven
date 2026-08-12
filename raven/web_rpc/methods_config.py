@@ -102,18 +102,24 @@ def register_config_methods(
       (``Session.metadata["model"]``), read by the agent loop at turn time.
       ``set`` validates against ``config`` (the same object the running
       ``AgentLoop``/``ResolvingProvider`` was built from) before writing.
+    - ``raven.session.workdir.{get,set}`` — a session's own working-directory
+      override (``Session.metadata["workdir"]``), read by ``WorkdirResolver``
+      ahead of the policy default on the *next* turn. ``set`` refuses while
+      the session has a subagent in flight.
     """
     from raven.agent.subagent.instances import get_registry
     from raven.agent.subagent.presets import third_party_subagent_presets
     from raven.agent.subagent.probe import TestResult, probe_all, run_test
     from raven.agent.subagent.test_state import TestStateStore
     from raven.agent.subagent_dag._resume import read_run_reconciled
+    from raven.agent.workdir import validate_override
     from raven.config.schema import SubagentsConfig
     from raven.config.update_subagents import (
         get_third_party_subagents,
         reject_unsupported_openai_fields,
         set_third_party_subagents,
     )
+    from raven.tui_rpc.errors import RpcError
 
     async def _list(params: dict) -> dict:
         return {"agents": get_third_party_subagents()}
@@ -223,6 +229,7 @@ def register_config_methods(
                 params.get("run_id", ""),
                 params.get("node", ""),
                 max_output_chars=int(params.get("max_output_chars") or 20000),
+                session_key=params.get("session_key"),
             )
         }
 
@@ -302,6 +309,49 @@ def register_config_methods(
 
     dispatcher.register("raven.session.model.get", _session_model_get)
     dispatcher.register("raven.session.model.set", _session_model_set)
+
+    async def _session_workdir_get(params: dict) -> dict:
+        key = params.get("session_key", "")
+        session = _sessions().get_or_create(key)
+        return {
+            "workdir": session.metadata.get("workdir"),
+            "default": str(agent.peek_session_workdir(key)),
+        }
+
+    async def _session_workdir_set(params: dict) -> dict:
+        key = params.get("session_key", "")
+        raw = params.get("workdir")
+        # A turn binds its directory at turn start and finishes in the one it
+        # started with regardless of a later metadata change, and a sub-agent
+        # captures its directory as data when it is spawned. So nothing is
+        # stranded by a rebind -- what a rebind does is let in-flight work keep
+        # landing in the previous directory while the UI already shows the new
+        # one. Clearing rebinds the next turn exactly like setting does, so
+        # both branches need the same guard.
+        if agent.subagents.has_active(key):
+            raise RpcError(f"session {key} has work in flight; retry when it is idle")
+        if raw is not None:
+            if not isinstance(raw, str) or not raw.strip():
+                raise RpcError("workdir must be a non-empty string, or null to clear")
+            try:
+                resolved = validate_override(raw.strip(), agent.workspace)
+                # Same refusal the turn would raise, applied here so a sandboxed
+                # gateway rejects the override at set time rather than storing
+                # one that every later turn fails on.
+                agent.check_workdir_mounted(resolved)
+            except ValueError as exc:
+                raise RpcError(str(exc)) from exc
+            raw = str(resolved)
+        session = _sessions().get_or_create(key)
+        if raw is None:
+            session.metadata.pop("workdir", None)
+        else:
+            session.metadata["workdir"] = raw
+        _sessions().save(session)
+        return {"ok": True, "workdir": raw}
+
+    dispatcher.register("raven.session.workdir.get", _session_workdir_get)
+    dispatcher.register("raven.session.workdir.set", _session_workdir_set)
 
     # Channels (IM). Reuses raven.config.update_channels (reflected field specs +
     # secret redaction). Config is applied at gateway startup, so a change takes

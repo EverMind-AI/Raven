@@ -59,7 +59,7 @@ function nodeStatusClass(status?: string): string {
  * exchange has no such record: its reply arrives as a separate announce turn
  * with no handle to tie it back to, so its output stays empty.
  */
-function ExchangeCard({ exchange }: { exchange: Exchange }) {
+function ExchangeCard({ exchange, sessionKey }: { exchange: Exchange; sessionKey: string }) {
 	const { t } = useTranslation();
 	const [detail, setDetail] = useState<RavenDagNodeDetail | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -72,7 +72,7 @@ function ExchangeCard({ exchange }: { exchange: Exchange }) {
 		let cancelled = false;
 		setLoading(true);
 		ravenConfigApi
-			.getDagNode(runId, node, EXCHANGE_OUTPUT_CHARS)
+			.getDagNode(runId, node, EXCHANGE_OUTPUT_CHARS, sessionKey)
 			.then((r) => {
 				if (!cancelled) setDetail(r.node);
 			})
@@ -85,7 +85,7 @@ function ExchangeCard({ exchange }: { exchange: Exchange }) {
 		return () => {
 			cancelled = true;
 		};
-	}, [runId, node]);
+	}, [runId, node, sessionKey]);
 
 	// The rendered prompt is what the sub-agent actually received; the template
 	// it was built from is the fallback when the run dir is unreadable.
@@ -385,7 +385,7 @@ export function SubagentInstanceMonitor({
 									</p>
 								)}
 								{inst.exchanges.map((ex, i) => (
-									<ExchangeCard key={i} exchange={ex} />
+									<ExchangeCard key={i} exchange={ex} sessionKey={sessionKey} />
 								))}
 							</div>
 						)}

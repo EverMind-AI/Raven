@@ -115,7 +115,7 @@ class TestLocalSkillSource:
         from raven.memory_engine.skill_local.local_pool import LocalPool
         from raven.memory_engine.skill_local.registry import SkillRegistry
 
-        ws = tmp_path / "ws"
+        ws = tmp_path / "chanwork"
         (ws / "skills").mkdir(parents=True)
         builtin = tmp_path / "builtin"
         builtin.mkdir()
@@ -212,7 +212,7 @@ class TestLocalSkillCatalog:
     @pytest.fixture
     def catalog(self, tmp_path: Path):
         """A standalone catalog over a real workspace + builtin dir."""
-        ws = tmp_path / "ws"
+        ws = tmp_path / "chanwork"
         (ws / "skills").mkdir(parents=True)
         builtin = tmp_path / "builtin"
         builtin.mkdir()
@@ -267,7 +267,7 @@ class TestLocalSkillCatalog:
         assert [m.name for m in ranked[:2]] == ["a-builtin", "z-builtin"]
 
     def test_always_cap_drops_the_lowest_ranked_source(self, tmp_path: Path) -> None:
-        ws = tmp_path / "ws"
+        ws = tmp_path / "chanwork"
         (ws / "skills").mkdir(parents=True)
         builtin = tmp_path / "builtin"
         builtin.mkdir()

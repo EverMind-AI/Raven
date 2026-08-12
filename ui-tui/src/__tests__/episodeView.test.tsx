@@ -91,7 +91,7 @@ describe('EpisodeView (flat, one-level)', () => {
           dag: {
             runId: 'dag-1',
             done: true,
-            dir: '/w/.ravenx_dag/dag-1',
+            dir: '/w/mas_dag/dag-1',
             summary: { total: 3, completed: 2, failed: 1, skipped: 0 },
             nodes: [
               { id: 'fetch', subagent: 'echo', dependsOn: [], status: 'completed' },

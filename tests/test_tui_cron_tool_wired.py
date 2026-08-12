@@ -40,7 +40,7 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     config.channels = MagicMock()
     monkeypatch.setattr(
         "raven.cli._helpers.load_runtime_config",
-        lambda _a, _b: config,
+        lambda *a, **kw: config,
     )
     monkeypatch.setattr(
         "raven.cli._helpers.make_provider",
@@ -57,7 +57,7 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
     # Stub SessionManager + cron store dir
     monkeypatch.setattr(
         "raven.session.manager.SessionManager",
-        lambda _wp: MagicMock(),
+        lambda _wp, **_kw: MagicMock(),
     )
     cron_dir = tmp_path / "cron"
     cron_dir.mkdir(parents=True, exist_ok=True)

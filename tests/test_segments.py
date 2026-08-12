@@ -76,6 +76,29 @@ class TestIdentityBootstrap:
         legacy = ContextBuilder(workspace=tmp_path)._get_identity()
         assert seg.text == legacy
 
+    async def test_identity_names_both_directories(self, tmp_path: Path) -> None:
+        """The model is told where it works and where its memory lives, and the
+        two are not the same directory."""
+        from raven.agent.workdir import bind
+
+        home = tmp_path / "home"
+        home.mkdir()
+        project = tmp_path / "project"
+        project.mkdir()
+
+        with bind(project):
+            seg = await IdentitySegmentBuilder(home).build(_ctx(home))
+
+        assert f"Working directory: {project}" in seg.text
+        assert f"Agent home: {home}" in seg.text
+        assert f"{home}/user_memory/profile/user.md" in seg.text
+        assert str(project / "user_memory") not in seg.text
+
+    async def test_identity_falls_back_to_agent_home_when_unbound(self, tmp_path: Path) -> None:
+        """No binding means the pre-split single-directory behaviour."""
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+        assert f"Working directory: {tmp_path}" in seg.text
+
     async def test_bootstrap_none_when_no_files(self, tmp_path: Path) -> None:
         seg = await BootstrapSegmentBuilder(tmp_path).build(_ctx(tmp_path))
         assert seg is None

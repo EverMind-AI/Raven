@@ -4,23 +4,25 @@ import asyncio
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from raven.agent import workdir
 from raven.agent.subagent.backends import (
     ABORTED_ACTION_RESULT,
     AgentMeta,
     RavenLoopBackend,
     SubagentActionAbortedError,
     SubagentBackend,
-    build_subagent_prompt,
     build_third_party_backend,
     enabled_third_party,
     third_party_agent_meta,
 )
 from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent_history import SpawnRecord
 from raven.config.schema import ExecToolConfig
 from raven.providers.base import LLMProvider
 from raven.sandbox import SandboxConfig, build_executor
@@ -73,11 +75,19 @@ class SubagentManager:
         max_concurrent: int = 4,
         max_spawns_per_hour: int = 30,
         third_party_subagents: list | None = None,
+        session_dir: "Callable[[str], Path] | None" = None,
     ):
         from raven.config.schema import ExecToolConfig
 
         self.provider = provider
+        # Agent home. Also the working-directory fallback for a spawn that
+        # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        # SessionManager.session_dir, so a call record lands beside the
+        # transcript of the session that made it -- including the sessions
+        # whose group only the manager can resolve (raven/agent/subagent_history.py).
+        self.session_dir = session_dir
+        self._fallback_sessions: Any = None
         # Spine submit, late-bound (the scheduler pins its home loop at
         # construction and is built inside each entry point's run loop; this
         # manager is built in AgentLoop.__init__ in the sync prologue). Wired via
@@ -113,6 +123,7 @@ class SubagentManager:
         self._raven_backend = RavenLoopBackend(
             provider=self.provider,
             model=self.model,
+            agent_home=self.workspace,
             restrict_to_workspace=self.restrict_to_workspace,
             exec_config=self.exec_config,
             brave_api_key=self.brave_api_key,
@@ -161,8 +172,15 @@ class SubagentManager:
         session_key: str | None = None,
         agent: str | None = None,
         instance: str | None = None,
+        workspace: Path | None = None,
     ) -> str:
-        """Spawn a subagent to execute a task in the background."""
+        """Spawn a subagent to execute a task in the background.
+
+        ``workspace`` must be captured here, at spawn time, rather than read
+        later inside the background task: the sub-agent outlives the calling
+        turn, and the turn's working-directory binding is released once that
+        turn returns.
+        """
         quota_key = session_key or "default"
         now = time.monotonic()
         window = self._session_spawn_times.setdefault(quota_key, deque())
@@ -188,6 +206,7 @@ class SubagentManager:
         # and the registry rows this spawn later writes can never drift from
         # each other, or from `CliAgentBackend`'s own handle derivation.
         handle = instance or task_id
+        effective_workspace = workspace or self.workspace
         origin = {
             "channel": origin_channel,
             "chat_id": origin_chat_id,
@@ -195,6 +214,7 @@ class SubagentManager:
             "agent": agent,
             "instance": instance,
             "handle": handle,
+            "workspace": effective_workspace,
         }
         instance_key = (quota_key, agent, handle) if agent else None
 
@@ -234,16 +254,22 @@ class SubagentManager:
         task_id: str,
         task: str,
         label: str,
-        origin: dict[str, str],
+        origin: dict[str, Any],
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info("Subagent [{}] starting task: {}", task_id, label)
 
+        effective_workspace = origin.get("workspace") or self.workspace
         try:
             # Each subagent runs its own sandbox VM; gate the count so heavy
             # fan-out can't exhaust host resources.
             async with self._gate:
-                executor = build_executor(self._sandbox_config, self.workspace, self._owned_ids)
+                executor = build_executor(
+                    self._sandbox_config,
+                    effective_workspace,
+                    self._owned_ids,
+                    self._home_volume(effective_workspace),
+                )
                 async with executor:
                     await self._run_subagent_inner(task_id, task, label, origin, executor)
         except Exception as e:
@@ -251,41 +277,91 @@ class SubagentManager:
             logger.error("Subagent [{}] failed: {}", task_id, e)
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
 
+    def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
+        """Mount agent home into the sub-agent's VM unless the run's own mount covers it.
+
+        Mirrors the loop-level executor: the sub-agent's prompt hands out
+        absolute paths under agent home, so a sandboxed run that cannot see
+        that tree is fenced out of the memory and skills it is told to use.
+        """
+        if workdir.is_within(Path(self.workspace), mount_root):
+            return ()
+        return ((str(self.workspace), "/agent-home", "rw"),)
+
+    def _session_dir(self, session_key: str) -> Path:
+        """The metadata directory of the session a spawn was made from.
+
+        Falls back to a slug-less ``SessionManager`` when no resolver was
+        injected -- the gateway's grouping, and the right answer for a manager
+        built without one. Still the manager's own derivation rather than a
+        second copy of it, so the two cannot drift.
+        """
+        if self.session_dir is not None:
+            return self.session_dir(session_key)
+        if self._fallback_sessions is None:
+            from raven.session.manager import SessionManager
+
+            self._fallback_sessions = SessionManager(Path(self.workspace))
+        return self._fallback_sessions.session_dir(session_key)
+
     async def _run_subagent_inner(
         self,
         task_id: str,
         task: str,
         label: str,
-        origin: dict[str, str],
+        origin: dict[str, Any],
         executor: Any,
     ) -> None:
         session_key = origin.get("session_key")
         agent = origin.get("agent")
         handle = origin.get("handle") or task_id
+        effective_workspace = origin.get("workspace") or self.workspace
+        # Opened before dispatch so a call that never returns still leaves its
+        # input on disk. Rooted at the session's metadata directory, not at
+        # effective_workspace: the record has to outlive whatever the working
+        # directory is pointed at.
+        record = SpawnRecord.open(
+            self._session_dir(session_key or ""),
+            task_id=task_id,
+            task=task,
+            meta={
+                "call_id": task_id,
+                "session_key": session_key,
+                "agent": agent,
+                "label": label,
+                "instance": origin.get("instance"),
+                "handle": handle,
+                "working_directory": str(effective_workspace),
+            },
+        )
         try:
             await _write_spawn_status(session_key, agent, handle, "running")
             backend = self._resolve_backend(agent)
             final_result = await backend.run(
                 task,
                 task_id=task_id,
-                workspace=self.workspace,
+                workspace=effective_workspace,
                 executor=executor,
                 session_key=session_key,
                 instance=origin.get("instance"),
             )
             await _write_spawn_status(session_key, agent, handle, "completed")
+            record.finish(status="completed", output=final_result)
             await self._announce_result(task_id, label, task, final_result, origin, "ok")
         except asyncio.CancelledError:
             await _write_spawn_status(session_key, agent, handle, "cancelled")
+            record.finish(status="cancelled")
             raise
         except SubagentActionAbortedError:
             await _write_spawn_status(session_key, agent, handle, "failed")
             logger.info("Subagent [{}] stopped on a terminal safety decision", task_id)
+            record.finish(status="aborted", output=ABORTED_ACTION_RESULT)
             await self._announce_result(task_id, label, task, ABORTED_ACTION_RESULT, origin, "error")
         except Exception as e:
             await _write_spawn_status(session_key, agent, handle, "failed")
             error_msg = f"Error: {str(e)}"
             logger.error("Subagent [{}] failed: {}", task_id, e)
+            record.finish(status="failed", error=error_msg)
             await self._announce_result(task_id, label, task, error_msg, origin, "error")
 
     def set_submit(self, submit) -> None:
@@ -297,7 +373,7 @@ class SubagentManager:
         label: str,
         task: str,
         result: str,
-        origin: dict[str, str],
+        origin: dict[str, Any],
         status: str,
     ) -> None:
         """Announce the subagent result to the main agent via the spine.
@@ -345,10 +421,6 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         )
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
 
-    def _build_subagent_prompt(self) -> str:
-        """Build a focused system prompt for the subagent (raven-loop backend)."""
-        return build_subagent_prompt(self.workspace)
-
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""
         tasks = [
@@ -386,6 +458,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         return True
+
+    def has_active(self, session_key: str) -> bool:
+        """Whether this session has any subagent currently running."""
+        return bool(self._session_tasks.get(session_key))
 
     def live_handles(self, session_key: str) -> set[tuple[str, str]]:
         """The (agent, handle) pairs currently in flight for one session.

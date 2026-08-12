@@ -1590,12 +1590,14 @@ class _ReadableDagTool:
     def __init__(self, *, finalized: bool, live: bool = True) -> None:
         self._finalized = finalized
         self._live = live
-        self.node_calls: list[tuple[str, str, int]] = []
+        self.node_calls: list[tuple[str, str, int, str | None]] = []
+        self.run_calls: list[tuple[str, str | None]] = []
 
     def active_run_ids(self) -> list[str]:
         return [self.RUN_ID] if self._live else []
 
-    async def read_run(self, run_id: str) -> dict:
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
+        self.run_calls.append((run_id, session_key))
         status = "completed" if self._finalized else "pending"
         return {
             "run_id": run_id,
@@ -1621,8 +1623,10 @@ class _ReadableDagTool:
             "summary": {"total": 2, "completed": 2 if self._finalized else 0, "failed": 0, "skipped": 0},
         }
 
-    async def read_node(self, run_id: str, node_id: str, *, max_output_chars: int = 20000) -> dict:
-        self.node_calls.append((run_id, node_id, max_output_chars))
+    async def read_node(
+        self, run_id: str, node_id: str, *, max_output_chars: int = 20000, session_key: str | None = None
+    ) -> dict:
+        self.node_calls.append((run_id, node_id, max_output_chars, session_key))
         return {"run_id": run_id, "node": node_id, "prompt": "P", "output": "O"}
 
 
@@ -1708,11 +1712,15 @@ async def test_dag_get_of_another_session_does_not_leak_its_statuses(
     await reg.upsert_dag_node("web:s2", _ReadableDagTool.RUN_ID, "node-a", "claude_code", "completed")
     monkeypatch.setattr(instances_mod, "_registry", reg)
 
+    tool = _ReadableDagTool(finalized=False)
     d = Dispatcher()
-    register_config_methods(d, agent=_AgentWithReadableDag(_ReadableDagTool(finalized=False)))
+    register_config_methods(d, agent=_AgentWithReadableDag(tool))
 
     resp = await _dispatch(d, "raven.subagents.dag.get", {"run_id": _ReadableDagTool.RUN_ID, "session_key": "web:s1"})
     assert {f["status"] for f in resp["result"]["run"]["files"]} == {"pending"}
+    # The key is not only the registry-overlay scope: it also selects the
+    # working directory the run dir is read from, so it has to reach the tool.
+    assert tool.run_calls == [(_ReadableDagTool.RUN_ID, "web:s1")]
 
 
 async def test_dag_node_forwards_the_output_cap() -> None:
@@ -1726,7 +1734,22 @@ async def test_dag_node_forwards_the_output_cap() -> None:
         {"run_id": _ReadableDagTool.RUN_ID, "node": "node-a", "max_output_chars": 500},
     )
     assert resp["result"]["node"]["output"] == "O"
-    assert tool.node_calls == [(_ReadableDagTool.RUN_ID, "node-a", 500)]
+    assert tool.node_calls == [(_ReadableDagTool.RUN_ID, "node-a", 500, None)]
+
+
+async def test_dag_node_forwards_the_session_key() -> None:
+    """Without it the tool resolves the run dir against agent home, where a
+    per-session run was never written, and the node reads back blank."""
+    tool = _ReadableDagTool(finalized=True)
+    d = Dispatcher()
+    register_config_methods(d, agent=_AgentWithReadableDag(tool))
+
+    await _dispatch(
+        d,
+        "raven.subagents.dag.node",
+        {"run_id": _ReadableDagTool.RUN_ID, "node": "node-a", "session_key": "web:s1"},
+    )
+    assert tool.node_calls == [(_ReadableDagTool.RUN_ID, "node-a", 20000, "web:s1")]
 
 
 @pytest.mark.parametrize("method", ["raven.subagents.dag.get", "raven.subagents.dag.node"])

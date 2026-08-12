@@ -240,7 +240,7 @@ def test_cross_process_visibility_via_fcntl(tmp_path: Path):
 
 
 def test_read_history_since_filters_by_timestamp(tmp_path: Path):
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     store = MemoryStore(ws)
 
     # Helper: epoch-ms for a local datetime
@@ -265,7 +265,7 @@ def test_read_history_since_filters_by_timestamp(tmp_path: Path):
 
 
 def test_read_history_since_drops_unstamped_paragraphs(tmp_path: Path):
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     store = MemoryStore(ws)
     store.append_history("[2026-05-08 08:00] valid stamp")
     store.append_history("no stamp at all — should be dropped")
@@ -278,14 +278,14 @@ def test_read_history_since_drops_unstamped_paragraphs(tmp_path: Path):
 
 
 def test_read_history_since_missing_file_returns_empty(tmp_path: Path):
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     store = MemoryStore(ws)
     # No history written yet
     assert store.read_history_since(0) == ""
 
 
 def test_read_history_since_preserves_multi_line_paragraph(tmp_path: Path):
-    ws = tmp_path / "ws"
+    ws = tmp_path / "chanwork"
     store = MemoryStore(ws)
     store.append_history("[2026-05-08 08:00] line one\nline two\nline three")
 

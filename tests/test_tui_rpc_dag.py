@@ -23,12 +23,14 @@ class _FakeDagTool:
     def __init__(self, *, finalized: bool, live: bool = True) -> None:
         self._finalized = finalized
         self._live = live
-        self.node_calls: list[tuple[str, str, int]] = []
+        self.node_calls: list[tuple[str, str, int, str | None]] = []
+        self.run_calls: list[tuple[str, str | None]] = []
 
     def active_run_ids(self) -> list[str]:
         return [RUN_ID] if self._live else []
 
-    async def read_run(self, run_id: str) -> dict:
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
+        self.run_calls.append((run_id, session_key))
         status = "completed" if self._finalized else "pending"
         return {
             "run_id": run_id,
@@ -54,8 +56,10 @@ class _FakeDagTool:
             "summary": {"total": 2, "completed": 2 if self._finalized else 0, "failed": 0, "skipped": 0},
         }
 
-    async def read_node(self, run_id: str, node_id: str, *, max_output_chars: int = 20000) -> dict:
-        self.node_calls.append((run_id, node_id, max_output_chars))
+    async def read_node(
+        self, run_id: str, node_id: str, *, max_output_chars: int = 20000, session_key: str | None = None
+    ) -> dict:
+        self.node_calls.append((run_id, node_id, max_output_chars, session_key))
         return {"run_id": run_id, "node": node_id, "prompt": "rendered prompt", "output": "node output"}
 
 
@@ -123,7 +127,7 @@ async def test_dag_node_returns_the_rendered_prompt_and_output() -> None:
 
     assert result["node"]["prompt"] == "rendered prompt"
     assert result["node"]["output"] == "node output"
-    assert tool.node_calls == [(RUN_ID, "node-a", 20000)]
+    assert tool.node_calls == [(RUN_ID, "node-a", 20000, None)]
 
 
 async def test_dag_node_honours_an_output_cap() -> None:
@@ -131,7 +135,21 @@ async def test_dag_node_honours_an_output_cap() -> None:
 
     await dag_node({"run_id": RUN_ID, "node": "node-a", "max_output_chars": 500}, agent_loop_factory=_factory(tool))
 
-    assert tool.node_calls == [(RUN_ID, "node-a", 500)]
+    assert tool.node_calls == [(RUN_ID, "node-a", 500, None)]
+
+
+async def test_dag_node_forwards_the_session_key() -> None:
+    """The run dir lives under the *session's* working directory, so the tool
+    cannot find it without being told which session asked. This RPC is the one
+    that carried no session key at all before."""
+    tool = _FakeDagTool(finalized=True)
+
+    await dag_node(
+        {"run_id": RUN_ID, "node": "node-a", "session_key": "cli:s1"},
+        agent_loop_factory=_factory(tool),
+    )
+
+    assert tool.node_calls == [(RUN_ID, "node-a", 20000, "cli:s1")]
 
 
 async def test_dag_get_without_a_dag_tool_is_a_typed_rpc_error() -> None:
@@ -150,12 +168,14 @@ async def test_dag_node_without_an_agent_loop_is_a_typed_rpc_error() -> None:
 class _UnreadableDagTool(_FakeDagTool):
     """The run dir is gone (cleaned up, or the id was never real)."""
 
-    async def read_run(self, run_id: str) -> dict:
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
         from raven.agent.subagent_dag._reader import DagReadError
 
         raise DagReadError(f"no readable DAG run at {run_id}")
 
-    async def read_node(self, run_id: str, node_id: str, *, max_output_chars: int = 20000) -> dict:
+    async def read_node(
+        self, run_id: str, node_id: str, *, max_output_chars: int = 20000, session_key: str | None = None
+    ) -> dict:
         from raven.agent.subagent_dag._reader import DagReadError
 
         raise DagReadError(f"invalid node id: {node_id!r}")

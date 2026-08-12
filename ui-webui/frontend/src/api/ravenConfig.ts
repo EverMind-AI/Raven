@@ -322,12 +322,25 @@ export const ravenConfigApi = {
 			{ silent: true },
 		),
 
-	getDagNode: (runId: string, nodeId: string, maxOutputChars?: number) =>
-		client.get<{ node: RavenDagNodeDetail }>(
+	// `sessionKey` names the session whose working directory holds the run dir;
+	// without it the gateway can only guess, and between turns it guesses the
+	// agent home, where a per-session run was never written.
+	getDagNode: (
+		runId: string,
+		nodeId: string,
+		maxOutputChars?: number,
+		sessionKey?: string,
+	) => {
+		const query: Record<string, string> = {}
+		if (maxOutputChars) query.max_output_chars = String(maxOutputChars)
+		if (sessionKey) query.session_key = sessionKey
+
+		return client.get<{ node: RavenDagNodeDetail }>(
 			`/raven/subagents/dag/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}`,
-			maxOutputChars ? { max_output_chars: String(maxOutputChars) } : undefined,
+			Object.keys(query).length > 0 ? query : undefined,
 			{ silent: true },
-		),
+		)
+	},
 
 	cancelSubagentInstance: (body: { session_key: string; agent: string; handle: string }) =>
 		client.post<{ cancelled: boolean }>('/raven/subagents/instances/cancel', body),

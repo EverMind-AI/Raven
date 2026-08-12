@@ -14,18 +14,26 @@ interface WorkingDirectoryControlProps {
 	 * `null` to clear the override. Not called when the value is unchanged.
 	 */
 	onChange: (path: string | null) => void | Promise<void>;
+	/**
+	 * Server-side rejection of the last commit (e.g. a path inside the
+	 * agent's protected trees, or a session with work in flight). Shown
+	 * the same way as the local "must be absolute" hint.
+	 */
+	error?: string | null;
 }
 
 /**
  * A compact row below the chat input for viewing / setting the session's
  * working directory. An empty field means "use the default session
  * workspace"; a non-empty value must be an absolute path. Commits on blur
- * or Enter; shows an inline hint when the path is not absolute.
+ * or Enter; shows an inline hint when the path is not absolute, or when the
+ * backend rejected the last commit.
  */
 export function WorkingDirectoryControl({
 	value,
 	disabled,
 	onChange,
+	error,
 }: WorkingDirectoryControlProps) {
 	const { t } = useTranslation();
 	const [draft, setDraft] = useState(value ?? '');
@@ -71,7 +79,7 @@ export function WorkingDirectoryControl({
 				}}
 				className={cn(
 					'min-w-0 flex-1 border-b border-transparent bg-transparent py-0.5 outline-none focus:border-border',
-					invalid && 'border-destructive focus:border-destructive',
+					(invalid || error) && 'border-destructive focus:border-destructive',
 				)}
 			/>
 			{invalid && (
@@ -79,6 +87,7 @@ export function WorkingDirectoryControl({
 					{t('workingDirectory.mustBeAbsolute')}
 				</span>
 			)}
+			{!invalid && error && <span className="shrink-0 truncate text-destructive">{error}</span>}
 		</div>
 	);
 }

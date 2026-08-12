@@ -137,12 +137,22 @@ def build_raven_config_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @router.get("/subagents/dag/{run_id}/nodes/{node_id}")
-    async def get_dag_node(run_id: str, node_id: str, max_output_chars: int = 20000) -> dict:
+    async def get_dag_node(
+        run_id: str,
+        node_id: str,
+        max_output_chars: int = 20000,
+        session_key: str | None = None,
+    ) -> dict:
         client = await GatewayClient.shared()
         try:
             return await client.call(
                 "raven.subagents.dag.node",
-                {"run_id": run_id, "node": node_id, "max_output_chars": max_output_chars},
+                {
+                    "run_id": run_id,
+                    "node": node_id,
+                    "max_output_chars": max_output_chars,
+                    "session_key": session_key,
+                },
             )
         except Exception as exc:  # pruned run dir / bad id / transport
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -222,6 +232,22 @@ def build_raven_config_router() -> APIRouter:
                 {"session_key": session_key, "model": body.get("model")},
             )
         except Exception as exc:  # unroutable model / transport
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/sessions/{session_key}/workdir")
+    async def get_session_workdir(session_key: str) -> dict:
+        client = await GatewayClient.shared()
+        return await client.call("raven.session.workdir.get", {"session_key": session_key})
+
+    @router.put("/sessions/{session_key}/workdir")
+    async def set_session_workdir(session_key: str, body: dict = Body(...)) -> dict:
+        client = await GatewayClient.shared()
+        try:
+            return await client.call(
+                "raven.session.workdir.set",
+                {"session_key": session_key, "workdir": body.get("workdir")},
+            )
+        except Exception as exc:  # invalid path / busy session / transport
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/skills")

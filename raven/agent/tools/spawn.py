@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from raven.agent import workdir
 from raven.agent.tools.base import Tool
 
 if TYPE_CHECKING:
@@ -167,4 +168,5 @@ class SpawnTool(Tool):
             session_key=org.session_key,
             agent=agent,
             instance=instance,
+            workspace=workdir.current(),
         )

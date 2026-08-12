@@ -386,11 +386,14 @@ async def session_most_recent(
     Returns the SessionMostRecentResponse shape: {session_id?: string | null, ...}.
     The TS caller (createGatewayEventHandler.ts:242) reads r?.session_id; null
     is the tolerated no-sessions value.
+
+    Scoped to this checkout: the TUI offers this session to reopen, and one
+    started in another project is not the one the user left.
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = _manager_for(agent_loop, config)
-    chat_id = mgr.find_most_recent_chat_id("tui")
+    chat_id = mgr.find_most_recent_chat_id("tui", this_project_only=True)
     session_id = f"tui:{chat_id}" if chat_id else None
     return {"session_id": session_id}
 

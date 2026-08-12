@@ -100,6 +100,7 @@ async def test_run_dag_runs_a_sub_agent_whose_name_has_a_space() -> None:
         subagents={"General Audit": _FakeExec()},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
     )
     assert result.summary == {"total": 2, "completed": 2, "failed": 0, "skipped": 0}
     # The name survives into the per-node records the UI and the resume path read.
@@ -125,6 +126,7 @@ async def test_run_dag_passes_output_downstream_and_emits_progress() -> None:
         subagents={"x": _FakeExec()},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
         progress_publisher=pub,
     )
 
@@ -158,6 +160,7 @@ async def test_run_dag_threads_session_key_and_node_instance_to_backend() -> Non
         subagents={"x": backend},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
         session_key="web:sess1",
     )
     calls_by_id = {c["task_id"]: c for c in backend.calls}
@@ -181,6 +184,7 @@ async def test_run_dag_failure_cascades_to_skip() -> None:
         subagents={"x": _FakeExec(fail_ids={"a"})},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
     )
     assert result.summary["failed"] == 1
     assert result.summary["skipped"] == 1  # b skipped because a failed
@@ -214,6 +218,7 @@ async def test_run_dag_writes_node_status_transitions_to_registry(
         subagents={"x": _FakeExec()},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
         session_key="web:sess1",
     )
 
@@ -278,6 +283,7 @@ async def test_run_dag_cancel_skips_unfinished_and_reaps_in_flight_task(tmp_path
                 subagents={"x": _BlockingExec()},
                 backend=_InMemBackend(),
                 workdir="/w",
+                run_root="/hist/mas_dag",
                 cancel=cancel,
             ),
             timeout=5,
@@ -333,6 +339,7 @@ async def test_run_dag_writes_skipped_status_to_registry_with_session_key(
         subagents={"x": _FakeExec(fail_ids={"a"})},
         backend=_InMemBackend(),
         workdir="/w",
+        run_root="/hist/mas_dag",
         session_key="web:sess1",
     )
 
@@ -356,7 +363,9 @@ async def test_run_dag_without_session_key_writes_nothing_to_registry(
     monkeypatch.setattr(instances_mod, "_registry", reg)
 
     spec = parse_dag_spec({"nodes": [{"id": "a", "subagent": "x", "prompt_template": "hi"}]})
-    result = await run_dag(spec, subagents={"x": _FakeExec()}, backend=_InMemBackend(), workdir="/w")
+    result = await run_dag(
+        spec, subagents={"x": _FakeExec()}, backend=_InMemBackend(), workdir="/w", run_root="/hist/mas_dag"
+    )
 
     assert result.summary["completed"] == 1
     assert calls == []
@@ -694,7 +703,7 @@ class TestCallAndResultLabels:
         # The loop clamps the preview at 200 chars. The tally has to be inside
         # that window whatever the workspace path length is, so it leads.
         assert "2/2 completed" in preview[:200]
-        assert ".ravenx_dag" in preview
+        assert "mas_dag" in preview
 
     async def test_result_preview_names_the_failed_nodes(self, tmp_path: Path) -> None:
         """A failure the user cannot see the id of is a failure they cannot act
@@ -793,7 +802,7 @@ class TestCapabilityGate:
         assert "No sub-agent was run." in out
         assert f'read_skill("{GUIDE_SKILL_ID}")' in out
         # Nothing was dispatched, so no run directory exists to read back.
-        assert not (tmp_path / ".ravenx_dag").exists()
+        assert not (tmp_path / "sessions").exists()
 
     async def test_path_placeholder_to_a_boxed_agent_runs_no_node(self, tmp_path: Path) -> None:
         tool = self._tool(tmp_path)
@@ -812,7 +821,7 @@ class TestCapabilityGate:
         assert out.startswith("Error: invalid DAG")
         assert "{{ a.output }}" in out  # the fix, not just the complaint
         assert "No sub-agent was run." in out
-        assert not (tmp_path / ".ravenx_dag").exists()
+        assert not (tmp_path / "sessions").exists()
 
     async def test_a_graph_that_respects_the_tags_still_runs(self, tmp_path: Path) -> None:
         tool = self._tool(tmp_path)
@@ -888,7 +897,7 @@ class TestValidationErrorGuidesRetry:
         assert "cycle" in out
         assert f'read_skill("{GUIDE_SKILL_ID}")' in out
         assert "retry" in out
-        assert not (tmp_path / ".ravenx_dag").exists()
+        assert not (tmp_path / "sessions").exists()
 
     async def test_no_guide_installed_means_no_dead_end_advice(self, tmp_path: Path) -> None:
         tool = SubAgentDagTool(

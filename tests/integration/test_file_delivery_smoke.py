@@ -12,13 +12,13 @@ from raven.web_rpc.files import add_files_routes
 
 
 async def test_deliver_then_download_round_trip(tmp_path) -> None:
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     payload = b"report bytes, exactly these"
     (workspace / "report.txt").write_bytes(payload)
 
     store = DeliverableStore(tmp_path / "deliverables.json")
-    tool = DeliverFilesTool(store, workspace=workspace, allowed_dir=workspace)
+    tool = DeliverFilesTool(store, workspace=workspace, allowed_dirs=(workspace,))
     tool.set_context("web", "default", "web:s1")
 
     await tool.execute(files=[{"path": "report.txt", "title": "The report"}])
@@ -38,12 +38,12 @@ async def test_deliver_then_download_round_trip(tmp_path) -> None:
 async def test_delivery_survives_a_store_restart(tmp_path) -> None:
     """The gateway can restart between delivery and download; the persisted
     registry is what keeps the button working."""
-    workspace = tmp_path / "ws"
+    workspace = tmp_path / "chanwork"
     workspace.mkdir()
     (workspace / "a.txt").write_bytes(b"AAA")
     path = tmp_path / "deliverables.json"
 
-    tool = DeliverFilesTool(DeliverableStore(path), workspace=workspace, allowed_dir=workspace)
+    tool = DeliverFilesTool(DeliverableStore(path), workspace=workspace, allowed_dirs=(workspace,))
     tool.set_context("web", "default", "web:s1")
     await tool.execute(files=[{"path": "a.txt"}])
     token = tool.take_metadata()["raven_delivery"]["files"][0]["token"]

@@ -163,10 +163,10 @@ describe('chatStream DAG dispatch', () => {
       type: 'dag.run_completed',
       payload: {
         run_id: 'dag-1',
-        dir: '/w/.ravenx_dag/dag-1',
+        dir: '/w/mas_dag/dag-1',
         summary: { total: 2, completed: 1, failed: 0, skipped: 1 },
         files: [
-          { node: 'a', status: 'completed', output_file: '/w/.ravenx_dag/dag-1/a.out.md' },
+          { node: 'a', status: 'completed', output_file: '/w/mas_dag/dag-1/a.out.md' },
           { node: 'b', status: 'skipped' }
         ]
       }
@@ -174,7 +174,7 @@ describe('chatStream DAG dispatch', () => {
 
     const [run] = getTurnState().dagRuns
     expect(run?.done).toBe(true)
-    expect(run?.dir).toBe('/w/.ravenx_dag/dag-1')
+    expect(run?.dir).toBe('/w/mas_dag/dag-1')
     expect(run?.nodes.map(n => n.status)).toEqual(['completed', 'skipped'])
 
     await stream.detach()
@@ -184,7 +184,7 @@ describe('chatStream DAG dispatch', () => {
 describe('turnController.applyDagSnapshot', () => {
   const snapshot = (over: Partial<DagRunSnapshot> = {}): DagRunSnapshot => ({
     run_id: 'dag-1',
-    dir: '/w/.ravenx_dag/dag-1',
+    dir: '/w/mas_dag/dag-1',
     finalized: true,
     files: [
       { node: 'a', status: 'completed', subagent: 'echo', depends_on: [] },

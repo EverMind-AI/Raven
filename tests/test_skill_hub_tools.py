@@ -171,7 +171,7 @@ class TestUseSkill:
         """
         from raven.memory_engine.skill_local import SkillRegistry
 
-        workspace = tmp_path / "ws"
+        workspace = tmp_path / "chanwork"
         workspace.mkdir()
         builtin = tmp_path / "builtin" / "demo"
         builtin.mkdir(parents=True)

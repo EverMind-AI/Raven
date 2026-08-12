@@ -6,8 +6,6 @@ import time
 import uuid
 from typing import Any
 
-_DAG_DIR = ".ravenx_dag"
-
 
 def make_run_id() -> str:
     """Build a unique, sortable run id.
@@ -28,25 +26,29 @@ class DagRunStore:
     local, Docker, E2B, and remote backends alike.
     """
 
-    def __init__(self, backend: Any, workdir: str, run_id: str) -> None:
+    def __init__(self, backend: Any, root: str, run_id: str) -> None:
         """Initialize the store.
 
         Args:
             backend (`BackendBase`):
                 The session workspace backend.
-            workdir (`str`):
-                The session working directory (run dirs live under it).
+            root (`str`):
+                The session's DAG history root -- already the full
+                ``.../subagents/mas_dag`` path, not a directory this
+                class appends a marker to. Deliberately not the session working
+                directory: a run record outlives whatever the working directory
+                is pointed at (raven/agent/subagent_history.py).
             run_id (`str`):
                 The unique id for this run.
         """
         self._backend = backend
-        self._workdir = workdir
+        self._root = root
         self.run_id = run_id
 
     @property
     def run_dir(self) -> str:
-        """The run-scoped directory ``<workdir>/.ravenx_dag/<run_id>``."""
-        return self._backend.join_path(self._workdir, _DAG_DIR, self.run_id)
+        """The run-scoped directory ``<root>/<run_id>``."""
+        return self._backend.join_path(self._root, self.run_id)
 
     def prompt_path(self, node_id: str) -> str:
         """Path of a node's rendered prompt file.
@@ -130,7 +132,7 @@ class DagRunStore:
             entry (`dict`):
                 A small summary of this run for later discovery.
         """
-        path = self._backend.join_path(self._workdir, _DAG_DIR, "index.json")
+        path = self._backend.join_path(self._root, "index.json")
         entries: list = []
         if await self._backend.file_exists(path):
             raw = await self.read_text(path)

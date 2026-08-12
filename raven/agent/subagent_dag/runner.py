@@ -93,6 +93,7 @@ async def run_dag(
     subagents: dict[str, Any],
     backend: Any,
     workdir: str,
+    run_root: str,
     sandbox: Any = None,
     max_concurrency: int = 5,
     progress_publisher: ProgressPublisher | None = None,
@@ -106,6 +107,14 @@ async def run_dag(
     is the duck-typed file backend (read_file/write_file/join_path/abspath/
     file_exists). ``sandbox`` is an optional executor handed to each node backend
     (third-party CLI/OpenAI backends ignore it; a raven-loop node backend uses it).
+
+    ``workdir`` and ``run_root`` are two different places and must not be
+    collapsed back into one. ``workdir`` is the session's working directory: it
+    is each node sub-agent's cwd, and what ``{{ ref:<path> }}`` resolves
+    against, so it has to be where the user's files are. ``run_root`` is this
+    session's DAG history root, where the prompt/output records are written --
+    an audit trail that outlives whatever the working directory is pointed at
+    (raven/agent/subagent_history.py).
     ``session_key`` scopes each node's stateful ``instance`` handle (see
     :mod:`raven.agent.subagent.instances`) to this DAG's conversation, the same
     way ``spawn`` scopes its ``instance`` handle. It also scopes this run's node
@@ -126,7 +135,7 @@ async def run_dag(
         if subagents.get(node.subagent) is None:
             raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
 
-    store = DagRunStore(backend, workdir, run_id or make_run_id())
+    store = DagRunStore(backend, run_root, run_id or make_run_id())
     await store.init(spec.model_dump_json())
 
     await _emit(

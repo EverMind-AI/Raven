@@ -99,7 +99,17 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def gateway(
         port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
-        workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+        workspace: str | None = typer.Option(
+            None,
+            "--workspace",
+            "-w",
+            help="Root for per-channel working directories (default: ~/.raven/tmp)",
+        ),
+        home: str | None = typer.Option(
+            None,
+            "--home",
+            help="Agent home directory (memory, skills, transcripts)",
+        ),
         verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
         config: str | None = typer.Option(None, "--config", help="Path to config file"),
         fake_now: str | None = typer.Option(
@@ -115,6 +125,7 @@ def register(app: typer.Typer) -> None:
         """Start the Raven gateway."""
         from raven.agent.loop import AgentLoop
         from raven.agent.loop.recovery import limits_from_defaults
+        from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
         from raven.channels.manager import ChannelManager
         from raven.config.paths import get_cron_dir
         from raven.config.raven import load_raven_config
@@ -126,7 +137,7 @@ def register(app: typer.Typer) -> None:
         # that subsequent load_raven_config() reads from --config, not the
         # default ~/.raven/config.json. Otherwise skill_forge / sentinel
         # from --config are silently ignored.
-        config = load_runtime_config(config, workspace)
+        config = load_runtime_config(config, home=home)
 
         from raven.cli._log_file import redirect_loguru_to_file
 
@@ -164,6 +175,24 @@ def register(app: typer.Typer) -> None:
         sync_workspace_templates(config.workspace_path)
         provider = make_resolving_provider(config)
         session_manager = SessionManager(config.workspace_path)
+        session_root = None
+        if workspace:
+            try:
+                # Guards the root landing inside a protected subtree (e.g.
+                # -w <home>/skills, which would put every channel's files under
+                # skills/), and agent home itself, which would scatter channel
+                # directories through the tree the default root exists to keep
+                # them out of.
+                session_root = validate_override(workspace, config.workspace_path)
+            except ValueError as e:
+                raise typer.BadParameter(str(e)) from e
+        workdir_resolver = WorkdirResolver(
+            WorkdirPolicy.PER_CHANNEL,
+            agent_home=config.workspace_path,
+            session_root=session_root,
+            sessions=session_manager,
+            channel_workspaces=config.channel_workspaces(),
+        )
 
         # Create cron service first (callback set after agent creation).
         #
@@ -238,6 +267,7 @@ def register(app: typer.Typer) -> None:
             cron_service=cron,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             session_manager=session_manager,
+            workdir_resolver=workdir_resolver,
             mcp_servers=config.tools.mcp_servers,
             disabled_tools=config.tools.disabled_tools,
             tool_search_config=config.tools.tool_search,

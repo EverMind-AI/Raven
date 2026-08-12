@@ -234,8 +234,8 @@ def print_probe_troubleshooting(provider: str | None) -> None:
     )
 
 
-def load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
-    """Load config and optionally override the active workspace."""
+def load_runtime_config(config: str | None = None, home: str | None = None) -> Config:
+    """Load config and optionally override agent home."""
     from raven.config.loader import load_config, set_config_path
 
     config_path = None
@@ -248,8 +248,8 @@ def load_runtime_config(config: str | None = None, workspace: str | None = None)
         Console(stderr=True).print(f"[dim]Using config: {config_path}[/dim]")
 
     loaded = load_config(config_path)
-    if workspace:
-        loaded.agents.defaults.workspace = workspace
+    if home:
+        loaded.agents.defaults.workspace = home
     return loaded
 
 
