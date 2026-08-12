@@ -129,6 +129,15 @@ class SkillsSegmentBuilder:
         meta: dict[str, Any] = {
             "injected_skill_ids": [h.qualified_id for h in gated if getattr(h, "qualified_id", None)],
             "skill_hits_by_source": dict(Counter((h.meta.get("source") or "?") for h in gated)),
+            # ``qualified_id`` carries the *addressing* namespace, which is
+            # ``local`` for every on-disk skill regardless of where it came
+            # from, so the id alone cannot say "builtin" / "workspace" / "hub".
+            # Ship the registry source per id for surfaces that report origin.
+            "injected_skill_sources": {
+                h.qualified_id: (h.meta.get("source") or "")
+                for h in gated
+                if getattr(h, "qualified_id", None) and h.meta.get("source")
+            },
         }
         text = f"# Skills\n\n{body}" if body else ""
         return Segment(text=text, meta=meta)

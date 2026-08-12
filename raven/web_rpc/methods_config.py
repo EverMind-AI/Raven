@@ -732,6 +732,55 @@ def register_config_methods(
     dispatcher.register("raven.everos.providers", _everos_providers)
     dispatcher.register("raven.everos.models", _everos_models)
 
+    # MCP servers. The config is the source of truth for what the chat agent can
+    # reach; the live AgentLoop only adds whether the connection came up and
+    # which tools it registered. MCP tools are registered once, lazily, on the
+    # first turn that needs them, and there is no teardown that unregisters
+    # them, so a config change takes effect on the next gateway restart -- the
+    # same contract as skills above, reported the same way.
+    from raven.config.update_mcp import get_mcp_servers, set_mcp_servers
+
+    def _mcp_live(name: str, server_names: list[str]) -> dict:
+        """Connection state + tool names for one server, read off the registry.
+
+        A tool goes to the *longest* server name that prefixes it: registered
+        names are ``mcp_<server>_<tool>`` and the separator is legal inside a
+        server name, so with both ``foo`` and ``foo_bar`` configured a plain
+        ``startswith`` would let ``foo`` claim ``foo_bar``'s tools.
+        """
+        if agent is None:
+            return {"connected": False, "tools": []}
+        tools = []
+        for n in getattr(agent.tools, "tool_names", None) or []:
+            owner = max(
+                (s for s in server_names if n.startswith(f"mcp_{s}_")),
+                key=len,
+                default=None,
+            )
+            if owner == name:
+                tools.append(n[len(f"mcp_{name}_") :])
+        return {
+            "connected": bool(getattr(agent, "_mcp_connected", False)) and bool(tools),
+            "tools": sorted(tools),
+        }
+
+    async def _mcp_list(params: dict) -> dict:
+        servers = get_mcp_servers()
+        names = [s["name"] for s in servers]
+        return {
+            "servers": [{**s, **_mcp_live(s["name"], names)} for s in servers],
+            # False before the first turn connects them, which is why a server
+            # can be configured, valid, and still show no tools.
+            "connected": bool(getattr(agent, "_mcp_connected", False)),
+        }
+
+    async def _mcp_set(params: dict) -> dict:
+        set_mcp_servers(params.get("servers") or [])
+        return {"ok": True, "restart_required": True}
+
+    dispatcher.register("raven.mcp.list", _mcp_list)
+    dispatcher.register("raven.mcp.set", _mcp_set)
+
     # Skill operations (Req2/Req3, phase 1): view body + Skill Hub test/search/
     # install. Fetch/read only — no config write, so no restart_required.
     from raven.config import skill_ops

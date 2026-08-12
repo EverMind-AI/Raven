@@ -450,6 +450,11 @@ class AgentLoop:
         # ``None`` means "use the legacy ``_collect_injected_skill_ids``
         # path" — see that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
+        # ``qualified_id -> registry source`` for the ids above. The id's own
+        # prefix is the addressing namespace (``local`` for anything on disk),
+        # so origin reporting needs this side map — see
+        # ``SkillsSegmentBuilder.build``.
+        self._last_injected_skill_sources: dict[str, str] = {}
 
         self.context = ContextBuilder(
             workspace,
@@ -967,6 +972,7 @@ class AgentLoop:
         # path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
+        self._last_injected_skill_sources = {}
         session_messages = self._context_messages_for_session(session)
         assembled = await self.context_engine.assemble(
             session_key,
@@ -987,6 +993,8 @@ class AgentLoop:
         # to the SkillMeta-based path.
         meta_ids = assembled.metadata.get("injected_skill_ids") if assembled.metadata else None
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
+        meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
+        self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         messages = assembled.messages
         self._inject_recovery_block(session_key, messages)
         return messages
@@ -1469,10 +1477,13 @@ class AgentLoop:
 
     async def _emit_injected_skills(self, session_key: str) -> None:
         """Push this turn's SkillForge-injected skills to the web UI's skill
-        panel as a ``skills_injected`` custom event. Ids are source-qualified
-        (``"<source>/<name>"``), so source + display name are parsed from the id
-        itself — no registry lookup needed. No-op when there is no sink (CLI/IM)
-        or nothing was injected this turn."""
+        panel as a ``skills_injected`` custom event.
+
+        The id's prefix is the *addressing* namespace, which is ``local`` for
+        every on-disk skill, so origin comes from
+        ``_last_injected_skill_sources`` (the registry source the engine
+        reported) and falls back to the prefix only when that is absent. No-op
+        when there is no sink (CLI/IM) or nothing was injected this turn."""
         if self._skills_sink is None:
             return
         ids = self._last_injected_skill_ids or []
@@ -1480,12 +1491,61 @@ class AgentLoop:
             return
         skills = []
         for qid in ids:
-            source, _, name = str(qid).partition("/")
-            skills.append({"id": str(qid), "source": source, "name": name or str(qid)})
+            prefix, _, name = str(qid).partition("/")
+            skills.append(
+                {
+                    "id": str(qid),
+                    "source": self._last_injected_skill_sources.get(str(qid)) or prefix,
+                    "name": name or str(qid),
+                    "kind": "injected",
+                }
+            )
+        await self._emit_skills(session_key, skills)
+
+    async def _emit_skills(self, session_key: str, skills: list[dict[str, Any]]) -> None:
+        """Send one ``skills_injected`` payload, swallowing any failure."""
         try:
             await self._skills_sink(session_key, "skills_injected", {"skills": skills})
         except Exception:  # never break a turn on a telemetry/UI push
             logger.exception("skills_injected emit failed")
+
+    async def _report_skill_read(self, session_key: str, tool_name: str, args: dict[str, Any]) -> None:
+        """Report a skill the model loaded itself to the web UI's skill panel.
+
+        ``read_skill`` / ``use_skill`` are how a skill advertised by description
+        alone actually gets loaded -- notably the builtin orchestration guide,
+        whose id the DAG tool names in its own description. Those never pass
+        through SkillForge injection, so without this the panel shows nothing
+        for a turn that demonstrably used a skill.
+
+        The model passes the addressing id (``local/<name>``); the registry is
+        what knows the real source. An unresolvable id is still reported, with
+        the addressed namespace as source, rather than dropped -- the call
+        happened."""
+        if self._skills_sink is None:
+            return
+        qid = str(args.get("skill_id") or "").strip()
+        if not qid:
+            return
+        namespace, native = qid.partition("/")[0], qid.partition("/")[2]
+        registry = getattr(getattr(self.context, "skills", None), "registry", None)
+        try:
+            # The same split and resolver ``read_skill`` itself uses, so the id
+            # grammar -- including "a bare id addresses the Hub" -- and "local
+            # spans every on-disk source" stay defined in exactly one place.
+            from raven.agent.tools.skill_hub import _lookup_on_disk, _split_qualified_id
+
+            namespace, native = _split_qualified_id(qid)
+            meta = _lookup_on_disk(registry, namespace, native)
+            source = str(meta.source) if meta is not None and getattr(meta, "source", None) else namespace
+        except Exception:  # noqa: BLE001 - a registry hiccup must not lose the report
+            logger.debug("skill source lookup failed for %s", qid)
+            source = namespace
+        name = native or qid
+        await self._emit_skills(
+            session_key,
+            [{"id": qid, "source": source, "name": name, "kind": tool_name}],
+        )
 
     def apply_third_party_subagents(self, configs: list) -> None:
         """Hot-apply new third-party sub-agent config to the live runtime (P4):
@@ -2125,6 +2185,11 @@ class AgentLoop:
                                 "metadata": tool_metadata,
                             },
                         )
+                    # A skill the model loaded itself never passes through
+                    # SkillForge injection, so report it here or the skill panel
+                    # misses the whole class (builtin guides in particular).
+                    if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
+                        await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
                     blocks = getattr(result, "blocks", None)
                     attach_blocks: list[dict[str, Any]] | None = None
                     if blocks:

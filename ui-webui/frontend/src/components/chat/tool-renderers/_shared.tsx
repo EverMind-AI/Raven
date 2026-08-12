@@ -53,12 +53,22 @@ export const toolLabelClass = 'shrink-0 transition-colors group-hover:text-foreg
 
 /**
  * Shared class for the *primary argument* of a trigger line — the file name
- * (Read/Edit/Write), search pattern (Grep/Glob), task subject (TaskCreate) or,
- * for tools without a dedicated renderer, the tool name itself. Unifies weight
- * and truncation so the second slot is visually identical across every tool.
+ * (Read/Edit/Write), search pattern (Grep/Glob) or task subject (TaskCreate).
+ * Unifies weight and truncation so the second slot is visually identical
+ * across every tool.
  */
 export const toolArgClass =
 	'font-[450] min-w-0 truncate transition-colors group-hover:text-foreground';
+
+/**
+ * Shared class for the tool's own name on a generic trigger line, where the
+ * name reads as a label rather than an argument. Label-weight like
+ * {@link toolLabelClass}, but shrinkable: an MCP tool is registered as
+ * `mcp_<server>_<tool>` and is long by construction, and the trigger row has
+ * no overflow guard of its own, so a `shrink-0` name would push the state icon
+ * out of the row instead of ellipsing.
+ */
+export const toolNameClass = 'min-w-0 truncate transition-colors group-hover:text-foreground';
 
 /**
  * One collapsible tool-call row — the single shared shell every tool renders

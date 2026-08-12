@@ -33,6 +33,7 @@ export type {
 	EverOSSection,
 	EverOSProvider,
 	RavenLocalDir,
+	RavenMcpServer,
 	RavenSkillEntry,
 	RavenSkillBody,
 	RavenHubItem,

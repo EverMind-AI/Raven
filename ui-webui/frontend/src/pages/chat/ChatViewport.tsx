@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 import type {
 	ChatModelConfig,
+	MCPClient,
 	RavenThirdPartySubagent,
 	SessionKnowledgeConfig,
 	TTSModelConfig,
@@ -24,7 +25,7 @@ import { dagRunIdsOf, mergeRestoredRuns } from '@/components/dag/restoreDagRuns'
 import { DeliverablesPanel } from '@/components/delivery/DeliverablesPanel';
 import { deriveDeliverables } from '@/components/delivery/deriveDeliverables';
 import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
-import { McpPanel } from '@/components/panel/McpPanel';
+import { McpPanel, toRavenMcpServer } from '@/components/panel/McpPanel';
 import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock.tsx';
 import { PermissionPanel } from '@/components/panel/PermissionPanel';
 import { SkillPanel, type InjectedSkillEntry } from '@/components/panel/SkillPanel';
@@ -51,9 +52,10 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useKnowledgeBaseMiddlewareSchema } from '@/hooks/useKnowledgeBaseMiddlewareSchema';
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
 import { useMessages } from '@/hooks/useMessages';
+import { useRavenMcps } from '@/hooks/useRavenMcps';
 import { useRavenModels } from '@/hooks/useRavenModels';
+import { useRavenSkills } from '@/hooks/useRavenSkills';
 import { useSessions } from '@/hooks/useSessions';
-import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 import ChevronDown from '~icons/solar/alt-arrow-down-linear';
@@ -318,7 +320,12 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 	const handleSkillsInjected = useCallback(
 		(value: Record<string, unknown>) => {
 			const incoming = Array.isArray(value.skills)
-				? (value.skills as { id?: string; source?: string; name?: string }[])
+				? (value.skills as {
+						id?: string;
+						source?: string;
+						name?: string;
+						kind?: InjectedSkillEntry['kind'];
+					}[])
 				: [];
 			if (!incoming.length) return;
 			setInjectedSkills((prev) => {
@@ -328,9 +335,23 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 					if (!id) continue;
 					const existing = byId.get(id);
 					if (existing) {
-						byId.set(id, { ...existing, count: existing.count + 1 });
+						// A later event carries the better-known origin: a skill first
+						// seen as injected and later read (or vice versa) keeps the
+						// non-empty source and the newest kind.
+						byId.set(id, {
+							...existing,
+							count: existing.count + 1,
+							source: s.source || existing.source,
+							kind: s.kind ?? existing.kind,
+						});
 					} else {
-						byId.set(id, { id, source: s.source ?? '', name: s.name ?? id, count: 1 });
+						byId.set(id, {
+							id,
+							source: s.source ?? '',
+							name: s.name ?? id,
+							count: 1,
+							kind: s.kind,
+						});
 					}
 				}
 				const next = Array.from(byId.values());
@@ -390,16 +411,42 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 			onSubagentInstanceUpdated: handleSubagentInstanceUpdated,
 			onSkillsInjected: handleSkillsInjected,
 		});
+	// Skills and MCP servers come from raven's own runtime, not the AgentScope
+	// workspace: the chat agent is the gateway, and the workspace stores are not
+	// wired to it (they report an empty skill set and MCP servers the agent
+	// cannot see).
+	const {
+		skills: ravenSkills,
+		loading: ravenSkillsLoading,
+		remove: removeRavenSkill,
+	} = useRavenSkills();
 	const {
 		mcps,
 		loading: mcpsLoading,
-		addMcps,
-		removeMcp,
-		skills,
-		skillsLoading,
-		addSkill,
-		removeSkill,
-	} = useWorkspace(agentId, sessionId);
+		loadError: mcpsLoadError,
+		connected: mcpsConnected,
+		add: addRavenMcps,
+		remove: removeRavenMcp,
+	} = useRavenMcps();
+	// The dialog emits the standard mcpServers JSON shape; raven's config uses
+	// its own field names, so adapt at this boundary and warn that MCP tools
+	// only register at connect time.
+	const addMcps = useCallback(
+		async (clients: MCPClient[]) => {
+			const res = await addRavenMcps(clients.map(toRavenMcpServer));
+			if (res?.restart_required) toast.info(t('panel.mcp.restartRequired'));
+		},
+		[addRavenMcps, t],
+	);
+	// Same warning on the way out: removing a server rewrites the config, but
+	// its already-registered tools live until the gateway restarts.
+	const removeMcp = useCallback(
+		async (name: string) => {
+			const res = await removeRavenMcp(name);
+			if (res?.restart_required) toast.info(t('panel.mcp.restartRequiredRemove'));
+		},
+		[removeRavenMcp, t],
+	);
 	const { knowledgeBases, loading: knowledgeBasesLoading } = useKnowledgeBases();
 	const { schema: kbMiddlewareSchema } = useKnowledgeBaseMiddlewareSchema();
 
@@ -461,6 +508,8 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 					<McpPanel
 						mcps={mcps}
 						loading={mcpsLoading}
+						loadError={mcpsLoadError}
+						connected={mcpsConnected}
 						onAdd={addMcps}
 						onRemove={removeMcp}
 					/>
@@ -471,10 +520,9 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 				icon: <BookText className="size-4" />,
 				content: (
 					<SkillPanel
-						skills={skills}
-						loading={skillsLoading}
-						onAdd={addSkill}
-						onRemove={removeSkill}
+						skills={ravenSkills}
+						loading={ravenSkillsLoading}
+						onRemove={removeRavenSkill}
 						injected={injectedSkills}
 					/>
 				),
@@ -546,12 +594,13 @@ export function ChatViewport({ agentId, sessionId, subagents, onTeamUpdated }: C
 			tasksContext,
 			mcps,
 			mcpsLoading,
+			mcpsLoadError,
+			mcpsConnected,
 			addMcps,
 			removeMcp,
-			skills,
-			skillsLoading,
-			addSkill,
-			removeSkill,
+			ravenSkills,
+			ravenSkillsLoading,
+			removeRavenSkill,
 			injectedSkills,
 			msgs,
 			subagents,
