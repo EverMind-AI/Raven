@@ -13,9 +13,20 @@
 
 </div>
 
+<br>
+
 # Raven
 
-Raven 是一个构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的、记忆优先且能自我改进的 Agent Harness。它把持久记忆、可控上下文、主动执行、可复用技能、多来源深度研究和本地可观测性整合进一个终端原生运行时。
+Raven 是构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上的
+**The Self-Improving Agent Harness**，并内置可选 Deep Research，用于多来源深度研究。
+
+Raven 会持续迭代支撑 Agent 的 harness：tools、skills、memory、code execution
+runtime、policies 和工作环境。EverOS 为这个 harness 提供跨会话持久存在的用户
+记忆、Agent 记忆和世界知识，让每一次运行都能改进 Agent 的行动方式、知识状态，
+并把可重复工作流沉淀成可复用 Agent Templates 和 digital workers。
+
+**Update：** Raven 新增 Deep Research。运行 `raven deep-research enable` 后，
+Agent 可以在需要深度调查的任务中使用 MiroThinker-backed、多来源 research tool。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
@@ -23,9 +34,9 @@ Raven 是一个构建在 [EverOS](https://github.com/EverMind-AI/EverOS) 之上�
 
 | 基准测试 | Raven 结果 | 对比 |
 | --- | --- | --- |
-| [效率](https://raven.evermind.ai/) | 27B 下为 `56.7%`；397B 下为 `58.1%` | Hermes 为 `46.8%` / `47.9%`；27B 下领先 `+9.9pp` |
-| [自我进化](https://evermind-ai.github.io/EvoAgentBench/) | EvoAgentBench 排名 `#1` | 在四种方法中领先下一名 `+6.2pp` |
-| [主动性](https://x.com/evermind) | ProAgentBench F1 为 `0.60` | 是 Hermes/OpenClaw `0.253` 的 `2.4x` |
+| 效率 | 27B 下为 `56.7%`；397B 下为 `58.1%` | Hermes 为 `46.8%` / `47.9%`；27B 下领先 `+9.9pp` |
+| 自我进化 | EvoAgentBench 排名 `#1` | 在四种方法中领先下一名 `+6.2pp` |
+| 主动性 | ProAgentBench F1 为 `0.60` | 是 Hermes/OpenClaw `0.253` 的 `2.4x` |
 
 以上结果对应已发布的测试配置；模型、任务集和评测协议都会影响最终结果。
 
@@ -141,6 +152,13 @@ Schema 遵循一个精简、带版本的语义契约。Span 名称、属性、ar
 | **Evolver** | 用于改进 Agent 和可复用流程的可复现评测循环 |
 | **Agent Templates** | 基于同一套 harness 构建专用 digital workers 的可分享起点 |
 
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
 ## Providers 和 Gateways
 
 Raven 支持 API key、OAuth、本地和 OpenAI-compatible providers。Onboarding catalog 包括 OpenRouter、OpenAI、Anthropic、Gemini、MiniMax、DeepSeek、Z.ai、DashScope、Moonshot、VolcEngine、SiliconFlow、Groq、AiHubMix、Azure OpenAI、GitHub Copilot OAuth、OpenAI Codex OAuth、Ollama 和托管 vLLM。
@@ -171,6 +189,23 @@ raven gateway
 | `raven upgrade` | 升级受管理的安装 |
 
 运行 `raven --help` 或 `raven <command> --help` 查看完整 CLI。
+
+## 文档
+
+- [文档索引](docs/README.md)
+- [开发工作流](docs/dev.md)
+- [Tracing Standard API](docs/TRACING_STANDARD_API.md)
+- [Sandbox 使用说明](docs/sandbox/usage.md)
+- [Memory plugin 架构](docs/memory-plugin-architecture.md)
+- [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
+- [Proactivity 实现](docs/Proactivity-Implementation.md)
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## 架构
 
@@ -212,19 +247,23 @@ raven/tui_rpc/           typed runtime-to-TUI boundary
 ui-tui/                  React/Ink terminal interface
 ```
 
-## 文档
+<br>
+<div align="right">
 
-- [文档索引](docs/README.md)
-- [开发工作流](docs/dev.md)
-- [Tracing Standard API](docs/TRACING_STANDARD_API.md)
-- [Sandbox 使用说明](docs/sandbox/usage.md)
-- [Memory plugin 架构](docs/memory-plugin-architecture.md)
-- [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
-- [Proactivity 实现](docs/Proactivity-Implementation.md)
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## EverMind 生态
 
 Raven 是 [EverMind](https://evermind.ai/) 开源生态的一部分。你可以继续了解 [EverOS](https://github.com/EverMind-AI/EverOS)、[EverAlgo](https://github.com/EverMind-AI/EverAlgo)、[HyperMem](https://github.com/EverMind-AI/HyperMem)、[EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench)、[EverMemBench](https://github.com/EverMind-AI/EverMemBench) 和 [EverMe](https://github.com/EverMind-AI/EverMe)。
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## 参与贡献
 

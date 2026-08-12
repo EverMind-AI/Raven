@@ -13,9 +13,17 @@
 
 </div>
 
+<br>
+
 # Raven
 
-Raven is a memory-first, self-improving agent harness built on [EverOS](https://github.com/EverMind-AI/EverOS). It brings durable memory, controlled context, proactive execution, reusable skills, deep multi-source research, and local observability into one terminal-native runtime.
+Raven is **The Self-Improving Agent Harness**, built on [EverOS](https://github.com/EverMind-AI/EverOS), with opt-in Deep Research for multi-source investigation.
+
+Raven helps agents improve across runs by continuously refining the systems around them: tools, skills, memory, code execution, policies, and working environment. EverOS provides durable user memory, agent memory, and world knowledge across sessions, so successful workflows can evolve into reusable Agent Templates and digital workers.
+
+**Update:** Raven added Deep Research. Enable it with `raven deep-research enable`
+to give the agent access to MiroThinker-backed, multi-source research when a
+task needs deeper investigation.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
@@ -23,9 +31,9 @@ Raven is a memory-first, self-improving agent harness built on [EverOS](https://
 
 | Benchmark | Raven Result | Comparison |
 | --- | --- | --- |
-| [Efficiency](https://raven.evermind.ai/) | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
-| [Self-evolution](https://evermind-ai.github.io/EvoAgentBench/) | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
-| [Proactivity](https://x.com/evermind) | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
+| Efficiency | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
+| Self-evolution | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
+| Proactivity | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
 
 Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
 
@@ -141,6 +149,13 @@ The schema follows a small, versioned semantic contract. See the [Tracing Standa
 | **Evolver** | Reproducible evaluation loops for improving agents and reusable procedures |
 | **Agent Templates** | Shareable starting points for specialized digital workers built on the same harness |
 
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
 ## Providers and Gateways
 
 Raven supports API-key, OAuth, local, and OpenAI-compatible providers. The onboarding catalog includes OpenRouter, OpenAI, Anthropic, Gemini, MiniMax, DeepSeek, Z.ai, DashScope, Moonshot, VolcEngine, SiliconFlow, Groq, AiHubMix, Azure OpenAI, GitHub Copilot OAuth, OpenAI Codex OAuth, Ollama, and hosted vLLM.
@@ -171,6 +186,23 @@ raven gateway
 | `raven upgrade` | Upgrade a managed installation |
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Developer workflow](docs/dev.md)
+- [Tracing Standard API](docs/TRACING_STANDARD_API.md)
+- [Sandbox usage](docs/sandbox/usage.md)
+- [Memory plugin architecture](docs/memory-plugin-architecture.md)
+- [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
+- [Proactivity implementation](docs/Proactivity-Implementation.md)
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## Architecture
 
@@ -212,19 +244,23 @@ raven/tui_rpc/           typed runtime-to-TUI boundary
 ui-tui/                  React/Ink terminal interface
 ```
 
-## Documentation
+<br>
+<div align="right">
 
-- [Documentation index](docs/README.md)
-- [Developer workflow](docs/dev.md)
-- [Tracing Standard API](docs/TRACING_STANDARD_API.md)
-- [Sandbox usage](docs/sandbox/usage.md)
-- [Memory plugin architecture](docs/memory-plugin-architecture.md)
-- [Self-evolution loop mapping](docs/specs/self-evolution-loop-raven-mapping.md)
-- [Proactivity implementation](docs/Proactivity-Implementation.md)
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## EverMind Ecosystem
 
 Raven is part of the [EverMind](https://evermind.ai/) open-source ecosystem. Explore [EverOS](https://github.com/EverMind-AI/EverOS), [EverAlgo](https://github.com/EverMind-AI/EverAlgo), [HyperMem](https://github.com/EverMind-AI/HyperMem), [EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench), [EverMemBench](https://github.com/EverMind-AI/EverMemBench), and [EverMe](https://github.com/EverMind-AI/EverMe).
+
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
 
 ## Contributing
 
