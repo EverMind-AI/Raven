@@ -186,7 +186,12 @@ class WriteFileTool(_FsTool):
 
     @property
     def description(self) -> str:
-        return "Write content to a file at the given path. Creates parent directories if needed."
+        return (
+            "Write content to a file at the given path. Creates parent directories if needed. "
+            "For a long file, write the first part with mode=overwrite and add the rest with "
+            "mode=append: one oversized call risks being cut off mid-argument, and the whole "
+            "call is then lost."
+        )
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -195,14 +200,30 @@ class WriteFileTool(_FsTool):
             "properties": {
                 "path": {"type": "string", "description": "The file path to write to"},
                 "content": {"type": "string", "description": "The content to write"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["overwrite", "append"],
+                    "description": "overwrite (default) replaces the file; append adds to the end",
+                },
             },
             "required": ["path", "content"],
         }
 
-    async def execute(self, path: str, content: str, **kwargs: Any) -> str:
+    async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:
+        if mode not in ("overwrite", "append"):
+            return f"Error: unknown mode '{mode}' for write_file. Use 'overwrite' or 'append'."
+        # An empty append is refused rather than treated as a no-op: it is what
+        # a call cut off before its content field looks like, and the one thing
+        # it must never silently become is an overwrite.
+        if mode == "append" and not content:
+            return "Error: write_file with mode=append needs content; refusing to append nothing."
         try:
             fp = self._resolve(path)
             fp.parent.mkdir(parents=True, exist_ok=True)
+            if mode == "append":
+                with fp.open("a", encoding="utf-8") as handle:
+                    handle.write(content)
+                return f"Successfully appended {len(content)} bytes to {fp}"
             fp.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {fp}"
         except PermissionError as e:
