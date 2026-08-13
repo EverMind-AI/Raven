@@ -77,6 +77,23 @@ def limits_from_defaults(defaults: object) -> RecoveryLimits:
     )
 
 
+def strip_think_blocks(text: str) -> str:
+    """Remove paired ``<think>...</think>`` blocks. Debris is left in place."""
+    return re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+
+
+def is_only_think_debris(text: str) -> bool:
+    """True when the text is nothing but think tags once they are removed.
+
+    The shape a turn cut off inside an inlined reasoning block arrives in: a
+    lone closing tag with no opener, which pairs with nothing and so survives
+    ``strip_think_blocks`` as an eleven-character string that reads like a real
+    answer. Asked of the residue rather than of vendor spellings -- which
+    prefix a backend picked is not knowable in advance.
+    """
+    return bool(text) and not _THINK_TAG_RE.sub("", text).strip()
+
+
 def has_inline_thinking(content: str | None) -> bool:
     """True when raw content carries a <think>/<thinking>/<reasoning> marker."""
     return bool(content) and bool(_THINK_TAG_RE.search(content))

@@ -8,7 +8,7 @@ it cannot know.
 
 from __future__ import annotations
 
-from raven.agent.loop.main import _failure_class, _loop_break_nudge
+from raven.agent.loop.failure_streak import failure_class, loop_break_nudge
 
 
 def test_different_failures_from_one_tool_are_different_classes() -> None:
@@ -18,17 +18,17 @@ def test_different_failures_from_one_tool_are_different_classes() -> None:
     the nudge at a model that is working through a problem -- the opposite of
     what the nudge is for.
     """
-    truncated = _failure_class("Error: [truncated] Arguments for 'write_file' were cut off at 8192 tokens")
-    schema = _failure_class("Error: Invalid parameters for tool 'write_file': missing required field")
-    missing = _failure_class("Error: File not found: /tmp/nope.py")
+    truncated = failure_class("Error: [truncated] Arguments for 'write_file' were cut off at 8192 tokens")
+    schema = failure_class("Error: Invalid parameters for tool 'write_file': missing required field")
+    missing = failure_class("Error: File not found: /tmp/nope.py")
 
     assert len({truncated, schema, missing}) == 3
 
 
 def test_the_same_failure_twice_is_one_class() -> None:
     """The streak still has to fire on a genuinely repeated dead call."""
-    first = _failure_class("Error: File not found: /tmp/a.py")
-    second = _failure_class("Error: File not found: /tmp/b.py")
+    first = failure_class("Error: File not found: /tmp/a.py")
+    second = failure_class("Error: File not found: /tmp/b.py")
 
     assert first == second == "not_found"
 
@@ -40,8 +40,8 @@ def test_truncation_is_its_own_class() -> None:
     which would let a truncated call and a genuine schema mistake accumulate
     into one streak.
     """
-    assert _failure_class("Error: [truncated] Arguments for 'write_file' were cut off") == "truncated"
-    assert _failure_class("Error: Invalid parameters for tool 'write_file': missing path") == "schema"
+    assert failure_class("Error: [truncated] Arguments for 'write_file' were cut off") == "truncated"
+    assert failure_class("Error: Invalid parameters for tool 'write_file': missing path") == "schema"
 
 
 def test_nudge_does_not_assert_a_cause_it_cannot_know() -> None:
@@ -52,7 +52,7 @@ def test_nudge_does_not_assert_a_cause_it_cannot_know() -> None:
     mistake it did not make. The nudge points at the error text instead, which
     is the one account of the failure that is actually true.
     """
-    text = _loop_break_nudge("write_file", 2)
+    text = loop_break_nudge("write_file", 2)
 
     assert "write_file" in text
     assert "2 times" in text

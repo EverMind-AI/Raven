@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
@@ -15,11 +14,18 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
+from raven.agent.loop.failure_streak import (
+    failure_class,
+    is_hard_tool_failure,
+    loop_break_nudge,
+)
 from raven.agent.loop.recovery import (
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
     classify_empty_response,
+    is_only_think_debris,
+    strip_think_blocks,
 )
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
@@ -177,61 +183,13 @@ _SKIP_USER_INBOUND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 # SUBAGENT = the result re-injection (skipped so the announce gets no nudge).
 _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 
-# Failure markers a plain retry would likely clear — these must NOT count toward
-# the tool-failure-loop streak (nudging on a 429 that self-heals is just noise).
-_TRANSIENT_FAILURE_MARKERS = (
-    "429",
-    "rate limit",
-    "timed out",
-    "timeout",
-    "no healthy upstream",
-    "502",
-    "503",
-)
-# Successful-but-empty results: the tool ran fine and just found nothing. A
-# repeated empty search is legitimate exploration, not a stuck dead call, so it
-# must NOT count toward the failure streak.
-_EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
-
-
-def _failure_class(model_text: str) -> str:
-    """Which kind of failure this is, for streak accounting.
-
-    Coarse on purpose: the streak asks "is the model repeating the same dead
-    call", and two different errors from one tool mean it is still adapting.
-    Counting them together fires the nudge at a model that is working through
-    a problem, which is the opposite of what the nudge is for.
-    """
-    low = model_text[:200].lower()
-    if "[truncated]" in low:
-        return "truncated"
-    if "invalid parameters" in low:
-        return "schema"
-    if "not found" in low:
-        return "not_found"
-    if "permission" in low or "denied" in low:
-        return "denied"
-    if "timed out" in low:
-        return "timeout"
-    return "other"
-
-
-# Marks the synthetic user message that carries images a transport cannot put in
-# a tool result. Not persisted: the tool result above it already names the file
-# path, so the only thing this message would add to the transcript is a user turn
-# saying "[image]" that the user never sent -- misleading on resume and in
-# session export. Deliberately a different key from ``_recovery_synthetic``:
-# that one marks empty-response recovery scaffolding, and collapsing the two
-# would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
+
 
 # Opening or closing reasoning tag, with or without a vendor namespace prefix
 # (<think>, </thinking>, <mm:think>, ...). Used only to ask whether a stripped
 # response is nothing but tag debris -- matching a spelling wrong costs a
 # missed recovery, never a mangled answer.
-_THINK_TAG_RESIDUE_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
-
-
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
 
@@ -253,39 +211,6 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
         else:
             out.append(part)
     return out
-
-
-def _is_hard_tool_failure(result: object) -> bool:
-    """True for a deterministic tool failure (recurs on an identical retry).
-
-    False for success or a transient/retryable error. Used to decide whether a
-    repeated identical tool call is a stuck loop worth breaking.
-    """
-    s = str(result)
-    low = s.lower()
-    if any(m in low for m in _TRANSIENT_FAILURE_MARKERS):
-        return False
-    if s.strip().rstrip(".").lower() in _EMPTY_SUCCESS_MARKERS:
-        return False
-    m = re.search(r"Exit code:\s*(-?\d+)", s)
-    if m:
-        return m.group(1) != "0"
-    # Real not-found failures (file / dir / path / old_text) all start with
-    # "Error:" or carry a non-zero exit code, so those are already covered; a
-    # bare "not found" scan would only risk flagging successful output that
-    # merely mentions the phrase.
-    return s.lstrip().startswith("Error") or "error:" in low[:80]
-
-
-def _loop_break_nudge(tool: str, n: int) -> str:
-    """Injected when the same tool fails deterministically N times running, so
-    the model stops repeating a dead approach instead of adapting."""
-    return (
-        f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
-        "Stop repeating it. The error text above names the actual cause -- read it "
-        "and change approach: a different tool, command, or strategy. Do not call it "
-        "again unchanged."
-    )
 
 
 class AgentLoop:
@@ -1596,8 +1521,8 @@ class AgentLoop:
         """
         if not text:
             return None
-        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
-        if cleaned and not _THINK_TAG_RESIDUE_RE.sub("", cleaned).strip():
+        cleaned = strip_think_blocks(text)
+        if is_only_think_debris(cleaned):
             return None
         return cleaned or None
 
@@ -2298,8 +2223,8 @@ class AgentLoop:
                         break
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
-                    if _is_hard_tool_failure(model_text):
-                        failure_key = (tool_call.name, _failure_class(model_text))
+                    if is_hard_tool_failure(model_text):
+                        failure_key = (tool_call.name, failure_class(model_text))
                         if failure_key == loop_fail_key:
                             loop_fail_streak += 1
                         else:
@@ -2334,7 +2259,7 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + _loop_break_nudge(loop_fail_key[0], loop_fail_streak)
+                        + loop_break_nudge(loop_fail_key[0], loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be

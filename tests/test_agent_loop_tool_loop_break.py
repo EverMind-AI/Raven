@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.main import _is_hard_tool_failure
+from raven.agent.loop.failure_streak import is_hard_tool_failure
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
@@ -26,7 +26,7 @@ def workspace():
 
 
 # --------------------------------------------------------------------------- #
-# unit: _is_hard_tool_failure                                                  #
+# unit: is_hard_tool_failure                                                  #
 # --------------------------------------------------------------------------- #
 
 
@@ -46,7 +46,7 @@ def workspace():
     ],
 )
 def test_is_hard_tool_failure(result, expected):
-    assert _is_hard_tool_failure(result) is expected
+    assert is_hard_tool_failure(result) is expected
 
 
 # --------------------------------------------------------------------------- #
