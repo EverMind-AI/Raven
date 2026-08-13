@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -303,6 +304,114 @@ class TestStoppingWhatWeStarted:
         assert stop_recorded_server(_data_dir) is True
         assert sent == [_signal.SIGTERM]
         assert not (_data_dir / "everos-server.pid").exists()
+
+
+class TestThePrimitivesAgainstTheRealOS:
+    """The four OS-touching helpers, unmocked.
+
+    Everything above stubs these out to stay deterministic, which leaves the
+    layer where a wrong assumption about flock or ``ps`` would not be caught by
+    anything. These run them for real.
+    """
+
+    def test_an_untouched_root_reads_as_free(self, tmp_path) -> None:
+        from raven.plugin.memory.everos._server import ome_lock_held
+
+        assert ome_lock_held(tmp_path / "never-started") is False
+
+    def test_a_held_ome_lock_is_detected(self, tmp_path) -> None:
+        """The signal the whole "served elsewhere" state rests on.
+
+        Also pins the documented flock caveat: the lock lives on the open file
+        description, so a holder in *this* process collides with itself. That is
+        why only the wizard and doctor -- which hold no engine -- may ask.
+        """
+        from raven.plugin.memory.everos._server import ome_lock_held
+        from raven.utils.portable_lock import file_lock
+
+        lock = tmp_path / "root" / ".index" / "sqlite" / "ome.db.lock"
+        lock.parent.mkdir(parents=True)
+        lock.touch()
+
+        with file_lock(lock, blocking=False):
+            assert ome_lock_held(tmp_path / "root") is True
+
+        assert ome_lock_held(tmp_path / "root") is False, "the lock outlived its holder"
+
+    def test_ps_does_not_mistake_this_process_for_a_server(self) -> None:
+        """The pid-reuse guard, run against a real ``ps``.
+
+        A pidfile names a number, not a process; without this check a recycled
+        pid would take a SIGTERM meant for an everos server.
+        """
+        from raven.plugin.memory.everos._server import _is_everos_server
+
+        assert _is_everos_server(os.getpid()) is False
+
+    def test_ps_recognises_a_process_whose_command_line_says_everos(self) -> None:
+        import subprocess
+        import sys
+
+        from raven.plugin.memory.everos._server import _is_everos_server
+
+        # A stand-in whose command line carries the marker `ps` looks for; the
+        # point is that the parsing works against real `ps` output, not that this
+        # is an everos build.
+        #
+        # Deliberately not `sh -c "sleep 5 # marker"`: a shell handed a single
+        # simple command execs it directly, replacing its own command line and
+        # dropping the marker -- which made this pass alone and fail in a full
+        # run. A python interpreter never rewrites its argv, so the marker stays.
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)  # everos server start --root /x"])
+        try:
+            assert _is_everos_server(proc.pid) is True
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+
+    def test_a_dead_pid_is_not_a_server(self) -> None:
+        import subprocess
+
+        from raven.plugin.memory.everos._server import _is_everos_server
+
+        proc = subprocess.Popen(["sh", "-c", "exit 0"])
+        proc.wait(timeout=5)
+
+        assert _is_everos_server(proc.pid) is False
+
+    def test_health_probe_reads_a_real_response(self, tmp_path) -> None:
+        """``_probe_health`` against a real socket: 200 is up, 500 is not, and a
+        closed port is not an exception the caller has to handle."""
+        import http.server
+        import threading
+
+        from raven.plugin.memory.everos._server import _probe_health
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            status = 200
+
+            def do_GET(self):  # noqa: N802 - stdlib callback name
+                self.send_response(self.status)
+                self.end_headers()
+
+            def log_message(self, *_a):
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            assert _probe_health(f"http://127.0.0.1:{port}") is True
+            _Handler.status = 503
+            assert _probe_health(f"http://127.0.0.1:{port}") is False
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        # Nothing listening any more: a refused connection is False, not a raise.
+        assert _probe_health(f"http://127.0.0.1:{port}") is False
 
 
 class TestDeadChildDetection:
