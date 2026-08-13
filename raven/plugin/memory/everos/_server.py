@@ -210,6 +210,38 @@ def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> bool:
     return False
 
 
+def ome_lock_held(root: Path | str) -> bool:
+    """Is an OME engine already serving the data under ``root``?
+
+    EverOS admits one offline engine per data directory and enforces it with a
+    non-blocking exclusive ``flock`` on ``<root>/.index/sqlite/ome.db.lock``. The
+    lock is the only reliable answer to "is this data already being served",
+    because it is keyed on the directory rather than on a port: a second server
+    on a different port dies here, which is exactly the failure that looked like
+    a mysterious 30s startup timeout.
+
+    Acquire-and-release, so this reports on *other* holders. Two caveats worth
+    knowing: ``flock`` is held per open file description, so a raven process that
+    itself holds the lock would see its own -- callers run this from the wizard
+    and doctor, which do not; and a missing lock file means nobody has ever
+    started an engine here, which is not the same as "free after a crash" but
+    answers the same way.
+    """
+    lock = Path(root).expanduser() / ".index" / "sqlite" / "ome.db.lock"
+    if not lock.exists():
+        return False
+    try:
+        with file_lock(lock, blocking=False):
+            return False
+    except LockTimeoutError:
+        return True
+    except OSError as exc:
+        # Unreadable lock file: refuse to claim the data is free, since acting on
+        # that would spawn an instance that cannot start.
+        logger.debug("could not test the OME lock at {}: {}", lock, exc)
+        return True
+
+
 def _last_error_line() -> str:
     """The most recent exception line from the server log, or an empty string.
 
