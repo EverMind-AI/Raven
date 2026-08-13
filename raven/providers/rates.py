@@ -34,10 +34,15 @@ from raven.providers import model_catalog_cache
 #: this many tokens of headroom rather than a number invented at the call site.
 DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 
-# Output ceiling for a model the metadata does not know. Matches the value the
-# retired ``agents.defaults.maxTokens`` defaulted to, so unmapped models keep
-# the behaviour they had when that setting existed.
-DEFAULT_MAX_OUTPUT_TOKENS = 8192
+# Output ceiling for a model the catalogue does not know -- self-hosted
+# deployments, gateways, models newer than the table. Not a default in the
+# sense the surveyed agents use one (theirs applies to every model, mapped or
+# not); this only answers where the catalogue cannot, so it is picked for
+# breadth rather than for any single model: Claude Code defaults to 16000, the
+# Anthropic SDK suggests ~16000 non-streaming, and gpt-4o's real ceiling is
+# also 16384. Unmapped backends are OpenAI-compatible servers in practice,
+# which clamp an over-large value rather than rejecting it.
+DEFAULT_MAX_OUTPUT_TOKENS = 16384
 
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
