@@ -515,6 +515,23 @@ def _two_calls_last_one_cut() -> list[StreamDelta]:
     ]
 
 
+async def test_only_the_last_tool_call_is_marked_truncated() -> None:
+    """Calls arrive in order, so everything before the last one finished intact.
+
+    Marking all of them tells a model that a complete call was cut off; if that
+    call is genuinely malformed it then gets the wrong diagnosis for a mistake
+    it really did make.
+    """
+    response = await _bind_helper(_provider_with_ceiling(_two_calls_last_one_cut(), max_tokens=4096))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is True
+    assert response.tool_calls[0].truncation is None
+    assert response.tool_calls[1].truncation is not None
+    assert response.tool_calls[1].truncation.at_tokens == 4096
+
+
 async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
     """It is metadata about the call, not an argument the model wrote.
 

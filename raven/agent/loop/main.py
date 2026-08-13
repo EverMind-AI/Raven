@@ -1744,14 +1744,14 @@ class AgentLoop:
         truncated = upstream_finish_reason == "length" or hit_ceiling or args_parse_failed
 
         if truncated and tool_calls:
-            # Mark every call from this turn, not just the ones whose JSON
-            # failed to parse: when the transport closes the braces for us the
-            # blob parses cleanly and simply lacks whatever the model had not
-            # reached yet, which schema validation then reports as a missing
-            # field. That message is true and useless -- it sends the model
-            # looking for a field it never omitted.
-            for tc in tool_calls:
-                tc.truncation = TruncationInfo(at_tokens=sent_max_tokens)
+            # The last call, and not only the ones whose JSON failed to parse:
+            # when the transport closes the braces for us the blob parses
+            # cleanly and simply lacks whatever the model had not reached yet,
+            # which schema validation then reports as a missing field. That
+            # message is true and useless -- it sends the model looking for a
+            # field it never omitted. Earlier calls need no marker: the stream
+            # emits them in order, so each of them finished before the ceiling.
+            tool_calls[-1].truncation = TruncationInfo(at_tokens=sent_max_tokens)
 
         if truncated:
             logger.warning(
