@@ -919,3 +919,74 @@ def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert "fixed" in out
     assert "raven doctor --fix" not in out, "nothing left to apply, so nothing to advertise"
+
+
+# ------------------------------------------------------- tool capabilities
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_serper_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """web_search resolves its key from the environment too, so a developer who
+    exported one would see these assert the wrong branch."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+
+
+def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) -> None:
+    """The reason this section exists: an unconfigured tool is not registered,
+    so without it nothing in the running system says the capability is there."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Tool capabilities" in result.stdout
+    assert "web_search" in result.stdout
+    assert "serper.dev" in result.stdout, "a deployer cannot act without being told where to go"
+    assert "tools.web.search.apiKey" in result.stdout
+
+
+def test_doctor_says_a_paid_capability_bills_before_it_is_switched_on(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor"])
+
+    assert "Billed per image." in result.stdout
+    assert "prepaid OpenRouter credit" in result.stdout, "video cannot run at all without it"
+
+
+def test_doctor_reports_a_configured_capability_and_where_its_key_came_from(tmp_config: Path, tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.providers.openrouter.api_key = "sk-or-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrowed" in result.stdout, "the deployer should see it reused a key, not that it needs one"
+
+
+def test_an_unconfigured_capability_is_not_a_failure(healthy_config: Path) -> None:
+    """An install without image generation is a choice, not a fault."""
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+
+
+def test_tool_capabilities_reach_the_json_output(healthy_config: Path) -> None:
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    payload = json.loads(result.stdout)
+    tools = payload["tools"]["capabilities"]
+    by_name = {c["tool"]: c for c in tools}
+    assert "web_search" in by_name and "web_fetch" in by_name
+    assert by_name["web_search"]["configured"] is False
+    assert by_name["web_search"]["obtain_from"] == "https://serper.dev"
+    assert by_name["web_fetch"]["configured"] is True
+
+
+def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None:
+    """These rows exist to be copied. A key wrapped mid-path is unusable, which
+    is why each fact is printed on its own line rather than in a sentence."""
+    result = runner.invoke(app, ["doctor"])
+
+    for path in ("tools.web.search.apiKey", "tools.media.image.model", "SERPER_API_KEY"):
+        assert path in result.stdout, f"{path} was broken across a line wrap"
