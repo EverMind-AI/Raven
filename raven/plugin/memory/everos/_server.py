@@ -107,10 +107,22 @@ def _start_server_if_unlocked(port: str) -> bool:
 
 
 async def ensure_everos_server(
-    base_url: str = DEFAULT_EVEROS_BASE_URL,
+    base_url: str,
     *,
     timeout: float = 30.0,
 ) -> None:
+    """Make sure a server is answering at ``base_url``, starting one if not.
+
+    ``base_url`` is required on purpose. It used to default to
+    ``DEFAULT_EVEROS_BASE_URL``, which let the onboard wizard probe 18791 while
+    the memory backend read ``plugins.config`` and used whatever address was
+    configured there. On a machine that had moved everos off the default port
+    the wizard then decided nothing was running, spawned a second instance, and
+    that instance died on the OME jobstore lock the first one already held --
+    reported to the user as a 30s timeout blaming a missing install. A default
+    here means "forgot to read the config" is a silent runtime bug rather than a
+    signature error, so there is none.
+    """
     if await asyncio.to_thread(_probe_health, base_url):
         logger.info("everos server already running at {}", base_url)
         return

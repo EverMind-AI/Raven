@@ -1495,6 +1495,49 @@ def test_the_memory_step_reaches_the_capability_report(
     assert reported == [1], "the memory step never reported what EverOS can do"
 
 
+def test_memory_step_starts_the_configured_address_not_the_default(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wizard must probe the address the memory backend will actually use.
+
+    Probing the 18791 default while ``plugins.config`` names another port made
+    the wizard conclude nothing was running and spawn a second instance, which
+    then died on the OME jobstore lock the first one held -- surfaced to the user
+    as a 30s timeout that blamed a missing install. Both the first attempt and
+    the retry have to carry the configured address.
+    """
+    import questionary
+
+    tmp_env.write_text(
+        json.dumps({"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:1995"}}}}),
+        encoding="utf-8",
+    )
+
+    seen: list[str] = []
+
+    async def _fake_ensure(base_url: str, **_kw: object) -> None:
+        seen.append(base_url)
+        if len(seen) == 1:
+            raise RuntimeError("boom")
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fake_ensure)
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+    monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+
+    class _FQ:
+        def ask(self):
+            return "retry"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert seen == ["http://localhost:1995", "http://localhost:1995"]
+
+
 def test_memory_llm_reuse_pulls_provider_creds(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

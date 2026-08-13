@@ -1405,7 +1405,15 @@ def _step4_memory(
     # Verify EverOS server is reachable (auto-starts if needed)
     import asyncio
 
+    from raven.config.raven import load_raven_config
+    from raven.plugin.memory.everos._health import configured_base_url
     from raven.plugin.memory.everos._server import ensure_everos_server
+
+    # The configured address, not the default: the memory backend connects to
+    # whatever ``plugins.config`` names, so probing 18791 on a setup that moved
+    # everos elsewhere reports on a server nobody uses -- and then spawns a
+    # second instance that cannot hold the OME lock.
+    base_url = configured_base_url(load_raven_config())
 
     oc.console.print()
     oc.console.print(
@@ -1415,7 +1423,7 @@ def _step4_memory(
         )
     )
     try:
-        asyncio.run(ensure_everos_server())
+        asyncio.run(ensure_everos_server(base_url))
         oc.console.print(
             oc._t(
                 "  [green]✓ EverOS service is running.[/green]",
@@ -1426,10 +1434,10 @@ def _step4_memory(
         oc.console.print(
             oc._t(
                 f"  [red]✗ EverOS service failed to start: {exc}[/red]\n"
-                "  [dim]Check: everos installed? Port 18791 free? "
+                f"  [dim]Check: everos installed? Is {base_url} free? "
                 "See ~/.raven/logs/everos-server.log[/dim]",
                 f"  [red]✗ EverOS 服务启动失败：{exc}[/red]\n"
-                "  [dim]请检查：everos 是否安装？端口 18791 是否被占用？"
+                f"  [dim]请检查：everos 是否安装？{base_url} 是否被占用？"
                 "查看 ~/.raven/logs/everos-server.log[/dim]",
             )
         )
@@ -1445,7 +1453,7 @@ def _step4_memory(
         if retry == "retry":
             # Recurse once — the loop in _step4_memory handles further retries
             try:
-                asyncio.run(ensure_everos_server())
+                asyncio.run(ensure_everos_server(base_url))
                 oc.console.print(
                     oc._t(
                         "  [green]✓ EverOS service is running.[/green]",
