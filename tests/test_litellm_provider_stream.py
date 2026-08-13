@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from raven.providers.base import StreamDelta
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 
 # ---------- Test doubles modelling OpenAI ChatCompletionChunk shape ----------
@@ -243,3 +243,92 @@ async def test_chat_stream_forwards_api_key_to_acompletion(monkeypatch: pytest.M
         pass
 
     assert captured["api_key"] == "k-main"
+
+
+# --------- generation settings reach the request body (regression) ----------
+#
+# chat_stream used to declare literal defaults (max_tokens=4096,
+# temperature=0.7, reasoning_effort=None). The agent loop calls it with
+# messages/tools/model only, so those literals silently shadowed whatever the
+# user had configured — a class of defect that is invisible in review because
+# the signature reads as perfectly reasonable. Both assertions below therefore
+# check the *outgoing request body*, not that a function was called.
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_sends_configured_generation_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured generation settings reach acompletion's kwargs verbatim."""
+    captured: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any):
+        captured.update(kwargs)
+        return _fake_stream([_chunk("ok")])
+
+    monkeypatch.setattr(
+        "raven.providers.litellm_provider.acompletion",
+        fake_acompletion,
+    )
+
+    provider = _make_provider()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["max_tokens"] == 8192
+    assert captured["temperature"] == 0.1
+    assert captured["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_explicit_arguments_still_win() -> None:
+    """An explicit argument overrides the configured default."""
+    captured: dict[str, Any] = {}
+
+    class _Recorder(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs: Any) -> LLMResponse:
+            captured.update(kwargs)
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _Recorder()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], max_tokens=256):
+        pass
+
+    assert captured["max_tokens"] == 256  # explicit wins
+    assert captured["temperature"] == 0.1  # unset falls back to config
+
+
+@pytest.mark.asyncio
+async def test_base_chat_stream_fallback_sends_configured_settings() -> None:
+    """The base non-streaming fallback resolves settings the same way.
+
+    Providers without real streaming (azure / codex / custom) reach the model
+    through this default implementation. Leaving its literals in place would
+    keep them on 4096 even after the LiteLLM path is fixed.
+    """
+    captured: dict[str, Any] = {}
+
+    class _ChatOnly(LLMProvider):
+        async def chat(self, messages, tools=None, model=None, **kwargs: Any) -> LLMResponse:
+            captured.update(kwargs)
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _ChatOnly()
+    provider.generation = GenerationSettings(max_tokens=8192, temperature=0.1, reasoning_effort="low")
+
+    async for _ in provider.chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        pass
+
+    assert captured["max_tokens"] == 8192
+    assert captured["temperature"] == 0.1
+    assert captured["reasoning_effort"] == "low"

@@ -362,9 +362,9 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
+        max_tokens: object = _SENTINEL,
+        temperature: object = _SENTINEL,
+        reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Non-streaming fallback: emit the full ``chat()`` response as a single
@@ -375,7 +375,24 @@ class LLMProvider(ABC):
         otherwise ``AttributeError`` there. This default makes any provider that
         implements ``chat`` usable in the streaming path — without token-level
         streaming. ``LiteLLMProvider`` overrides this with true streaming.
+
+        Generation defaults resolve from ``self.generation`` the same way
+        ``chat_with_retry`` does: literal defaults here would shadow the user's
+        configuration, since the agent loop calls this with messages/tools/model
+        only.
+
+        ``generation`` is read defensively -- a subclass that never runs this
+        ``__init__`` (thin adapters, test doubles) reaches this method with the
+        attribute missing, and a crash there would be worse than the settings
+        it is meant to restore.
         """
+        gen = getattr(self, "generation", None) or GenerationSettings()
+        if max_tokens is self._SENTINEL:
+            max_tokens = gen.max_tokens
+        if temperature is self._SENTINEL:
+            temperature = gen.temperature
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = gen.reasoning_effort
         response = await self.chat(
             messages=messages,
             tools=tools,

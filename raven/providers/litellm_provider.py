@@ -14,7 +14,14 @@ import json_repair
 from loguru import logger
 
 from raven.providers import prompt_cache
-from raven.providers.base import LLMProvider, LLMResponse, StreamDelta, ToolCallRequest, format_llm_error
+from raven.providers.base import (
+    GenerationSettings,
+    LLMProvider,
+    LLMResponse,
+    StreamDelta,
+    ToolCallRequest,
+    format_llm_error,
+)
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
 from raven.providers.reasoning import split_orphan_think
@@ -481,9 +488,9 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
+        max_tokens: object = LLMProvider._SENTINEL,
+        temperature: object = LLMProvider._SENTINEL,
+        reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         """Streaming counterpart to chat().
@@ -496,7 +503,19 @@ class LiteLLMProvider(LLMProvider):
         Provider-specific chunk shapes (e.g. dashscope) are handled inside
         `_normalize_stream_chunk`. The default OpenAI shape extraction lives
         in that hook; subclasses or implementer additions can override.
+
+        Generation defaults resolve from ``self.generation`` the same way
+        ``chat_with_retry`` does: literal defaults here would shadow the user's
+        configuration, since the agent loop calls this with messages/tools/model
+        only.
         """
+        gen = getattr(self, "generation", None) or GenerationSettings()
+        if max_tokens is self._SENTINEL:
+            max_tokens = gen.max_tokens
+        if temperature is self._SENTINEL:
+            temperature = gen.temperature
+        if reasoning_effort is self._SENTINEL:
+            reasoning_effort = gen.reasoning_effort
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
