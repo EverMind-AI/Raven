@@ -75,6 +75,20 @@ def _resolved(config, attr):
     return getattr(config.effective_media_config(), attr)
 
 
+def _media_attrs() -> list[str]:
+    """Every media tool the schema declares, asked of the schema.
+
+    Listing them here instead would make the coverage test below blind to the
+    one case it exists to catch: a media tool added to the schema and to
+    registration but not to the table. A hardcoded list never configures the new
+    tool, so it never appears among the gated ones, so the assertion holds while
+    the table is already wrong.
+    """
+    from raven.config.schema import MediaGenConfig, MediaToolConfig
+
+    return [n for n, f in MediaGenConfig.model_fields.items() if f.annotation is MediaToolConfig]
+
+
 def _loop(workspace: Path, config, **kw) -> AgentLoop:
     return AgentLoop(
         provider=_StubProvider(),
@@ -96,7 +110,7 @@ def test_the_table_names_exactly_the_credential_gated_tools(workspace, tmp_path:
 
     full = _config(tmp_path)
     full.tools.web.search.api_key = "sk-serper"
-    for attr in ("image", "speech", "video"):
+    for attr in _media_attrs():
         getattr(full.tools.media, attr).model = "some/model"
     full.providers.openrouter.api_key = "sk-or-test"
     loop_full = _loop(workspace, full, brave_api_key="sk-serper")
