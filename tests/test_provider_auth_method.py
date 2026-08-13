@@ -456,6 +456,12 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # for display, rotate it -- rather than to rule on whether a provider is
         # set up.
         "raven/config/schema.py",
+        # Reports which source supplied a tool's key, so a deployer is told
+        # "reusing the OpenRouter key you already have" rather than "needs a
+        # key" and does not go and create an account twice. It rules on nothing:
+        # `is_configured` asks each tool, which is where that family's rule
+        # already lives, so this file cannot become a second opinion.
+        "raven/agent/tools/capabilities.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
         "raven/cli/_helpers.py",
