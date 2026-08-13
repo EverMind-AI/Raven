@@ -202,7 +202,12 @@ class SubagentManager:
                     extra_deny_patterns=self.exec_config.extra_deny_patterns,
                 )
             )
-            tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+            # Withheld without a key, same as the main loop: a sub-agent that
+            # reaches for a search it cannot run reports the failure to its
+            # caller, and that text ends up in the parent turn.
+            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+            if web_search.api_key:
+                tools.register(web_search)
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
 
             system_prompt = self._build_subagent_prompt()
