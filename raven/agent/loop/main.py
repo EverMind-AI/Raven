@@ -192,6 +192,29 @@ _TRANSIENT_FAILURE_MARKERS = (
 # must NOT count toward the failure streak.
 _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 
+
+def _failure_class(model_text: str) -> str:
+    """Which kind of failure this is, for streak accounting.
+
+    Coarse on purpose: the streak asks "is the model repeating the same dead
+    call", and two different errors from one tool mean it is still adapting.
+    Counting them together fires the nudge at a model that is working through
+    a problem, which is the opposite of what the nudge is for.
+    """
+    low = model_text[:200].lower()
+    if "[truncated]" in low:
+        return "truncated"
+    if "invalid parameters" in low:
+        return "schema"
+    if "not found" in low:
+        return "not_found"
+    if "permission" in low or "denied" in low:
+        return "denied"
+    if "timed out" in low:
+        return "timeout"
+    return "other"
+
+
 # Marks the synthetic user message that carries images a transport cannot put in
 # a tool result. Not persisted: the tool result above it already names the file
 # path, so the only thing this message would add to the transcript is a user turn
@@ -258,11 +281,9 @@ def _loop_break_nudge(tool: str, n: int) -> str:
     the model stops repeating a dead approach instead of adapting."""
     return (
         f"[loop] `{tool}` has failed {n} times in a row with the same kind of error. "
-        "Stop repeating it. If it is an external dependency (network/API/search), "
-        "complete what you can offline from local data and report what stayed blocked. "
-        "If it is a file or path error, re-examine the EXACT path before any retry — "
-        "do not call it again unchanged. Otherwise change approach: a different tool, "
-        "command, or strategy."
+        "Stop repeating it. The error text above names the actual cause -- read it "
+        "and change approach: a different tool, command, or strategy. Do not call it "
+        "again unchanged."
     )
 
 
@@ -2000,9 +2021,10 @@ class AgentLoop:
         compress_retries = 0
         # Image-demotion recovery: bound per turn, same reason.
         image_demote_retries = 0
-        # Tool-failure-loop break (#1b): track consecutive same-tool hard
-        # failures across iterations; nudge once per fresh streak, bounded/turn.
-        loop_fail_tool: str | None = None
+        # Tool-failure-loop break (#1b): track consecutive hard failures of the
+        # same tool *with the same kind of error* across iterations; nudge once
+        # per fresh streak, bounded/turn.
+        loop_fail_key: tuple[str, str] | None = None
         loop_fail_streak = 0
         loop_nudges = 0
         # Empty-response recovery state, local to the turn — the AgentLoop is a
@@ -2278,12 +2300,13 @@ class AgentLoop:
                     # #1b Track consecutive same-tool deterministic failures
                     # (transient errors excluded — a retry would clear those).
                     if _is_hard_tool_failure(model_text):
-                        if tool_call.name == loop_fail_tool:
+                        failure_key = (tool_call.name, _failure_class(model_text))
+                        if failure_key == loop_fail_key:
                             loop_fail_streak += 1
                         else:
-                            loop_fail_tool, loop_fail_streak = tool_call.name, 1
+                            loop_fail_key, loop_fail_streak = failure_key, 1
                     else:
-                        loop_fail_tool, loop_fail_streak = None, 0
+                        loop_fail_key, loop_fail_streak = None, 0
 
                 if abort_action:
                     # A normal tool result starts another model iteration. That
@@ -2312,7 +2335,7 @@ class AgentLoop:
                     messages[-1]["content"] = (
                         str(messages[-1].get("content", ""))
                         + "\n\n"
-                        + _loop_break_nudge(loop_fail_tool, loop_fail_streak)
+                        + _loop_break_nudge(loop_fail_key[0], loop_fail_streak)
                     )
                     loop_fail_streak = 0  # fire once per fresh streak
                 # After the nudge above, which needs the last message to still be
