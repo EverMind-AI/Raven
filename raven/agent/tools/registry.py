@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
-from raven.providers.base import TruncationInfo
+from raven.providers.base import RunMeta
 from raven.tracing import semconv, trace
 
 
@@ -49,12 +49,14 @@ class ToolRegistry:
         name: str,
         params: dict[str, Any],
         *,
-        truncation: TruncationInfo | None = None,
+        run_meta: RunMeta | None = None,
     ) -> str:
         """Execute a tool by name with given parameters.
 
-        ``truncation`` is the caller's note that this call never finished
-        arriving, which changes what a validation failure means.
+        ``run_meta`` carries what happened around the call rather than what it
+        asks for -- today only whether it finished arriving, which changes what
+        a validation failure means. Keyword-only so the five call sites stay
+        self-describing and so a second field does not reorder anything.
         """
         _hint = "\n\n[Analyze the error above and try a different approach.]"
 
@@ -69,6 +71,7 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
+                truncation = run_meta.truncation if run_meta else None
                 if truncation:
                     # The schema is right that something is missing, but not
                     # about why. Saying "missing required path" to a model that

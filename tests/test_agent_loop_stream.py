@@ -577,9 +577,9 @@ async def test_only_the_last_tool_call_is_marked_truncated() -> None:
     )
 
     assert response.truncated is True
-    assert response.tool_calls[0].truncation is None
-    assert response.tool_calls[1].truncation is not None
-    assert response.tool_calls[1].truncation.at_tokens == 4096
+    assert response.tool_calls[0].run_meta is None
+    assert response.tool_calls[1].run_meta is not None
+    assert response.tool_calls[1].run_meta.truncation.at_tokens == 4096
 
 
 async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
@@ -596,6 +596,7 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
 
     payload = json.dumps([tc.to_openai_tool_call() for tc in response.tool_calls])
 
-    assert response.tool_calls[1].truncation is not None
+    assert response.tool_calls[1].run_meta is not None
     assert "truncation" not in payload
+    assert "run_meta" not in payload
     assert "_truncated" not in payload

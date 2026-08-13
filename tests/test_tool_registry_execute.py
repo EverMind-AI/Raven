@@ -15,7 +15,7 @@ import pytest
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.agent.tools.registry import ToolRegistry
-from raven.providers.base import TruncationInfo
+from raven.providers.base import RunMeta, TruncationInfo
 
 
 class _Split(Tool):
@@ -198,7 +198,7 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
     out = await reg.execute(
         "write_file",
         {"_raw_arguments": '{"content": "def foo('},
-        truncation=TruncationInfo(at_tokens=4096),
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=4096)),
     )
 
     assert "[truncated]" in out
@@ -223,7 +223,7 @@ async def test_truncated_but_parseable_arguments_also_reported_as_truncation() -
     out = await reg.execute(
         "write_file",
         {"content": "def foo(): ..."},
-        truncation=TruncationInfo(at_tokens=8192),
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=8192)),
     )
 
     assert "[truncated]" in out
@@ -261,7 +261,7 @@ async def test_truncation_note_never_reaches_the_tool() -> None:
     await reg.execute(
         "write_file",
         {"path": "a.py", "content": "x"},
-        truncation=TruncationInfo(at_tokens=4096),
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=4096)),
     )
 
     assert tool.received == {"path": "a.py", "content": "x"}

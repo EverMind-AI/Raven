@@ -47,6 +47,7 @@ from raven.providers.base import (
     ErrorClassification,
     LLMProvider,
     LLMResponse,
+    RunMeta,
     ToolCallRequest,
     TruncationInfo,
     send_max_tokens,
@@ -1773,7 +1774,7 @@ class AgentLoop:
             # message is true and useless -- it sends the model looking for a
             # field it never omitted. Earlier calls need no marker: the stream
             # emits them in order, so each of them finished before the ceiling.
-            tool_calls[-1].truncation = TruncationInfo(at_tokens=sent_max_tokens)
+            tool_calls[-1].run_meta = RunMeta(truncation=TruncationInfo(at_tokens=sent_max_tokens))
 
         if truncated:
             logger.warning(
@@ -2235,9 +2236,7 @@ class AgentLoop:
                         if isinstance(exec_tool, ExecTool):
                             exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(
-                        tool_call.name, tool_call.arguments, truncation=tool_call.truncation
-                    )
+                    result = await self.tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
