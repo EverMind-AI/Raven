@@ -52,6 +52,38 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
+class EverosNotConfigured(RuntimeError):
+    """The memory LLM is missing, so no server could survive startup.
+
+    A ``RuntimeError`` subclass on purpose: callers already treat that as
+    "server unavailable", and this only narrows the reason so a caller that
+    wants to say something more useful can.
+    """
+
+
+def _require_llm_configured() -> None:
+    """Refuse to spawn a server that is guaranteed to die on startup.
+
+    EverOS treats the LLM as a hard requirement: its lifespan provider builds
+    the client eagerly and raises ``LLMNotConfiguredError`` when credentials are
+    missing, which fails FastAPI startup outright. Spawning anyway costs the
+    caller a full poll timeout waiting on a process that already exited, and
+    leaves the real reason only in the server log.
+
+    This is reachable out of the box, not just after a misconfiguration:
+    ``memory.backend`` defaults to ``"everos"`` in the schema while the
+    everos.toml template ships ``[llm]`` with an empty ``api_key``.
+    """
+    from raven.config.update_everos import everos_role_configured, get_everos_config_path
+
+    if everos_role_configured("llm"):
+        return
+    raise EverosNotConfigured(
+        f"EverOS memory LLM is not configured: [llm] in {get_everos_config_path()} "
+        "needs both model and api_key."
+    )
+
+
 def _everos_executable() -> str:
     """Locate the everos CLI, preferring the one installed alongside raven.
 
@@ -127,6 +159,10 @@ async def ensure_everos_server(
         logger.info("everos server already running at {}", base_url)
         return
 
+    # Only on the spawn path: a server that answers /health has already built
+    # its LLM client, so its credentials are proven by the probe above.
+    _require_llm_configured()
+
     port = _extract_port(base_url)
     await asyncio.to_thread(_start_server_if_unlocked, port)
 
@@ -146,4 +182,4 @@ async def ensure_everos_server(
     )
 
 
-__all__ = ["DEFAULT_EVEROS_BASE_URL", "ensure_everos_server"]
+__all__ = ["DEFAULT_EVEROS_BASE_URL", "EverosNotConfigured", "ensure_everos_server"]

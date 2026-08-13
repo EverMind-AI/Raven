@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from raven.plugin.memory.everos._server import _everos_executable, ensure_everos_server
+from raven.plugin.memory.everos._server import (
+    EverosNotConfigured,
+    _everos_executable,
+    ensure_everos_server,
+)
 
 
 def _make_executable(path):
@@ -79,6 +83,88 @@ class TestEverosExecutable:
             _everos_executable()
 
 
+@pytest.fixture
+def everos_toml(tmp_path, monkeypatch):
+    """Redirect the EverOS config read to a throwaway toml."""
+    import raven.config.update_everos as ue
+
+    cfg = tmp_path / ".everos" / "everos.toml"
+    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
+    return cfg
+
+
+def _write_llm_section(cfg, *, model="mem-llm", api_key="k"):
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    body = "[llm]\n"
+    if model is not None:
+        body += f'model = "{model}"\n'
+    if api_key is not None:
+        body += f'api_key = "{api_key}"\n'
+    cfg.write_text(body, encoding="utf-8")
+
+
+class TestSpawnPreflight:
+    """A server with no LLM credentials cannot survive startup, so do not spawn.
+
+    EverOS builds its LLM client eagerly during startup and fails outright when
+    credentials are missing. Spawning regardless burned a full poll timeout on a
+    process that had already exited and buried the reason in the server log.
+    """
+
+    @pytest.mark.asyncio
+    async def test_missing_api_key_does_not_spawn(self, everos_toml, monkeypatch) -> None:
+        _write_llm_section(everos_toml, api_key="")
+        spawned = []
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: spawned.append(1),
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(EverosNotConfigured, match="memory LLM is not configured"):
+                await ensure_everos_server("http://localhost:18791", timeout=1.0)
+
+        assert spawned == [], "spawned a server that could never finish starting"
+
+    @pytest.mark.asyncio
+    async def test_missing_section_entirely_does_not_spawn(self, everos_toml, monkeypatch) -> None:
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_toml.write_text("[memory]\ntimezone = \"UTC\"\n", encoding="utf-8")
+        spawned = []
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: spawned.append(1),
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(EverosNotConfigured):
+                await ensure_everos_server("http://localhost:18791", timeout=1.0)
+
+        assert spawned == []
+
+    @pytest.mark.asyncio
+    async def test_a_running_server_needs_no_credential_check(self, everos_toml) -> None:
+        """A /health 200 proves the LLM client was built, so do not second-guess it."""
+        _write_llm_section(everos_toml, api_key="")
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=True):
+            await ensure_everos_server("http://localhost:18791")
+
+    @pytest.mark.asyncio
+    async def test_configured_llm_reaches_the_spawn(self, everos_toml, tmp_path, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        spawned = []
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: spawned.append(1),
+        )
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server.get_logs_dir",
+            lambda: tmp_path,
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=[False, True]):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        assert spawned == [1]
+
+
 class TestEnsureEverosServer:
     @pytest.mark.asyncio
     async def test_server_already_running(self) -> None:
@@ -92,7 +178,8 @@ class TestEnsureEverosServer:
             await ensure_everos_server("http://localhost:18791")
 
     @pytest.mark.asyncio
-    async def test_auto_start_on_connection_error(self, tmp_path) -> None:
+    async def test_auto_start_on_connection_error(self, tmp_path, everos_toml) -> None:
+        _write_llm_section(everos_toml)
         call_count = 0
 
         def probe_side_effect(*_args, **_kwargs):
@@ -118,7 +205,13 @@ class TestEnsureEverosServer:
         mock_start.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_timeout_raises(self, tmp_path) -> None:
+    async def test_timeout_raises(self, tmp_path, everos_toml) -> None:
+        """A live-but-unhealthy start still gets the full poll budget.
+
+        The credential gate must not shorten this: a slow first boot is exactly
+        what the timeout exists for.
+        """
+        _write_llm_section(everos_toml)
         with (
             patch(
                 "raven.plugin.memory.everos._server._probe_health",
