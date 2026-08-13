@@ -248,6 +248,18 @@ def everos_section(section: str) -> dict[str, Any]:
     return load_everos_config().get(section, {}) or {}
 
 
+def role_configured_in(data: dict[str, Any], section: str) -> bool:
+    """Whether ``section`` of an already-parsed everos.toml counts as configured.
+
+    Same criterion as :func:`everos_role_configured`, applied to a toml the caller
+    read itself. Discovery needs this: it inspects candidate roots before any of
+    them is the active one, and a second hand-rolled "does it have a key" check
+    is exactly what made two callers disagree once before.
+    """
+    sec = data.get(section) or {}
+    return bool(sec.get("model") and sec.get("api_key"))
+
+
 def everos_role_configured(section: str) -> bool:
     """True iff the user really configured this EverOS role.
 
@@ -260,8 +272,7 @@ def everos_role_configured(section: str) -> bool:
     to import it: the wizard module costs ~290ms to load, which `raven doctor`
     (a millisecond command) would otherwise pay just to answer this.
     """
-    sec = everos_section(section)
-    return bool(sec.get("model") and sec.get("api_key"))
+    return role_configured_in(load_everos_config(), section)
 
 
 def set_everos_section(section: str, fields: dict[str, Any]) -> None:

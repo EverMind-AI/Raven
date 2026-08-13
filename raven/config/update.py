@@ -357,6 +357,27 @@ def init_extension_block_defaults(*, config_path: Path | None = None) -> None:
     logger.info("config/update: seeded memory/plugins/skillForge extension defaults")
 
 
+def set_plugin_config_fields(
+    plugin_id: str,
+    fields: dict[str, Any],
+    *,
+    config_path: Path | None = None,
+) -> None:
+    """Merge ``fields`` into ``plugins.config[plugin_id]`` on the on-disk config.
+
+    A merge rather than a replace: the slice holds several independent decisions
+    (which EverOS root, whether raven owns it, its cached address) written at
+    different moments, and a replacing write would drop whichever the caller did
+    not happen to be carrying.
+    """
+    path = config_path or get_config_path()
+    data = read_raw_or_raise(path)
+    slice_ = data.setdefault("plugins", {}).setdefault("config", {}).setdefault(plugin_id, {})
+    slice_.update(fields)
+    _write_atomic(path, data)
+    logger.info("config/update: plugins.config.{} updated ({})", plugin_id, ", ".join(fields))
+
+
 def set_memory_backend(
     backend: str | None,
     *,

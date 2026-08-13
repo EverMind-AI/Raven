@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1623,6 +1624,186 @@ def test_a_failed_start_can_be_retried_until_it_works(
 
     assert len(attempts) == 3
     assert json.loads(tmp_env.read_text())["memory"]["backend"] == "everos"
+
+
+def _root_state(root: Path, **kw: Any) -> Any:
+    from raven.plugin.memory.everos._discover import RootState
+
+    defaults = {
+        "root": root,
+        "owned": True,
+        "configured": True,
+        "declared_url": "http://127.0.0.1:18791",
+        "alive": True,
+        "lock_held": True,
+    }
+    defaults.update(kw)
+    return RootState(**defaults)
+
+
+def _found(monkeypatch: pytest.MonkeyPatch, state: Any) -> None:
+    from raven.plugin.memory.everos import _discover
+
+    monkeypatch.setattr(_discover, "discover", lambda: [state])
+
+
+class TestReusingAnEverosTheUserManages:
+    """Read-only reuse: record the address, touch nothing else.
+
+    Writing its config would overwrite the user's own models and keys; starting it
+    would take the OME jobstore lock exclusively, which is theirs to grant.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_writes(self, monkeypatch: pytest.MonkeyPatch):
+        from raven.config import update_everos as ue
+
+        self.writes: list[str] = []
+        self.signals: list[int] = []
+        monkeypatch.setattr(ue, "set_everos_section", lambda s, _f: self.writes.append(s))
+        monkeypatch.setattr(ue, "clear_everos_section", lambda s: self.writes.append(s))
+        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: self.writes.append("template"))
+        monkeypatch.setattr(os, "kill", lambda *_a: self.signals.append(1))
+        monkeypatch.setattr(onboard_everos, "_capability_lines", lambda _u: ["ok"])
+        return monkeypatch
+
+    def test_reuse_records_the_address_and_writes_nothing(
+        self, tmp_env: Path, everos_isolated: Path, _no_writes
+    ) -> None:
+        import questionary
+
+        theirs = tmp_env.parent / "theirs"
+        _found(_no_writes, _root_state(theirs, owned=False, declared_url="http://localhost:8000"))
+        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("reuse"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        data = json.loads(tmp_env.read_text())
+        slice_ = data["plugins"]["config"]["everos-memory"]
+        assert slice_["root"] == str(theirs)
+        assert slice_["owned"] is False
+        assert slice_["base_url"] == "http://localhost:8000"
+        assert data["memory"]["backend"] == "everos"
+        assert self.writes == [], "wrote into a root the user manages"
+        assert self.signals == [], "signalled a process raven does not own"
+
+    def test_declining_falls_through_to_ravens_own_root(self, tmp_env: Path, everos_isolated: Path, _no_writes) -> None:
+        """Saying no must leave raven building its own memory, not with none."""
+        import questionary
+
+        theirs = tmp_env.parent / "theirs"
+        _found(_no_writes, _root_state(theirs, owned=False))
+        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("own"))
+        reached: list[int] = []
+        _no_writes.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+        _no_writes.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+
+        async def _ok(*_a: object, **_kw: object) -> None:
+            return None
+
+        _no_writes.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ok)
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert len(reached) == 4, "did not reach the four role screens"
+        assert json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]["owned"] is True
+
+    def test_a_stopped_one_is_probed_again_rather_than_started(
+        self, tmp_env: Path, everos_isolated: Path, _no_writes, capsys: pytest.CaptureFixture
+    ) -> None:
+        import questionary
+
+        from raven.plugin.memory.everos import _discover
+
+        theirs = tmp_env.parent / "theirs"
+        _found(_no_writes, _root_state(theirs, owned=False, alive=False, declared_url="http://localhost:8000"))
+        _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("retry"))
+        # The user starts it; the re-probe then sees it up.
+        _no_writes.setattr(
+            _discover,
+            "_describe",
+            lambda root, owned: _root_state(root, owned=owned, alive=True, declared_url="http://localhost:8000"),
+        )
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "everos server start --root" in out, "did not tell the user how to start it"
+        assert self.writes == []
+        assert self.signals == []
+        assert json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]["owned"] is False
+
+
+class TestConvergingRavensOwnPort:
+    @pytest.fixture(autouse=True)
+    def _stubs(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+        monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: True)
+        return monkeypatch
+
+    def test_a_legacy_port_is_moved_to_the_standard_one(self, tmp_env: Path, everos_isolated: Path, _stubs) -> None:
+        """An install seeded with an older default keeps working, on one address."""
+        import questionary
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
+        stopped: list[Path] = []
+        _stubs.setattr(_server, "stop_recorded_server", lambda r, **_kw: stopped.append(r) or True)
+        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        assert stopped == [root]
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:18791"
+
+    def test_a_process_raven_did_not_start_is_left_alone(
+        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    ) -> None:
+        """Its address stays in use rather than being taken over blindly."""
+        import questionary
+
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
+        _stubs.setattr(_server, "stop_recorded_server", lambda _r, **_kw: False)
+        _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "not start this process" in out or "不是 Raven 启动的" in out
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["base_url"] == "http://localhost:1995"
+
+    def test_data_held_by_an_unidentifiable_process_stops_the_step(
+        self, tmp_env: Path, everos_isolated: Path, _stubs, capsys: pytest.CaptureFixture
+    ) -> None:
+        """One memory directory admits one instance, so there is nothing to start."""
+        from raven.plugin.memory.everos import _server
+
+        root = tmp_env.parent / "everos"
+        _found(_stubs, _root_state(root, alive=False, lock_held=True))
+        _stubs.setattr(_server, "find_recorded_server", lambda _r: None)
+        reached: list[int] = []
+        _stubs.setattr(onboard_everos, "_config_everos_role", lambda **_kw: reached.append(1))
+
+        onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+        out = " ".join(capsys.readouterr().out.split())
+        assert "Cannot take over" in out or "无法接管" in out
+        assert reached == [], "walked into role configuration on data it cannot serve"
+
+
+class _Answer:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def ask(self) -> object:
+        return self._value
 
 
 def test_memory_llm_reuse_pulls_provider_creds(

@@ -70,8 +70,9 @@ class RootState:
 
 
 def _describe(root: Path, *, owned: bool) -> RootState:
+    from raven.config.update_everos import role_configured_in
+
     data = _read_toml(root)
-    llm = data.get("llm") or {}
     api = data.get("api") or {}
     host, port = api.get("host"), api.get("port")
     declared = f"http://{host}:{port}" if host and port else None
@@ -79,7 +80,9 @@ def _describe(root: Path, *, owned: bool) -> RootState:
     return RootState(
         root=root,
         owned=owned,
-        configured=bool(llm.get("model") and llm.get("api_key")),
+        # Through the ops layer rather than re-reading the fields here: one
+        # definition of "configured", shared with the wizard and doctor.
+        configured=role_configured_in(data, "llm"),
         declared_url=declared,
         alive=_probe_health(declared) if declared else False,
         lock_held=ome_lock_held(root),
@@ -155,10 +158,12 @@ def pick(states: list[RootState]) -> RootState | None:
 
     Prefers a root that is already configured -- a half-built root has nothing
     to reuse -- and among those keeps discovery order, which puts the recorded
-    root first.
+    root first. ``configured`` alone is the test: it can only be true of a root
+    whose toml was read, so re-checking that the file exists adds a stat and no
+    information.
     """
     for state in states:
-        if state.exists and state.configured:
+        if state.configured:
             return state
     return None
 
