@@ -18,56 +18,78 @@ jobs:
   review:
     # Same-repo (internal), non-draft PRs only; skip dependabot's own PRs. On a
     # public repo GitHub withholds secrets from fork PRs, so external PRs are
-    # skipped here by design. A `labeled` event only re-runs when the added
-    # label is `deep-review` (which escalates the model to Opus, see below).
+    # skipped by design. A `labeled` event only re-runs for the `deep-review` label.
     if: >
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       (github.event.action != 'labeled' || github.event.label.name == 'deep-review')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read        # read code only; never writes or pushes
       pull-requests: write  # post inline + summary comments
       id-token: write       # required for the GitHub App auth
+      actions: read         # read the real CI result instead of re-running the suite
+    env:
+      # The reviewer may run this PR's own tests (conftest.py, deps come from the PR
+      # head). Scrub Anthropic/cloud secrets from its Bash subprocesses so a malicious
+      # test file cannot read the token. NOT auto-on without allowed_non_write_users.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
+      # Make `uv` available so the reviewer can run targeted tests to verify a finding.
+      # The heavy env sync happens lazily, only if Claude actually runs `uv run`.
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
           use_sticky_comment: true
+          additional_permissions: |
+            actions: read
           # Sonnet by default; a `deep-review` label escalates to Opus for that PR.
+          # Bash is scoped to read + targeted test execution (uv run) + git revert
+          # helpers so the reviewer can VERIFY by running, not just reason. No Write/Edit:
+          # a throwaway repro is a heredoc inside a Bash call; tracked files stay untouched.
           claude_args: |
             --model ${{ contains(github.event.pull_request.labels.*.name, 'deep-review') && 'claude-opus-5' || 'claude-sonnet-5' }}
             --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(uv run:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git stash:*),Bash(git checkout:*),Read,Grep,Glob"
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ github.event.pull_request.number }} -> ${{ github.event.pull_request.base.ref }}
 
-            FIRST read the review comments already on this PR, including your own from
-            earlier runs - this workflow re-runs on every push and keeps no memory between
-            runs. Do NOT repeat a finding that has already been raised; only add what is new
-            or newly broken, and you may note briefly if an earlier issue now looks fixed.
+            Review this pull request. Post only to GitHub: inline comments on the exact
+            lines plus one short top-level summary. Do not narrate into the workflow log.
 
-            Then read the diff plus the surrounding code, callers and tests you need. Before
-            reporting a finding, try to REFUTE it - drop it unless you can name the concrete
-            failure it causes. Out of scope: pre-existing issues on untouched lines, anything
-            a linter catches, and undocumented style.
+            First read the comments already on this PR, including your own from earlier runs
+            (this re-runs on every push with no memory between runs). Do not repeat a finding
+            already raised; add only what is new or newly broken.
 
-            Focus, in order:
-            1. Correctness - bugs, edge cases, error handling, broken callers, back-compat.
-            2. Repo conventions in AGENTS.md / CLAUDE.md - Conventional-Commit and branch
-               naming, uv-only dependency changes (never a hand-edited pyproject/lockfile),
-               test file naming (tests/test_cli_<module>_commands.py etc.), canonical
-               domain terms from CONTEXT-MAP.md, and no report/asset/large files.
-            3. Tests - was any test weakened, skipped, or made green without exercising it?
+            Then review the diff, the surrounding code and callers, the tests, and this
+            repo's AGENTS.md / CLAUDE.md rules. Cover, in order: (1) correctness - bugs, edge
+            cases, error handling, broken callers, back-compat; (2) repo conventions -
+            Conventional-Commit and branch naming, uv-only dependency changes, test naming
+            (tests/test_cli_<module>_commands.py etc.), CONTEXT-MAP.md terms, no asset/large
+            files; (3) tests - was any test weakened, skipped, or made green without
+            exercising the change?
 
-            Post only to GitHub: inline comments on the exact lines, plus one top-level
-            summary. Do NOT narrate your review into the workflow log. Open the summary with
-            your stance in one sentence - "No blockers; this can merge." or "Blocking: <one
-            line>." Be willing to approve.
+            VERIFY, do not just reason. For each candidate finding, try to DISPROVE it: check
+            callers and invariants, and where a quick check settles it, RUN it - `uv run
+            python -c '...'` for a runtime-behavior claim, or `uv run --all-extras pytest
+            <path> -q` for a specific test (you may `git stash` / `git checkout` a file to
+            revert a fix and confirm a test actually catches it, then restore it). For whether
+            the whole suite passes, read the CI result via the actions tool - do not re-run it.
+
+            Report only findings you are highly confident are real AND introduced by this PR.
+            Every behavior claim needs a file:line citation, not an inference from naming. When
+            unsure, drop it - false positives waste the author's time. Out of scope:
+            pre-existing issues on untouched lines, anything a linter catches, undocumented
+            style. Open the summary with your stance in one sentence - "No blockers; this can
+            merge." or "Blocking: <one line>." Be willing to approve.
