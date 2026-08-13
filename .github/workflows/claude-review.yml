@@ -54,13 +54,14 @@ jobs:
           additional_permissions: |
             actions: read
           # Sonnet by default; a `deep-review` label escalates to Opus for that PR.
-          # Bash is scoped to read + targeted test execution (uv run) + git revert
-          # helpers so the reviewer can VERIFY by running, not just reason. No Write/Edit:
-          # a throwaway repro is a heredoc inside a Bash call; tracked files stay untouched.
+          # Read + targeted execution (uv run) + Write/Edit, so it can write a throwaway
+          # repro script and run it, or revert a fix locally, to VERIFY rather than reason.
+          # contents:read means nothing written/edited here can be pushed; the runner is
+          # ephemeral, and CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps the token out of subprocesses.
           claude_args: |
             --model ${{ contains(github.event.pull_request.labels.*.name, 'deep-review') && 'claude-opus-5' || 'claude-sonnet-5' }}
             --max-turns 40
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(uv run:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git stash:*),Bash(git checkout:*),Read,Grep,Glob"
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*),Bash(uv run:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git stash:*),Bash(git checkout:*),Read,Grep,Glob,Write,Edit"
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ github.event.pull_request.number }} -> ${{ github.event.pull_request.base.ref }}
@@ -84,11 +85,13 @@ jobs:
             the tests. Static reading is the default and is enough for almost everything, so
             do NOT run tests routinely. ONLY when a claim genuinely cannot be settled by
             reading - a subtle runtime-behavior question you are truly unsure about - verify
-            by running, smallest check first: a one-line `uv run python -c '...'` repro. Run
-            `uv run --all-extras pytest <path> -q` (slow) only for one specific test you must
-            confirm, never the whole suite; for whole-suite pass/fail read the CI result via
-            the actions tool. You may `git stash`/`git checkout` a file to revert a fix and
-            confirm a test truly catches it, then restore it.
+            by running, smallest check first: a one-line `uv run python -c '...'`, or write a
+            throwaway script (e.g. /tmp/repro.py) and run it with `uv run python /tmp/repro.py`
+            for anything longer. Run `uv run --all-extras pytest <path> -q` (slow) only for
+            one specific test you must confirm, never the whole suite; for whole-suite
+            pass/fail read the CI result via the actions tool. Anything you write or edit is a
+            throwaway experiment on the ephemeral runner - restore tracked files with
+            `git checkout` and never push.
 
             Report only findings you are highly confident are real AND introduced by this PR.
             Every behavior claim needs a file:line citation, not an inference from naming. When
