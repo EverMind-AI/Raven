@@ -49,6 +49,7 @@ from raven.providers.base import (
     LLMResponse,
     ToolCallRequest,
     TruncationInfo,
+    send_max_tokens,
 )
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
@@ -1076,7 +1077,7 @@ class AgentLoop:
 
     def _make_token_budget(self, selected_skills: list[Any] | None = None) -> TokenBudget:
         """Compute a conservative per-turn prompt budget for the active engine."""
-        reserved_output = int(getattr(getattr(self.provider, "generation", None), "max_tokens", 4096) or 4096)
+        reserved_output = send_max_tokens(getattr(self.provider, "generation", None), self.model)
         tool_tokens = estimate_prompt_tokens([], self.tools.get_definitions())
         system_prompt = self.context.build_system_prompt(selected_skills)
         system_tokens = estimate_prompt_tokens([{"role": "system", "content": system_prompt}])
@@ -1736,7 +1737,7 @@ class AgentLoop:
         # negative costs a retry loop -- the model re-sends the same oversized
         # payload, is told again that a field is missing, and never learns the
         # real reason.
-        sent_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", None)
+        sent_max_tokens = send_max_tokens(getattr(self.provider, "generation", None), model)
         output_tokens = (final_usage or {}).get("completion_tokens")
         hit_ceiling = (
             sent_max_tokens is not None and isinstance(output_tokens, int) and output_tokens >= sent_max_tokens

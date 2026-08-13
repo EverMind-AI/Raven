@@ -34,6 +34,11 @@ from raven.providers import model_catalog_cache
 #: this many tokens of headroom rather than a number invented at the call site.
 DEFAULT_CONTEXT_WINDOW_TOKENS = 65_536
 
+# Output ceiling for a model the metadata does not know. Matches the value the
+# retired ``agents.defaults.maxTokens`` defaulted to, so unmapped models keep
+# the behaviour they had when that setting existed.
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+
 #: Rate pair: (prompt_cost_per_token, completion_cost_per_token) in USD.
 #: Keep this table small -- it is a fallback for brand-new models that LiteLLM
 #: has not indexed yet. Check LiteLLM first before adding here.
@@ -490,6 +495,55 @@ def token_rates(model: str, input_tokens: int = 0, output_tokens: int = 0) -> tu
     )
 
 
+def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+    """The model's own output ceiling, from the same metadata as the window.
+
+    ``max_tokens`` is a legitimate fallback here in a way it is not on the
+    input side: in LiteLLM's table it *is* the output ceiling, and the two
+    agree wherever both are present.
+    """
+    if not allow_import and "litellm" not in sys.modules:
+        return None
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        litellm = import_litellm()
+    except Exception:
+        return None
+
+    for candidate in _candidates(model):
+        ceiling = _numeric(_table_entry(candidate), "max_output_tokens", "max_tokens")
+        if ceiling:
+            return int(ceiling)
+        if _may_prompt(candidate):
+            continue
+        try:
+            info = litellm.get_model_info(candidate)
+        except Exception:
+            continue
+        ceiling = _numeric(info, "max_output_tokens", "max_tokens")
+        if ceiling:
+            return int(ceiling)
+    return None
+
+
+def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -> int:
+    """How many output tokens to ask for. Never ``None`` -- the caller is about
+    to build a request with the result.
+
+    Table first, fixed fallback second, which is the shape LiteLLM's own
+    Anthropic path uses and for the same reason: one constant cannot fit every
+    model. Too large for a small model is a 400; too small for a large one
+    truncates silently, which is the failure this whole module's callers exist
+    to avoid. ``DEFAULT_MAX_OUTPUT_TOKENS`` is deliberately the value the
+    retired ``agents.defaults.maxTokens`` used to default to, so a model the
+    table does not know behaves exactly as it did before.
+    """
+    if not model:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    return _try_litellm_max_output(model, allow_import=allow_fetch) or DEFAULT_MAX_OUTPUT_TOKENS
+
+
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
     """LiteLLM's static model metadata -- offline, covers most mapped providers.
 
@@ -512,7 +566,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
-        window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
+        window = _numeric(_table_entry(candidate), "max_input_tokens")
         if window:
             return int(window)
         if _may_prompt(candidate):
@@ -521,7 +575,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
             info = litellm.get_model_info(candidate)
         except Exception:
             continue
-        window = _numeric(info, "max_input_tokens", "max_tokens")
+        window = _numeric(info, "max_input_tokens")
         if window:
             return int(window)
     return None

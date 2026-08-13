@@ -254,7 +254,12 @@ class AgentDefaults(Base):
     workspace: str = "~/.raven/workspace"
     model: str = "anthropic/claude-opus-4-5"
     provider: str = "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
-    max_tokens: int = 8192
+    # No maxTokens here on purpose. A number in a config file cannot be right
+    # for every model -- too large is a 400, too small truncates silently --
+    # so the ceiling is resolved per model from the catalogue
+    # (providers/rates.resolve_max_output_tokens). An old config carrying the
+    # retired key is ignored rather than rejected: this model does not forbid
+    # extras.
     # None (or 0) means "figure it out" -- resolved against the model's real
     # window at construction time. A positive value pins the window, taking
     # priority over whatever the model's own catalogue reports.

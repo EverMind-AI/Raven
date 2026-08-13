@@ -21,6 +21,7 @@ from raven.providers.base import (
     StreamDelta,
     ToolCallRequest,
     format_llm_error,
+    send_max_tokens,
 )
 from raven.providers.litellm_setup import import_litellm
 from raven.providers.prompt_cache import CACHE_CONTROL
@@ -397,7 +398,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -427,7 +428,9 @@ class LiteLLMProvider(LLMProvider):
 
         # Clamp max_tokens to at least 1 — negative or zero values cause
         # LiteLLM to reject the request with "max_tokens must be at least 1".
-        max_tokens = max(1, max_tokens)
+        max_tokens = max(
+            1, send_max_tokens(getattr(self, "generation", None), model) if max_tokens is None else max_tokens
+        )
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -512,6 +515,8 @@ class LiteLLMProvider(LLMProvider):
         gen = getattr(self, "generation", None) or GenerationSettings()
         if max_tokens is self._SENTINEL:
             max_tokens = gen.max_tokens
+        if max_tokens is None:
+            max_tokens = send_max_tokens(gen, model)
         if temperature is self._SENTINEL:
             temperature = gen.temperature
         if reasoning_effort is self._SENTINEL:

@@ -14,6 +14,7 @@ from typing import Any
 
 from raven.agent.loop import AgentLoop
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, StreamDelta
+from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class _FakeProvider:
@@ -482,14 +483,63 @@ async def test_complete_tool_call_is_not_flagged_truncated() -> None:
     assert response.tool_calls[0].arguments == {"path": "a.py"}
 
 
-async def test_unknown_ceiling_does_not_flag_truncation() -> None:
-    """A provider with no configured ceiling: signal 2 sits out, not misfires."""
+async def test_ceiling_check_compares_against_what_was_sent() -> None:
+    """Signal 2 measures usage against the ceiling the request actually carried.
+
+    Reading it from configuration while the provider resolved its own is how
+    this check stops firing without ever failing: the two numbers drift and
+    the comparison quietly stops matching. A provider with no ``generation``
+    at all still has a resolvable ceiling -- the catalogue default -- so there
+    is no "unknown ceiling" branch left to sit out.
+    """
     provider = _FakeProvider(
-        [StreamDelta(content="x", usage={"completion_tokens": 999999}), StreamDelta(content=None, finish_reason="stop")]
+        [
+            StreamDelta(content="x", usage={"completion_tokens": DEFAULT_MAX_OUTPUT_TOKENS}),
+            StreamDelta(content=None, finish_reason="stop"),
+        ]
     )  # no .generation at all
-    response = await _bind_helper(provider)(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
+    response = await _bind_helper(provider)(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="not/in-any-catalogue"
+    )
+
+    assert response.max_tokens == DEFAULT_MAX_OUTPUT_TOKENS
+    assert response.truncated is True
+
+
+async def test_output_below_the_resolved_ceiling_is_not_truncation() -> None:
+    """The other side of the same comparison."""
+    provider = _FakeProvider(
+        [
+            StreamDelta(content="x", usage={"completion_tokens": 12}),
+            StreamDelta(content=None, finish_reason="stop"),
+        ]
+    )
+    response = await _bind_helper(provider)(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="not/in-any-catalogue"
+    )
 
     assert response.truncated is False
+
+
+async def test_pinned_generation_ceiling_wins_over_the_catalogue() -> None:
+    """An explicit number is a call-site decision, not a hint.
+
+    This is the path a caller like the personalizer takes when it asks for a
+    short answer -- the catalogue must not widen it back out.
+    """
+    provider = _provider_with_ceiling(
+        [
+            StreamDelta(content="x", usage={"completion_tokens": 120}),
+            StreamDelta(content=None, finish_reason="stop"),
+        ],
+        max_tokens=120,
+    )
+    response = await _bind_helper(provider)(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="anthropic/claude-opus-4-5"
+    )
+
+    assert response.max_tokens == 120
+    assert response.truncated is True
 
 
 def _two_calls_last_one_cut() -> list[StreamDelta]:

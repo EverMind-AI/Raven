@@ -175,7 +175,6 @@ def make_provider(config: Config):
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(
         temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
         reasoning_effort=defaults.reasoning_effort,
         timeout=defaults.llm_call_timeout,
     )
@@ -202,7 +201,6 @@ def make_lazy_provider(config: Config):
         default_model=defaults.model,
         generation=GenerationSettings(
             temperature=defaults.temperature,
-            max_tokens=defaults.max_tokens,
             reasoning_effort=defaults.reasoning_effort,
             timeout=defaults.llm_call_timeout,
         ),

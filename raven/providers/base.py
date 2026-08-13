@@ -267,6 +267,23 @@ class StreamDelta:
     error_classification: ErrorClassification | None = None
 
 
+def send_max_tokens(generation: Any, model: str | None) -> int:
+    """The output ceiling a request will actually carry.
+
+    One function for both the request body and the agent loop's ceiling check.
+    Computed separately the two would drift the moment either side grew a
+    bound, and the check would stop firing without ever failing -- which is
+    the exact shape of the defect this branch exists to remove.
+    """
+    pinned = getattr(generation, "max_tokens", None)
+    if pinned:
+        return int(pinned)
+
+    from raven.providers.rates import resolve_max_output_tokens
+
+    return resolve_max_output_tokens(model)
+
+
 @dataclass(frozen=True)
 class GenerationSettings:
     """Default generation parameters for LLM calls.
@@ -278,7 +295,10 @@ class GenerationSettings:
     """
 
     temperature: float = 0.7
-    max_tokens: int = 4096
+    #: ``None`` means "no opinion" -- the ceiling is resolved from the model's
+    #: own metadata at request time. A number pins it, which is what an
+    #: explicit ``chat(max_tokens=...)`` at a call site wants.
+    max_tokens: int | None = None
     reasoning_effort: str | None = None
     timeout: float = 600.0
 
@@ -366,7 +386,7 @@ class LLMProvider(ABC):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
