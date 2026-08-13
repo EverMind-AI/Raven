@@ -436,6 +436,12 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # Not an LLM provider section: a tool's own key (deep research, media
         # generation, web search), the router's, or EverOS's.
         "raven/agent/loop/main.py",
+        # The sub-agent surface asks the same question the main loop does, about
+        # the same tool: whether web_search resolved a Serper key, so an unusable
+        # search is withheld rather than offered and failed. It asks the built
+        # tool rather than the config because the tool resolves from either the
+        # constructor value or SERPER_API_KEY.
+        "raven/agent/subagent/manager.py",
         "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
