@@ -925,10 +925,16 @@ def test_doctor_prints_what_the_fix_applied(tmp_path, capsys) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_serper_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """web_search resolves its key from the environment too, so a developer who
-    exported one would see these assert the wrong branch."""
-    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These credentials resolve from the environment too, so a developer who
+    exported one would see these assert the wrong branch.
+
+    ``OPENROUTER_API_KEY`` counts as much as the search key: it is what the
+    media family falls back to, so exporting it turns the "nothing to borrow"
+    rows into "borrowing from the environment" rows.
+    """
+    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_doctor_lists_a_capability_that_is_not_configured(healthy_config: Path) -> None:
@@ -964,6 +970,47 @@ def test_doctor_reports_a_configured_capability_and_where_its_key_came_from(tmp_
     assert "borrowed" in result.stdout, "the deployer should see it reused a key, not that it needs one"
 
 
+def test_doctor_does_not_offer_a_borrow_it_cannot_make(healthy_config: Path) -> None:
+    """This config has no OpenRouter key, so "reuse the one you have" is false.
+
+    It is false in the expensive direction: acting on it means setting a model,
+    getting a registered tool -- a model alone counts -- and every call failing
+    on a credential the deployer was told they already had.
+    """
+    result = runner.invoke(app, ["doctor"])
+
+    assert "image_generate" in result.stdout
+    assert "borrow" not in result.stdout, "claimed a reuse with nothing to reuse"
+    assert "tools.media.image.apiKey" in result.stdout, "must name the key it actually needs"
+    assert "OPENROUTER_API_KEY" in result.stdout
+
+
+def test_doctor_flags_a_capability_registered_without_a_key(tmp_config: Path, tmp_path: Path) -> None:
+    """A media model with no key from any source is offered to the model and
+    fails on every call. A satisfied row is the one thing that must not say."""
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.media.image.model = "some/model"
+    save_config(cfg)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "no key resolves" in result.stdout
+    assert "tools.media.image.apiKey" in result.stdout
+    # Warned, not failed. Unlike a memory role the server could not build, this
+    # failure is loud where it happens -- the tool returns its missing-key error
+    # to the model -- so the section stays advisory, as the rest of it is.
+    assert result.exit_code == 0
+
+    # Two fields rather than one, because collapsing them is what hid this
+    # state: registered *and* unusable is not reachable through either alone.
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    image = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "image_generate")
+    assert image["configured"] is True and image["has_credential"] is False
+
+
 def test_an_unconfigured_capability_is_not_a_failure(healthy_config: Path) -> None:
     """An install without image generation is a choice, not a fault."""
     result = runner.invoke(app, ["doctor"])
@@ -981,6 +1028,9 @@ def test_tool_capabilities_reach_the_json_output(healthy_config: Path) -> None:
     assert by_name["web_search"]["configured"] is False
     assert by_name["web_search"]["obtain_from"] == "https://serper.dev"
     assert by_name["web_fetch"]["configured"] is True
+    assert by_name["image_generate"]["key_path"] == "tools.media.image.apiKey", (
+        "the key path is not the model path this row switches on"
+    )
 
 
 def test_a_config_path_is_never_split_across_lines(healthy_config: Path) -> None:
