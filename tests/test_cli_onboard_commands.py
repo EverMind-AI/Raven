@@ -959,12 +959,17 @@ def test_minimax_catalog_models_keep_public_provider_prefix(provider: str, model
 
 @pytest.fixture
 def everos_isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect EverOS writes to a throwaway toml (never touches ~/.everos)."""
+    """Redirect EverOS writes to a throwaway root raven owns.
+
+    Owned is pinned rather than inferred: these tests exercise the wizard's
+    write paths, and a root the user manages is read-only by design.
+    """
     import raven.config.update_everos as ue
 
-    cfg = tmp_path / ".everos" / "everos.toml"
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
-    return cfg
+    root = tmp_path / ".everos"
+    monkeypatch.setattr(ue, "everos_root", lambda: root)
+    monkeypatch.setattr(ue, "everos_owned", lambda: True)
+    return root / "everos.toml"
 
 
 def _seed_provider(provider: str = "openai", key: str = "sk-seed", model: str = "openai/gpt-4o-mini") -> None:
@@ -1288,7 +1293,12 @@ def test_memory_giving_up_sets_backend_null(
     onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
     data = json.loads(tmp_env.read_text())
     assert data["memory"]["backend"] is None
-    assert not everos_isolated.exists()
+    # The step lays down EverOS's config templates before asking anything, so
+    # what matters is that no role ended up configured -- not that the file is
+    # absent. A template [llm] carries an empty api_key and reads as unconfigured.
+    from raven.config.update_everos import everos_role_configured
+
+    assert not everos_role_configured("llm")
     # Effective config (schema default is "everos") must resolve to disabled.
     from raven.config.raven import load_raven_config
 
@@ -1444,8 +1454,13 @@ def test_memory_enable_writes_everos_sections(
     assert everos["embedding"]["model"] == "mem-embed"
     assert everos["embedding"]["api_key"] == "k-embed"
     assert everos["embedding"]["base_url"] == "https://llm/v1"
-    assert "rerank" not in everos
-    assert "multimodal" not in everos
+    # Skipped roles keep whatever the shipped template holds, which is a model
+    # name with no credentials -- so they must read as unconfigured rather than
+    # be absent outright.
+    from raven.config.update_everos import everos_role_configured
+
+    assert not everos_role_configured("rerank")
+    assert not everos_role_configured("multimodal")
 
 
 def test_the_memory_step_reaches_the_capability_report(

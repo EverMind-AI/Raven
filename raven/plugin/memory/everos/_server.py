@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -113,6 +117,97 @@ def _everos_executable() -> str:
 
 _LOG_TAIL_BYTES = 65536
 _EXCEPTION_LINE = re.compile(r"^[\w.]+(Error|Exception)\b")
+_SERVER_CMDLINE = "everos server start"
+
+
+def _pidfile_path() -> Path:
+    return get_data_dir() / "everos-server.pid"
+
+
+def _write_pidfile(pid: int, *, base_url: str, root: Path) -> None:
+    """Record the server raven just started.
+
+    Answers "is the process serving this root mine, and may I stop it?" without
+    scanning the process table or depending on ``lsof``. Best-effort: failing to
+    record must not fail the start.
+    """
+    try:
+        _pidfile_path().write_text(
+            json.dumps({"pid": pid, "base_url": base_url, "root": str(root)}),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.debug("could not record everos server pidfile: {}", exc)
+
+
+def _read_pidfile() -> dict[str, Any] | None:
+    try:
+        data = json.loads(_pidfile_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _is_everos_server(pid: int) -> bool:
+    """Verify ``pid`` is still an everos server before signalling it.
+
+    A pidfile is stale information: the process it names may have exited and the
+    number been handed to something unrelated. Checking the command line is what
+    keeps a port-convergence restart from killing an innocent process. ``ps -p``
+    is POSIX and needs no extra dependency; the EverOS path is POSIX-only anyway.
+    """
+    ps = shutil.which("ps") or "/bin/ps"
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [ps, "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return _SERVER_CMDLINE in out.stdout
+
+
+def find_recorded_server(root: Path | str) -> dict[str, Any] | None:
+    """The server raven started for ``root``, if it is still that server."""
+    record = _read_pidfile()
+    if not record:
+        return None
+    if str(record.get("root")) != str(Path(root).expanduser()):
+        return None
+    pid = record.get("pid")
+    if not isinstance(pid, int) or not _is_everos_server(pid):
+        return None
+    return record
+
+
+def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> bool:
+    """Ask the server raven started for ``root`` to shut down, and wait for it.
+
+    SIGTERM rather than SIGKILL: uvicorn's graceful shutdown runs the OME
+    engine's ``stop()``, which drains in-flight strategy runs (up to 30s) before
+    releasing the jobstore lock. Killing outright would leave that work to crash
+    recovery for no reason. Returns False when there is nothing of ours to stop.
+    """
+    record = find_recorded_server(root)
+    if record is None:
+        return False
+    pid = int(record["pid"])
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as exc:
+        logger.debug("could not signal everos server {}: {}", pid, exc)
+        return False
+    waited = 0.0
+    while waited < timeout:
+        if not _is_everos_server(pid):
+            _pidfile_path().unlink(missing_ok=True)
+            return True
+        time.sleep(_POLL_INTERVAL)
+        waited += _POLL_INTERVAL
+    logger.warning("everos server {} did not exit within {}s", pid, timeout)
+    return False
 
 
 def _last_error_line() -> str:
@@ -138,7 +233,7 @@ def _last_error_line() -> str:
     return ""
 
 
-def _start_server_if_unlocked(port: str) -> subprocess.Popen | None:
+def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     """Try to acquire the startup lock and launch the server.
 
     Returns the child process when this process launched it, or ``None`` when
@@ -148,8 +243,19 @@ def _start_server_if_unlocked(port: str) -> subprocess.Popen | None:
 
     The handle is returned rather than discarded so the caller can tell "still
     booting" apart from "already dead" -- see :func:`ensure_everos_server`.
+
+    The address is written into ``<root>/everos.toml`` rather than passed as
+    ``--port``. A command-line override left the file describing an address
+    nobody was listening on, which is how the wizard came to probe one port while
+    the backend talked to another. Writing it makes the root self-describing, and
+    both the child and any later reader agree by construction.
     """
+    from raven.config.update_everos import everos_root, set_everos_api
+
     everos = _everos_executable()
+    root = everos_root()
+    parsed = urlparse(base_url)
+    set_everos_api(host=parsed.hostname or "127.0.0.1", port=int(parsed.port or 80))
 
     try:
         with file_lock(_lock_path(), blocking=False):
@@ -157,12 +263,17 @@ def _start_server_if_unlocked(port: str) -> subprocess.Popen | None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:
                 proc = subprocess.Popen(
-                    [everos, "server", "start", "--port", port],
+                    # --root on the command line rather than only inherited via
+                    # EVEROS_ROOT: a server that names its own root is one `ps`
+                    # away from being identified, which matters when a stale
+                    # instance has to be found and stopped.
+                    [everos, "server", "start", "--root", str(root)],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
-            logger.info("started everos server on port {} (log: {})", port, log_path)
+            logger.info("started everos server for {} at {} (log: {})", root, base_url, log_path)
+            _write_pidfile(proc.pid, base_url=base_url, root=root)
             return proc
     except LockTimeoutError:
         logger.debug("everos server startup lock held by another process; skipping spawn")
@@ -203,8 +314,7 @@ async def ensure_everos_server(
     if on_wait is not None:
         on_wait()
 
-    port = _extract_port(base_url)
-    proc = await asyncio.to_thread(_start_server_if_unlocked, port)
+    proc = await asyncio.to_thread(_start_server_if_unlocked, base_url)
 
     elapsed = 0.0
     while elapsed < timeout:
@@ -228,8 +338,8 @@ async def ensure_everos_server(
 
     raise RuntimeError(
         f"EverOS server did not become healthy within {timeout}s at {base_url}. "
-        f"The process is still running; check that port {port} is not held by "
-        f"something else, and see {server_log_path()}"
+        f"The process is still running; check that port {_extract_port(base_url)} "
+        f"is not held by something else, and see {server_log_path()}"
     )
 
 

@@ -400,6 +400,7 @@ class EverosBackend:
 
             from rich.console import Console
 
+            from raven.config.update_everos import everos_declared_address, everos_owned
             from raven.plugin.memory.everos._server import (
                 EverosNotConfiguredError,
                 ensure_everos_server,
@@ -407,6 +408,24 @@ class EverosBackend:
 
             stderr = Console(stderr=True)
             base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
+
+            if not everos_owned():
+                # A root the user manages: connect if a server is up, never start
+                # one. Starting it would take the OME jobstore lock exclusively,
+                # which is theirs to grant, not raven's to assume.
+                from raven.plugin.memory.everos._server import _probe_health
+
+                if await asyncio.to_thread(_probe_health, base_url):
+                    return
+                declared = await asyncio.to_thread(everos_declared_address)
+                where = declared or base_url
+                stderr.print(
+                    f"[yellow]Long-term memory is off: the EverOS you manage is not running at {where}.[/yellow]\n"
+                    "[dim]Start it yourself and Raven will use it; Raven does not start or stop it.[/dim]"
+                )
+                self._adapter = _NoOpAdapter()
+                return
+
             try:
                 # Narrate only a real wait. ``on_wait`` does not fire when a
                 # server is already answering, which is the common case -- a line
@@ -828,10 +847,19 @@ def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
     after manifest activation. Sync construction only — async setup
     happens in ``EverosBackend.start()``."""
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+    from raven.config.update_everos import (
+        configure_everos_env,
+        ensure_everos_home,
+        everos_owned,
+        everos_root,
+    )
 
-    configure_everos_env()
-    ensure_everos_home()
+    root = everos_root()
+    configure_everos_env(root)
+    # See tools.py: a root the user manages is read-only, template files
+    # included.
+    if everos_owned():
+        ensure_everos_home(root)
     return EverosBackend(ctx)
 
 

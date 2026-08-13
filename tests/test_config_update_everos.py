@@ -9,6 +9,7 @@ coverage here.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 
@@ -19,10 +20,11 @@ import raven.config.update_everos as ue
 
 @pytest.fixture
 def everos_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point the ops library at a throwaway config path."""
-    cfg = tmp_path / ".everos" / "everos.toml"
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
-    return cfg
+    """Point the ops library at a throwaway root that raven owns."""
+    root = tmp_path / ".everos"
+    monkeypatch.setattr(ue, "everos_root", lambda: root)
+    monkeypatch.setattr(ue, "everos_owned", lambda: True)
+    return root / "everos.toml"
 
 
 def _read(path: Path) -> dict:
@@ -35,10 +37,9 @@ def _read(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_config_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", Path("~/.everos/everos.toml"))
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert ue.get_everos_config_path() == tmp_path / ".everos" / "everos.toml"
+def test_config_path_follows_the_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "somewhere")
+    assert ue.get_everos_config_path() == tmp_path / "somewhere" / "everos.toml"
 
 
 def test_load_absent_returns_empty(everos_home: Path) -> None:
@@ -46,37 +47,96 @@ def test_load_absent_returns_empty(everos_home: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# root resolution + ownership
+# ---------------------------------------------------------------------------
+
+
+def test_recorded_root_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        ue,
+        "_recorded_slice",
+        lambda: {"root": str(tmp_path / "recorded"), "owned": True},
+    )
+    assert ue.everos_root() == tmp_path / "recorded"
+    assert ue.everos_owned() is True
+
+
+def test_legacy_root_is_kept_when_it_holds_a_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An install from before the move must not be pointed at an empty dir."""
+    legacy = tmp_path / ".everos" / "raven"
+    legacy.mkdir(parents=True)
+    (legacy / "everos.toml").write_text("[llm]\n", encoding="utf-8")
+    monkeypatch.setattr(ue, "_recorded_slice", dict)
+    monkeypatch.setattr(ue, "legacy_everos_root", lambda: legacy)
+
+    assert ue.everos_root() == legacy
+
+
+def test_fresh_install_uses_the_raven_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ue, "_recorded_slice", dict)
+    monkeypatch.setattr(ue, "legacy_everos_root", lambda: tmp_path / "absent")
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "data" / "everos")
+
+    assert ue.everos_root() == tmp_path / "data" / "everos"
+
+
+def test_ownership_of_an_unrecorded_foreign_root_is_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Absent the field, anything raven did not create is treated as not ours."""
+    monkeypatch.setattr(ue, "_recorded_slice", lambda: {"root": str(tmp_path / "theirs")})
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "ours")
+    monkeypatch.setattr(ue, "legacy_everos_root", lambda: tmp_path / "legacy")
+
+    assert ue.everos_owned() is False
+
+
+def test_recorded_ownership_overrides_the_path_guess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A user-managed root cannot be classified by its path, so the record wins."""
+    monkeypatch.setattr(
+        ue,
+        "_recorded_slice",
+        lambda: {"root": str(tmp_path / "ours"), "owned": False},
+    )
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "ours")
+
+    assert ue.everos_owned() is False
+
+
+# ---------------------------------------------------------------------------
 # configure_everos_env
 # ---------------------------------------------------------------------------
 
 
-def test_configure_everos_env_points_at_raven_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
+def test_configure_everos_env_points_at_the_recorded_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "recorded")
     monkeypatch.delenv("EVEROS_ROOT", raising=False)
 
     ue.configure_everos_env()
 
-    base = tmp_path / ".everos" / "raven"
-    import os
-
-    assert os.environ["EVEROS_ROOT"] == str(base)
+    assert os.environ["EVEROS_ROOT"] == str(tmp_path / "recorded")
 
 
-def test_configure_everos_env_respects_explicit_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # An operator-set EVEROS_ROOT must win (setdefault, not overwrite).
-    monkeypatch.setattr(ue, "_EVEROS_BASE", tmp_path / ".everos" / "raven")
+def test_configure_everos_env_overrides_an_ambient_value(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The recorded root wins over the environment, not the other way round.
+
+    This reverses the old contract deliberately. Following an ambient
+    EVEROS_ROOT pointed raven at a root nothing had recorded, so the next run
+    without the variable reported no memories while they sat on disk. Operators
+    who want another root record it in the config.
+    """
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "recorded")
     monkeypatch.setenv("EVEROS_ROOT", "/custom/root")
 
     ue.configure_everos_env()
 
-    import os
-
-    assert os.environ["EVEROS_ROOT"] == "/custom/root"
+    assert os.environ["EVEROS_ROOT"] == str(tmp_path / "recorded")
 
 
-def test_default_config_path_under_raven_home() -> None:
-    # The production default lives under ~/.everos/raven, not bare ~/.everos.
-    assert ue.get_everos_config_path() == (Path("~/.everos/raven/everos.toml").expanduser())
+def test_configure_everos_env_accepts_an_explicit_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "recorded")
+
+    ue.configure_everos_env(tmp_path / "explicit")
+
+    assert os.environ["EVEROS_ROOT"] == str(tmp_path / "explicit")
 
 
 def test_load_round_trips_written_content(everos_home: Path) -> None:
@@ -157,7 +217,9 @@ def test_set_preserves_mixed_value_types(everos_home: Path) -> None:
 
 
 def test_set_unknown_section_rejected(everos_home: Path) -> None:
-    for bad in ("sqlite", "memory", "api", "lancedb", ""):
+    # ``api`` is writable now (the address lives there); the data-layout
+    # sections EverOS owns still are not.
+    for bad in ("sqlite", "memory", "lancedb", ""):
         with pytest.raises(KeyError):
             ue.set_everos_section(bad, {"x": 1})
 

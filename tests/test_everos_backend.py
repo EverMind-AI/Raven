@@ -214,6 +214,80 @@ class TestColdStartSpeaksUp:
         assert "without long-term memory" in err
 
 
+class TestAUserManagedRootIsReadOnly:
+    """Reusing an EverOS the user manages means recording its address, nothing more.
+
+    Writing to it or starting it would take the OME jobstore lock exclusively --
+    theirs to grant, not raven's to assume.
+    """
+
+    @staticmethod
+    def _not_owned(monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.config import update_everos
+
+        monkeypatch.setattr(update_everos, "everos_owned", lambda: False)
+
+    async def test_an_unreachable_server_is_not_started_for_us(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        self._not_owned(monkeypatch)
+        started: list[int] = []
+
+        async def _ensure(*_a: object, **_kw: object) -> None:
+            started.append(1)
+
+        monkeypatch.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ensure)
+        monkeypatch.setattr("raven.plugin.memory.everos._server._probe_health", lambda _u: False)
+
+        b = EverosBackend(_ctx(tmp_path))
+        await b.start()
+
+        assert started == [], "started a server on a root raven does not own"
+        err = " ".join(capsys.readouterr().err.split())
+        assert "you manage is not running" in err
+        assert "does not start or stop it" in err
+
+    async def test_a_reachable_server_is_simply_used(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+    ) -> None:
+        self._not_owned(monkeypatch)
+        started: list[int] = []
+
+        async def _ensure(*_a: object, **_kw: object) -> None:
+            started.append(1)
+
+        monkeypatch.setattr("raven.plugin.memory.everos._server.ensure_everos_server", _ensure)
+        monkeypatch.setattr("raven.plugin.memory.everos._server._probe_health", lambda _u: True)
+
+        b = EverosBackend(_ctx(tmp_path))
+        await b.start()
+
+        assert started == []
+        assert capsys.readouterr().err == ""
+
+    def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._not_owned(monkeypatch)
+        from raven.config import update_everos
+
+        seeded: list[int] = []
+        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+
+        make_backend(_ctx(tmp_path))
+
+        assert seeded == [], "wrote template files into a root the user manages"
+
+    def test_an_owned_root_still_gets_its_templates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven.config import update_everos
+
+        monkeypatch.setattr(update_everos, "everos_owned", lambda: True)
+        seeded: list[int] = []
+        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+
+        make_backend(_ctx(tmp_path))
+
+        assert seeded == [1]
+
+
 class TestStartWarnsWhenRecallCannotWork:
     """A running server stopped implying a working one in everos 1.2.1."""
 

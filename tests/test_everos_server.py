@@ -85,12 +85,13 @@ class TestEverosExecutable:
 
 @pytest.fixture
 def everos_toml(tmp_path, monkeypatch):
-    """Redirect the EverOS config read to a throwaway toml."""
+    """Redirect the EverOS config read/write to a throwaway root raven owns."""
     import raven.config.update_everos as ue
 
-    cfg = tmp_path / ".everos" / "everos.toml"
-    monkeypatch.setattr(ue, "_EVEROS_CONFIG", cfg)
-    return cfg
+    root = tmp_path / ".everos"
+    monkeypatch.setattr(ue, "everos_root", lambda: root)
+    monkeypatch.setattr(ue, "everos_owned", lambda: True)
+    return root / "everos.toml"
 
 
 def _live_child():
@@ -173,6 +174,135 @@ class TestSpawnPreflight:
             await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
         assert spawned == [1]
+
+
+class TestTheRootDescribesItsOwnAddress:
+    """The address goes into ``<root>/everos.toml``, not onto the command line.
+
+    A ``--port`` override left the file describing an address nobody listened on,
+    which is how the wizard came to probe one port while the backend talked to
+    another.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_real_spawn(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("raven.plugin.memory.everos._server.get_logs_dir", lambda: tmp_path)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.get_data_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._everos_executable",
+            lambda: "/bin/true",
+        )
+        self.spawned: list[list[str]] = []
+
+        class _Proc:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+        def _popen(argv, **_kw):
+            self.spawned.append(argv)
+            return _Proc()
+
+        monkeypatch.setattr("subprocess.Popen", _popen)
+
+    def test_the_declared_address_is_written_before_the_child_starts(self, everos_toml) -> None:
+        import tomllib
+
+        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+
+        _write_llm_section(everos_toml)
+        _start_server_if_unlocked("http://localhost:18791")
+
+        with everos_toml.open("rb") as fh:
+            api = tomllib.load(fh)["api"]
+        assert api == {"host": "localhost", "port": 18791}
+
+    def test_the_child_gets_root_and_no_port(self, everos_toml) -> None:
+        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+
+        _write_llm_section(everos_toml)
+        _start_server_if_unlocked("http://localhost:18791")
+
+        argv = self.spawned[0]
+        assert "--port" not in argv, "a command-line port would override the toml again"
+        assert "--root" in argv
+        assert argv[argv.index("--root") + 1] == str(everos_toml.parent)
+
+    def test_the_started_server_is_recorded(self, everos_toml, tmp_path) -> None:
+        import json
+
+        from raven.plugin.memory.everos._server import _start_server_if_unlocked
+
+        _write_llm_section(everos_toml)
+        _start_server_if_unlocked("http://localhost:18791")
+
+        record = json.loads((tmp_path / "everos-server.pid").read_text())
+        assert record["pid"] == 4242
+        assert record["root"] == str(everos_toml.parent)
+
+
+class TestStoppingWhatWeStarted:
+    """A pidfile is stale information, so verify before signalling."""
+
+    @pytest.fixture
+    def _data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("raven.plugin.memory.everos._server.get_data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_a_pid_reused_by_another_program_is_not_signalled(self, _data_dir, monkeypatch) -> None:
+        import json
+        import os as _os
+
+        from raven.plugin.memory.everos._server import stop_recorded_server
+
+        (_data_dir / "everos-server.pid").write_text(
+            json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
+        )
+        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: False)
+        signalled: list[int] = []
+        monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
+
+        assert stop_recorded_server(_data_dir) is False
+        assert signalled == [], "signalled a pid that is no longer an everos server"
+
+    def test_a_record_for_another_root_is_ignored(self, _data_dir, monkeypatch) -> None:
+        import json
+        import os as _os
+
+        from raven.plugin.memory.everos._server import stop_recorded_server
+
+        (_data_dir / "everos-server.pid").write_text(
+            json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": "/somewhere/else"})
+        )
+        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+        signalled: list[int] = []
+        monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
+
+        assert stop_recorded_server(_data_dir) is False
+        assert signalled == []
+
+    def test_a_verified_server_gets_sigterm_not_sigkill(self, _data_dir, monkeypatch) -> None:
+        import json
+        import os as _os
+        import signal as _signal
+
+        from raven.plugin.memory.everos._server import stop_recorded_server
+
+        (_data_dir / "everos-server.pid").write_text(
+            json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
+        )
+        alive = [True, False]
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._is_everos_server",
+            lambda _p: alive.pop(0) if alive else False,
+        )
+        sent: list[int] = []
+        monkeypatch.setattr(_os, "kill", lambda _pid, sig: sent.append(sig))
+
+        assert stop_recorded_server(_data_dir) is True
+        assert sent == [_signal.SIGTERM]
+        assert not (_data_dir / "everos-server.pid").exists()
 
 
 class TestDeadChildDetection:
