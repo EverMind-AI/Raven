@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from raven.config.raven import RavenConfig
+    from raven.config.schema import Config
 
 console = Console()
 
@@ -133,6 +134,39 @@ class ConfigHealth:
 
 
 @dataclass
+class ToolCapabilityInfo:
+    """One credential-bearing tool, as the deployer needs to see it.
+
+    Reported whether or not it is configured, which is the point: an
+    unconfigured tool is not registered, so nothing else in the running system
+    mentions that the capability exists at all.
+    """
+
+    tool: str
+    summary: str
+    #: ``nothing`` / ``own_credential`` / ``new_account`` -- how much the
+    #: deployer has to do, which is a different question from configured-ness.
+    need: str
+    configured: bool
+    #: Where a configured one got its credential; empty when unconfigured or
+    #: when none was needed.
+    source: str = ""
+    config_path: str = ""
+    env_var: str = ""
+    obtain_from: str = ""
+    cost_note: str = ""
+
+
+@dataclass
+class ToolsInfo:
+    capabilities: list[ToolCapabilityInfo] = field(default_factory=list)
+
+    @property
+    def unconfigured(self) -> list[ToolCapabilityInfo]:
+        return [c for c in self.capabilities if not c.configured]
+
+
+@dataclass
 class DoctorReport:
     version: int = 1
     config_loaded: bool = False
@@ -141,6 +175,7 @@ class DoctorReport:
     features: Optional[FeaturesInfo] = None
     gateway: Optional[GatewayInfo] = None
     memory: Optional[MemoryInfo] = None
+    tools: Optional[ToolsInfo] = None
     probe: Optional[ProbeResult] = None
     config_health: Optional[ConfigHealth] = None
 
@@ -278,6 +313,34 @@ def _write_config_preserving_mode(path: "Path", raw: dict) -> None:
     _os.replace(tmp, path)
 
 
+def _gather_tools(config: "Config") -> ToolsInfo:
+    """Every credential-bearing tool and whether this install can use it.
+
+    Reads the capability table rather than re-deriving the rules: three
+    families decide registration three different ways, and a fourth opinion
+    here is how the answers drift apart. See
+    ``raven/agent/tools/capabilities.py``.
+    """
+    from raven.agent.tools.capabilities import CAPABILITIES, configured_from, is_configured
+
+    return ToolsInfo(
+        capabilities=[
+            ToolCapabilityInfo(
+                tool=cap.tool,
+                summary=cap.summary,
+                need=cap.need.value,
+                configured=is_configured(cap, config),
+                source=configured_from(cap, config),
+                config_path=cap.config_path,
+                env_var=cap.env_var,
+                obtain_from=cap.obtain_from,
+                cost_note=cap.cost_note,
+            )
+            for cap in CAPABILITIES
+        ]
+    )
+
+
 def _gather_static_checks() -> DoctorReport:
     """Inspect config / routing / features. Strictly zero-network."""
     from raven.config.loader import get_config_path, load_config
@@ -349,6 +412,8 @@ def _gather_static_checks() -> DoctorReport:
         channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
     )
+
+    report.tools = _gather_tools(config)
 
     from raven.cli._gateway_lock import read_status
 
@@ -488,6 +553,46 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
         console.print(f"  [dim]Check the server log: {_server_log_hint()}[/dim]")
 
 
+def _render_tool_capabilities(tools: ToolsInfo) -> None:
+    """List every credential-bearing tool, configured or not.
+
+    An unconfigured tool is not registered, so the agent never offers it and no
+    other surface says it exists -- this is the only place a deployer can learn
+    the capability is available at all. Ordered by how much they would have to
+    do, so what is one edit away reads before what needs an account.
+
+    Not a fault: an install with no image generation is a choice, so nothing
+    here moves the exit code.
+    """
+    for cap in tools.capabilities:
+        label = f"  {cap.tool + ':':<17}"
+        if cap.configured:
+            where = f"  [dim]({cap.source})[/dim]" if cap.source else ""
+            console.print(f"{label}[green]✓[/green] {cap.summary}{where}")
+            continue
+        console.print(f"{label}[dim]-  {cap.summary}[/dim]")
+        # One fact per line rather than one sentence: the terminal wraps a long
+        # line mid-path, and a config key broken across two rows cannot be
+        # copied, which is the only thing this row is for.
+        indent = f"{'':<19}"
+        if cap.need == "own_credential":
+            console.print(f"{indent}[dim]switch on:[/dim] {cap.config_path}")
+            console.print(f"{indent}[dim]key: borrowed from providers.openrouter[/dim]")
+        elif cap.need == "new_account":
+            console.print(f"{indent}[dim]set:[/dim] {cap.config_path}")
+            if cap.env_var:
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
+            console.print(f"{indent}[dim]key from:[/dim] {cap.obtain_from}")
+        if cap.cost_note:
+            console.print(f"{indent}[dim]{cap.cost_note}[/dim]")
+
+    if not tools.unconfigured:
+        return
+    console.print(
+        f"  [dim]{len(tools.unconfigured)} capability(s) available but not set up; the agent is not offered them.[/dim]"
+    )
+
+
 def _degradation_note(section: str) -> str:
     """What is lost by leaving an optional role unconfigured.
 
@@ -589,6 +694,10 @@ def _render_human_output(report: DoctorReport) -> None:
         elif not memory.owned:
             console.print("  Retrieval:  [dim]unknown  (the server you run is not answering)[/dim]")
         _render_memory_capabilities(memory)
+
+    if report.tools is not None:
+        console.print("\n[bold]Tool capabilities[/bold]")
+        _render_tool_capabilities(report.tools)
 
     if report.probe is not None:
         console.print("\n[bold]LLM Probe[/bold]")
