@@ -80,12 +80,15 @@ jobs:
             files; (3) tests - was any test weakened, skipped, or made green without
             exercising the change?
 
-            VERIFY, do not just reason. For each candidate finding, try to DISPROVE it: check
-            callers and invariants, and where a quick check settles it, RUN it - `uv run
-            python -c '...'` for a runtime-behavior claim, or `uv run --all-extras pytest
-            <path> -q` for a specific test (you may `git stash` / `git checkout` a file to
-            revert a fix and confirm a test actually catches it, then restore it). For whether
-            the whole suite passes, read the CI result via the actions tool - do not re-run it.
+            Settle each candidate finding by READING first - the diff, callers, invariants,
+            the tests. Static reading is the default and is enough for almost everything, so
+            do NOT run tests routinely. ONLY when a claim genuinely cannot be settled by
+            reading - a subtle runtime-behavior question you are truly unsure about - verify
+            by running, smallest check first: a one-line `uv run python -c '...'` repro. Run
+            `uv run --all-extras pytest <path> -q` (slow) only for one specific test you must
+            confirm, never the whole suite; for whole-suite pass/fail read the CI result via
+            the actions tool. You may `git stash`/`git checkout` a file to revert a fix and
+            confirm a test truly catches it, then restore it.
 
             Report only findings you are highly confident are real AND introduced by this PR.
             Every behavior claim needs a file:line citation, not an inference from naming. When
