@@ -8,6 +8,7 @@ AgentLoop and instead bind the helper to a minimal stand-in.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -489,3 +490,45 @@ async def test_unknown_ceiling_does_not_flag_truncation() -> None:
     response = await _bind_helper(provider)(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
 
     assert response.truncated is False
+
+
+def _two_calls_last_one_cut() -> list[StreamDelta]:
+    return [
+        StreamDelta(
+            content=None,
+            tool_call_delta={
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                    },
+                    {
+                        "index": 1,
+                        "id": "call_2",
+                        "function": {"name": "write_file", "arguments": '{"content": "def foo('},
+                    },
+                ]
+            },
+        ),
+        StreamDelta(content=None, finish_reason="length"),
+    ]
+
+
+async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
+    """It is metadata about the call, not an argument the model wrote.
+
+    ``to_openai_tool_call`` serializes ``arguments`` into the assistant message
+    that goes back upstream next turn, and the loop does that before the
+    registry ever sees the call. A marker living in that dict would therefore
+    be echoed to the model as a field it never sent.
+    """
+    response = await _bind_helper(_provider_with_ceiling(_two_calls_last_one_cut(), max_tokens=4096))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    payload = json.dumps([tc.to_openai_tool_call() for tc in response.tool_calls])
+
+    assert response.tool_calls[1].truncation is not None
+    assert "truncation" not in payload
+    assert "_truncated" not in payload

@@ -167,6 +167,27 @@ class ProviderHTTPError(RuntimeError):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class TruncationInfo:
+    """Where the output stopped, on a call that never finished arriving.
+
+    Rides on the call itself rather than inside ``arguments``: a marker written
+    into that dict is serialized into the assistant message by
+    ``to_openai_tool_call`` before the registry ever gets to strip it, and the
+    model then reads back a field it never wrote.
+    """
+
+    at_tokens: int | None = None
+
+    def as_error(self, tool_name: str) -> str:
+        at = f" at {self.at_tokens} tokens" if self.at_tokens else ""
+        return (
+            f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}, "
+            f"so this call is incomplete. Do not resend the same content. "
+            f"Write it in several smaller pieces instead."
+        )
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
@@ -176,6 +197,7 @@ class ToolCallRequest:
     arguments: dict[str, Any]
     provider_specific_fields: dict[str, Any] | None = None
     function_provider_specific_fields: dict[str, Any] | None = None
+    truncation: TruncationInfo | None = None
 
     def to_openai_tool_call(self) -> dict[str, Any]:
         """Serialize to an OpenAI-style tool_call payload."""

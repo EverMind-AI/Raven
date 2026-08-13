@@ -43,7 +43,13 @@ from raven.agent.tools.spawn import SpawnTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
 from raven.memory_engine.base import TokenBudget
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator, MemoryStore
-from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import (
+    ErrorClassification,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    TruncationInfo,
+)
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
@@ -1745,8 +1751,7 @@ class AgentLoop:
             # field. That message is true and useless -- it sends the model
             # looking for a field it never omitted.
             for tc in tool_calls:
-                tc.arguments["_truncated"] = True
-                tc.arguments["_truncated_at"] = sent_max_tokens
+                tc.truncation = TruncationInfo(at_tokens=sent_max_tokens)
 
         if truncated:
             logger.warning(
@@ -2207,7 +2212,9 @@ class AgentLoop:
                         if isinstance(exec_tool, ExecTool):
                             exec_tool.set_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
-                    result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = await self.tools.execute(
+                        tool_call.name, tool_call.arguments, truncation=tool_call.truncation
+                    )
                     duration_ms = int((time.monotonic() - tool_t0) * 1000)
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string

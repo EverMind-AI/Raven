@@ -15,6 +15,7 @@ import pytest
 
 from raven.agent.tools.base import Tool, ToolOutput, ToolResult
 from raven.agent.tools.registry import ToolRegistry
+from raven.providers.base import TruncationInfo
 
 
 class _Split(Tool):
@@ -196,7 +197,8 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
 
     out = await reg.execute(
         "write_file",
-        {"_raw_arguments": '{"content": "def foo(', "_truncated": True, "_truncated_at": 4096},
+        {"_raw_arguments": '{"content": "def foo('},
+        truncation=TruncationInfo(at_tokens=4096),
     )
 
     assert "[truncated]" in out
@@ -220,7 +222,8 @@ async def test_truncated_but_parseable_arguments_also_reported_as_truncation() -
 
     out = await reg.execute(
         "write_file",
-        {"content": "def foo(): ...", "_truncated": True, "_truncated_at": 8192},
+        {"content": "def foo(): ..."},
+        truncation=TruncationInfo(at_tokens=8192),
     )
 
     assert "[truncated]" in out
@@ -241,8 +244,8 @@ async def test_untruncated_invalid_arguments_keep_the_schema_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_truncation_markers_never_reach_the_tool() -> None:
-    """The markers are the loop's note to the registry, not tool arguments.
+async def test_truncation_note_never_reaches_the_tool() -> None:
+    """The note travels beside the arguments, never inside them.
 
     Note what this pins down as a side effect: when the arguments validate,
     the tool runs even though the turn was truncated. That is the remaining
@@ -257,7 +260,8 @@ async def test_truncation_markers_never_reach_the_tool() -> None:
 
     await reg.execute(
         "write_file",
-        {"path": "a.py", "content": "x", "_truncated": True, "_truncated_at": 4096},
+        {"path": "a.py", "content": "x"},
+        truncation=TruncationInfo(at_tokens=4096),
     )
 
     assert tool.received == {"path": "a.py", "content": "x"}
