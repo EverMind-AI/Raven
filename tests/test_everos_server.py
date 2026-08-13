@@ -6,7 +6,77 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from raven.plugin.memory.everos._server import ensure_everos_server
+from raven.plugin.memory.everos._server import _everos_executable, ensure_everos_server
+
+
+def _make_executable(path):
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+class TestEverosExecutable:
+    """The interpreter's own directory wins over PATH.
+
+    ``uv tool install`` exposes only the requested package's entry points, so a
+    released install has ``raven`` on PATH and ``everos`` only inside the tool
+    venv. Preferring the sibling also avoids picking up an everos from an
+    unrelated environment whose version does not match raven's pin.
+    """
+
+    def test_prefers_interpreter_sibling(self, tmp_path, monkeypatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        _make_executable(venv_bin / "everos")
+        monkeypatch.setattr("sys.executable", str(venv_bin / "python3"))
+        monkeypatch.setenv("PATH", "")
+
+        assert _everos_executable() == str(venv_bin / "everos")
+
+    def test_falls_back_to_path(self, tmp_path, monkeypatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        path_dir = tmp_path / "elsewhere"
+        path_dir.mkdir()
+        _make_executable(path_dir / "everos")
+        monkeypatch.setattr("sys.executable", str(venv_bin / "python3"))
+        monkeypatch.setenv("PATH", str(path_dir))
+
+        assert _everos_executable() == str(path_dir / "everos")
+
+    def test_sibling_beats_path_when_both_exist(self, tmp_path, monkeypatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        _make_executable(venv_bin / "everos")
+        path_dir = tmp_path / "elsewhere"
+        path_dir.mkdir()
+        _make_executable(path_dir / "everos")
+        monkeypatch.setattr("sys.executable", str(venv_bin / "python3"))
+        monkeypatch.setenv("PATH", str(path_dir))
+
+        assert _everos_executable() == str(venv_bin / "everos")
+
+    def test_sibling_without_exec_bit_is_skipped(self, tmp_path, monkeypatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        (venv_bin / "everos").write_text("not executable\n")
+        (venv_bin / "everos").chmod(0o644)
+        path_dir = tmp_path / "elsewhere"
+        path_dir.mkdir()
+        _make_executable(path_dir / "everos")
+        monkeypatch.setattr("sys.executable", str(venv_bin / "python3"))
+        monkeypatch.setenv("PATH", str(path_dir))
+
+        assert _everos_executable() == str(path_dir / "everos")
+
+    def test_missing_everywhere_names_the_interpreter_dir(self, tmp_path, monkeypatch) -> None:
+        venv_bin = tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        monkeypatch.setattr("sys.executable", str(venv_bin / "python3"))
+        monkeypatch.setenv("PATH", "")
+
+        with pytest.raises(RuntimeError, match=str(venv_bin)):
+            _everos_executable()
 
 
 class TestEnsureEverosServer:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1292,6 +1293,31 @@ def test_memory_giving_up_sets_backend_null(
     from raven.config.raven import load_raven_config
 
     assert load_raven_config().memory.backend is None
+
+
+def test_memory_step_is_skipped_on_native_windows(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native Windows leaves the step untouched and the backend disabled.
+
+    This guard is what lets the rest of the EverOS path stay POSIX-only --
+    ``_everos_executable`` looks for a bare ``everos`` with no ``.exe`` variant
+    precisely because it can never run here. Remove the guard and that lookup
+    starts failing on Windows instead of being unreachable.
+    """
+    import questionary
+
+    def _explode(*_a, **_kw):
+        raise AssertionError("step 4 must not prompt on native Windows")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(questionary, "select", _explode)
+    monkeypatch.setattr(questionary, "text", _explode)
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert json.loads(tmp_env.read_text())["memory"]["backend"] is None
+    assert not everos_isolated.exists()
 
 
 def test_giving_up_says_what_is_lost(

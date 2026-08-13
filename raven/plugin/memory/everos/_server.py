@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -50,6 +52,33 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
+def _everos_executable() -> str:
+    """Locate the everos CLI, preferring the one installed alongside raven.
+
+    ``everos`` is a hard dependency of raven, so it always lives in the same
+    environment as the running interpreter -- but not necessarily on PATH:
+    ``uv tool install`` exposes only the requested package's entry points, so
+    ``~/.local/bin`` gets ``raven`` and not ``everos``. Checking the
+    interpreter's own directory first therefore fixes more than a lookup
+    failure: when PATH carries an everos from a *different* environment,
+    ``shutil.which`` would hand back a version that does not match the one
+    raven pins.
+
+    POSIX only -- the EverOS path is gated off on native Windows by both
+    callers (``onboard_everos._step4_memory`` and ``EverosBackend.start``).
+    """
+    sibling = Path(sys.executable).parent / "everos"
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return str(sibling)
+    found = shutil.which("everos")
+    if found:
+        return found
+    raise RuntimeError(
+        f"everos not found next to {Path(sys.executable).parent} or on PATH. "
+        "Please install the everos CLI."
+    )
+
+
 def _start_server_if_unlocked(port: str) -> bool:
     """Try to acquire the startup lock and launch the server.
 
@@ -57,9 +86,7 @@ def _start_server_if_unlocked(port: str) -> bool:
     was already held (another process is spawning).  Uses the cross-
     platform ``portable_lock`` so Windows does not crash on import.
     """
-    everos = shutil.which("everos")
-    if not everos:
-        raise RuntimeError("everos not found. Please install the everos CLI.")
+    everos = _everos_executable()
 
     try:
         with file_lock(_lock_path(), blocking=False):
