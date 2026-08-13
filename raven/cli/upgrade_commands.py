@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
+from datetime import datetime
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,12 +19,24 @@ import typer
 from rich.console import Console
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
+LATEST_RELEASE_WEB = "https://github.com/EverMind-AI/Raven/releases/latest"
+RELEASE_TAG_PREFIX = "https://github.com/EverMind-AI/Raven/releases/tag/"
+RELEASE_DOWNLOAD_PREFIX = "https://github.com/EverMind-AI/Raven/releases/download/"
 _VERSION_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_REQUEST_TIMEOUT = 10.0
+# The fallback exists to rescue a failing command, so it may not add another full
+# timeout to the wait: three sequential requests at 10s would triple the worst case.
+_FALLBACK_TIMEOUT = 5.0
 console = Console()
 
 
 class UpgradeError(RuntimeError):
     pass
+
+
+class ReleaseLookupError(UpgradeError):
+    """Latest-release discovery failed. The local installation is fine, so the
+    caller must not advise reinstalling."""
 
 
 @dataclass(frozen=True)
@@ -178,7 +191,7 @@ def _upgrade_helper_bootstrap() -> str:
 def _version_key(value: str) -> tuple[int, int, int]:
     match = _VERSION_RE.fullmatch(value)
     if match is None:
-        raise UpgradeError(f"Unsupported Raven version: {value}")
+        raise UpgradeError(f"Unsupported Raven version: {value!r}")
     major, minor, patch = match.groups()
     return int(major), int(minor), int(patch)
 
@@ -187,64 +200,189 @@ def _current_version() -> str:
     return metadata.version("raven")
 
 
+def _user_agent() -> str:
+    return f"raven/{_current_version()}"
+
+
+def _release_wheel_name(version: str) -> str:
+    return f"raven-{version}-py3-none-any.whl"
+
+
+def _release_wheel_url(version: str) -> str:
+    return f"{RELEASE_DOWNLOAD_PREFIX}v{version}/{_release_wheel_name(version)}"
+
+
 def _parse_release_payload(payload: object) -> ReleaseInfo:
     if not isinstance(payload, dict):
-        raise UpgradeError("Malformed GitHub release payload")
+        raise ReleaseLookupError("Malformed GitHub release payload")
 
     draft = payload.get("draft")
     prerelease = payload.get("prerelease")
     if not isinstance(draft, bool) or not isinstance(prerelease, bool):
-        raise UpgradeError("Malformed GitHub release payload")
+        raise ReleaseLookupError("Malformed GitHub release payload")
     if draft or prerelease:
-        raise UpgradeError("Latest Raven release is not stable")
+        raise ReleaseLookupError("Latest Raven release is not stable")
 
     tag_name = payload.get("tag_name")
     if not isinstance(tag_name, str) or not tag_name.startswith("v"):
-        raise UpgradeError("Malformed GitHub release payload")
+        raise ReleaseLookupError("Malformed GitHub release payload")
     version = ".".join(str(part) for part in _version_key(tag_name))
 
     assets = payload.get("assets")
     if not isinstance(assets, list):
-        raise UpgradeError("Malformed GitHub release payload")
+        raise ReleaseLookupError("Malformed GitHub release payload")
 
-    wheel_name = f"raven-{version}-py3-none-any.whl"
+    wheel_name = _release_wheel_name(version)
     exact_wheels: list[str] = []
     for asset in assets:
         if not isinstance(asset, dict):
-            raise UpgradeError("Malformed GitHub release payload")
+            raise ReleaseLookupError("Malformed GitHub release payload")
         name = asset.get("name")
         wheel_url = asset.get("browser_download_url")
         if not isinstance(name, str) or not isinstance(wheel_url, str):
-            raise UpgradeError("Malformed GitHub release payload")
+            raise ReleaseLookupError("Malformed GitHub release payload")
         if name == wheel_name:
             exact_wheels.append(wheel_url)
 
     if len(exact_wheels) != 1:
-        raise UpgradeError(f"Expected exactly one release wheel named {wheel_name}")
+        raise ReleaseLookupError(f"Expected exactly one release wheel named {wheel_name}")
 
     wheel_url = exact_wheels[0]
-    parsed_url = urlparse(wheel_url)
-    expected_path = f"/EverMind-AI/Raven/releases/download/v{version}/{wheel_name}"
-    if parsed_url.scheme != "https" or parsed_url.netloc != "github.com" or parsed_url.path != expected_path:
-        raise UpgradeError(f"Untrusted Raven release wheel URL: {wheel_url}")
+    if wheel_url != _release_wheel_url(version):
+        raise ReleaseLookupError(f"Untrusted Raven release wheel URL: {wheel_url}")
 
     return ReleaseInfo(version=version, wheel_url=wheel_url)
 
 
-def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
+def _rate_limit_detail(response: httpx.Response) -> str:
+    detail = "GitHub rate limit exhausted (unauthenticated requests share 60 per hour per IP)"
+    try:
+        resets_at = datetime.fromtimestamp(int(response.headers["x-ratelimit-reset"]))
+    except (KeyError, ValueError, OSError, OverflowError):
+        return detail
+    return f"{detail}, resetting at {resets_at:%H:%M:%S}"
+
+
+def _github_failure_detail(error: Exception) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        response = error.response
+        if response.status_code in (403, 429):
+            if response.headers.get("x-ratelimit-remaining") == "0":
+                return _rate_limit_detail(response)
+            # The secondary (abuse) limit leaves the primary budget untouched and
+            # says when to come back instead.
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                return f"GitHub asked us to retry in {retry_after}s (HTTP {response.status_code})"
+        return f"HTTP {response.status_code} {response.reason_phrase}".strip()
+    return str(error).strip() or type(error).__name__
+
+
+def _sentence(error: Exception) -> str:
+    """Terminate the message with a period unless it already ends in one.
+
+    Strips a single trailing period rather than the whole run, so a message ending in
+    an ellipsis keeps it.
+    """
+    return f"{str(error).removesuffix('.')}."
+
+
+def _fetch_latest_release_via_api(client: httpx.Client) -> ReleaseInfo:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": f"raven/{_current_version()}",
+        "User-Agent": _user_agent(),
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    response = client.get(LATEST_RELEASE_API, headers=headers)
+    response.raise_for_status()
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        # A proxy or captive portal answering 200 with HTML is a remote failure the
+        # release page can recover from, so it has to reach the fallback: DecodingError
+        # is an httpx.HTTPError but not a TransportError, so it never reads as "offline".
+        raise httpx.DecodingError("GitHub API returned a non-JSON body", request=response.request) from exc
+    return _parse_release_payload(payload)
+
+
+def _fetch_latest_version_via_redirect(client: httpx.Client, *, timeout: float = _REQUEST_TIMEOUT) -> str:
+    """Read the latest stable version off the release page, which no API quota applies to.
+
+    The timeout belongs to the caller: this is one of three sequential requests when
+    `raven upgrade` falls back, but the only request the update notice makes.
+    """
+    response = client.get(
+        LATEST_RELEASE_WEB,
+        headers={"User-Agent": _user_agent()},
+        follow_redirects=False,
+        timeout=timeout,
+    )
+    location = response.headers.get("location", "")
+    tag = location[len(RELEASE_TAG_PREFIX) :] if location.startswith(RELEASE_TAG_PREFIX) else ""
+    if not response.has_redirect_location or not tag:
+        raise ReleaseLookupError(f"HTTP {response.status_code} without a release tag redirect")
+    return ".".join(str(part) for part in _version_key(tag))
+
+
+def _fetch_latest_release_via_redirect(client: httpx.Client) -> ReleaseInfo:
+    version = _fetch_latest_version_via_redirect(client, timeout=_FALLBACK_TIMEOUT)
+    wheel_url = _release_wheel_url(version)
+    try:
+        client.head(
+            wheel_url,
+            headers={"User-Agent": _user_agent()},
+            follow_redirects=True,
+            timeout=_FALLBACK_TIMEOUT,
+        ).raise_for_status()
+    except httpx.HTTPError as exc:
+        raise ReleaseLookupError(
+            f"release {version} has no wheel at the expected URL ({_github_failure_detail(exc)})"
+        ) from exc
+    return ReleaseInfo(version=version, wheel_url=wheel_url)
+
+
+def _resolve_latest_release(client: httpx.Client) -> ReleaseInfo:
+    try:
+        return _fetch_latest_release_via_api(client)
+    except httpx.HTTPError as error:
+        # Only transport / status / decoding failures fall back. No payload-level
+        # failure is routed around, because the release page cannot re-check what the
+        # payload carries -- above all the draft / prerelease flags, where falling
+        # back would install exactly what the API rejected.
+        api_error = error
+
+    try:
+        return _fetch_latest_release_via_redirect(client)
+    except (UpgradeError, httpx.HTTPError) as web_error:
+        message = (
+            f"could not resolve the latest Raven release "
+            f"(GitHub API: {_github_failure_detail(api_error)}; "
+            f"release page: {_github_failure_detail(web_error)})"
+        )
+        if isinstance(api_error, httpx.TransportError) and isinstance(web_error, httpx.TransportError):
+            message += "; check your network and try again"
+        raise ReleaseLookupError(message) from web_error
+
+
+def _fetch_latest_release(client: httpx.Client | None = None) -> ReleaseInfo:
     if client is not None:
-        response = client.get(LATEST_RELEASE_API, headers=headers)
-        response.raise_for_status()
-        return _parse_release_payload(response.json())
-    with httpx.Client(timeout=10.0, follow_redirects=True) as owned_client:
-        response = owned_client.get(LATEST_RELEASE_API, headers=headers)
-        response.raise_for_status()
-        return _parse_release_payload(response.json())
+        return _resolve_latest_release(client)
+    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
+        return _resolve_latest_release(owned_client)
+
+
+def fetch_latest_version(client: httpx.Client | None = None) -> str:
+    """Return the latest stable version, resolved without touching the API quota.
+
+    The update notice needs a version string and nothing else -- no payload, no wheel
+    URL -- so it stays off `api.github.com` entirely. That budget is 60 requests per
+    hour per IP for unauthenticated callers, and a daily check from every install
+    behind one egress is what drains it.
+    """
+    if client is not None:
+        return _fetch_latest_version_via_redirect(client)
+    with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
+        return _fetch_latest_version_via_redirect(owned_client)
 
 
 def _direct_url_data() -> dict[str, object] | None:
@@ -450,6 +588,9 @@ def register(app: typer.Typer) -> None:
                 )
 
             _handoff_upgrade(release, current_version, target)
+        except ReleaseLookupError as exc:
+            console.print(f"[red]Unable to upgrade Raven:[/red] {_sentence(exc)}")
+            raise typer.Exit(1) from exc
         except (
             UpgradeError,
             httpx.HTTPError,
@@ -457,8 +598,7 @@ def register(app: typer.Typer) -> None:
             metadata.PackageNotFoundError,
         ) as exc:
             console.print(
-                f"[red]Unable to upgrade Raven:[/red] {exc}. "
-                "Check your network and try again; if the problem persists, "
-                "rerun the official installer."
+                f"[red]Unable to upgrade Raven:[/red] {_sentence(exc)} "
+                "If the problem persists, rerun the official installer."
             )
             raise typer.Exit(1) from exc

@@ -191,15 +191,48 @@ function Ensure-Node {
     }
 }
 
+# Reads the latest stable tag off the release page redirect. The GitHub API caps
+# unauthenticated callers at 60 requests/hour per IP, which a shared egress can
+# exhaust; the release page carries no API quota. Returns "" when the redirect is
+# missing or does not name a stable tag, so the caller can fail with its own message.
+function Resolve-RavenLatestVersion {
+    $target = ""
+    try {
+        $response = Invoke-WebRequest "https://github.com/EverMind-AI/Raven/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
+        $target = [string]$response.Headers.Location
+    } catch {
+        # Windows PowerShell raises on an unfollowed redirect; the Location header
+        # still rides on the exception's response.
+        $failed = $_.Exception.Response
+        if ($failed) {
+            try { $target = [string]$failed.Headers.Location } catch { $target = "" }
+            if (-not $target) {
+                try { $target = [string]$failed.Headers.GetValues("Location")[0] } catch { $target = "" }
+            }
+        }
+    }
+    if ($target -match "^https://github\.com/EverMind-AI/Raven/releases/tag/v([0-9]+\.[0-9]+\.[0-9]+)$") {
+        return $Matches[1]
+    }
+    return ""
+}
+
 function Resolve-RavenWheel {
     if ($env:RAVEN_WHEEL_URL) { return $env:RAVEN_WHEEL_URL }
     Write-Info "Resolving the latest Raven release from GitHub..."
-    $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
-    $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
-    if (-not $asset) {
-        Fail "Could not resolve the latest Raven release wheel from GitHub. Set RAVEN_WHEEL_URL to a wheel URL."
+    try {
+        $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
+        $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
+        if ($asset) { return $asset.browser_download_url }
+        Write-Warn "GitHub API returned no release wheel; falling back to the release page."
+    } catch {
+        Write-Warn "GitHub API lookup failed ($($_.Exception.Message)); falling back to the release page."
     }
-    return $asset.browser_download_url
+    $version = Resolve-RavenLatestVersion
+    if (-not $version) {
+        Fail "Could not resolve the latest Raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
+    }
+    return "https://github.com/EverMind-AI/Raven/releases/download/v$version/raven-$version-py3-none-any.whl"
 }
 
 function Resolve-RavenConstraints([string]$WheelUrl) {
