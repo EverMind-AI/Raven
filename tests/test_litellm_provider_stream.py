@@ -119,11 +119,36 @@ def test_normalize_stream_chunk_openai_shape_default() -> None:
 
 
 def test_normalize_stream_chunk_returns_none_for_empty_payload() -> None:
-    """Chunks with no content/tool_calls/usage return None — chat_stream skips them."""
+    """Chunks carrying nothing at all return None — chat_stream skips them."""
     provider = _make_provider()
-    # delta.content is None AND no tool_calls AND no usage — pure stop-marker chunk
-    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="stop")])
+    # No content, no tool_calls, no usage, and no finish_reason either.
+    chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason=None)])
     assert provider._normalize_stream_chunk(chunk) is None
+
+
+def test_normalize_stream_chunk_keeps_terminal_finish_reason() -> None:
+    """A stop-marker chunk is no longer empty: finish_reason is its payload.
+
+    Upstream states why generation stopped only on this chunk. Skipping it
+    (which the emptiness check used to do, since content/tool_calls/usage are
+    all absent there) throws away the one signal distinguishing "finished"
+    from "cut off at the output ceiling".
+    """
+    provider = _make_provider()
+    for reason in ("stop", "length", "tool_calls"):
+        chunk = _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason=reason)])
+        delta = provider._normalize_stream_chunk(chunk)
+        assert delta is not None, f"terminal chunk with finish_reason={reason!r} was skipped"
+        assert delta.finish_reason == reason
+        assert delta.content is None
+
+
+def test_normalize_stream_chunk_finish_reason_absent_mid_stream() -> None:
+    """Content-bearing chunks mid-stream carry no finish_reason."""
+    provider = _make_provider()
+    delta = provider._normalize_stream_chunk(_chunk("token"))
+    assert delta is not None
+    assert delta.finish_reason is None
 
 
 @pytest.mark.asyncio
@@ -332,3 +357,57 @@ async def test_base_chat_stream_fallback_sends_configured_settings() -> None:
     assert captured["max_tokens"] == 8192
     assert captured["temperature"] == 0.1
     assert captured["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_surfaces_upstream_finish_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The consumer sees upstream's finish_reason on the terminal delta.
+
+    Without this the loop can only guess why generation stopped, and a
+    response cut off at the output ceiling is indistinguishable from one the
+    model chose to end.
+    """
+    chunks = [
+        _chunk("par"),
+        _chunk("tial"),
+        _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="length")]),
+    ]
+
+    async def fake_acompletion(**_: Any):
+        return _fake_stream(chunks)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    out: list[StreamDelta] = []
+    async for delta in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}]):
+        out.append(delta)
+
+    assert [d.content for d in out if d.content] == ["par", "tial"]
+    assert out[-1].finish_reason == "length"
+    # Mid-stream deltas stay clean so a consumer can key on "the one that has it".
+    assert [d.finish_reason for d in out[:-1]] == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_upstream_length_does_not_trip_the_error_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """finish_reason now carries two unrelated meanings; they must not collide.
+
+    The agent loop treats `finish_reason == "error"` as a replayed provider
+    failure. Upstream values ride the same field, so a truncated response must
+    not be mistaken for one.
+    """
+    chunks = [_FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="length")])]
+
+    async def fake_acompletion(**_: Any):
+        return _fake_stream(chunks)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    out = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+    assert out[-1].finish_reason == "length"
+    assert out[-1].finish_reason != "error"
+    assert out[-1].error_classification is None

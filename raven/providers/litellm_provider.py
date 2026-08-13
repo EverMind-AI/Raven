@@ -656,6 +656,13 @@ class LiteLLMProvider(LLMProvider):
             tool_calls = getattr(delta_obj, "tool_calls", None)
             usage = getattr(chunk, "usage", None)
             reasoning_content = getattr(delta_obj, "reasoning_content", None) or None
+            # Upstream states why it stopped only on the terminal chunk, which
+            # otherwise carries no payload at all. Dropping that chunk (as the
+            # emptiness check below used to) discards the one signal that says
+            # the response was cut off at the output ceiling rather than
+            # finished -- the difference between "the model is done" and "the
+            # model was interrupted mid-token".
+            finish_reason = getattr(choices[0], "finish_reason", None) or None
 
             tool_call_delta: dict[str, Any] | None = None
             if tool_calls:
@@ -690,7 +697,13 @@ class LiteLLMProvider(LLMProvider):
                         "total_tokens": getattr(usage, "total_tokens", None),
                     }
 
-            if content is None and tool_call_delta is None and usage_dict is None and reasoning_content is None:
+            if (
+                content is None
+                and tool_call_delta is None
+                and usage_dict is None
+                and reasoning_content is None
+                and finish_reason is None
+            ):
                 return None
 
             return StreamDelta(
@@ -698,6 +711,7 @@ class LiteLLMProvider(LLMProvider):
                 tool_call_delta=tool_call_delta,
                 usage=usage_dict,
                 reasoning_content=reasoning_content,
+                finish_reason=finish_reason,
             )
         except (AttributeError, IndexError):
             return None
