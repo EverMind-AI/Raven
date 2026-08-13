@@ -360,3 +360,32 @@ def test_text_mentioning_a_tag_is_left_alone() -> None:
 def test_real_content_after_a_think_block_survives() -> None:
     """The existing paired-block behaviour is unchanged."""
     assert AgentLoop._strip_think("<think>reasoning</think>the answer") == "the answer"
+
+
+# ---------------------------------------------------------------------------
+# Inline-thinking detection: namespaced and orphan spellings
+# ---------------------------------------------------------------------------
+
+
+def test_inline_thinking_detects_namespaced_and_orphan_tags() -> None:
+    """The scan decides whether a turn produced reasoning at all.
+
+    An opener-only pattern misses both shapes a truncated turn actually
+    produces: a vendor-namespaced tag, and a closing tag whose opener the
+    backend swallowed. Missing them classifies a reasoning-only turn as a real
+    answer, which is exactly the recovery this module exists to trigger.
+    """
+    from raven.agent.loop.recovery import has_inline_thinking
+
+    assert has_inline_thinking("<mm:think>weighing options</mm:think>")
+    assert has_inline_thinking("weighing options</think>")
+    assert has_inline_thinking("<think>weighing options</think>")
+
+
+def test_inline_thinking_ignores_prose_about_thinking() -> None:
+    """No tag, no detection -- the word alone must not trigger recovery."""
+    from raven.agent.loop.recovery import has_inline_thinking
+
+    assert not has_inline_thinking("I was thinking about the reasoning behind it")
+    assert not has_inline_thinking("")
+    assert not has_inline_thinking(None)

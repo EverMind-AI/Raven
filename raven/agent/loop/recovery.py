@@ -33,7 +33,10 @@ from raven.providers.base import LLMResponse
 # the reasoning in ``content`` as <think>…</think> rather than in the structured
 # reasoning_content field, so a content scan is required — checking only the
 # structured fields would miss them.
-_THINK_TAG_RE = re.compile(r"<think>|<thinking>|<reasoning>", re.IGNORECASE)
+# Matches an opening or a closing tag, with or without a vendor namespace
+# prefix (``<mm:think>``). A turn cut off inside an inlined block arrives as
+# a lone closing tag, so an opener-only pattern reads it as ordinary prose.
+_THINK_TAG_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
 
 POST_TOOL_NUDGE = (
     "You executed tool calls but returned an empty response. Use the tool "
