@@ -14,7 +14,14 @@ from pathlib import Path
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.tools.capabilities import CAPABILITIES, Need, configured_from, is_configured
+from raven.agent.tools.capabilities import (
+    CAPABILITIES,
+    Need,
+    borrowable_credential,
+    configured_from,
+    has_credential,
+    is_configured,
+)
 from raven.config.loader import load_config
 from raven.providers.base import LLMProvider, LLMResponse
 
@@ -46,10 +53,17 @@ def workspace():
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_serper_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """web_search resolves its key from the environment too, so a developer who
-    exported one would otherwise see these pass for the wrong reason."""
-    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+def _no_ambient_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every credential here also resolves from the environment, so a developer
+    who exported one would otherwise see these pass for the wrong reason.
+
+    ``OPENROUTER_API_KEY`` matters as much as the search key: it is a third
+    source for the media family, behind the section and the borrow, and a case
+    asserting that nothing was available to borrow silently stops testing that
+    on any machine that exports it.
+    """
+    for var in ("SERPER_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _config(tmp_path: Path):
@@ -139,7 +153,7 @@ def test_a_media_model_alone_agrees_on_both_sides(attr, tool, workspace, tmp_pat
 
     cap = next(c for c in CAPABILITIES if c.tool == tool)
     assert is_configured(cap, config) and loop.tools.has(tool)
-    assert configured_from(cap, config) == "providers.openrouter.apiKey (borrowed)"
+    assert configured_from(cap, config) == "borrowed: providers.openrouter.apiKey"
 
 
 def test_an_openrouter_key_alone_switches_nothing_on(workspace, tmp_path: Path) -> None:
@@ -173,6 +187,11 @@ def test_every_entry_carries_what_a_deployer_has_to_act_on() -> None:
             assert cap.config_path, f"{cap.tool}: no config path to put the key in"
         if cap.need is Need.OWN_CREDENTIAL:
             assert cap.cost_note, f"{cap.tool}: switched on without saying it bills per call"
+            # The row that says "you already have this key" has to name where,
+            # and the doctor prints both unguarded -- a blank one renders as an
+            # instruction with the answer missing.
+            assert cap.env_var, f"{cap.tool}: reuses a credential without naming the variable"
+            assert cap.key_path != cap.config_path, f"{cap.tool}: model path doubling as the key path"
 
 
 @pytest.mark.parametrize(
@@ -196,4 +215,92 @@ def test_a_media_model_with_no_key_to_borrow_still_counts(attr, tool, workspace,
     cap = next(c for c in CAPABILITIES if c.tool == tool)
     assert not _resolved(config, attr).api_key, "nothing should have been borrowed"
     assert is_configured(cap, config) and loop.tools.has(tool)
-    assert configured_from(cap, config) == cap.config_path
+    # Registered, and unusable: no key resolves from the section, the borrow, or
+    # the environment, so every call returns the tool's missing-key error. There
+    # is no source to name, and naming the model path -- the only path this
+    # capability has -- would tell the deployer a key sits somewhere it does not.
+    assert configured_from(cap, config) == ""
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_a_media_key_is_reported_at_its_own_path_not_the_model_path(attr, tool, workspace, tmp_path: Path) -> None:
+    """``config_path`` names the model for this family, so reusing it as the
+    credential source sends the deployer to edit a line holding no key."""
+    config = _config(tmp_path)
+    getattr(config.tools.media, attr).api_key = "sk-tool-own"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert is_configured(cap, config) and loop.tools.has(tool)
+    assert configured_from(cap, config) == f"tools.media.{attr}.apiKey"
+    assert configured_from(cap, config) != cap.config_path
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_a_media_key_from_the_environment_is_a_source_like_any_other(
+    attr, tool, monkeypatch: pytest.MonkeyPatch, workspace, tmp_path: Path
+) -> None:
+    """The tool resolves ``OPENROUTER_API_KEY`` at call time, so a report that
+    consults only config answers "no credential" for a working install."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-from-env")
+    config = _config(tmp_path)
+    getattr(config.tools.media, attr).model = "some/model"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert is_configured(cap, config) and loop.tools.has(tool)
+    assert configured_from(cap, config) == "OPENROUTER_API_KEY"
+    # The half that decides whether the row carries a warning. This install
+    # works, so calling it keyless would send a deployer to fix what is not
+    # broken -- and only the tool's chain reaches the variable to know that.
+    assert has_credential(cap, config)
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_no_borrow_is_claimed_when_there_is_nothing_to_borrow(attr, tool, tmp_path: Path) -> None:
+    """The instruction "reuse the key you already have" is wrong when no key
+    exists, and wrong in the expensive direction: it is the reason a deployer
+    sets a model, gets a registered tool, and sees every call fail."""
+    config = _config(tmp_path)
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert not config.providers.openrouter.api_key, "this case needs nothing to borrow"
+
+    assert borrowable_credential(cap, config) == ""
+
+    config.providers.openrouter.api_key = "sk-or-test"
+    assert borrowable_credential(cap, config) == "providers.openrouter.apiKey"
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_an_exported_key_is_reusable_too(attr, tool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A deployment that exports the key and configures nothing needs the model
+    and nothing else, so telling it to go and set a key is the same misreport in
+    the other direction."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-from-env")
+    config = _config(tmp_path)
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert not config.providers.openrouter.api_key, "the environment must be the only source"
+
+    assert borrowable_credential(cap, config) == "OPENROUTER_API_KEY"
+
+
+def test_only_the_media_family_borrows(tmp_path: Path) -> None:
+    """web_search cannot reuse anything -- its row already names what to get --
+    and web_fetch needs nothing at all."""
+    config = _config(tmp_path)
+    config.providers.openrouter.api_key = "sk-or-test"
+
+    for cap in (c for c in CAPABILITIES if not c.media_attr):
+        assert borrowable_credential(cap, config) == "", cap.tool

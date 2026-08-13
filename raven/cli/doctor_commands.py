@@ -151,7 +151,17 @@ class ToolCapabilityInfo:
     #: Where a configured one got its credential; empty when unconfigured or
     #: when none was needed.
     source: str = ""
+    #: Whether a credential resolves at all, which for the media family is not
+    #: the same as ``configured``: a model with no key is registered and fails
+    #: on every call.
+    has_credential: bool = True
     config_path: str = ""
+    #: Where this capability's own credential goes, which for the media family
+    #: is not ``config_path`` -- that one names the model.
+    key_path: str = ""
+    #: The credential an unconfigured one would pick up on being switched on;
+    #: empty when there is none to pick up, so the row can say so.
+    borrowable: str = ""
     env_var: str = ""
     obtain_from: str = ""
     cost_note: str = ""
@@ -321,7 +331,13 @@ def _gather_tools(config: "Config") -> ToolsInfo:
     here is how the answers drift apart. See
     ``raven/agent/tools/capabilities.py``.
     """
-    from raven.agent.tools.capabilities import CAPABILITIES, configured_from, is_configured
+    from raven.agent.tools.capabilities import (
+        CAPABILITIES,
+        borrowable_credential,
+        configured_from,
+        has_credential,
+        is_configured,
+    )
 
     return ToolsInfo(
         capabilities=[
@@ -331,7 +347,10 @@ def _gather_tools(config: "Config") -> ToolsInfo:
                 need=cap.need.value,
                 configured=is_configured(cap, config),
                 source=configured_from(cap, config),
+                has_credential=has_credential(cap, config),
                 config_path=cap.config_path,
+                key_path=cap.key_path,
+                borrowable=borrowable_credential(cap, config),
                 env_var=cap.env_var,
                 obtain_from=cap.obtain_from,
                 cost_note=cap.cost_note,
@@ -561,23 +580,43 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
     the capability is available at all. Ordered by how much they would have to
     do, so what is one edit away reads before what needs an account.
 
-    Not a fault: an install with no image generation is a choice, so nothing
-    here moves the exit code.
+    A capability registered with no credential is warned about rather than
+    ticked, because that one is not a choice: the agent is offered a tool whose
+    every call returns a missing-key error.
+
+    Still not a fault, though: an install with no image generation is a choice,
+    and the half-finished one fails loudly where it happens rather than
+    silently, so nothing here moves the exit code.
     """
+    # One fact per line rather than one sentence: the terminal wraps a long line
+    # mid-path, and a config key broken across two rows cannot be copied, which
+    # is the only thing these rows are for.
+    indent = f"{'':<19}"
     for cap in tools.capabilities:
         label = f"  {cap.tool + ':':<17}"
         if cap.configured:
             where = f"  [dim]({cap.source})[/dim]" if cap.source else ""
-            console.print(f"{label}[green]✓[/green] {cap.summary}{where}")
+            # The marker carries the answer too: a green tick above a line
+            # saying every call fails is the same misreport in miniature.
+            mark = "[green]✓[/green]" if cap.has_credential else "[yellow]![/yellow]"
+            console.print(f"{label}{mark} {cap.summary}{where}")
+            if not cap.has_credential:
+                console.print(f"{indent}[yellow]no key resolves; calls will fail[/yellow]")
+                console.print(f"{indent}[dim]set:[/dim] {cap.key_path}")
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
             continue
         console.print(f"{label}[dim]-  {cap.summary}[/dim]")
-        # One fact per line rather than one sentence: the terminal wraps a long
-        # line mid-path, and a config key broken across two rows cannot be
-        # copied, which is the only thing this row is for.
-        indent = f"{'':<19}"
         if cap.need == "own_credential":
             console.print(f"{indent}[dim]switch on:[/dim] {cap.config_path}")
-            console.print(f"{indent}[dim]key: borrowed from providers.openrouter[/dim]")
+            if cap.borrowable:
+                # "reusing" rather than "borrowed from" because the same line
+                # covers a provider entry and an exported variable.
+                console.print(f"{indent}[dim]key: reusing[/dim] {cap.borrowable}")
+            else:
+                # Claiming the borrow with nothing to borrow sends the deployer
+                # to set a model and land in the case flagged above.
+                console.print(f"{indent}[dim]also set:[/dim] {cap.key_path}")
+                console.print(f"{indent}[dim]or env:[/dim] {cap.env_var}")
         elif cap.need == "new_account":
             console.print(f"{indent}[dim]set:[/dim] {cap.config_path}")
             if cap.env_var:

@@ -13,6 +13,13 @@ the model, one per family, each a different shape:
     web_fetch    nothing -- always registered, a key only improves extraction
     media x3     an api_key *or* a model, either one counting as configured
 
+For the media family, being offered to the model and being usable are two
+different questions: a section naming only a model is registered, because a
+model alone counts as asking for the tool, and then every call fails on a
+missing key. :func:`is_configured` answers the first and the tools' ``has_key``
+answers the second -- collapsing them is how a report ends up ticking a
+capability that cannot run.
+
 Each rule is defensible where it sits. What is missing is anywhere to *read*
 them. A deployer cannot ask what this install lacks, and since an unconfigured
 tool stopped being registered there is no surface at all saying the capability
@@ -39,6 +46,10 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from raven.config.schema import Config
 
+#: The credential the media family falls back to, named once so what a doctor
+#: row tells the deployer to set cannot drift from what is read here.
+_OPENROUTER_KEY = "providers.openrouter.apiKey"
+
 
 class Need(Enum):
     """What stands between a capability and working."""
@@ -61,9 +72,11 @@ class Capability:
     #: One line in the deployer's terms rather than the code's.
     summary: str
     need: Need
-    #: Dotted config path the deployer would edit to switch this on.
+    #: Dotted config path the deployer would edit to switch this on. For the
+    #: media family this is the *model* field, not a credential -- see
+    #: :attr:`key_path`.
     config_path: str = ""
-    #: Environment variable accepted instead of the config field, if any.
+    #: Environment variable accepted instead of this capability's credential.
     env_var: str = ""
     #: Where to go when ``need`` is NEW_ACCOUNT.
     obtain_from: str = ""
@@ -72,6 +85,16 @@ class Capability:
     #: Stated before the deployer switches it on rather than after: these cost
     #: money per call, and one cannot run at all without prepaid credit.
     cost_note: str = ""
+
+    @property
+    def key_path(self) -> str:
+        """Dotted path to this capability's own credential field.
+
+        Distinct from :attr:`config_path`, which for the media family is the
+        model field: naming a model path as where a key came from sends the
+        deployer to edit a line that holds no credential.
+        """
+        return f"tools.media.{self.media_attr}.apiKey" if self.media_attr else self.config_path
 
 
 #: Ordered by how much the deployer has to do, least first, because that is the
@@ -89,6 +112,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         need=Need.OWN_CREDENTIAL,
         config_path="tools.media.image.model",
         media_attr="image",
+        env_var="OPENROUTER_API_KEY",
         cost_note="Billed per image.",
     ),
     Capability(
@@ -97,6 +121,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         need=Need.OWN_CREDENTIAL,
         config_path="tools.media.speech.model",
         media_attr="speech",
+        env_var="OPENROUTER_API_KEY",
         cost_note="Billed per call.",
     ),
     Capability(
@@ -105,6 +130,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         need=Need.OWN_CREDENTIAL,
         config_path="tools.media.video.model",
         media_attr="video",
+        env_var="OPENROUTER_API_KEY",
         cost_note="Billed per call; needs prepaid OpenRouter credit to run at all.",
     ),
     Capability(
@@ -144,6 +170,28 @@ def is_configured(cap: Capability, config: "Config") -> bool:
     return WebSearchTool.is_configured(config.tools.web.search.api_key)
 
 
+def has_credential(cap: Capability, config: "Config") -> bool:
+    """Whether a credential actually resolves for this capability.
+
+    A different question from :func:`is_configured`, which answers whether the
+    deployment asked for the tool. They come apart for the media family: a
+    section naming only a model is registered and offered to the model, and
+    every call then fails on a missing key. A report that collapses the two
+    ticks a capability that cannot run, which is the one thing it must not do.
+
+    The same answer twice for the other families -- web_search is configured by
+    a resolved key and nothing else, and web_fetch needs none -- so this only
+    ever diverges where the rule itself does.
+    """
+    if cap.need is Need.NOTHING:
+        return True
+    if cap.media_attr:
+        from raven.agent.tools.media_gen import _OpenRouterMediaTool
+
+        return _OpenRouterMediaTool.has_key(_resolved_media(cap, config))
+    return is_configured(cap, config)
+
+
 def configured_from(cap: Capability, config: "Config") -> str:
     """Where a satisfied capability got its credential, for a doctor row.
 
@@ -153,21 +201,54 @@ def configured_from(cap: Capability, config: "Config") -> str:
     have" and "needs a key" are different instructions, and a row that cannot
     tell them apart sends someone to create an account they already have.
 
-    Empty when the capability is unconfigured, and for the ones needing nothing
-    -- there is no credential to report on either.
+    Empty when the capability is unconfigured, when it needs nothing, and --
+    for the media family only -- when it is registered with no credential at
+    all: a section naming just a model is offered to the model and fails on
+    every call, so there is no source to name.
+
+    Names a source; it does not rule on whether one exists. Callers wanting that
+    answer ask :func:`has_credential`, which asks the tools -- inferring it from
+    an empty string here would make the two facts one, and they are not.
     """
     if cap.need is Need.NOTHING or not is_configured(cap, config):
         return ""
     if cap.media_attr:
+        if getattr(config.tools.media, cap.media_attr).api_key:
+            return cap.key_path
         # effective_media_config resolves the borrow, so a key present after it
         # but absent in the raw section came from the provider entry.
-        raw = getattr(config.tools.media, cap.media_attr)
-        if not raw.api_key and _resolved_media(cap, config).api_key:
-            return "providers.openrouter.apiKey (borrowed)"
-        return cap.config_path
-    if config.tools.web.search.api_key:
-        return cap.config_path
+        if _resolved_media(cap, config).api_key:
+            return f"borrowed: {_OPENROUTER_KEY}"
+    elif config.tools.web.search.api_key:
+        return cap.key_path
     return cap.env_var if os.environ.get(cap.env_var) else ""
 
 
-__all__ = ["CAPABILITIES", "Capability", "Need", "configured_from", "is_configured"]
+def borrowable_credential(cap: Capability, config: "Config") -> str:
+    """Where an unconfigured media capability would get its key once switched on.
+
+    "Reuse the OpenRouter key you already have" and "get a key as well" are
+    different instructions, and only this tells them apart. Stating the first
+    unconditionally is worse than saying nothing: the deployer sets a model,
+    the tool is registered because a model alone counts, and every call then
+    fails on a credential they were told they already had.
+
+    Empty for the other families, whose own rows already name what to set.
+    """
+    if not cap.media_attr:
+        return ""
+    openrouter = config.providers.get("openrouter")
+    if openrouter and openrouter.api_key:
+        return _OPENROUTER_KEY
+    return cap.env_var if os.environ.get(cap.env_var) else ""
+
+
+__all__ = [
+    "CAPABILITIES",
+    "Capability",
+    "Need",
+    "borrowable_credential",
+    "configured_from",
+    "has_credential",
+    "is_configured",
+]
