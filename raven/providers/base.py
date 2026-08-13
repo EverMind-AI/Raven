@@ -288,14 +288,20 @@ def send_max_tokens(generation: Any, model: str | None) -> int:
     Computed separately the two would drift the moment either side grew a
     bound, and the check would stop firing without ever failing -- which is
     the exact shape of the defect this branch exists to remove.
-    """
-    pinned = getattr(generation, "max_tokens", None)
-    if pinned:
-        return int(pinned)
 
+    A pinned value is a call site asking for a deliberately short answer, so it
+    wins -- but never above what the model accepts. Every pin in the tree today
+    is far below any real ceiling, which is exactly why the bound has to be
+    written down now: the first pin that is not would be a rejected request,
+    and nothing about the call site would say why.
+    """
     from raven.providers.rates import resolve_max_output_tokens
 
-    return resolve_max_output_tokens(model)
+    ceiling = resolve_max_output_tokens(model)
+    pinned = getattr(generation, "max_tokens", None)
+    if pinned:
+        return min(int(pinned), ceiling)
+    return ceiling
 
 
 @dataclass(frozen=True)

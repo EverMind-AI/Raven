@@ -600,3 +600,20 @@ async def test_truncation_marker_never_reaches_the_assistant_message() -> None:
     assert "truncation" not in payload
     assert "run_meta" not in payload
     assert "_truncated" not in payload
+
+
+async def test_a_pin_above_the_model_ceiling_is_bounded_by_it() -> None:
+    """A pin is a call site's decision, but not a licence to exceed the model.
+
+    Every pin in the tree today is far below any real ceiling, so this bound
+    never fires -- which is why it has to be written down: the first pin that
+    is not below it would be a rejected request, with nothing at the call site
+    saying why.
+    """
+    provider = _provider_with_ceiling(
+        [StreamDelta(content="x"), StreamDelta(content=None, finish_reason="stop")],
+        max_tokens=10_000_000,
+    )
+    response = await _bind_helper(provider)(messages=[{"role": "user", "content": "hi"}], tools=None, model="gpt-4o")
+
+    assert response.max_tokens == 16384  # gpt-4o's catalogue ceiling, not the pin
