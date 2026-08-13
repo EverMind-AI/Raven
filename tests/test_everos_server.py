@@ -151,8 +151,11 @@ class TestSpawnPreflight:
     async def test_a_running_server_needs_no_credential_check(self, everos_toml) -> None:
         """A /health 200 proves the LLM client was built, so do not second-guess it."""
         _write_llm_section(everos_toml, api_key="")
+        waits: list[int] = []
         with patch("raven.plugin.memory.everos._server._probe_health", return_value=True):
-            await ensure_everos_server("http://localhost:18791")
+            await ensure_everos_server("http://localhost:18791", on_wait=lambda: waits.append(1))
+
+        assert waits == [], "narrated a wait that never happened"
 
     @pytest.mark.asyncio
     async def test_configured_llm_reaches_the_spawn(self, everos_toml, tmp_path, monkeypatch) -> None:

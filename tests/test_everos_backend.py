@@ -150,6 +150,70 @@ class TestLifecycle:
         mock_ensure.assert_called_once()
 
 
+class TestColdStartSpeaksUp:
+    """The memory service starts on demand every session, and it can fail.
+
+    Both the wait and the failure used to be invisible: the wait was silent and
+    the reason went only to the log file, so a broken backend looked like an
+    agent that had simply gone quiet.
+    """
+
+    async def test_a_real_wait_says_so(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        async def _waits(_base_url: str, *, on_wait=None, **_kw: object) -> None:
+            if on_wait is not None:
+                on_wait()
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_waits):
+            b = EverosBackend(_ctx(tmp_path))
+            await b.start()
+
+        assert "Starting memory service" in capsys.readouterr().err
+
+    async def test_an_already_running_server_stays_silent(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        """``on_wait`` must not fire when there is nothing to wait for: this path
+        runs on every session, and a line here would be pure noise."""
+
+        async def _already_up(_base_url: str, *, on_wait=None, **_kw: object) -> None:
+            return None
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_already_up):
+            b = EverosBackend(_ctx(tmp_path))
+            await b.start()
+
+        assert "Starting memory service" not in capsys.readouterr().err
+
+    async def test_unconfigured_llm_degrades_with_an_actionable_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        """This is the out-of-the-box state: backend defaults to everos while the
+        shipped everos.toml has an empty [llm] api_key."""
+        from raven.plugin.memory.everos._server import EverosNotConfiguredError
+
+        async def _unconfigured(*_a: object, **_kw: object) -> None:
+            raise EverosNotConfiguredError("no llm")
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_unconfigured):
+            b = EverosBackend(_ctx(tmp_path))
+            await b.start()
+
+        err = " ".join(capsys.readouterr().err.split())
+        assert "its LLM is not configured" in err
+        assert "raven onboard" in err
+
+    async def test_other_failures_name_the_reason(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+        async def _boom(*_a: object, **_kw: object) -> None:
+            raise RuntimeError("EverOS server exited with code 1")
+
+        with patch("raven.plugin.memory.everos._server.ensure_everos_server", new=_boom):
+            b = EverosBackend(_ctx(tmp_path))
+            with pytest.raises(RuntimeError):
+                await b.start()
+
+        err = " ".join(capsys.readouterr().err.split())
+        assert "exited with code 1" in err
+        assert "without long-term memory" in err
+
+
 class TestStartWarnsWhenRecallCannotWork:
     """A running server stopped implying a working one in everos 1.2.1."""
 

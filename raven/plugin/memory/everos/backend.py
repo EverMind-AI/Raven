@@ -398,15 +398,43 @@ class EverosBackend:
                 self._adapter = _NoOpAdapter()
                 return
 
-            from raven.plugin.memory.everos._server import ensure_everos_server
+            from rich.console import Console
 
+            from raven.plugin.memory.everos._server import (
+                EverosNotConfiguredError,
+                ensure_everos_server,
+            )
+
+            stderr = Console(stderr=True)
             base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
             try:
-                await ensure_everos_server(base_url)
+                # Narrate only a real wait. ``on_wait`` does not fire when a
+                # server is already answering, which is the common case -- a line
+                # there would be noise on every single session, and a healthy
+                # start is meant to be silent.
+                await ensure_everos_server(
+                    base_url,
+                    on_wait=lambda: stderr.print("[dim]Starting memory service...[/dim]"),
+                )
+            except EverosNotConfiguredError:
+                # Reachable out of the box: memory.backend defaults to "everos"
+                # while the shipped everos.toml has an empty [llm] api_key. The
+                # user can act on this, so say it here rather than only in the
+                # log the caller writes.
+                stderr.print(
+                    "[yellow]Long-term memory is off: its LLM is not configured.[/yellow]\n"
+                    "[dim]Run `raven onboard` to set it up.[/dim]"
+                )
+                self._adapter = _NoOpAdapter()
+                return
             except Exception as e:
                 self._logger.error(
                     "EverosBackend: failed to start EverOS server (%s)",
                     e,
+                )
+                stderr.print(
+                    f"[yellow]Memory service unavailable: {e}[/yellow]\n"
+                    "[dim]This session runs without long-term memory.[/dim]"
                 )
                 raise
             # Off-thread: the probe and the config read below are both blocking

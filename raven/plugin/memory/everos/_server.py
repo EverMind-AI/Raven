@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -172,6 +173,7 @@ async def ensure_everos_server(
     base_url: str,
     *,
     timeout: float = 30.0,
+    on_wait: Callable[[], None] | None = None,
 ) -> None:
     """Make sure a server is answering at ``base_url``, starting one if not.
 
@@ -184,6 +186,11 @@ async def ensure_everos_server(
     reported to the user as a 30s timeout blaming a missing install. A default
     here means "forgot to read the config" is a silent runtime bug rather than a
     signature error, so there is none.
+
+    ``on_wait`` fires once, only when an actual boot is about to be waited on --
+    never when a server is already answering. That lets a caller narrate the
+    wait without adding noise to the common case where there is nothing to wait
+    for.
     """
     if await asyncio.to_thread(_probe_health, base_url):
         logger.info("everos server already running at {}", base_url)
@@ -192,6 +199,9 @@ async def ensure_everos_server(
     # Only on the spawn path: a server that answers /health has already built
     # its LLM client, so its credentials are proven by the probe above.
     _require_llm_configured()
+
+    if on_wait is not None:
+        on_wait()
 
     port = _extract_port(base_url)
     proc = await asyncio.to_thread(_start_server_if_unlocked, port)
