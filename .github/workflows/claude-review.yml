@@ -93,9 +93,13 @@ jobs:
             throwaway experiment on the ephemeral runner - restore tracked files with
             `git checkout` and never push.
 
-            Report only findings you are highly confident are real AND introduced by this PR.
-            Every behavior claim needs a file:line citation, not an inference from naming. When
-            unsure, drop it - false positives waste the author's time. Out of scope:
-            pre-existing issues on untouched lines, anything a linter catches, undocumented
-            style. Open the summary with your stance in one sentence - "No blockers; this can
-            merge." or "Blocking: <one line>." Be willing to approve.
+            Report only findings you are highly confident are real AND introduced by this PR;
+            when unsure, drop it. Every behavior claim needs a file:line citation, not an
+            inference from naming. Label each finding [blocker] (must fix before merge), [nit]
+            (minor, non-blocking), or [pre-existing] (not introduced here). Post at most 5
+            nits; if there are more, give the count in the summary rather than a comment each.
+            On a re-run of an already-reviewed change, post only NEW blockers - do not re-raise
+            nits or re-nag settled points. Out of scope: pre-existing issues on untouched
+            lines, anything a linter catches, undocumented style. Open the summary with your
+            stance in one sentence - "No blockers; this can merge." or "Blocking: <one line>."
+            Be willing to approve.
