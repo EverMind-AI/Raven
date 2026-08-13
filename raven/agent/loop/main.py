@@ -194,6 +194,12 @@ _EMPTY_SUCCESS_MARKERS = ("no matches found", "no files found")
 # would make either meaning impossible to reason about separately.
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
+# Opening or closing reasoning tag, with or without a vendor namespace prefix
+# (<think>, </thinking>, <mm:think>, ...). Used only to ask whether a stripped
+# response is nothing but tag debris -- matching a spelling wrong costs a
+# missed recovery, never a mangled answer.
+_THINK_TAG_RESIDUE_RE = re.compile(r"</?(?:[a-z][\w.-]{0,15}:)?(?:think|thinking|reasoning)>", re.IGNORECASE)
+
 
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
@@ -1546,10 +1552,25 @@ class AgentLoop:
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
-        """Remove <think>…</think> blocks that some models embed in content."""
+        """Remove <think>…</think> blocks that some models embed in content.
+
+        Paired blocks are removed. What is left is then checked for being
+        nothing but tag debris: when a backend inlines its reasoning and the
+        turn is cut off inside it, content arrives as a lone closing tag with
+        no opener to pair against, so the substitution above finds nothing and
+        an eleven-character string reads as a real answer. Recovery is skipped
+        and the tag is what the user sees.
+
+        The check is on residue, not on vendor spellings -- it does not matter
+        which prefix a backend picked. Text that merely mentions a tag keeps
+        its other words and is returned untouched.
+        """
         if not text:
             return None
-        return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        if cleaned and not _THINK_TAG_RESIDUE_RE.sub("", cleaned).strip():
+            return None
+        return cleaned or None
 
     @staticmethod
     def _tool_hint(tool_calls: list) -> str:

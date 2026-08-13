@@ -324,3 +324,39 @@ async def test_recovery_disabled_falls_back_immediately(workspace):
     assert out is not None
     assert provider.calls == 1  # no retries when disabled
     assert "no response" in out[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# Tag debris counts as empty, so recovery still runs
+# ---------------------------------------------------------------------------
+
+
+def test_lone_closing_think_tag_reads_as_empty() -> None:
+    """A cut-off inline reasoning block leaves an opener-less closing tag.
+
+    The paired-block substitution finds nothing to remove, so an
+    eleven-character string reaches the recovery check looking like a real
+    answer -- recovery is skipped and the tag is what the user sees.
+    """
+    for debris in ("</mm:think>", "</think>", "</thinking>", "</mm:think></mm:think>"):
+        assert AgentLoop._strip_think(debris) is None, debris
+
+
+def test_paired_namespaced_block_reads_as_empty() -> None:
+    """A complete but empty namespaced block is debris too."""
+    assert AgentLoop._strip_think("<mm:think></mm:think>") is None
+
+
+def test_text_mentioning_a_tag_is_left_alone() -> None:
+    """Debris detection must not eat an answer that talks about tags.
+
+    The check asks whether anything survives removing the tags, and does not
+    rewrite the text it returns.
+    """
+    said = "The model emits </think> at the end of its reasoning."
+    assert AgentLoop._strip_think(said) == said
+
+
+def test_real_content_after_a_think_block_survives() -> None:
+    """The existing paired-block behaviour is unchanged."""
+    assert AgentLoop._strip_think("<think>reasoning</think>the answer") == "the answer"
