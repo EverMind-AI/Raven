@@ -1716,6 +1716,17 @@ class AgentLoop:
         )
         truncated = upstream_finish_reason == "length" or hit_ceiling or args_parse_failed
 
+        if truncated and tool_calls:
+            # Mark every call from this turn, not just the ones whose JSON
+            # failed to parse: when the transport closes the braces for us the
+            # blob parses cleanly and simply lacks whatever the model had not
+            # reached yet, which schema validation then reports as a missing
+            # field. That message is true and useless -- it sends the model
+            # looking for a field it never omitted.
+            for tc in tool_calls:
+                tc.arguments["_truncated"] = True
+                tc.arguments["_truncated_at"] = sent_max_tokens
+
         if truncated:
             logger.warning(
                 "LLM output truncated (finish_reason={}, output_tokens={}, max_tokens={}, tool_args_incomplete={})",

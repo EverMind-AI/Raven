@@ -51,6 +51,11 @@ class ToolRegistry:
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
+        # Stripped before anything else looks at params: these are the loop's
+        # note to this method, not arguments the tool ever declared.
+        was_truncated = bool(params.pop("_truncated", False))
+        truncated_at = params.pop("_truncated_at", None)
+
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
@@ -58,6 +63,19 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
+                if was_truncated:
+                    # The schema is right that something is missing, but not
+                    # about why. Saying "missing required path" to a model that
+                    # wrote a path sends it hunting for a mistake it did not
+                    # make -- and its most reasonable next move is to send the
+                    # same oversized payload again. Name the real cause and
+                    # drop the generic try-another-approach hint with it.
+                    at = f" at {truncated_at} tokens" if truncated_at else ""
+                    return (
+                        f"Error: [truncated] Arguments for '{name}' were cut off{at}, "
+                        f"so this call is incomplete. Do not resend the same content. "
+                        f"Write it in several smaller pieces instead."
+                    )
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S

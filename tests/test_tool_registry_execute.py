@@ -148,3 +148,116 @@ def test_tool_output_is_a_str_subclass():
     assert out.display_text == "display"
     # Attribute is always present, so callers can getattr without a default dance.
     assert ToolOutput("text").display_text is None
+
+
+# ---------------------------------------------------------------------------
+# Truncated arguments are reported as truncation, not as a missing field
+# ---------------------------------------------------------------------------
+
+
+class _NeedsPath(Tool):
+    """A tool with one required parameter, plus a record of what it received."""
+
+    def __init__(self) -> None:
+        self.received: dict | None = None
+
+    @property
+    def name(self) -> str:
+        return "write_file"
+
+    @property
+    def description(self) -> str:
+        return "writes a file"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        }
+
+    async def execute(self, **kwargs) -> str:
+        self.received = kwargs
+        return "written"
+
+
+@pytest.mark.asyncio
+async def test_truncated_arguments_reported_as_truncation() -> None:
+    """A cut-off call names the real cause instead of the missing field.
+
+    The schema is right that something is missing; it is wrong about why.
+    Telling a model that wrote a path it forgot the path sends it looking for a
+    mistake it did not make, and its most reasonable next move is to resend the
+    same oversized payload.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"_raw_arguments": '{"content": "def foo(', "_truncated": True, "_truncated_at": 4096},
+    )
+
+    assert "[truncated]" in out
+    assert "4096 tokens" in out
+    assert "missing required" not in out
+    # The generic hint would still point at "try a different approach", which is
+    # the advice that produced the retry loop.
+    assert "different approach" not in out
+
+
+@pytest.mark.asyncio
+async def test_truncated_but_parseable_arguments_also_reported_as_truncation() -> None:
+    """Covers the shape where the transport closed the JSON for us.
+
+    The blob parses cleanly and simply lacks whatever the model had not reached
+    yet, so validation fails on a genuinely absent field -- indistinguishable
+    from a model error unless the truncation flag is honoured.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"content": "def foo(): ...", "_truncated": True, "_truncated_at": 8192},
+    )
+
+    assert "[truncated]" in out
+    assert "missing required" not in out
+
+
+@pytest.mark.asyncio
+async def test_untruncated_invalid_arguments_keep_the_schema_message() -> None:
+    """A genuine model mistake must still read as one."""
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute("write_file", {"content": "hello"})
+
+    assert "Invalid parameters" in out
+    assert "[truncated]" not in out
+    assert "different approach" in out
+
+
+@pytest.mark.asyncio
+async def test_truncation_markers_never_reach_the_tool() -> None:
+    """The markers are the loop's note to the registry, not tool arguments.
+
+    Note what this pins down as a side effect: when the arguments validate,
+    the tool runs even though the turn was truncated. That is the remaining
+    gap -- a call whose fields are all present but whose last string value was
+    cut mid-word passes validation and executes, writing a half-file and
+    reporting success. Closing it means refusing the call before dispatch,
+    which is a control-flow change and deliberately out of scope here.
+    """
+    tool = _NeedsPath()
+    reg = ToolRegistry()
+    reg.register(tool)
+
+    await reg.execute(
+        "write_file",
+        {"path": "a.py", "content": "x", "_truncated": True, "_truncated_at": 4096},
+    )
+
+    assert tool.received == {"path": "a.py", "content": "x"}
