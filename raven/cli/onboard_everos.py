@@ -1422,55 +1422,68 @@ def _step4_memory(
             "  [dim]正在启动 EverOS 服务...[/dim]",
         )
     )
-    try:
-        asyncio.run(ensure_everos_server(base_url))
-        oc.console.print(
-            oc._t(
-                "  [green]✓ EverOS service is running.[/green]",
-                "  [green]✓ EverOS 服务已启动。[/green]",
+    # A failed start is not a decision to abandon long-term memory. The models
+    # are already on disk at this point, so "defer" keeps the whole
+    # configuration and lets the runtime start the service on the next session;
+    # only the explicit third choice turns memory off.
+    while True:
+        try:
+            asyncio.run(ensure_everos_server(base_url))
+            oc.console.print(
+                oc._t(
+                    "  [green]✓ EverOS service is running.[/green]",
+                    "  [green]✓ EverOS 服务已启动。[/green]",
+                )
             )
-        )
-    except RuntimeError as exc:
-        oc.console.print(
-            oc._t(
-                f"  [red]✗ EverOS service failed to start: {exc}[/red]\n"
-                f"  [dim]Check: everos installed? Is {base_url} free? "
-                "See ~/.raven/logs/everos-server.log[/dim]",
-                f"  [red]✗ EverOS 服务启动失败：{exc}[/red]\n"
-                f"  [dim]请检查：everos 是否安装？{base_url} 是否被占用？"
-                "查看 ~/.raven/logs/everos-server.log[/dim]",
+            break
+        except RuntimeError as exc:
+            oc.console.print(
+                oc._t(
+                    f"  [red]✗ EverOS service failed to start: {exc}[/red]",
+                    f"  [red]✗ EverOS 服务启动失败：{exc}[/red]",
+                )
             )
-        )
-        retry = questionary.select(
-            oc._t("What to do?", "怎么办？"),
-            choices=[
-                questionary.Choice(oc._t("Retry", "重试"), value="retry"),
-                questionary.Choice(oc._t("Skip (memory disabled)", "跳过（记忆禁用）"), value="skip"),
-            ],
-            style=RAVEN_STYLE,
-            qmark=oc._QMARK,
-        ).ask()
-        if retry == "retry":
-            # Recurse once — the loop in _step4_memory handles further retries
-            try:
-                asyncio.run(ensure_everos_server(base_url))
+            action = questionary.select(
+                oc._t("What to do?", "怎么办？"),
+                choices=[
+                    questionary.Choice(oc._t("Retry", "重试"), value="retry"),
+                    questionary.Choice(
+                        oc._t(
+                            "Leave it for later (settings kept, Raven retries next start)",
+                            "暂时跳过（保留配置，下次启动 Raven 时会再试）",
+                        ),
+                        value="defer",
+                    ),
+                    questionary.Choice(
+                        oc._t("Turn long-term memory off", "关闭长期记忆"),
+                        value="disable",
+                    ),
+                ],
+                style=RAVEN_STYLE,
+                qmark=oc._QMARK,
+            ).ask()
+            if action is None:
+                raise typer.Exit(1) from exc
+            if action == "retry":
+                continue
+            if action == "defer":
+                _set_memory_backend("everos")
                 oc.console.print(
                     oc._t(
-                        "  [green]✓ EverOS service is running.[/green]",
-                        "  [green]✓ EverOS 服务已启动。[/green]",
+                        "  [yellow]! Memory settings kept. Raven will try to start the "
+                        "service again on the next session.[/yellow]",
+                        "  [yellow]⚠ 已保留记忆配置。下次会话启动时 Raven 会再尝试启动服务。[/yellow]",
                     )
                 )
-            except RuntimeError:
-                oc.console.print(
-                    oc._t(
-                        "  [red]✗ Still failed. Disabling memory.[/red]",
-                        "  [red]✗ 仍然失败。禁用记忆功能。[/red]",
-                    )
-                )
-                _set_memory_backend(None)
                 return None
-        else:
             _set_memory_backend(None)
+            oc.console.print(
+                oc._t(
+                    "  [yellow]! Long-term memory turned off. Run `raven onboard` "
+                    "again whenever you want it back.[/yellow]",
+                    "  [yellow]⚠ 已关闭长期记忆。随时可以重新运行 raven onboard 开启。[/yellow]",
+                )
+            )
             return None
     _report_everos_capabilities()
     _set_memory_backend("everos")

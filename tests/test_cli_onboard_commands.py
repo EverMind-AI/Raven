@@ -1538,6 +1538,78 @@ def test_memory_step_starts_the_configured_address_not_the_default(
     assert seen == ["http://localhost:1995", "http://localhost:1995"]
 
 
+@pytest.mark.parametrize(
+    ("action", "expected_backend"),
+    [("defer", "everos"), ("disable", None)],
+)
+def test_a_failed_start_does_not_decide_to_abandon_memory(
+    tmp_env: Path,
+    everos_isolated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    expected_backend: object,
+) -> None:
+    """Failing to start the service and giving up on memory are separate choices.
+
+    The models are already on disk by this point, so deferring has to keep the
+    whole configuration -- the runtime starts the service on demand anyway. Only
+    the explicit third choice turns memory off.
+    """
+    import questionary
+
+    async def _always_fails(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("boom")
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _always_fails)
+    monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+
+    class _FQ:
+        def ask(self):
+            return action
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert json.loads(tmp_env.read_text())["memory"]["backend"] == expected_backend
+
+
+def test_a_failed_start_can_be_retried_until_it_works(
+    tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry loops rather than disabling memory on the second failure."""
+    import questionary
+
+    attempts = []
+
+    async def _fails_twice(*_a: object, **_kw: object) -> None:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RuntimeError("boom")
+
+    import raven.plugin.memory.everos._server as everos_server
+
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _fails_twice)
+    monkeypatch.setattr(onboard_everos, "_config_everos_role", lambda **_: None)
+    monkeypatch.setattr(onboard_everos, "_memory_enabled", lambda: False)
+    monkeypatch.setattr(onboard_everos, "_report_everos_capabilities", lambda: None)
+
+    class _FQ:
+        def ask(self):
+            return "retry"
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ())
+
+    onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
+
+    assert len(attempts) == 3
+    assert json.loads(tmp_env.read_text())["memory"]["backend"] == "everos"
+
+
 def test_memory_llm_reuse_pulls_provider_creds(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
