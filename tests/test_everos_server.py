@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from raven.plugin.memory.everos._server import (
-    EverosNotConfigured,
+    EverosNotConfiguredError,
     _everos_executable,
     ensure_everos_server,
 )
@@ -93,6 +93,13 @@ def everos_toml(tmp_path, monkeypatch):
     return cfg
 
 
+def _live_child():
+    """A Popen stand-in that is still running (``poll()`` returns None)."""
+    proc = MagicMock()
+    proc.poll.return_value = None
+    return proc
+
+
 def _write_llm_section(cfg, *, model="mem-llm", api_key="k"):
     cfg.parent.mkdir(parents=True, exist_ok=True)
     body = "[llm]\n"
@@ -120,7 +127,7 @@ class TestSpawnPreflight:
             lambda *a, **kw: spawned.append(1),
         )
         with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
-            with pytest.raises(EverosNotConfigured, match="memory LLM is not configured"):
+            with pytest.raises(EverosNotConfiguredError, match="memory LLM is not configured"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
         assert spawned == [], "spawned a server that could never finish starting"
@@ -128,14 +135,14 @@ class TestSpawnPreflight:
     @pytest.mark.asyncio
     async def test_missing_section_entirely_does_not_spawn(self, everos_toml, monkeypatch) -> None:
         everos_toml.parent.mkdir(parents=True, exist_ok=True)
-        everos_toml.write_text("[memory]\ntimezone = \"UTC\"\n", encoding="utf-8")
+        everos_toml.write_text('[memory]\ntimezone = "UTC"\n', encoding="utf-8")
         spawned = []
         monkeypatch.setattr(
             "raven.plugin.memory.everos._server._start_server_if_unlocked",
             lambda *a, **kw: spawned.append(1),
         )
         with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
-            with pytest.raises(EverosNotConfigured):
+            with pytest.raises(EverosNotConfiguredError):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
         assert spawned == []
@@ -163,6 +170,115 @@ class TestSpawnPreflight:
             await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
         assert spawned == [1]
+
+
+class TestDeadChildDetection:
+    """ "Still booting" and "already dead" are different states.
+
+    The Popen handle used to be discarded, so a child that exited in under a
+    second still cost the caller the full poll timeout -- 30s per session, with
+    the reason buried in the server log.
+    """
+
+    @pytest.fixture
+    def _logs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("raven.plugin.memory.everos._server.get_logs_dir", lambda: tmp_path)
+        return tmp_path / "everos-server.log"
+
+    @pytest.mark.asyncio
+    async def test_exited_child_fails_immediately(self, everos_toml, _logs, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        probes = []
+
+        def _probe(*_a, **_kw):
+            probes.append(1)
+            return False
+
+        dead = MagicMock()
+        dead.poll.return_value = 1
+        dead.returncode = 1
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: dead,
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=_probe):
+            with pytest.raises(RuntimeError, match="exited with code 1"):
+                await ensure_everos_server("http://localhost:18791", timeout=30.0)
+
+        # Asserting on the probe count rather than wall-clock keeps this
+        # deterministic: one pre-loop probe plus one inside the loop, versus the
+        # 61 a full 30s budget would have cost.
+        assert len(probes) == 2
+
+    @pytest.mark.asyncio
+    async def test_failure_carries_the_reason_from_the_log(self, everos_toml, _logs, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        _logs.parent.mkdir(parents=True, exist_ok=True)
+        _logs.write_text(
+            "some uvicorn noise\n"
+            "Traceback (most recent call last):\n"
+            '  File "engine.py", line 554, in _acquire_lock\n'
+            "everos.infra.ome.exceptions.EngineLockHeldError: another OfflineEngine "
+            "instance already holds /tmp/ome.db.lock\n"
+            "Application startup failed. Exiting.\n",
+            encoding="utf-8",
+        )
+        dead = MagicMock()
+        dead.poll.return_value = 3
+        dead.returncode = 3
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: dead,
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(RuntimeError, match="EngineLockHeldError"):
+                await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+    @pytest.mark.asyncio
+    async def test_live_child_still_gets_the_full_budget(self, everos_toml, _logs, monkeypatch) -> None:
+        """A slow first boot is what the timeout exists for; do not cut it short."""
+        _write_llm_section(everos_toml)
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: _live_child(),
+        )
+        probes = []
+
+        def _probe(*_a, **_kw):
+            probes.append(1)
+            return False
+
+        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=_probe):
+            with pytest.raises(RuntimeError, match="did not become healthy"):
+                await ensure_everos_server("http://localhost:18791", timeout=1.0)
+
+        # One pre-loop probe plus one per 0.5s poll interval across a 1s budget.
+        assert len(probes) == 3, "timeout budget was not spent polling"
+
+    @pytest.mark.asyncio
+    async def test_another_process_spawning_is_not_treated_as_dead(self, everos_toml, _logs, monkeypatch) -> None:
+        """No handle means someone else holds the startup lock, not a dead child."""
+        _write_llm_section(everos_toml)
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: None,
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", side_effect=[False, True]):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+    @pytest.mark.asyncio
+    async def test_missing_log_degrades_to_no_detail(self, everos_toml, _logs, monkeypatch) -> None:
+        _write_llm_section(everos_toml)
+        dead = MagicMock()
+        dead.poll.return_value = 2
+        dead.returncode = 2
+        monkeypatch.setattr(
+            "raven.plugin.memory.everos._server._start_server_if_unlocked",
+            lambda *a, **kw: dead,
+        )
+        with patch("raven.plugin.memory.everos._server._probe_health", return_value=False):
+            with pytest.raises(RuntimeError, match="exited with code 2"):
+                await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
 
 class TestEnsureEverosServer:
@@ -194,6 +310,7 @@ class TestEnsureEverosServer:
             ),
             patch(
                 "raven.plugin.memory.everos._server._start_server_if_unlocked",
+                return_value=_live_child(),
             ) as mock_start,
             patch(
                 "raven.plugin.memory.everos._server.get_logs_dir",
@@ -206,11 +323,9 @@ class TestEnsureEverosServer:
 
     @pytest.mark.asyncio
     async def test_timeout_raises(self, tmp_path, everos_toml) -> None:
-        """A live-but-unhealthy start still gets the full poll budget.
-
-        The credential gate must not shorten this: a slow first boot is exactly
-        what the timeout exists for.
-        """
+        """No child of ours to watch (another process holds the startup lock),
+        and the address never turns healthy, so the budget is spent and the
+        message says the process is still up."""
         _write_llm_section(everos_toml)
         with (
             patch(
@@ -219,12 +334,13 @@ class TestEnsureEverosServer:
             ),
             patch(
                 "raven.plugin.memory.everos._server._start_server_if_unlocked",
+                return_value=None,
             ),
             patch(
                 "raven.plugin.memory.everos._server.get_logs_dir",
                 return_value=tmp_path,
             ),
-            pytest.raises(RuntimeError, match="EverOS server failed to start"),
+            pytest.raises(RuntimeError, match="did not become healthy"),
         ):
             await ensure_everos_server("http://localhost:18791", timeout=1.0)
 

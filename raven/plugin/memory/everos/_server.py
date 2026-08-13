@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,7 +53,7 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
-class EverosNotConfigured(RuntimeError):
+class EverosNotConfiguredError(RuntimeError):
     """The memory LLM is missing, so no server could survive startup.
 
     A ``RuntimeError`` subclass on purpose: callers already treat that as
@@ -78,9 +79,8 @@ def _require_llm_configured() -> None:
 
     if everos_role_configured("llm"):
         return
-    raise EverosNotConfigured(
-        f"EverOS memory LLM is not configured: [llm] in {get_everos_config_path()} "
-        "needs both model and api_key."
+    raise EverosNotConfiguredError(
+        f"EverOS memory LLM is not configured: [llm] in {get_everos_config_path()} needs both model and api_key."
     )
 
 
@@ -106,17 +106,47 @@ def _everos_executable() -> str:
     if found:
         return found
     raise RuntimeError(
-        f"everos not found next to {Path(sys.executable).parent} or on PATH. "
-        "Please install the everos CLI."
+        f"everos not found next to {Path(sys.executable).parent} or on PATH. Please install the everos CLI."
     )
 
 
-def _start_server_if_unlocked(port: str) -> bool:
+_LOG_TAIL_BYTES = 65536
+_EXCEPTION_LINE = re.compile(r"^[\w.]+(Error|Exception)\b")
+
+
+def _last_error_line() -> str:
+    """The most recent exception line from the server log, or an empty string.
+
+    The poll loop knows *that* the child died; the reason only exists in the
+    log. Surfacing it beats telling the user to go read a file that is often
+    hundreds of kilobytes of tracebacks. Only the tail is read, and any failure
+    to read degrades to "no detail" rather than masking the original error.
+    """
+    try:
+        path = server_log_path()
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - _LOG_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    for line in reversed(tail.splitlines()):
+        stripped = line.strip()
+        if _EXCEPTION_LINE.match(stripped):
+            return stripped
+    return ""
+
+
+def _start_server_if_unlocked(port: str) -> subprocess.Popen | None:
     """Try to acquire the startup lock and launch the server.
 
-    Returns True if this process launched the server, False if the lock
-    was already held (another process is spawning).  Uses the cross-
-    platform ``portable_lock`` so Windows does not crash on import.
+    Returns the child process when this process launched it, or ``None`` when
+    the lock was already held (another process is spawning, so there is no child
+    of ours to watch). Uses the cross-platform ``portable_lock`` so Windows does
+    not crash on import.
+
+    The handle is returned rather than discarded so the caller can tell "still
+    booting" apart from "already dead" -- see :func:`ensure_everos_server`.
     """
     everos = _everos_executable()
 
@@ -125,17 +155,17 @@ def _start_server_if_unlocked(port: str) -> bool:
             log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:
-                subprocess.Popen(
+                proc = subprocess.Popen(
                     [everos, "server", "start", "--port", port],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
             logger.info("started everos server on port {} (log: {})", port, log_path)
-            return True
+            return proc
     except LockTimeoutError:
         logger.debug("everos server startup lock held by another process; skipping spawn")
-        return False
+        return None
 
 
 async def ensure_everos_server(
@@ -164,7 +194,7 @@ async def ensure_everos_server(
     _require_llm_configured()
 
     port = _extract_port(base_url)
-    await asyncio.to_thread(_start_server_if_unlocked, port)
+    proc = await asyncio.to_thread(_start_server_if_unlocked, port)
 
     elapsed = 0.0
     while elapsed < timeout:
@@ -173,13 +203,24 @@ async def ensure_everos_server(
         if await asyncio.to_thread(_probe_health, base_url):
             logger.info("everos server ready at {}", base_url)
             return
+        # A dead child will never answer, so stop waiting on it. Without this
+        # the caller paid the full timeout for a process that exited in under a
+        # second -- once per session, silently. ``proc`` is None only when
+        # another process holds the startup lock, in which case there is no
+        # child of ours to inspect and polling health is all we can do.
+        if proc is not None and proc.poll() is not None:
+            detail = await asyncio.to_thread(_last_error_line)
+            raise RuntimeError(
+                f"EverOS server exited with code {proc.returncode} while starting at {base_url}. "
+                + (f"{detail} " if detail else "")
+                + f"Full log: {server_log_path()}"
+            )
 
     raise RuntimeError(
-        f"EverOS server failed to start within {timeout}s at {base_url}. "
-        f"Check: (1) everos is installed (`uv run everos --help`), "
-        f"(2) port {port} is not occupied, "
-        f"(3) logs at {server_log_path()}"
+        f"EverOS server did not become healthy within {timeout}s at {base_url}. "
+        f"The process is still running; check that port {port} is not held by "
+        f"something else, and see {server_log_path()}"
     )
 
 
-__all__ = ["DEFAULT_EVEROS_BASE_URL", "EverosNotConfigured", "ensure_everos_server"]
+__all__ = ["DEFAULT_EVEROS_BASE_URL", "EverosNotConfiguredError", "ensure_everos_server"]
