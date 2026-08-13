@@ -1,0 +1,73 @@
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, labeled]
+    paths-ignore:
+      - '**/*.md'
+      - 'uv.lock'
+      - 'package-lock.json'
+      - '**/package-lock.json'
+      - 'docs/**'
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Same-repo (internal), non-draft PRs only; skip dependabot's own PRs. On a
+    # public repo GitHub withholds secrets from fork PRs, so external PRs are
+    # skipped here by design. A `labeled` event only re-runs when the added
+    # label is `deep-review` (which escalates the model to Opus, see below).
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      (github.event.action != 'labeled' || github.event.label.name == 'deep-review')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read        # read code only; never writes or pushes
+      pull-requests: write  # post inline + summary comments
+      id-token: write       # required for the GitHub App auth
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          use_sticky_comment: true
+          # Sonnet by default; a `deep-review` label escalates to Opus for that PR.
+          claude_args: |
+            --model ${{ contains(github.event.pull_request.labels.*.name, 'deep-review') && 'claude-opus-5' || 'claude-sonnet-5' }}
+            --max-turns 40
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR: ${{ github.event.pull_request.number }} -> ${{ github.event.pull_request.base.ref }}
+
+            FIRST read the review comments already on this PR, including your own from
+            earlier runs - this workflow re-runs on every push and keeps no memory between
+            runs. Do NOT repeat a finding that has already been raised; only add what is new
+            or newly broken, and you may note briefly if an earlier issue now looks fixed.
+
+            Then read the diff plus the surrounding code, callers and tests you need. Before
+            reporting a finding, try to REFUTE it - drop it unless you can name the concrete
+            failure it causes. Out of scope: pre-existing issues on untouched lines, anything
+            a linter catches, and undocumented style.
+
+            Focus, in order:
+            1. Correctness - bugs, edge cases, error handling, broken callers, back-compat.
+            2. Repo conventions in AGENTS.md / CLAUDE.md - Conventional-Commit and branch
+               naming, uv-only dependency changes (never a hand-edited pyproject/lockfile),
+               test file naming (tests/test_cli_<module>_commands.py etc.), canonical
+               domain terms from CONTEXT-MAP.md, and no report/asset/large files.
+            3. Tests - was any test weakened, skipped, or made green without exercising it?
+
+            Post only to GitHub: inline comments on the exact lines, plus one top-level
+            summary. Do NOT narrate your review into the workflow log. Open the summary with
+            your stance in one sentence - "No blockers; this can merge." or "Blocking: <one
+            line>." Be willing to approve.
