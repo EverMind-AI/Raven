@@ -370,3 +370,122 @@ async def test_llm_call_stream_leaves_structured_reasoning_alone() -> None:
 
     assert response.reasoning_content == "thinking"
     assert response.content == "visible</think> more text"
+
+
+# ---------------------------------------------------------------------------
+# Truncation detection: three independent signals, OR'd
+# ---------------------------------------------------------------------------
+
+
+def _provider_with_ceiling(chunks: list[StreamDelta], max_tokens: int = 4096) -> _FakeProvider:
+    """A provider whose configured ceiling the loop can compare usage against."""
+    provider = _FakeProvider(chunks)
+    provider.generation = SimpleNamespace(max_tokens=max_tokens)
+    return provider
+
+
+async def test_truncation_detected_from_upstream_finish_reason() -> None:
+    """Signal 1: the backend says it stopped at the ceiling."""
+    chunks = [StreamDelta(content="partial"), StreamDelta(content=None, finish_reason="length")]
+    response = await _bind_helper(_provider_with_ceiling(chunks))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is True
+    assert response.finish_reason == "length"
+
+
+async def test_truncation_detected_from_output_tokens_alone() -> None:
+    """Signal 2: usage reached the ceiling even though the backend says "stop".
+
+    Some backends report a clean stop on a truncated reply, so trusting
+    finish_reason alone would miss this entirely.
+    """
+    chunks = [
+        StreamDelta(content="partial"),
+        StreamDelta(content=None, usage={"completion_tokens": 4096}, finish_reason="stop"),
+    ]
+    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is True
+    assert response.max_tokens == 4096
+
+
+async def test_truncation_detected_from_incomplete_tool_arguments() -> None:
+    """Signal 3: the tool call's JSON was cut mid-string.
+
+    Needs no cooperation from the backend at all -- this one is computed from
+    what actually arrived.
+    """
+    chunks = [
+        StreamDelta(
+            content=None,
+            tool_call_delta={
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {"name": "write_file", "arguments": '{"content": "def foo('},
+                    }
+                ]
+            },
+        ),
+        StreamDelta(content=None, finish_reason="tool_calls"),
+    ]
+    response = await _bind_helper(_provider_with_ceiling(chunks))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is True
+    assert response.tool_calls[0].arguments["_raw_arguments"] == '{"content": "def foo('
+
+
+async def test_complete_response_is_not_flagged_truncated() -> None:
+    """None of the three signals present: a normal turn stays unflagged."""
+    chunks = [
+        StreamDelta(content="all done"),
+        StreamDelta(content=None, usage={"completion_tokens": 12}, finish_reason="stop"),
+    ]
+    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is False
+    assert response.finish_reason == "stop"
+
+
+async def test_complete_tool_call_is_not_flagged_truncated() -> None:
+    """Well-formed tool arguments must not read as truncation."""
+    chunks = [
+        StreamDelta(
+            content=None,
+            tool_call_delta={
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                    }
+                ]
+            },
+        ),
+        StreamDelta(content=None, usage={"completion_tokens": 20}, finish_reason="tool_calls"),
+    ]
+    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
+        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
+    )
+
+    assert response.truncated is False
+    assert response.tool_calls[0].arguments == {"path": "a.py"}
+
+
+async def test_unknown_ceiling_does_not_flag_truncation() -> None:
+    """A provider with no configured ceiling: signal 2 sits out, not misfires."""
+    provider = _FakeProvider(
+        [StreamDelta(content="x", usage={"completion_tokens": 999999}), StreamDelta(content=None, finish_reason="stop")]
+    )  # no .generation at all
+    response = await _bind_helper(provider)(messages=[{"role": "user", "content": "hi"}], tools=None, model="m")
+
+    assert response.truncated is False

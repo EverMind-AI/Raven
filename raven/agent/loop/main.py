@@ -1637,6 +1637,7 @@ class AgentLoop:
         had_error = False
         error_content: str | None = None
         error_classification: ErrorClassification | None = None
+        upstream_finish_reason: str | None = None
 
         # aclosing() guarantees the async generator (and its underlying stream)
         # is closed when a TimeoutError from the per-chunk idle cap unwinds the
@@ -1658,6 +1659,8 @@ class AgentLoop:
                         if delta.usage is not None:
                             final_usage = delta.usage
                         continue
+                    if delta.finish_reason:
+                        upstream_finish_reason = delta.finish_reason
                     reasoning_delta = getattr(delta, "reasoning_content", None)
                     if reasoning_delta:
                         reasoning_buf.append(reasoning_delta)
@@ -1689,8 +1692,40 @@ class AgentLoop:
                 usage=final_usage or {},
             )
 
-        tool_calls = _finalize_tool_calls(tool_call_slots)
-        finish_reason = "tool_calls" if tool_calls else "stop"
+        tool_calls, args_parse_failed = _finalize_tool_calls(tool_call_slots)
+
+        # Three independent signals, OR'd. They cover different failure shapes
+        # and none subsumes the others, so a miss by one is not a miss overall:
+        #
+        #   upstream_finish_reason  costs nothing to trust, but some backends
+        #                           report a clean stop on a truncated reply
+        #   output_tokens vs cap    survives a lying finish_reason, needs the
+        #                           ceiling to be known
+        #   args_parse_failed       computed locally, but only exists when the
+        #                           turn produced a tool call
+        #
+        # Deliberately permissive: a false positive costs one extra sentence to
+        # the model, which it can weigh against what it just wrote. A false
+        # negative costs a retry loop -- the model re-sends the same oversized
+        # payload, is told again that a field is missing, and never learns the
+        # real reason.
+        sent_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", None)
+        output_tokens = (final_usage or {}).get("completion_tokens")
+        hit_ceiling = (
+            sent_max_tokens is not None and isinstance(output_tokens, int) and output_tokens >= sent_max_tokens
+        )
+        truncated = upstream_finish_reason == "length" or hit_ceiling or args_parse_failed
+
+        if truncated:
+            logger.warning(
+                "LLM output truncated (finish_reason={}, output_tokens={}, max_tokens={}, tool_args_incomplete={})",
+                upstream_finish_reason,
+                output_tokens,
+                sent_max_tokens,
+                args_parse_failed,
+            )
+
+        finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
 
         content = "".join(content_buf)
         reasoning_content = "".join(reasoning_buf) or None
@@ -1708,6 +1743,8 @@ class AgentLoop:
             finish_reason=finish_reason,
             usage=final_usage or {},
             reasoning_content=reasoning_content,
+            truncated=truncated,
+            max_tokens=sent_max_tokens,
         )
 
     @classmethod
@@ -3167,9 +3204,16 @@ def _merge_tool_call_fragments(
             slot["function"]["arguments_buf"].append(fn["arguments"])
 
 
-def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
-    """Convert accumulator slots into final ToolCallRequest list."""
+def _finalize_tool_calls(slots: list[dict[str, Any]]) -> tuple[list[ToolCallRequest], bool]:
+    """Convert accumulator slots into final ToolCallRequest list.
+
+    Also reports whether any slot's arguments failed to parse. An incomplete
+    JSON blob is the local, zero-dependency evidence that generation was cut
+    short: it needs no cooperation from the backend, and it is available even
+    when the backend reports a clean stop.
+    """
     result: list[ToolCallRequest] = []
+    parse_failed = False
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
@@ -3179,6 +3223,7 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             args = {"_raw_arguments": args_text}
+            parse_failed = True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
@@ -3186,4 +3231,4 @@ def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
                 arguments=args,
             )
         )
-    return result
+    return result, parse_failed

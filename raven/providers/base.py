@@ -208,6 +208,14 @@ class LLMResponse:
     # attach a precise classification here; otherwise the retry layer fills it
     # in from the error string.
     error_classification: "ErrorClassification | None" = None
+    # Generation stopped at the output ceiling rather than because the model
+    # was done. Distinct from finish_reason: upstream does not always say so
+    # (some backends report "stop" on a truncated response), and a tool call
+    # whose arguments were cut mid-JSON is truncated no matter what the
+    # backend claims.
+    truncated: bool = False
+    # The ceiling that produced it, for the message shown to the model.
+    max_tokens: int | None = None
 
     @property
     def has_tool_calls(self) -> bool:
