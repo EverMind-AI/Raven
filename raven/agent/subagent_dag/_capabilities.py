@@ -25,13 +25,10 @@ from ._errors import DagValidationError
 from ._graph import DagNodeSpec, SubAgentDagSpec
 from ._placeholders import parse_placeholders
 
-# Placeholder kinds that hand the sub-agent a filesystem path, mapped to the
-# content-passing form to use instead when it cannot read local files.
-_PATH_KINDS: dict[str, str] = {
-    "output_path": "{{{{ {name}.output }}}}",
-    "input_path": "{{{{ inputs.{name} }}}}",
-    "ref_path": "{{{{ ref:{name} }}}}",
-}
+# Placeholder kinds that hand the sub-agent a filesystem path. The content form
+# to use instead comes from the placeholder itself (``Placeholder.content_form``),
+# so a run-qualified reference keeps its qualifier in the advice.
+_PATH_KINDS = ("output_path", "input_path", "ref_path")
 
 
 @dataclass(frozen=True)
@@ -117,10 +114,9 @@ def _check_path_placeholders(
 
     offenders: list[str] = []
     for ph in parse_placeholders(node.prompt_template):
-        replacement = _PATH_KINDS.get(ph.kind)
-        if replacement is None:
+        if ph.kind not in _PATH_KINDS:
             continue
-        offenders.append(f"{ph.raw} -> use {replacement.format(name=ph.name)}")
+        offenders.append(f"{ph.raw} -> use {ph.content_form()}")
     if not offenders:
         return
 

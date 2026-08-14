@@ -23,7 +23,7 @@ from raven.agent.subagent_dag._graph import (
     parse_dag_spec,
     validate_and_order,
 )
-from raven.agent.subagent_dag._paths import check_confined
+from raven.agent.subagent_dag._paths import RUNS_PREFIX, check_confined, split_reference
 from raven.agent.subagent_dag._placeholders import (
     Placeholder,
     iter_placeholders,
@@ -32,7 +32,7 @@ from raven.agent.subagent_dag._placeholders import (
 from raven.agent.subagent_dag._projection import fold_dag_run_entry
 from raven.agent.subagent_dag._reader import DagReadError, read_node, read_run
 from raven.agent.subagent_dag._render import render_prompt
-from raven.agent.subagent_dag._store import DagRunStore, make_run_id
+from raven.agent.subagent_dag._store import DagRunStore, SessionNodes, make_run_id, read_session_nodes
 
 __all__ = [
     "AgentCapabilities",
@@ -45,12 +45,16 @@ __all__ = [
     "SubAgentDagSpec",
     "parse_dag_spec",
     "validate_and_order",
+    "RUNS_PREFIX",
     "check_confined",
+    "split_reference",
     "Placeholder",
     "iter_placeholders",
     "parse_placeholders",
     "fold_dag_run_entry",
     "render_prompt",
     "DagRunStore",
+    "SessionNodes",
+    "read_session_nodes",
     "make_run_id",
 ]

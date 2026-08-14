@@ -93,11 +93,11 @@ flag (default `true`) is described above.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `id` | yes | Unique node id. Letters, digits, `_`, `-` only. |
+| `id` | yes | Node id, unique across the whole conversation (not just this graph). Letters, digits, `_`, `-` only. |
 | `subagent` | yes | Name of a configured third-party sub-agent. Use one of the names listed in the tool's own description — don't invent them. |
 | `prompt_template` | yes | Template rendered into the node's prompt. May contain the placeholders below. |
-| `depends_on` | no | Upstream node ids that must finish before this node runs. |
-| `inputs` | no | Object mapping a key to a literal string, or to `{"file": "<path relative to the working directory>"}`. |
+| `depends_on` | no | Upstream node ids that must finish before this node runs. May also name a node an earlier run in this conversation completed, which is already finished and so only records the dependency. |
+| `inputs` | no | Object mapping a key to a literal string, to `{"file": "<path>"}`, or to `{"node": "<id>"}` for another node's output. |
 | `instance` | no | A stable handle (e.g. `researcher`). Nodes sharing it run sequentially in id order and reuse one sub-agent session — only on an agent the roster tags `[stateful]`. |
 
 A handle reaches beyond one run: two graphs in the same conversation that name the same
@@ -127,11 +127,11 @@ Inside `prompt_template`:
 
 | Placeholder | Resolves to |
 | --- | --- |
-| `{{ <id>.output }}` | The upstream node's output **contents**. |
-| `{{ <id>.output_path }}` | The upstream node's output file **path**. |
-| `{{ inputs.<key> }}` | The input's literal value, or the referenced file's **contents**. |
-| `{{ inputs.<key>.path }}` | The input file's **path**. |
-| `{{ ref:<path> }}` | The **contents** of an existing file in the working directory (e.g. one an earlier turn wrote there). |
+| `{{ <id>.output }}` | That node's output **contents**. |
+| `{{ <id>.output_path }}` | That node's output file **path**. |
+| `{{ inputs.<key> }}` | The input's literal value, or the **contents** of the file or node it names. |
+| `{{ inputs.<key>.path }}` | That file's, or that node's output file's, **path**. |
+| `{{ ref:<path> }}` | The **contents** of an existing file. |
 | `{{ ref_path:<path> }}` | That file's **path**. |
 
 Rules:
@@ -139,10 +139,70 @@ Rules:
 - **Prefer the `_path` forms for anything large.** They hand the sub-agent a path so it
   reads the file itself — the bytes never enter your context. Only for an agent tagged
   `[local-files]`; a `[no-local-files]` one has to get the contents form.
-- A template may only reference ids listed in that node's `depends_on`, and keys listed
-  in its `inputs`.
-- `ref:` / `ref_path:` / `{"file": ...}` paths must be relative and stay inside the
-  session working directory; absolute or escaping paths are rejected.
+- A `_path` form must name a file that already exists. One that does not fails the node
+  before its sub-agent is dispatched, rather than handing over a path nothing can open.
+- `{{ inputs.<key> }}` needs `<key>` declared in that node's own `inputs`. The key is
+  never a node id; what may name a node is the *value*.
+
+### Node ids are unique across the conversation
+
+**A node id may not repeat an id any earlier run in this conversation used.** The graph is
+rejected if it does. That is what makes `{{ <id>.output }}` mean one thing, so pick ids that
+say what the node produced — `pricing_research`, `deck_script_v2` — not `a`, `step1`, or a
+generic `plan` you will want again. Re-doing work needs a new id; the earlier node's output
+stays where it is and stays referenceable.
+
+### Reading an earlier run in this conversation
+
+Because ids are unique, **an earlier run's node is named by its id alone**:
+
+```
+{{ pricing_research.output }}        that node's output text, whichever run produced it
+{{ pricing_research.output_path }}   its path
+```
+
+That node needs no `depends_on` — there is nothing to order, it has already finished.
+Listing it anyway is accepted and changes nothing, so write the edge if it makes the graph
+read better. `depends_on` is still *required* for a node of *this* graph, since that edge
+is what makes the upstream node run first.
+
+Only a node that **completed** can be named this way, in a placeholder or in `depends_on`
+alike. A node that failed, was skipped, or belongs to a run still in flight keeps its id —
+nothing else may take it — but has no output
+to read, and naming it is refused before any node of your graph is dispatched. The refusal
+says which of the three it is, because the fix differs: re-do failed or skipped work under a
+**new** id, and for a run still in flight, submit again once it reports its result.
+
+Note what is *not* an option in any of the three: re-creating that node here. Its id is
+taken, so a graph that repeats it is refused for the reuse instead. Re-running an upstream
+step *as a node of your own graph* only works for one that does not exist yet — naming the
+taken id in `depends_on` does not re-run anything.
+
+A node id is all you ever need to name a node — there is no run qualifier on these forms,
+because there is nothing left to disambiguate. Two other ways to say the same thing:
+
+```
+inputs: {"prev": {"node": "pricing_research"}}     then {{ inputs.prev }} / {{ inputs.prev.path }}
+{{ ref:@runs/<run_id>/pricing_research.out.md }}   by file path
+```
+
+Use the `{"node": ...}` input form when one upstream feeds several placeholders. Use
+`ref:@runs/<run_id>/...` when you have a path rather than an id — it reads the run
+directory directly, so it also reaches files that are not a node's output
+(`graph.json`, `<node>.prompt.md`) and runs recorded before ids were indexed. `<run_id>` is
+the id reported when that run finished.
+
+### Where a reference may point
+
+`ref:` / `ref_path:` / `{"file": ...}` paths resolve inside two roots — the **session
+working directory** (what a plain relative path is relative to) and **this conversation's
+sub-agent history**, which may be named by absolute path. Anything outside both is
+rejected, as is a `@runs/` path that climbs out of the run history.
+
+The second root is this conversation's own record: its DAG runs, and the `spawn` calls
+beside them. It stops there. The user's long-term memory, the installed skills, and every
+*other* conversation's transcript sit outside it and are refused — so reference an earlier
+run's outputs, or files the user pointed you at.
 
 ## Examples
 
@@ -246,7 +306,8 @@ Terminal outputs:
   blocking only costs you the turn.
 - **Don't** inline large upstream content with `{{ <id>.output }}` when you only need to
   pass it along; use `{{ <id>.output_path }}` — unless the agent is `[no-local-files]`.
-- **Don't** reference an id in a template without listing it in that node's `depends_on`.
+- **Don't** reference a node of *this* graph in a template without listing it in that node's
+  `depends_on` — an earlier run's node is the case that needs no edge.
 - **Don't** guess `subagent` names — only configured ones resolve.
 - **Don't** share an `instance` handle across nodes to "keep them in order" on a
   `[stateless]` agent — order without shared context is what `depends_on` already gives.

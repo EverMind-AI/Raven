@@ -20,7 +20,7 @@ class Placeholder:
             One of ``"input"``, ``"input_path"``, ``"output"``,
             ``"output_path"``, ``"ref"``, ``"ref_path"``.
         name (`str`):
-            The input key, dependency id, or file path referenced.
+            The input key, node id, or file path referenced.
         raw (`str`):
             The exact ``{{ ... }}`` substring, used for substitution.
     """
@@ -28,6 +28,14 @@ class Placeholder:
     kind: str
     name: str
     raw: str
+
+    def content_form(self) -> str:
+        """The same reference rewritten to inject contents instead of a path."""
+        if self.kind == "output_path":
+            return f"{{{{ {self.name}.output }}}}"
+        if self.kind == "input_path":
+            return f"{{{{ inputs.{self.name} }}}}"
+        return f"{{{{ ref:{self.name} }}}}"
 
 
 def parse_placeholders(template: str) -> list[Placeholder]:

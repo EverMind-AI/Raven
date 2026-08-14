@@ -21,9 +21,15 @@ from loguru import logger
 
 from raven.agent.subagent.instances import get_registry
 from raven.agent.subagent_dag._errors import DagValidationError
-from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, validate_and_order
+from raven.agent.subagent_dag._graph import DagNodeSpec, SubAgentDagSpec, graph_deps, validate_and_order
 from raven.agent.subagent_dag._render import render_prompt
-from raven.agent.subagent_dag._store import DagRunStore, make_run_id
+from raven.agent.subagent_dag._store import (
+    DagRunStore,
+    SessionNodes,
+    index_guard,
+    make_run_id,
+    read_session_nodes,
+)
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -94,6 +100,7 @@ async def run_dag(
     backend: Any,
     workdir: str,
     run_root: str,
+    subagents_root: str | None = None,
     sandbox: Any = None,
     max_concurrency: int = 5,
     semaphore: asyncio.Semaphore | None = None,
@@ -116,10 +123,42 @@ async def run_dag(
     session's DAG history root, where the prompt/output records are written --
     an audit trail that outlives whatever the working directory is pointed at
     (raven/agent/subagent_history.py).
+
+    They are both reference roots, though, not just the one: ``run_root``
+    resolves ``{{ ref:@runs/<run_id>/... }}``, which is the short way for a
+    graph to read an earlier run in the same conversation. It has to be a
+    second root rather than a relative path from ``workdir``, because
+    ``sessions/`` is a protected subtree (raven/agent/workdir.py) that no
+    working directory can be aimed at -- so no relative path from one reaches
+    the other.
+
+    ``subagents_root`` widens that by one directory: ``<session_dir>/subagents``,
+    the parent of ``run_root``, so a reference may also name this conversation's
+    run history -- and its ``spawn`` records -- by absolute path rather than only
+    through ``@runs/``. Left unset, references are confined to ``workdir`` plus
+    ``@runs/``.
+
+    It is deliberately *not* agent home. Agent home also holds ``user_memory/``,
+    ``skills/`` and every other conversation's transcript and sub-agent history;
+    ``workdir.py`` keeps those three out of the agent's file surface as
+    ``_PROTECTED_SUBTREES``, and a DAG graph is LLM-authored and auto-run, so a
+    root that spanned them would render their contents into a third-party
+    sub-agent's prompt. See :func:`._paths.check_confined`.
+
+    Node ids are unique across the session, not just across this graph: the
+    session index under ``run_root`` is read before validation, so a graph
+    reusing an id an earlier run already took is refused, and one naming a node
+    an earlier run *completed* resolves to that run's output, needing no
+    ``depends_on`` entry for it. Such an entry is allowed and satisfied on
+    sight; ``_graph.graph_deps`` is what keeps it out of the scheduling below,
+    which only knows this run's statuses. Those two are separate questions --
+    see :class:`._store.SessionNodes`.
+
     ``semaphore`` caps how many nodes dispatch at once. Pass one in to share the
     cap with everything else that runs a sub-agent -- concurrent runs, and
     ``spawn`` -- rather than letting each run hold its own; ``max_concurrency``
     only sizes the private fallback built when none is given.
+
     ``session_key`` scopes each node's stateful ``instance`` handle (see
     :mod:`raven.agent.subagent.instances`) to this DAG's conversation, the same
     way ``spawn`` scopes its ``instance`` handle. It also scopes this run's node
@@ -134,28 +173,26 @@ async def run_dag(
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
-    validate_and_order(spec)
-    by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
-    for node in spec.nodes:
-        if subagents.get(node.subagent) is None:
-            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+    roots = (workdir, subagents_root) if subagents_root else (workdir,)
+    # Read, validate and claim under one guard. Splitting them would let two
+    # concurrent runs both read an index without node 'x', both pass the
+    # uniqueness check, and both claim it -- leaving two nodes answering to one
+    # name, which is exactly what the id being unique is supposed to rule out.
+    async with index_guard(run_root):
+        session_nodes = await read_session_nodes(backend, run_root)
+        validate_and_order(spec, roots, session_nodes)
+        by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
+        for node in spec.nodes:
+            if subagents.get(node.subagent) is None:
+                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
 
-    store = DagRunStore(backend, run_root, run_id or make_run_id())
-    await store.init(spec.model_dump_json())
+        store = DagRunStore(backend, run_root, run_id or make_run_id())
+        await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
 
-    await _emit(
-        progress_publisher,
-        "dag_run_started",
-        {
-            "run_id": store.run_id,
-            "nodes": [
-                {"id": node.id, "subagent": node.subagent, "depends_on": node.depends_on, "instance": node.instance}
-                for node in spec.nodes
-            ],
-        },
-    )
     published_skips: set[str] = set()
 
+    # Built before the `try` below, not inside it: the cancellation handler reads
+    # `status`, and a handler that covers the first await has to be able to.
     status: dict[str, str] = {nid: "pending" for nid in by_id}
     output_paths: dict[str, str] = {}
     errors: dict[str, str] = {}
@@ -164,83 +201,122 @@ async def run_dag(
     node_ended_at: dict[str, int] = {}
     gate = semaphore if semaphore is not None else asyncio.Semaphore(max_concurrency)
 
+    deps: dict[str, list[str]] = {nid: graph_deps(node, by_id) for nid, node in by_id.items()}
     dependents: dict[str, list[str]] = {nid: [] for nid in by_id}
-    for nid, node in by_id.items():
-        for dep in node.depends_on:
+    for nid, in_graph in deps.items():
+        for dep in in_graph:
             dependents[dep].append(nid)
 
-    while True:
-        _cascade_failures(by_id, status)
-        if cancel is not None and cancel.is_set():
-            # A node still "running" here was cancelled mid-flight (see
-            # _run_ready_groups below) and never reached a terminal status
-            # because CancelledError bypasses _run_node's except-Exception.
-            for nid, st in status.items():
-                if st in ("pending", "running"):
-                    status[nid] = "skipped"
-        for nid, st in status.items():
-            if st == "skipped" and nid not in published_skips:
-                published_skips.add(nid)
-                node_started_at[nid] = _now_ms()
-                node_ended_at[nid] = _now_ms()
-                await _emit(
-                    progress_publisher,
-                    "dag_node_updated",
-                    {"run_id": store.run_id, "node": nid, "status": "skipped"},
-                )
-                await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, "skipped")
-        ready = [
-            nid
-            for nid, st in status.items()
-            if st == "pending" and all(status[d] == "completed" for d in by_id[nid].depends_on)
-        ]
-        if not ready:
-            break
-        # Nodes sharing a stateful instance run sequentially (id order); independent
-        # nodes each form a singleton group and run concurrently under the semaphore.
-        groups: dict[str, list[str]] = {}
-        for nid in ready:
-            inst = by_id[nid].instance
-            key = inst if inst is not None else f"\x00node\x00{nid}"
-            groups.setdefault(key, []).append(nid)
-        await _run_ready_groups(
-            (
-                _run_group(
-                    sorted(nids),
-                    by_id=by_id,
-                    subagents=subagents,
-                    store=store,
-                    backend=backend,
-                    workdir=workdir,
-                    sandbox=sandbox,
-                    output_paths=output_paths,
-                    status=status,
-                    errors=errors,
-                    prompt_written=prompt_written,
-                    node_started_at=node_started_at,
-                    node_ended_at=node_ended_at,
-                    semaphore=gate,
-                    progress_publisher=progress_publisher,
-                    session_key=session_key,
-                )
-                for nids in groups.values()
-            ),
-            cancel,
+    # `store.init` above made this run's claim on its node ids durable, so every
+    # await from here on has to be covered: a stop delivered on any of them would
+    # otherwise leave those ids recorded as still being written, for a run that is
+    # over. That includes the run-started publish -- it goes to a host sink (a
+    # websocket fan-out, the TUI RPC broadcast), so it genuinely suspends, and the
+    # shutdown sweep cancels every in-flight run at once including one that has
+    # only just started.
+    try:
+        await _emit(
+            progress_publisher,
+            "dag_run_started",
+            {
+                "run_id": store.run_id,
+                "nodes": [
+                    {
+                        "id": node.id,
+                        "subagent": node.subagent,
+                        "depends_on": node.depends_on,
+                        "instance": node.instance,
+                    }
+                    for node in spec.nodes
+                ],
+            },
         )
+        while True:
+            _cascade_failures(deps, status)
+            if cancel is not None and cancel.is_set():
+                # A node still "running" here was cancelled mid-flight (see
+                # _run_ready_groups below) and never reached a terminal status
+                # because CancelledError bypasses _run_node's except-Exception.
+                for nid, st in status.items():
+                    if st in ("pending", "running"):
+                        status[nid] = "skipped"
+            for nid, st in status.items():
+                if st == "skipped" and nid not in published_skips:
+                    published_skips.add(nid)
+                    node_started_at[nid] = _now_ms()
+                    node_ended_at[nid] = _now_ms()
+                    await _emit(
+                        progress_publisher,
+                        "dag_node_updated",
+                        {"run_id": store.run_id, "node": nid, "status": "skipped"},
+                    )
+                    await _write_node_status(session_key, store.run_id, nid, by_id[nid].subagent, "skipped")
+            ready = [
+                nid
+                for nid, st in status.items()
+                if st == "pending" and all(status[d] == "completed" for d in deps[nid])
+            ]
+            if not ready:
+                break
+            # Nodes sharing a stateful instance run sequentially (id order); independent
+            # nodes each form a singleton group and run concurrently under the semaphore.
+            groups: dict[str, list[str]] = {}
+            for nid in ready:
+                inst = by_id[nid].instance
+                key = inst if inst is not None else f"\x00node\x00{nid}"
+                groups.setdefault(key, []).append(nid)
+            await _run_ready_groups(
+                (
+                    _run_group(
+                        sorted(nids),
+                        by_id=by_id,
+                        subagents=subagents,
+                        store=store,
+                        backend=backend,
+                        workdir=workdir,
+                        roots=roots,
+                        session_nodes=session_nodes,
+                        sandbox=sandbox,
+                        output_paths=output_paths,
+                        status=status,
+                        errors=errors,
+                        prompt_written=prompt_written,
+                        node_started_at=node_started_at,
+                        node_ended_at=node_ended_at,
+                        semaphore=gate,
+                        progress_publisher=progress_publisher,
+                        session_key=session_key,
+                    )
+                    for nids in groups.values()
+                ),
+                cancel,
+            )
 
-    return await _finalize(
-        spec,
-        by_id,
-        status,
-        errors,
-        output_paths,
-        prompt_written,
-        dependents,
-        node_started_at,
-        node_ended_at,
-        store,
-        session_key,
-    )
+        return await _finalize(
+            spec,
+            by_id,
+            status,
+            errors,
+            output_paths,
+            prompt_written,
+            dependents,
+            node_started_at,
+            node_ended_at,
+            store,
+            session_key,
+        )
+    except asyncio.CancelledError:
+        # `/stop` and the shutdown sweep stop a background run by cancelling its
+        # task rather than setting `cancel`, so `_finalize` never runs. Without
+        # this, the ids claimed at `init` would keep their index entry with no
+        # `status`, and `read_session_nodes` would report them `running` forever:
+        # neither reusable nor readable, for a run that is definitively over --
+        # and the two refusals that produces contradict each other.
+        for nid, st in status.items():
+            if st in ("pending", "running"):
+                status[nid] = "skipped"
+        await _record_outcome(store, status, cancelled=True)
+        raise
 
 
 async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None) -> None:
@@ -285,15 +361,49 @@ async def _run_ready_groups(coros: Any, cancel: asyncio.Event | None) -> None:
         await asyncio.gather(cancel_wait, *tasks, return_exceptions=True)
 
 
-def _cascade_failures(by_id: dict[str, DagNodeSpec], status: dict[str, str]) -> None:
+def _tally(status: dict[str, str]) -> dict:
+    """Count this run's nodes by terminal state."""
+    return {
+        "total": len(status),
+        "completed": sum(1 for s in status.values() if s == "completed"),
+        "failed": sum(1 for s in status.values() if s == "failed"),
+        "skipped": sum(1 for s in status.values() if s == "skipped"),
+    }
+
+
+async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
+    """Write this run's per-node outcome into the session index.
+
+    Per-node status, not just the tally: a later graph may name one of these
+    nodes, and whether that reference is legal -- and what to advise when it is
+    not -- turns on that node's own outcome, not the run's. Every id claimed at
+    ``init`` has to appear here, or ``read_session_nodes`` keeps reporting it as
+    still being written.
+
+    Reached from the cancellation path too, where nothing else would record an
+    outcome. A failure there must not replace the ``CancelledError`` being
+    propagated, so it is logged and swallowed -- the same call is best-effort in
+    both directions, since a wedged index is never worth losing a stop over.
+    """
+    entry = {"run_id": store.run_id, "summary": _tally(status), "status": dict(status)}
+    try:
+        async with index_guard(store.root):
+            await store.upsert_index(entry)
+    except Exception:  # noqa: BLE001 - see above
+        if not cancelled:
+            raise
+        logger.opt(exception=True).warning("DAG index write failed for cancelled run {}", store.run_id)
+
+
+def _cascade_failures(deps: dict[str, list[str]], status: dict[str, str]) -> None:
     """Mark pending nodes with a failed/skipped dependency as skipped."""
     changed = True
     while changed:
         changed = False
-        for nid, node in by_id.items():
+        for nid, in_graph in deps.items():
             if status[nid] != "pending":
                 continue
-            if any(status[d] in ("failed", "skipped") for d in node.depends_on):
+            if any(status[d] in ("failed", "skipped") for d in in_graph):
                 status[nid] = "skipped"
                 changed = True
 
@@ -306,6 +416,8 @@ async def _run_group(
     store: DagRunStore,
     backend: Any,
     workdir: str,
+    roots: tuple[str, ...],
+    session_nodes: SessionNodes,
     sandbox: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
@@ -325,6 +437,8 @@ async def _run_group(
             store=store,
             backend=backend,
             workdir=workdir,
+            roots=roots,
+            session_nodes=session_nodes,
             sandbox=sandbox,
             output_paths=output_paths,
             status=status,
@@ -345,6 +459,8 @@ async def _run_node(
     store: DagRunStore,
     backend: Any,
     workdir: str,
+    roots: tuple[str, ...],
+    session_nodes: SessionNodes,
     sandbox: Any,
     output_paths: dict[str, str],
     status: dict[str, str],
@@ -367,7 +483,15 @@ async def _run_node(
         )
         await _write_node_status(session_key, store.run_id, node.id, node.subagent, "running")
         try:
-            prompt = await render_prompt(node, backend=backend, cwd=workdir, output_paths=output_paths)
+            prompt = await render_prompt(
+                node,
+                backend=backend,
+                cwd=workdir,
+                output_paths=output_paths,
+                runs_root=store.root,
+                roots=roots,
+                session_nodes=session_nodes,
+            )
             prompt_path = store.prompt_path(node.id)
             output_path = store.output_path(node.id)
             await store.write_text(prompt_path, prompt)
@@ -482,14 +606,9 @@ async def _finalize(
                 text = text[:_MAX_OUTPUT_CHARS] + "\n... (output truncated)"
             terminal_outputs.append({"node": nid, "text": text})
 
-    summary = {
-        "total": len(by_id),
-        "completed": sum(1 for s in status.values() if s == "completed"),
-        "failed": sum(1 for s in status.values() if s == "failed"),
-        "skipped": sum(1 for s in status.values() if s == "skipped"),
-    }
+    summary = _tally(status)
     await store.write_manifest(manifest)
-    await store.append_index({"run_id": store.run_id, "summary": summary})
+    await _record_outcome(store, status)
     return DagRunResult(
         run_id=store.run_id,
         dir=store.run_dir,
