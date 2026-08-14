@@ -158,3 +158,34 @@ async def test_add_job_wakes_idle_loop(tmp_path: Path) -> None:
         await asyncio.wait_for(fired.wait(), timeout=3.0)
     finally:
         svc.stop()
+
+
+async def test_manual_run_uses_the_shared_writeback(tmp_path: Path) -> None:
+    """run_job rides the same execute/writeback path as the wake loop: the
+    claim is cleared, the recurring next_run advances, and last_status lands
+    — a test-fire cannot diverge from real scheduling."""
+    store_path = tmp_path / "jobs.json"
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store_path, on_job=on_job)
+    job = svc.add_job(
+        name="recurring",
+        schedule=CronSchedule(kind="every", every_ms=3600_000),
+        message="manual fire",
+        channel="tui",
+        to="direct",
+    )
+
+    before = _now_ms()
+    assert await svc.run_job(job.id) is True
+
+    assert fired == [job.id]
+    data = json.loads(store_path.read_text(encoding="utf-8"))
+    (j,) = data["jobs"]
+    assert j["state"]["claimedByPid"] is None
+    assert j["state"]["lastStatus"] == "ok"
+    assert j["state"]["lastRunAtMs"] >= before
+    assert j["state"]["nextRunAtMs"] > _now_ms()

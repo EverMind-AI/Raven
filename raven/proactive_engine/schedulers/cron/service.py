@@ -759,39 +759,23 @@ class CronService:
         return None
 
     async def run_job(self, job_id: str, force: bool = False) -> bool:
-        """Manually run a job."""
+        """Manually run a job through the same execute/writeback path the
+        wake loop uses, so a test-fire cannot diverge from real scheduling."""
         # Pick the target job under lock, then run it lock-free so we don't
         # block concurrent cron activity during a slow agent turn.
+        my_pid = os.getpid()
         with self._locked():
             self._store = None
             store = self._load_store()
             target = next((j for j in store.jobs if j.id == job_id), None)
             if target is None or (not force and not target.enabled):
                 return False
-            target.state.claimed_by_pid = os.getpid()
+            target.state.claimed_by_pid = my_pid
             target.state.claimed_at_ms = self._now_ms()
             self._save_store()
 
         await self._execute_job(target)
-
-        with self._locked():
-            self._store = None
-            self._load_store()
-            if self._store is not None:
-                for j in self._store.jobs:
-                    if j.id == target.id and j.state.claimed_by_pid == os.getpid():
-                        j.state.claimed_by_pid = None
-                        j.state.claimed_at_ms = None
-                        j.state.last_run_at_ms = target.state.last_run_at_ms
-                        j.state.last_status = target.state.last_status
-                        j.state.last_error = target.state.last_error
-                        j.state.next_run_at_ms = target.state.next_run_at_ms
-                        j.enabled = target.enabled
-                        j.updated_at_ms = target.updated_at_ms
-                        break
-                if target.schedule.kind == "at" and target.delete_after_run:
-                    self._store.jobs = [j for j in self._store.jobs if j.id != target.id]
-                self._save_store()
+        await asyncio.shield(self._writeback_after_run(target, my_pid))
         self._signal_wake()
         return True
 
