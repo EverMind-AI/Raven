@@ -4519,3 +4519,14 @@ def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
             if group["kind"] != want:
                 misfiled.append(f"{entry['name']}: filed under {group['kind']!r}, credentials say {want!r}")
     assert not misfiled, "; ".join(misfiled)
+
+
+# --------------------------------------------------------------------------- first-run hints
+
+
+def test_install_sh_all_set_mentions_onboard() -> None:
+    """The install.sh closing hints must point first-time users at ``raven onboard``
+    (README already does; the installer's "All set" block must match)."""
+    text = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
+    tail = text[text.index("All set") :]
+    assert "raven onboard" in tail
