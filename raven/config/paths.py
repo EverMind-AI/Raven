@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.config.loader import get_config_path
+from raven.config.loader import get_config_path, raven_home
 from raven.utils.helpers import ensure_dir
 
 
@@ -60,8 +60,16 @@ def get_logs_dir() -> Path:
 
 
 def get_workspace_path(workspace: str | None = None) -> Path:
-    """Resolve and ensure the agent workspace path."""
-    path = Path(workspace).expanduser() if workspace else Path.home() / ".raven" / "workspace"
+    """Resolve and ensure the agent workspace path.
+
+    The default is anchored on ``raven_home()`` rather than on ``~/.raven`` so
+    that it agrees with ``Config.workspace_path``, which is the other derivation
+    of the same thing. The two are reached by different callers -- the gateway
+    goes through the config, ``raven session list`` and ``raven onboard`` come
+    here -- and a home that moved only one of them writes sessions where the
+    other does not read them.
+    """
+    path = Path(workspace).expanduser() if workspace else raven_home() / "workspace"
     return ensure_dir(path)
 
 
