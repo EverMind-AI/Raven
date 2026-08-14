@@ -552,6 +552,13 @@ def resolve_max_output_tokens(model: str | None, *, allow_fetch: bool = True) ->
 def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
     """LiteLLM's static model metadata -- offline, covers most mapped providers.
 
+    Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
+    that carry no ``max_input_tokens``. Not because the two mean the same
+    thing, but because a model's window is never smaller than what it is
+    allowed to emit, so the output ceiling is a safe lower bound -- and a lower
+    bound only over-trims, where this module's documented default (65536) would
+    over-estimate an 8k model by a factor of eight.
+
     ``allow_import=False`` answers only from a LiteLLM already sitting in
     ``sys.modules``: importing it costs ~2-7s, and a caller passing this
     (``AgentLoop`` construction, before the lazy provider's prewarm thread has
@@ -571,7 +578,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     for candidate in _candidates(model):
         # The table before the ask: it holds every model the interactive-login
         # drivers are asked about in practice, and reading it cannot prompt.
-        window = _numeric(_table_entry(candidate), "max_input_tokens")
+        window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
         if _may_prompt(candidate):
@@ -580,7 +587,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
             info = litellm.get_model_info(candidate)
         except Exception:
             continue
-        window = _numeric(info, "max_input_tokens")
+        window = _numeric(info, "max_input_tokens", "max_tokens")
         if window:
             return int(window)
     return None
