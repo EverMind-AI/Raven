@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge check-commits check-pr-title check-large-files ci clean
+.PHONY: help install install-deps lint lint-python lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui check-commits check-pr-title check-large-files ci clean
 
 PYTHON ?= python3
 PYTHON_LINT_TARGETS ?= raven tests scripts
@@ -52,10 +52,13 @@ test-python:
 test-tui:
 	npm test --prefix ui-tui
 
-build: build-tui build-bridge
+build: build-tui build-bridge build-ui
 
 build-tui:
 	npm run build --prefix ui-tui
+
+build-ui:
+	python3 ui/build.py
 
 build-bridge:
 	npm run build --prefix bridge
@@ -76,4 +79,5 @@ clean:
 	rm -rf .pytest_cache .ruff_cache .uv-cache .mypy_cache htmlcov dist build
 	rm -rf ui-tui/dist ui-tui/coverage ui-tui/.vitest-cache ui-tui/packages/hermes-ink/dist
 	rm -rf bridge/dist
+	rm -rf ui/dist
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
