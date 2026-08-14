@@ -981,7 +981,17 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
 
   if (url.pathname === '/api/health') {
-    sendJson(res, 200, { ok: true, port: PORT, stateDir: STATE_DIR });
+    // Report the UI as part of health, not just the process. STATIC_DIR is read
+    // per request, so an upgrade that replaces the install directory leaves this
+    // process able to answer from memory while every asset 404s; a bare
+    // ok:true would then invite the launcher to reuse a viewer that cannot render.
+    const uiOk = fs.existsSync(path.join(STATIC_DIR, 'app.js'));
+    sendJson(res, uiOk ? 200 : 503, {
+      ok: uiOk,
+      port: PORT,
+      stateDir: STATE_DIR,
+      ui: uiOk ? 'ok' : 'missing'
+    });
     return;
   }
 

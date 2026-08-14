@@ -37,6 +37,12 @@ def _viewer_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "tracing" / "viewer"
 
 
+# Asset the viewer must still be able to read off disk for the page to work.
+# Served by ``serveStatic``, unlike the health payload and HTML shell, which the
+# process answers from memory and therefore survive their files being deleted.
+_VIEWER_UI_PROBE = "/app.js"
+
+
 def _port_live(port: int) -> bool:
     """True if something is already listening on 127.0.0.1:port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -45,12 +51,20 @@ def _port_live(port: int) -> bool:
 
 
 def _viewer_health(port: int) -> bool:
-    """True only if *our* tracing viewer is serving on ``port``.
+    """True only if *our* tracing viewer is serving on ``port`` and can still
+    serve its UI.
 
-    A live port is not enough: a stale viewer from an older layout, or an
-    unrelated server (e.g. another observability tool), can hold it and 404
-    every request. The viewer answers ``/api/health`` with ``{"ok": true}``;
-    a foreign server does not, so this distinguishes reuse from a clash.
+    Two probes, because either one alone accepts a viewer that cannot render:
+
+    * ``/api/health`` separates our viewer from an unrelated server (e.g.
+      another observability tool) holding the port -- a foreign server does not
+      answer ``{"ok": true}``.
+    * ``_VIEWER_UI_PROBE`` separates a working viewer from one whose files were
+      deleted from under it. The health payload and the HTML shell are both
+      answered from memory, so a viewer whose install directory was replaced
+      (a version upgrade, a switch to an editable install) keeps passing the
+      first probe indefinitely while every asset read 404s -- the page then
+      renders unstyled and never connects.
     """
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=0.5) as resp:
@@ -59,7 +73,13 @@ def _viewer_health(port: int) -> bool:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 — any failure means "not our viewer"
         return False
-    return isinstance(data, dict) and data.get("ok") is True
+    if not (isinstance(data, dict) and data.get("ok") is True):
+        return False
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{_VIEWER_UI_PROBE}", timeout=0.5) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001 — a 404 raises here; either way the UI is gone
+        return False
 
 
 def _find_free_port(start: int, span: int = 20) -> int | None:
