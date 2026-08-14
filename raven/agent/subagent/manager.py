@@ -14,7 +14,7 @@ from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import WebFetchTool, WebSearchTool
-from raven.config.schema import ExecToolConfig
+from raven.config.schema import ExecToolConfig, WebSearchConfig
 from raven.providers.base import LLMProvider
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
@@ -39,7 +39,7 @@ class SubagentManager:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        brave_api_key: str | None = None,
+        web_search_config: "WebSearchConfig | None" = None,
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
@@ -59,7 +59,7 @@ class SubagentManager:
         # SUBAGENT-origin turn.
         self._submit = None
         self._fallback = ModelBinding(provider, model or provider.get_default_model())
-        self.brave_api_key = brave_api_key
+        self.web_search_config = web_search_config or WebSearchConfig()
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
@@ -205,7 +205,11 @@ class SubagentManager:
             # Withheld without a key, same as the main loop: a sub-agent that
             # reaches for a search it cannot run reports the failure to its
             # caller, and that text ends up in the parent turn.
-            web_search = WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy)
+            web_search = WebSearchTool(
+                api_key=self.web_search_config.api_key or None,
+                max_results=self.web_search_config.max_results,
+                proxy=self.web_proxy,
+            )
             if web_search.api_key:
                 tools.register(web_search)
             tools.register(WebFetchTool(api_key=self.jina_api_key, proxy=self.web_proxy))
