@@ -695,6 +695,170 @@
       "en": "Name, e.g. internal CRM",
       "zh": "名称，例如 内部 CRM"
     },
+    "gui.agent.cancel": {
+      "en": "Cancel",
+      "zh": "取消"
+    },
+    "gui.agent.configure": {
+      "en": "Configure",
+      "zh": "设置"
+    },
+    "gui.agent.connect": {
+      "en": "Connect",
+      "zh": "连接"
+    },
+    "gui.agent.desc": {
+      "en": "What it is good at",
+      "zh": "它擅长什么"
+    },
+    "gui.agent.desc_hint": {
+      "en": "Read by the model when it picks which agent to delegate to.",
+      "zh": "模型挑选把任务交给谁时会读这句。"
+    },
+    "gui.agent.disable": {
+      "en": "Disable",
+      "zh": "停用"
+    },
+    "gui.agent.disabled": {
+      "en": "switched off",
+      "zh": "已停用"
+    },
+    "gui.agent.disc_body": {
+      "en": "Disconnect {name}? Its configuration is removed; sessions it already ran are kept.",
+      "zh": "断开 {name}？它的配置会被删除，已经跑过的会话保留。"
+    },
+    "gui.agent.disconnect": {
+      "en": "Disconnect",
+      "zh": "断开"
+    },
+    "gui.agent.enable": {
+      "en": "Enable",
+      "zh": "启用"
+    },
+    "gui.agent.failed": {
+      "en": "That did not work: {detail}",
+      "zh": "没成功：{detail}"
+    },
+    "gui.agent.hero": {
+      "en": "Other agents Raven can hand work to",
+      "zh": "可以把活交给的其它智能体"
+    },
+    "gui.agent.hero_sub": {
+      "en": "Connect a coding agent or an assistant, and Raven can delegate a task to it and read back what it did.",
+      "zh": "接上一个编码智能体或助手，Raven 就能把任务交给它，并读回它做了什么。"
+    },
+    "gui.agent.key": {
+      "en": "API key",
+      "zh": "API key"
+    },
+    "gui.agent.key_hint": {
+      "en": "Stored in this machine's config, never sent to the page.",
+      "zh": "存在本机配置里，不会发到页面。"
+    },
+    "gui.agent.key_set": {
+      "en": "already set",
+      "zh": "已设置"
+    },
+    "gui.agent.kind_acp": {
+      "en": "acp",
+      "zh": "acp"
+    },
+    "gui.agent.kind_cli": {
+      "en": "command line",
+      "zh": "命令行"
+    },
+    "gui.agent.kind_openai": {
+      "en": "openai",
+      "zh": "openai"
+    },
+    "gui.agent.missing": {
+      "en": "not reachable",
+      "zh": "连不上"
+    },
+    "gui.agent.name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.agent.name_hint": {
+      "en": "What Raven calls it when it hands over a task.",
+      "zh": "Raven 交活时怎么称呼它。"
+    },
+    "gui.agent.needs_key": {
+      "en": "needs an API key",
+      "zh": "缺 API key"
+    },
+    "gui.agent.none": {
+      "en": "Nothing connected yet.",
+      "zh": "还没有连接任何智能体。"
+    },
+    "gui.agent.off": {
+      "en": "Available",
+      "zh": "可连接"
+    },
+    "gui.agent.on": {
+      "en": "Connected",
+      "zh": "已连接"
+    },
+    "gui.agent.probe": {
+      "en": "Re-check",
+      "zh": "重新检查"
+    },
+    "gui.agent.probing": {
+      "en": "checking",
+      "zh": "检查中"
+    },
+    "gui.agent.ready": {
+      "en": "ready",
+      "zh": "可用"
+    },
+    "gui.agent.save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.agent.test": {
+      "en": "Test",
+      "zh": "测试"
+    },
+    "gui.agent.test_bad": {
+      "en": "failed {ago}",
+      "zh": "{ago}失败"
+    },
+    "gui.agent.test_cancel": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.agent.test_never": {
+      "en": "never tested",
+      "zh": "没测过"
+    },
+    "gui.agent.test_ok": {
+      "en": "passed {ago}",
+      "zh": "{ago}通过"
+    },
+    "gui.agent.test_spend": {
+      "en": "Runs a real turn against {name}, which costs what that agent costs.",
+      "zh": "会对 {name} 跑一次真实对话，花费按那个智能体自己的价算。"
+    },
+    "gui.agent.testing": {
+      "en": "testing",
+      "zh": "测试中"
+    },
+    "gui.agent.unverified": {
+      "en": "not verified",
+      "zh": "未验证"
+    },
+    "gui.agent.upgrade": {
+      "en": "This preset now runs over {to}.",
+      "zh": "这个预设现在走 {to}。"
+    },
+    "gui.agent.upgrade_body": {
+      "en": "Switch {name} to the transport its preset now uses? Its command line changes, and session handles bound to it stop resolving.",
+      "zh": "把 {name} 切到它的预设现在用的传输方式？它的命令行会变，绑在它上面的会话句柄会失效。"
+    },
+    "gui.agent.upgrade_do": {
+      "en": "Switch",
+      "zh": "切换"
+    },
     "gui.ai_note": {
       "en": "AI-generated content -- double-check what matters.",
       "zh": "内容由 AI 生成，请注意甄别"
@@ -778,6 +942,14 @@
     "gui.boot_fail": {
       "en": "Startup step \"{where}\" failed: {err}",
       "zh": "启动步骤「{where}」失败：{err}"
+    },
+    "gui.br.absent": {
+      "en": "This server has no built-in browser; links open in your own.",
+      "zh": "这个服务端没有内置浏览器，链接会在你自己的浏览器里打开。"
+    },
+    "gui.br.absent_h": {
+      "en": "No browser on this server",
+      "zh": "这个服务端没有浏览器"
     },
     "gui.br.back": {
       "en": "Back",
@@ -914,6 +1086,10 @@
     "gui.caps.repair": {
       "en": "Repair",
       "zh": "修复"
+    },
+    "gui.caps.search_agents": {
+      "en": "Search agents",
+      "zh": "搜索智能体"
     },
     "gui.caps.search_plugin": {
       "en": "Search plugins",
@@ -1627,6 +1803,10 @@
       "en": "Hourly",
       "zh": "每小时"
     },
+    "gui.freq.once": {
+      "en": "Once",
+      "zh": "仅一次"
+    },
     "gui.freq.week": {
       "en": "Weekly",
       "zh": "每周"
@@ -1835,13 +2015,13 @@
       "en": "open {name}",
       "zh": "查看 {name}"
     },
-    "gui.job.at_week_ph": {
-      "en": "Mon 09:30",
-      "zh": "周一 09:30"
-    },
     "gui.job.bad_time": {
       "en": "Could not read that time format",
       "zh": "时间格式没看懂"
+    },
+    "gui.job.bad_weekday": {
+      "en": "Pick a weekday",
+      "zh": "选一个星期几"
     },
     "gui.job.deliver": {
       "en": "Where results go",
@@ -1874,6 +2054,18 @@
     "gui.job.need_fields": {
       "en": "Name and what-to-do are both required.",
       "zh": "名称和要做什么都得填"
+    },
+    "gui.job.need_instant": {
+      "en": "Pick the date and time it should run",
+      "zh": "选一个运行的日期和时间"
+    },
+    "gui.job.need_name": {
+      "en": "Give it a name",
+      "zh": "起个名称"
+    },
+    "gui.job.need_what": {
+      "en": "Say what it should do",
+      "zh": "写清楚要做什么"
     },
     "gui.job.run_once": {
       "en": "Run it now",
@@ -2203,6 +2395,10 @@
       "en": "{n} failed",
       "zh": "{n} 失败"
     },
+    "gui.nav.agents": {
+      "en": "Connections",
+      "zh": "连接"
+    },
     "gui.nav.conn": {
       "en": "Channels",
       "zh": "入口"
@@ -2322,6 +2518,10 @@
     "gui.onb.welcome_t": {
       "en": "Welcome to Raven",
       "zh": "欢迎使用 Raven"
+    },
+    "gui.page.agents": {
+      "en": "Connections",
+      "zh": "连接"
     },
     "gui.page.conn": {
       "en": "Channels",
@@ -4338,6 +4538,10 @@
     "gui.ws.agents": {
       "en": "Subagents",
       "zh": "子智能体"
+    },
+    "gui.ws.agents_absent": {
+      "en": "This server does not report delegated work.",
+      "zh": "这个服务端不上报交办出去的工作。"
     },
     "gui.ws.agents_none": {
       "en": "No background work yet",

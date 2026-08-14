@@ -4,10 +4,12 @@ Runs the shared RPC stack (the same engine assembly `raven tui` builds, see
 ``raven/tui_rpc/bootstrap.py``) behind an aiohttp WebSocket at ``/rpc``, so a
 browser-based front end reaches the same runtime the terminal does.
 
-A page is served from ``<repo>/ui-gui/dist`` or the wheel's packaged copy when
-one is present; with none built, ``/`` answers with a short notice and the
-WebSocket endpoint stays live. No front end ships in this repo yet, so that is
-the normal state -- `--open` is for whoever builds one.
+A page is served from ``<repo>/ui/dist`` or the wheel's packaged copy when one is
+present; with none built, ``/`` answers with a short notice and the WebSocket
+endpoint stays live.
+
+``ui/`` is one front end, not two: the desktop window is a browser view of the
+same page a browser gets, so nothing here distinguishes them and nothing should.
 """
 
 from __future__ import annotations
@@ -19,13 +21,13 @@ from typing import Optional
 
 import typer
 
-_UI_GUI_DIR = Path(__file__).resolve().parent.parent.parent / "ui-gui"
-_PACKAGED_GUI_DIST = Path(__file__).resolve().parent.parent / "ui-gui" / "dist"
+_UI_DIR = Path(__file__).resolve().parent.parent.parent / "ui"
+_PACKAGED_UI_DIST = Path(__file__).resolve().parent.parent / "ui" / "dist"
 
 
-def resolve_gui_dist() -> Optional[Path]:
-    """Locate the built ui-gui SPA: wheel-packaged copy first, then source tree."""
-    for candidate in (_PACKAGED_GUI_DIST, _UI_GUI_DIR / "dist"):
+def resolve_ui_dist() -> Optional[Path]:
+    """Locate the built ui page: wheel-packaged copy first, then source tree."""
+    for candidate in (_PACKAGED_UI_DIST, _UI_DIR / "dist"):
         if (candidate / "index.html").exists():
             return candidate
     return None
@@ -126,7 +128,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     stack = await build_rpc_stack(gateway.broadcast)
     gateway.dispatcher = stack.dispatcher
 
-    app = build_app(gateway, resolve_gui_dist())
+    app = build_app(gateway, resolve_ui_dist())
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", bound_port)
@@ -180,9 +182,8 @@ def _run(port: int, open_browser: bool) -> None:
 
 
 def register(app: typer.Typer) -> None:
-    # Only `serve` for now. A `gui` command that opens a browser belongs with a
-    # front end to open: until one ships in this repo, `--open` would land on
-    # the "assets not built" placeholder, so the convenience wrapper waits.
+    # Only `serve` for now: `--open` covers opening the page, and a second
+    # command that starts the same gateway would be a second way to be running.
     @app.command("serve")
     def serve(
         port: int = typer.Option(18792, "--port", help="Preferred port; probes forward if taken."),
@@ -192,4 +193,4 @@ def register(app: typer.Typer) -> None:
         _run(port, open_browser)
 
 
-__all__ = ["SERVE", "register", "resolve_gui_dist"]
+__all__ = ["SERVE", "register", "resolve_ui_dist"]
