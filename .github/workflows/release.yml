@@ -76,6 +76,10 @@ jobs:
           names = zipfile.ZipFile(whl).namelist()
           assert "raven/ui-tui/dist/entry.js" in names, "entry.js missing from wheel"
           assert "raven/ui/dist/index.html" in names, "index.html missing from wheel"
+          # The half that degrades quietly: `resolve_ui_dist` accepts a dist with
+          # no assets, `build_app` skips mounting /assets, and the page loads
+          # with broken images rather than failing.
+          assert any(n.startswith("raven/ui/dist/assets/") for n in names), "page assets missing from wheel"
           assert not any("node_modules" in n for n in names), "node_modules leaked into wheel"
           # The only ui-tui/ entry must be the bundle — no TS source, no stray files.
           ui = [n for n in names if "ui-tui/" in n]
