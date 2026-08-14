@@ -22,6 +22,7 @@ import { NO_CONFIRM_DESTRUCTIVE } from '../../../config/env.js'
 import { dailyFortune, randomFortune } from '../../../content/fortunes.js'
 import { HOTKEYS } from '../../../content/hotkeys.js'
 import { isSectionName, nextDetailsMode, parseDetailsMode, SECTION_NAMES } from '../../../domain/details.js'
+import { getLocale, isLocale, setLocale } from '../../../i18n/index.js'
 import { writeClipboardText } from '../../../lib/clipboard.js'
 import { writeOsc52Clipboard } from '../../../lib/osc52.js'
 import { configureDetectedTerminalKeybindings, configureTerminalKeybindings } from '../../../lib/terminalSetup.js'
@@ -96,6 +97,36 @@ export const coreCommands: SlashCommand[] = [
     help: 'exit raven',
     name: 'quit',
     run: (_arg, ctx) => ctx.session.die()
+  },
+
+  {
+    // One switch for both front ends: the GUI reads the same key, and the
+    // agent's reply language follows it through the system prompt.
+    aliases: ['language'],
+    help: 'switch UI language [en|zh]',
+    name: 'lang',
+    run: (arg, ctx) => {
+      const want = arg.trim().toLowerCase()
+
+      if (!want) {
+        return ctx.transcript.sys(`language: ${getLocale()} (usage: /lang [en|zh])`)
+      }
+
+      if (!isLocale(want)) {
+        return ctx.transcript.sys('usage: /lang [en|zh]')
+      }
+
+      ctx.gateway
+        .rpc<ConfigSetResponse>('config.set', { key: 'language', value: want })
+        .then(
+          ctx.guarded<ConfigSetResponse>(() => {
+            setLocale(want)
+            forceRedraw()
+            ctx.transcript.sys(want === 'zh' ? '界面语言已切换为中文' : 'language set to English')
+          })
+        )
+        .catch(ctx.guardedErr)
+    }
   },
 
   {

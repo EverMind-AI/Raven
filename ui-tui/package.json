@@ -23,6 +23,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "gen:rpc": "node scripts/gen-rpc-types.mjs",
+    "gen:i18n": "node scripts/gen-i18n.mjs",
+    "lint:i18n": "node scripts/gen-i18n.mjs --check",
     "lint:rpc": "node scripts/gen-rpc-types.mjs --check"
   },
   "dependencies": {

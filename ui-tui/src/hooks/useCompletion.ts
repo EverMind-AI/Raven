@@ -12,6 +12,7 @@ import type { CompletionResponse } from '../gatewayTypes.js'
 
 import { SLASH_COMMANDS } from '../app/slash/registry.js'
 import { looksLikeSlashCommand } from '../domain/slash.js'
+import { slashHelp, slashName } from '../i18n/index.js'
 import { asRpcResult } from '../lib/rpc.js'
 
 const TAB_PATH_RE = /((?:["']?(?:[A-Za-z]:[\\/]|\.{1,2}\/|~\/|\/|@|[^"'`\s]+\/))[^\s]*)$/
@@ -41,16 +42,20 @@ export function slashCompletions(input: string, commands: SlashCommand[]): Compl
       continue
     }
 
-    const nameMatch = cmd.name.startsWith(token)
+    // The palette shows and completes the name in the active language; the
+    // canonical name keeps matching so both spellings are typeable.
+    const shown = slashName(cmd.name)
+    const nameMatch = cmd.name.startsWith(token) || shown.toLowerCase().startsWith(token)
     const aliasMatch = !nameMatch && (cmd.aliases ?? []).some(a => a.startsWith(token))
 
     if (nameMatch || aliasMatch) {
       seen.add(cmd.name)
 
-      const item: CompletionItem = { display: `/${cmd.name}`, text: `/${cmd.name}` }
+      const item: CompletionItem = { display: `/${shown}`, text: `/${shown}` }
+      const help = slashHelp(cmd.name, cmd.help ?? '')
 
-      if (cmd.help) {
-        item.meta = cmd.help
+      if (help) {
+        item.meta = help
       }
 
       items.push(item)

@@ -142,6 +142,7 @@ jobs:
         run: |
           npm run lint
           npm run lint:rpc
+          npm run lint:i18n
           npm run type-check
           npm test
           npm run build
