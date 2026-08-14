@@ -854,7 +854,10 @@ class SystemHelloParams(_Strict):
 
 
 class SystemHelloSession(_Strict):
-    default_channel: Literal["tui"]
+    default_channel: str = Field(
+        ...,
+        description="The channel this dispatcher's turns run on; the terminal and the served page share one.",
+    )
     default_session_key: str
 
 

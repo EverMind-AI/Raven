@@ -93,7 +93,10 @@ async def server_url():
     server = WebSocketRpcServer(host="127.0.0.1", port=port, auth_token=None)
     emitter = SubscriptionEmitter(send_frame=server.broadcast)
     dispatcher = Dispatcher()
-    register_system_methods(dispatcher)
+    # Both halves of the same wiring, as the gateway builds it: a handshake that
+    # names one channel while turns run on another is the bug this harness was
+    # otherwise reproducing.
+    register_system_methods(dispatcher, channel="web")
     register_turn_methods(dispatcher, emitter=emitter, scheduler=scheduler, turn_ids={}, default_channel="web")
     server.bind(dispatcher)
 
@@ -124,6 +127,12 @@ async def test_hello_subscribe_send_and_stream(server_url) -> None:
             hello = await _rpc(ws, "system.hello", {"client_version": "0.1.0"}, 1)
             assert "error" not in hello, hello
             assert "server_version" in hello["result"]
+            # The handshake's own answer, not just that it answered: a client
+            # takes the session key from here and subscribes to it, so a
+            # terminal key handed to a web client sends its turns to a pool it
+            # is not watching.
+            assert hello["result"]["session"]["default_channel"] == "web"
+            assert hello["result"]["session"]["default_session_key"] == "web:default"
 
             # 2. subscribe
             sub = await _rpc(ws, "turn.subscribe", {"session_key": "web:default"}, 2)
@@ -168,7 +177,7 @@ async def test_auth_token_gate_rejects_wrong_token() -> None:
     server = WebSocketRpcServer(host="127.0.0.1", port=port, auth_token="s3cret")
     emitter = SubscriptionEmitter(send_frame=server.broadcast)
     dispatcher = Dispatcher()
-    register_system_methods(dispatcher)
+    register_system_methods(dispatcher, channel="web")
     server.bind(dispatcher)
     serve_task = asyncio.create_task(server.serve_forever())
     for _ in range(50):

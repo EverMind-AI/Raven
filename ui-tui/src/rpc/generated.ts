@@ -1709,7 +1709,10 @@ export interface SystemHelloResult {
   server_version: string;
   server_capabilities: string[];
   session: {
-    default_channel: 'tui';
+    /**
+     * The channel this dispatcher's turns run on; the terminal and the served page share one.
+     */
+    default_channel: string;
     default_session_key: string;
   };
 }

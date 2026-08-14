@@ -1345,7 +1345,7 @@
               "properties": {
                 "default_channel": {
                   "type": "string",
-                  "const": "tui"
+                  "description": "The channel this dispatcher's turns run on; the terminal and the served page share one."
                 },
                 "default_session_key": { "type": "string" }
               }

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
@@ -290,7 +291,7 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
             schedule=schedule,
             message=message,
             deliver=bool(params.get("deliver", True)),
-            channel="tui",
+            channel=LOCAL_CHANNEL,
             to="default",
             delete_after_run=kind == "at",
             # Keep the id across an edit: run history lives in the

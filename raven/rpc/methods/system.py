@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
@@ -51,10 +52,16 @@ def _raven_version() -> str:
 # ----------------------------------------------------------------------------
 
 
-async def system_hello(params: dict) -> dict:
+async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
     """`system.hello` — initial handshake. Validates client_version semver.
 
     Spec: §3.7 `system.hello` — errors -32011 if client_version invalid.
+
+    ``channel`` is the routing tag this dispatcher's turns run on, and the prefix
+    of the default session key handed back here. It must match the
+    ``default_channel`` given to ``register_turn_methods`` on the same
+    dispatcher: a client is told one thing at handshake and its turns run on the
+    other, and nothing else in the process notices.
     """
     client_version = params.get("client_version")
     if not isinstance(client_version, str) or not client_version:
@@ -80,8 +87,8 @@ async def system_hello(params: dict) -> dict:
         "server_version": SERVER_VERSION,
         "server_capabilities": list(SERVER_CAPABILITIES),
         "session": {
-            "default_channel": "tui",
-            "default_session_key": "tui:default",
+            "default_channel": channel,
+            "default_session_key": f"{channel}:default",
         },
     }
 
@@ -201,9 +208,13 @@ async def system_upgrade(params: dict) -> dict:
 _UPGRADE_EXIT_DELAY_S = 0.75
 
 
-def register_system_methods(dispatcher: "Dispatcher") -> None:
+def register_system_methods(dispatcher: "Dispatcher", *, channel: str = LOCAL_CHANNEL) -> None:
     """Register all 4 system.* methods on a dispatcher instance."""
-    dispatcher.register("system.hello", system_hello)
+
+    async def _hello(params: dict) -> dict:
+        return await system_hello(params, channel=channel)
+
+    dispatcher.register("system.hello", _hello)
     dispatcher.register("system.ping", system_ping)
     dispatcher.register("system.version", system_version)
     dispatcher.register("system.upgrade", system_upgrade)
