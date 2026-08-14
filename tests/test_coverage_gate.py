@@ -109,6 +109,23 @@ diff --git a/tests/test_example.py b/tests/test_example.py
     }
 
 
+def test_parse_changed_lines_ignores_deleted_file_hunks() -> None:
+    diff = """diff --git a/raven/removed.py b/raven/removed.py
+--- a/raven/removed.py
++++ /dev/null
+@@ -1,2 +0,0 @@
+-gone
+-also gone
+diff --git a/raven/kept.py b/raven/kept.py
+--- a/raven/kept.py
++++ b/raven/kept.py
+@@ -3 +3 @@
++changed
+"""
+
+    assert parse_changed_lines(diff) == {"raven/kept.py": {3}}
+
+
 def test_diff_coverage_ignores_comments_deletions_and_non_executable_lines() -> None:
     report = _report()
     changed = {"raven/example.py": {2, 9, 10, 11, 12}}

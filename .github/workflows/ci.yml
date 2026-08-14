@@ -95,7 +95,7 @@ jobs:
         run: uv python install ${{ matrix.python }}
 
       - name: Install dependencies
-        run: uv sync --frozen --all-extras --dev --python ${{ matrix.python }}
+        run: uv sync --locked --all-extras --dev --python ${{ matrix.python }}
 
       - name: Unit tests with line and branch coverage
         # TERM=dumb: typer's rich_utils force-enables colour when GITHUB_ACTIONS is

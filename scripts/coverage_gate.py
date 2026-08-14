@@ -190,9 +190,12 @@ def parse_changed_lines(diff: str) -> dict[str, set[int]]:
     changed: dict[str, set[int]] = {}
     path: str | None = None
     for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
-            changed.setdefault(path, set())
+        if line.startswith("+++ "):
+            # Reset on a non-b/ target (e.g. +++ /dev/null) so a deleted file's
+            # hunks are not misattributed to the previously seen path.
+            path = line[6:] if line.startswith("+++ b/") else None
+            if path is not None:
+                changed.setdefault(path, set())
             continue
         match = _HUNK_RE.match(line)
         if path is None or match is None:
