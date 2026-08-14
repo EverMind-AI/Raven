@@ -9,6 +9,7 @@ import pytest
 
 from raven.plugin.memory.everos._server import (
     EverosNotConfiguredError,
+    StopOutcome,
     _everos_executable,
     ensure_everos_server,
 )
@@ -264,7 +265,7 @@ class TestStoppingWhatWeStarted:
         signalled: list[int] = []
         monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
 
-        assert stop_recorded_server(_data_dir) is False
+        assert stop_recorded_server(_data_dir) is StopOutcome.NOT_OURS
         assert signalled == [], "signalled a pid that is no longer an everos server"
 
     def test_a_record_for_another_root_is_ignored(self, _data_dir, monkeypatch) -> None:
@@ -280,8 +281,48 @@ class TestStoppingWhatWeStarted:
         signalled: list[int] = []
         monkeypatch.setattr(_os, "kill", lambda *a: signalled.append(1))
 
-        assert stop_recorded_server(_data_dir) is False
+        assert stop_recorded_server(_data_dir) is StopOutcome.NOT_OURS
         assert signalled == []
+
+    def test_a_server_that_will_not_exit_reports_draining_not_ownership(self, _data_dir, monkeypatch) -> None:
+        """A shutdown that is still draining memory work is not a foreign process.
+
+        Collapsed into one False, the wizard told users whose OME jobs were
+        mid-flight that raven had not started the server -- an explanation that is
+        simply untrue, and one that sends them looking for the wrong thing.
+        """
+        import json
+        import os as _os
+
+        from raven.plugin.memory.everos._server import stop_recorded_server
+
+        (_data_dir / "everos-server.pid").write_text(
+            json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
+        )
+        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+        monkeypatch.setattr(_os, "kill", lambda *_a: None)
+        monkeypatch.setattr("raven.plugin.memory.everos._server.time.sleep", lambda _s: None)
+
+        assert stop_recorded_server(_data_dir, timeout=1.0) is StopOutcome.STILL_DRAINING
+        assert (_data_dir / "everos-server.pid").exists(), "forgot a server that is still up"
+
+    def test_an_undeliverable_signal_is_its_own_answer(self, _data_dir, monkeypatch) -> None:
+        import json
+        import os as _os
+
+        from raven.plugin.memory.everos._server import stop_recorded_server
+
+        (_data_dir / "everos-server.pid").write_text(
+            json.dumps({"pid": 4242, "base_url": "http://localhost:18791", "root": str(_data_dir)})
+        )
+        monkeypatch.setattr("raven.plugin.memory.everos._server._is_everos_server", lambda _p: True)
+
+        def _denied(*_a):
+            raise PermissionError("nope")
+
+        monkeypatch.setattr(_os, "kill", _denied)
+
+        assert stop_recorded_server(_data_dir) is StopOutcome.SIGNAL_FAILED
 
     def test_a_verified_server_gets_sigterm_not_sigkill(self, _data_dir, monkeypatch) -> None:
         import json
@@ -301,7 +342,7 @@ class TestStoppingWhatWeStarted:
         sent: list[int] = []
         monkeypatch.setattr(_os, "kill", lambda _pid, sig: sent.append(sig))
 
-        assert stop_recorded_server(_data_dir) is True
+        assert stop_recorded_server(_data_dir) is StopOutcome.STOPPED
         assert sent == [_signal.SIGTERM]
         assert not (_data_dir / "everos-server.pid").exists()
 

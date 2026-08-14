@@ -111,20 +111,39 @@ def _recorded_slice() -> dict[str, Any]:
     return slice_ if isinstance(slice_, dict) else {}
 
 
-def everos_root() -> Path:
-    """The active EverOS root.
+def fallback_everos_root() -> Path:
+    """Which root to assume when nothing is recorded.
 
-    The recorded value when there is one; otherwise the legacy location if it
-    holds a config (so an install from before the move keeps its memories), else
-    the current default. ``_migrate_config`` records the outcome on the next
-    write, so this fallback only runs until then.
+    The legacy location when it holds a config, so an install from before the
+    move keeps its memories; otherwise the current default. Derives its answer
+    without reading raven's config, which is what lets ``_migrate_config`` use it
+    while holding a config dict of its own -- calling :func:`everos_root` there
+    would re-read whatever path is globally current, not the file being migrated.
     """
-    recorded = _recorded_slice().get("root")
-    if recorded:
-        return Path(str(recorded)).expanduser()
     legacy = legacy_everos_root()
     if (legacy / "everos.toml").is_file():
         return legacy
+    return default_everos_root()
+
+
+def everos_root() -> Path:
+    """The active EverOS root: the recorded one, else the fallback."""
+    recorded = _recorded_slice().get("root")
+    if recorded:
+        return Path(str(recorded)).expanduser()
+    return fallback_everos_root()
+
+
+def owned_everos_root() -> Path:
+    """The root raven may create in and write to.
+
+    Deliberately not the same question as :func:`everos_root`. The active root
+    can be one the user manages, and "raven needs a root of its own" must never
+    resolve to that one: a user who declines to share theirs would otherwise have
+    it adopted, seeded with templates and overwritten with raven's models.
+    """
+    if everos_owned():
+        return everos_root()
     return default_everos_root()
 
 
@@ -140,6 +159,28 @@ def everos_owned() -> bool:
     if "owned" in slice_:
         return bool(slice_["owned"])
     return root_is_raven_owned(everos_root())
+
+
+class EverosRootNotOwnedError(RuntimeError):
+    """A write was attempted against a root the user manages.
+
+    Not a ``PermissionError``: that is a filesystem condition and callers catch
+    it as one (``except OSError``), which would swallow exactly the signal this
+    is meant to raise.
+    """
+
+
+def _require_owned(action: str) -> None:
+    """Refuse a write unless raven owns the active root.
+
+    The read-only promise used to live only at the call sites that happened to
+    remember it -- the same shape as the drift this whole change is about, where
+    one rule was enforced in several places and one of them was wrong. Enforcing
+    it at the write primitives means a new caller cannot quietly opt out.
+    """
+    if everos_owned():
+        return
+    raise EverosRootNotOwnedError(f"refusing to {action}: {everos_root()} is managed by the user, not by raven")
 
 
 def get_everos_config_path() -> Path:
@@ -186,6 +227,7 @@ def ensure_everos_home(root: Path | str | None = None) -> None:
     a root the user manages is an unrequested write, and "the files are usually
     there already" is not a basis for a read-only promise.
     """
+    _require_owned("create config templates in")
     base = Path(root).expanduser() if root is not None else everos_root()
     base.mkdir(parents=True, exist_ok=True)
 
@@ -283,6 +325,7 @@ def set_everos_section(section: str, fields: dict[str, Any]) -> None:
     """
     if section not in WRITABLE_SECTIONS:
         raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
+    _require_owned(f"write [{section}]")
     data = load_everos_config()
     clean = {k: v for k, v in fields.items() if v is not None}
     data[section] = {**data.get(section, {}), **clean}
@@ -293,6 +336,7 @@ def clear_everos_section(section: str) -> None:
     """Drop ``[section]`` from the user-level toml (no-op if absent)."""
     if section not in WRITABLE_SECTIONS:
         raise KeyError(f"unknown everos section {section!r}; writable: {WRITABLE_SECTIONS}")
+    _require_owned(f"clear [{section}]")
     data = load_everos_config()
     if section not in data:
         return

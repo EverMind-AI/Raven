@@ -322,10 +322,13 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True) -> dict:
         if isinstance(slice_, dict):
             if slice_.pop("mode", None) is not None:
                 _log.info("Migrated: dropped plugins.config.everos-memory.mode (no reader)")
-            from raven.config.update_everos import everos_root, root_is_raven_owned
+            from raven.config.update_everos import fallback_everos_root, root_is_raven_owned
 
             if "root" not in slice_:
-                slice_["root"] = str(everos_root())
+                # Not ``everos_root()``: that re-reads whatever config path is
+                # globally current, which is not necessarily the file being
+                # migrated here.
+                slice_["root"] = str(fallback_everos_root())
                 _log.info("Migrated: recorded everos-memory.root = %s", slice_["root"])
             if "owned" not in slice_:
                 slice_["owned"] = root_is_raven_owned(slice_["root"])

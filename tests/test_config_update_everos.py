@@ -260,3 +260,85 @@ def test_clear_absent_section_with_existing_file_preserves_it(everos_home: Path)
 def test_clear_unknown_section_rejected(everos_home: Path) -> None:
     with pytest.raises(KeyError):
         ue.clear_everos_section("sqlite")
+
+
+# ---------------------------------------------------------------------------
+# ownership as a write gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _unowned(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """An active root the user manages."""
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "theirs")
+    monkeypatch.setattr(ue, "everos_owned", lambda: False)
+    return tmp_path / "theirs"
+
+
+def test_writing_a_section_of_an_unowned_root_is_refused(_unowned: Path) -> None:
+    """The read-only promise is enforced at the write, not only at the callers
+    that remember to check -- one rule kept in several places is the drift this
+    whole change is about."""
+    with pytest.raises(ue.EverosRootNotOwnedError, match="managed by the user"):
+        ue.set_everos_section("llm", {"model": "m", "api_key": "k"})
+    assert not (_unowned / "everos.toml").exists()
+
+
+def test_clearing_a_section_of_an_unowned_root_is_refused(_unowned: Path) -> None:
+    with pytest.raises(ue.EverosRootNotOwnedError):
+        ue.clear_everos_section("rerank")
+
+
+def test_seeding_templates_into_an_unowned_root_is_refused(_unowned: Path) -> None:
+    with pytest.raises(ue.EverosRootNotOwnedError):
+        ue.ensure_everos_home()
+    assert not _unowned.exists(), "created a directory inside a root the user manages"
+
+
+def test_the_address_write_is_refused_too(_unowned: Path) -> None:
+    """[api] goes through the same gate: the address is raven's to manage only on
+    a root raven owns."""
+    with pytest.raises(ue.EverosRootNotOwnedError):
+        ue.set_everos_api(host="127.0.0.1", port=18791)
+
+
+def test_a_root_raven_owns_may_be_written(everos_home: Path) -> None:
+    ue.set_everos_section("llm", {"model": "m", "api_key": "k"})
+    assert everos_home.exists()
+
+
+# ---------------------------------------------------------------------------
+# owned_everos_root
+# ---------------------------------------------------------------------------
+
+
+def test_own_root_falls_back_when_the_active_one_is_the_users(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """ "raven needs a root of its own" must never resolve to a root the user
+    manages, or declining to share theirs would hand it over anyway."""
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "theirs")
+    monkeypatch.setattr(ue, "everos_owned", lambda: False)
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "mine")
+
+    assert ue.owned_everos_root() == tmp_path / "mine"
+
+
+def test_own_root_keeps_the_active_one_when_raven_owns_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ue, "everos_root", lambda: tmp_path / "recorded")
+    monkeypatch.setattr(ue, "everos_owned", lambda: True)
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "mine")
+
+    assert ue.owned_everos_root() == tmp_path / "recorded"
+
+
+def test_fallback_root_reads_no_raven_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The migration calls this while holding a config dict of its own; reading
+    the globally-current config there would stamp one file with another's root."""
+    monkeypatch.setattr(ue, "legacy_everos_root", lambda: tmp_path / "absent")
+    monkeypatch.setattr(ue, "default_everos_root", lambda: tmp_path / "mine")
+
+    def _boom() -> dict:
+        raise AssertionError("fallback_everos_root read raven's config")
+
+    monkeypatch.setattr(ue, "_recorded_slice", _boom)
+
+    assert ue.fallback_everos_root() == tmp_path / "mine"

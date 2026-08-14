@@ -1440,7 +1440,7 @@ def _converge_owned_root(state: Any) -> bool:
     the user to make, only work to report.
     """
     from raven.plugin.memory.everos import _discover
-    from raven.plugin.memory.everos._server import find_recorded_server, stop_recorded_server
+    from raven.plugin.memory.everos._server import StopOutcome, find_recorded_server, stop_recorded_server
 
     target = _discover.default_new_root_url()
     _set_base_url(state.declared_url or target)
@@ -1464,14 +1464,32 @@ def _converge_owned_root(state: Any) -> bool:
             ),
             highlight=False,
         )
-        if not stop_recorded_server(state.root):
+        outcome = stop_recorded_server(state.root)
+        if outcome is not StopOutcome.STOPPED:
+            # Each of these is a different situation for the user, and saying the
+            # wrong one is worse than saying nothing: a server still draining
+            # memory work is not a foreign process.
+            reason = {
+                StopOutcome.NOT_OURS: oc._t(
+                    "Raven did not start this process.",
+                    "这个进程不是 Raven 启动的。",
+                ),
+                StopOutcome.SIGNAL_FAILED: oc._t(
+                    "the stop signal could not be delivered.",
+                    "停止信号发送失败（权限不足？）。",
+                ),
+                StopOutcome.STILL_DRAINING: oc._t(
+                    "it is shutting down but still finishing memory work.",
+                    "它正在收尾，可能有记忆任务还在跑。",
+                ),
+            }[outcome]
             oc.console.print(
                 oc._t(
-                    f"  [yellow]! Could not stop it: Raven did not start this process.[/yellow]\n"
-                    f"  [dim]Keeping {state.declared_url}. Stop it yourself and re-run "
-                    "`raven onboard` to move it.[/dim]",
-                    f"  [yellow]⚠ 无法停止：这个进程不是 Raven 启动的。[/yellow]\n"
-                    f"  [dim]继续使用 {state.declared_url}。要统一端口，先自行停掉它再重跑 raven onboard。[/dim]",
+                    f"  [yellow]! Could not move it: {reason}[/yellow]\n"
+                    f"  [dim]Keeping {state.declared_url}. Re-run `raven onboard` "
+                    "once it has stopped.[/dim]",
+                    f"  [yellow]⚠ 无法迁移：{reason}[/yellow]\n"
+                    f"  [dim]继续使用 {state.declared_url}。等它停下后重跑 raven onboard 即可。[/dim]",
                 ),
                 highlight=False,
             )
@@ -1640,9 +1658,11 @@ def _step4_memory(
     # + ome.toml) BEFORE writing model sections — set_everos_section merges
     # into the template so default sections (memory/sqlite/lancedb/api) are
     # preserved. Also creates ome.toml which the runtime requires.
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home, everos_root
+    from raven.config.update_everos import configure_everos_env, ensure_everos_home, owned_everos_root
 
-    root = everos_root()
+    # owned_everos_root, not everos_root: after a user declined to share theirs,
+    # the recorded root is still theirs, and building there would adopt it.
+    root = owned_everos_root()
     _record_root(root, owned=True)
     configure_everos_env(root)
     ensure_everos_home(root)

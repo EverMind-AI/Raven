@@ -1687,11 +1687,28 @@ class TestReusingAnEverosTheUserManages:
         assert self.writes == [], "wrote into a root the user manages"
         assert self.signals == [], "signalled a process raven does not own"
 
-    def test_declining_falls_through_to_ravens_own_root(self, tmp_env: Path, everos_isolated: Path, _no_writes) -> None:
-        """Saying no must leave raven building its own memory, not with none."""
+    def test_declining_falls_through_to_ravens_own_root(self, tmp_env: Path, _no_writes) -> None:
+        """Saying no must leave raven building its OWN memory, not adopting theirs.
+
+        Deliberately without the ``everos_isolated`` fixture: that pins ownership
+        to true, which is the condition under test. Ownership has to resolve for
+        real from the recorded config here, or the root assertion below cannot
+        fail -- which is how the first version of this test passed while raven was
+        taking over the user's root.
+        """
         import questionary
 
+        from raven.config import update_everos as ue
+
         theirs = tmp_env.parent / "theirs"
+        mine = tmp_env.parent / "mine"
+        _no_writes.setattr(ue, "default_everos_root", lambda: mine)
+        _no_writes.setattr(ue, "legacy_everos_root", lambda: tmp_env.parent / "legacy")
+        # The state a previous session's reuse leaves behind.
+        tmp_env.write_text(
+            json.dumps({"plugins": {"config": {"everos-memory": {"root": str(theirs), "owned": False}}}}),
+            encoding="utf-8",
+        )
         _found(_no_writes, _root_state(theirs, owned=False))
         _no_writes.setattr(questionary, "select", lambda *a, **kw: _Answer("own"))
         reached: list[int] = []
@@ -1706,7 +1723,13 @@ class TestReusingAnEverosTheUserManages:
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         assert len(reached) == 4, "did not reach the four role screens"
-        assert json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]["owned"] is True
+        slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
+        assert slice_["owned"] is True
+        # The point of declining: raven builds its OWN root. Asserting only that
+        # ownership flipped to true was the hole -- it passes just as well when
+        # raven has adopted the user's root and is about to overwrite it.
+        assert Path(slice_["root"]) != theirs, "adopted the root the user declined to share"
+        assert Path(slice_["root"]) == mine
 
     def test_a_stopped_one_is_probed_again_rather_than_started(
         self, tmp_env: Path, everos_isolated: Path, _no_writes, capsys: pytest.CaptureFixture
@@ -1750,7 +1773,11 @@ class TestConvergingRavensOwnPort:
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
         stopped: list[Path] = []
-        _stubs.setattr(_server, "stop_recorded_server", lambda r, **_kw: stopped.append(r) or True)
+        _stubs.setattr(
+            _server,
+            "stop_recorded_server",
+            lambda r, **_kw: (stopped.append(r), _server.StopOutcome.STOPPED)[1],
+        )
         _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
@@ -1769,13 +1796,13 @@ class TestConvergingRavensOwnPort:
 
         root = tmp_env.parent / "everos"
         _found(_stubs, _root_state(root, declared_url="http://localhost:1995"))
-        _stubs.setattr(_server, "stop_recorded_server", lambda _r, **_kw: False)
+        _stubs.setattr(_server, "stop_recorded_server", lambda _r, **_kw: _server.StopOutcome.NOT_OURS)
         _stubs.setattr(questionary, "select", lambda *a, **kw: _Answer("keep"))
 
         onboard_everos._step4_memory(skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[])
 
         out = " ".join(capsys.readouterr().out.split())
-        assert "not start this process" in out or "不是 Raven 启动的" in out
+        assert "did not start this process" in out or "不是 Raven 启动的" in out
         slice_ = json.loads(tmp_env.read_text())["plugins"]["config"]["everos-memory"]
         assert slice_["base_url"] == "http://localhost:1995"
 

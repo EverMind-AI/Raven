@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -182,32 +183,49 @@ def find_recorded_server(root: Path | str) -> dict[str, Any] | None:
     return record
 
 
-def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> bool:
+class StopOutcome(str, Enum):
+    """Why a stop attempt ended the way it did.
+
+    A bare bool collapsed three situations a caller must tell apart: a process
+    raven never started, a signal that could not be delivered, and a server that
+    is shutting down but still draining work. Reporting them as one made the
+    wizard tell a user whose memory tasks were mid-flight that raven had not
+    started the process -- an explanation that is simply untrue.
+    """
+
+    STOPPED = "stopped"
+    NOT_OURS = "not_ours"
+    SIGNAL_FAILED = "signal_failed"
+    STILL_DRAINING = "still_draining"
+
+
+def stop_recorded_server(root: Path | str, *, timeout: float = 35.0) -> StopOutcome:
     """Ask the server raven started for ``root`` to shut down, and wait for it.
 
     SIGTERM rather than SIGKILL: uvicorn's graceful shutdown runs the OME
     engine's ``stop()``, which drains in-flight strategy runs (up to 30s) before
     releasing the jobstore lock. Killing outright would leave that work to crash
-    recovery for no reason. Returns False when there is nothing of ours to stop.
+    recovery for no reason -- which is also why ``STILL_DRAINING`` is a distinct
+    answer rather than a failure: the server is doing exactly what it should.
     """
     record = find_recorded_server(root)
     if record is None:
-        return False
+        return StopOutcome.NOT_OURS
     pid = int(record["pid"])
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
         logger.debug("could not signal everos server {}: {}", pid, exc)
-        return False
+        return StopOutcome.SIGNAL_FAILED
     waited = 0.0
     while waited < timeout:
         if not _is_everos_server(pid):
             _pidfile_path().unlink(missing_ok=True)
-            return True
+            return StopOutcome.STOPPED
         time.sleep(_POLL_INTERVAL)
         waited += _POLL_INTERVAL
     logger.warning("everos server {} did not exit within {}s", pid, timeout)
-    return False
+    return StopOutcome.STILL_DRAINING
 
 
 def ome_lock_held(root: Path | str) -> bool:
@@ -375,4 +393,9 @@ async def ensure_everos_server(
     )
 
 
-__all__ = ["DEFAULT_EVEROS_BASE_URL", "EverosNotConfiguredError", "ensure_everos_server"]
+__all__ = [
+    "DEFAULT_EVEROS_BASE_URL",
+    "EverosNotConfiguredError",
+    "StopOutcome",
+    "ensure_everos_server",
+]
