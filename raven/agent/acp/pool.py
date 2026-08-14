@@ -23,7 +23,14 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.acp import protocol
 from raven.agent.acp.client import AcpClient
+
+# Budget for the one `initialize` a new connection owes, when the caller does
+# not say. Generous because an adapter fetched by `npx` may be downloading
+# itself on the first connect -- but an entry's own `readyTimeoutMs` is
+# documented as exactly this budget, so a caller that has one passes it.
+_HANDSHAKE_TIMEOUT_S = 120.0
 
 SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Receives ``(method, params)`` for one session's notifications."""
@@ -91,12 +98,24 @@ class _SessionRouter:
 class _Connection:
     """A client, the router whose lifetime is tied to it, and one lock per session."""
 
-    def __init__(self, client: AcpClient, router: _SessionRouter, launch: str = "") -> None:
+    def __init__(
+        self,
+        client: AcpClient,
+        router: _SessionRouter,
+        launch: str = "",
+        initialize: Any = None,
+    ) -> None:
         self.client = client
         self.router = router
         # What this process was launched from, so a later dispatch can tell
         # whether the connection it is about to reuse still matches its config.
         self.launch_key = launch
+        self.initialize = initialize
+        """What the agent answered to ``initialize`` on this connection.
+
+        Kept because it is the authoritative capability report for the process
+        actually serving requests, where a stored snapshot only describes the one
+        that was verified."""
         self._session_locks: dict[str, asyncio.Lock] = {}
 
     @property
@@ -147,6 +166,7 @@ class AcpConnectionPool:
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         on_request: Any = None,
+        ready_timeout_s: float | None = None,
     ) -> _Connection:
         """The live connection for ``name``, starting or restarting it if needed.
 
@@ -183,7 +203,29 @@ class AcpConnectionPool:
                 on_request=on_request,
                 on_notification=router.dispatch,
             )
-            connection = _Connection(client, router, key)
+            # The handshake belongs to establishing the connection, not to the
+            # first caller: ACP has no usable state before `initialize`, and an
+            # agent is entitled to reject anything sent ahead of it. Two of the
+            # three servers measured here tolerate a `session/new` without one
+            # and simply work; `codex-acp` answers `-32603 Internal error`, which
+            # is the correct reading of the protocol and the one to build against.
+            try:
+                initialize = await client.request(
+                    "initialize",
+                    protocol.initialize_params(),
+                    timeout=ready_timeout_s or _HANDSHAKE_TIMEOUT_S,
+                )
+            except BaseException:
+                # A connection that never handshook is unusable, and leaving the
+                # process running would leak it behind a failed acquire. Catching
+                # BaseException rather than Exception because cancellation is the
+                # likeliest way out of this await -- an adapter fetched by `npx`
+                # can sit here for a minute -- and a connection abandoned here is
+                # in nobody's bookkeeping: it never reached `_connections`, so
+                # shutdown cannot find it either.
+                await client.close()
+                raise
+            connection = _Connection(client, router, key, initialize)
             self._connections[name] = connection
             return connection
 

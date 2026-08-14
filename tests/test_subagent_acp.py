@@ -543,8 +543,10 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     from raven.agent.acp.pool import LAUNCH_PARAMS, AcpConnectionPool, launch_key
 
     # `name` is the dict key itself; `on_request` is a callable, and swapping the
-    # handler does not make the running process the wrong one.
-    outside = {"self", "name", "on_request"}
+    # handler does not make the running process the wrong one. `ready_timeout_s`
+    # is how long this caller waits for the handshake, not what was launched: two
+    # entries differing only in patience share the connection they both wanted.
+    outside = {"self", "name", "on_request", "ready_timeout_s"}
     params = {p for p in inspect.signature(AcpConnectionPool.acquire).parameters} - outside
     assert params == set(LAUNCH_PARAMS)
 
@@ -747,3 +749,114 @@ async def test_the_rpc_stack_teardown_closes_the_pool(tmp_path: Path) -> None:
     await asyncio.wait_for(stack.teardown(), timeout=30)
 
     assert get_pool().live_agents() == [], "the agent process is still running after teardown"
+
+
+async def test_a_pooled_connection_handshakes_before_anyone_uses_it(tmp_path: Path) -> None:
+    """ACP has no usable state before ``initialize``, so the pool owes it.
+
+    Found against a live server, not here: two of the three agents measured answer
+    a ``session/new`` sent with no handshake and simply work, so a pool that never
+    initialised looked correct until ``codex-acp`` answered ``-32603 Internal
+    error``. The stub now refuses pre-handshake requests for that reason.
+    """
+    connection = await get_pool().acquire(name="a", command=stub_config("a").command, env={"ACP_STUB_MODE": "ok"})
+    assert connection.initialize["agentInfo"]["name"] == "stub-agent"
+    # And the connection is usable straight away, by a caller that sends nothing
+    # but its own request.
+    session = await connection.client.request("session/new", {"cwd": str(tmp_path), "mcpServers": []}, timeout=10)
+    assert session["sessionId"]
+
+
+async def test_the_handshake_runs_on_the_entrys_own_budget(tmp_path: Path) -> None:
+    """`readyTimeoutMs` is documented as exactly this budget.
+
+    When the handshake moved into the connection it started using a module
+    constant instead, so the field stopped governing the one thing its
+    documentation names: an operator who raised it for a slow adapter had
+    `verify` handshake at 150s and report the agent healthy, while every
+    dispatch failed at the pool's 120.
+    """
+    asked: list[float | None] = []
+    pool = get_pool()
+    real = pool.acquire
+
+    async def spy(**kw: Any) -> Any:
+        asked.append(kw.get("ready_timeout_s"))
+        return await real(**kw)
+
+    backend = build_third_party_backend(stub_config("a", ready_timeout_ms=7000))
+    pool.acquire = spy  # type: ignore[method-assign]
+    try:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    finally:
+        pool.acquire = real  # type: ignore[method-assign]
+
+    assert asked == [7.0]
+
+
+async def test_a_caller_with_no_budget_still_gets_a_bounded_handshake() -> None:
+    """The fallback, observed rather than restated.
+
+    Without it the handshake runs on ``timeout=None``, which ``AcpClient.request``
+    reads as a bare await: an agent that accepts the connection and never
+    answers ``initialize`` hangs ``acquire`` forever while holding that agent's
+    lock, so every dispatch to it blocks with nothing to end the wait. That is a
+    worse failure than the fixed 120s this revision replaced.
+    """
+    from raven.agent.acp import pool as pool_mod
+    from raven.agent.acp.client import AcpClient
+
+    seen: list[float | None] = []
+    real = AcpClient.request
+
+    async def spy(self: AcpClient, method: str, params: Any = None, *, timeout: float | None = None) -> Any:
+        if method == "initialize":
+            seen.append(timeout)
+        return await real(self, method, params, timeout=timeout)
+
+    AcpClient.request = spy  # type: ignore[method-assign]
+    try:
+        await get_pool().acquire(name="a", command=stub_config("a").command, env={"ACP_STUB_MODE": "ok"})
+    finally:
+        AcpClient.request = real  # type: ignore[method-assign]
+
+    assert seen == [pool_mod._HANDSHAKE_TIMEOUT_S]
+
+
+async def test_a_connection_that_cannot_handshake_is_not_kept(tmp_path: Path) -> None:
+    """A failed acquire must not leave the process running behind it."""
+    cfg = stub_config("a", mode="reject_init")
+    with pytest.raises(Exception, match="Invalid params"):
+        await get_pool().acquire(name="a", command=cfg.command, env=dict(cfg.env))
+    assert get_pool().live_agents() == []
+
+
+async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> None:
+    """Cancelling an acquire mid-handshake must still reap the child.
+
+    The handshake is the one await in `acquire` long enough to be interrupted --
+    an adapter fetched by `npx` may be downloading itself -- and a connection
+    cancelled there is in nobody's bookkeeping: it never reached `_connections`,
+    so `close_all` at shutdown cannot find it and the process outlives raven.
+    """
+    from raven.agent.acp.client import AcpClient
+
+    launched: list[AcpClient] = []
+    real_launch = AcpClient.launch.__func__
+
+    async def capture(cls: Any, **kwargs: Any) -> AcpClient:
+        client = await real_launch(cls, **kwargs)
+        launched.append(client)
+        return client
+
+    monkeypatch.setattr(AcpClient, "launch", classmethod(capture))
+
+    cfg = stub_config("a", mode="silent")
+    task = asyncio.create_task(get_pool().acquire(name="a", command=cfg.command, env=dict(cfg.env)))
+    while not launched:
+        await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not launched[0].alive, "the agent process is still running after a cancelled connect"

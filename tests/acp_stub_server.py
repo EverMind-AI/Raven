@@ -25,6 +25,11 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      cross-talk case: one shared connection, two sessions, and only
                      one of them asked for anything.
 - ``silent``       - reads and never answers, for the timeout path.
+
+Requests before ``initialize`` are refused, deliberately. A permissive stub is
+what let a real bug through once already: two of the three live servers answer a
+``session/new`` sent without a handshake, so the missing ``initialize`` in the
+connection pool only surfaced against ``codex-acp``, which rejects it.
 """
 
 from __future__ import annotations
@@ -34,6 +39,8 @@ import os
 import sys
 
 MODE = os.environ.get("ACP_STUB_MODE", "ok")
+
+_INITIALIZED = False
 
 # A real server mints a distinct id per session; the counter keeps the stub from
 # making concurrent sessions collide in a way no real agent would.
@@ -145,7 +152,11 @@ def main() -> None:
             if MODE == "reject_init":
                 err(request_id, -32602, "Invalid params")
             else:
+                global _INITIALIZED
+                _INITIALIZED = True
                 ok(request_id, CAPABILITIES)
+        elif not _INITIALIZED:
+            err(request_id, -32603, "Internal error: no initialize was received on this connection")
         elif method == "session/new":
             if MODE == "no_session":
                 err(request_id, -32000, "no api key configured for this agent")
