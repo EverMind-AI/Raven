@@ -1,7 +1,7 @@
 """Typer subcommand: `raven serve` — the headless RPC gateway.
 
 Runs the shared RPC stack (the same engine assembly `raven tui` builds, see
-``raven/tui_rpc/bootstrap.py``) behind an aiohttp WebSocket at ``/rpc``, so a
+``raven/rpc/bootstrap.py``) behind an aiohttp WebSocket at ``/rpc``, so a
 browser-based front end reaches the same runtime the terminal does.
 
 A page is served from ``<repo>/ui/dist`` or the wheel's packaged copy when one is
@@ -107,8 +107,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from aiohttp import web
     from loguru import logger
 
-    from raven.tui_rpc.bootstrap import build_rpc_stack
-    from raven.tui_rpc.transports.ws import WsGateway, build_app, pick_port
+    from raven.rpc.bootstrap import build_rpc_stack
+    from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     gateway = WsGateway()
     # A relaunch after `system.upgrade` must reclaim the exact port the open

@@ -453,7 +453,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # The RPC surface that renders that EverOS section: the same key,
         # reduced to a set/unset flag for the settings page. No verdict about
         # a Raven provider is being made from it.
-        "raven/tui_rpc/methods/console.py",
+        "raven/rpc/methods/console.py",
         "raven/config/update_tools.py",
         "raven/providers/transcription.py",
         # Reads a key in order to *use* it -- put it on the request, redact it
@@ -474,8 +474,8 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/providers/endpoints.py",
         "raven/cli/provider_commands.py",
         "raven/cli/status_commands.py",
-        "raven/tui_rpc/methods/model.py",
-        "raven/tui_rpc/methods/setup.py",
+        "raven/rpc/methods/model.py",
+        "raven/rpc/methods/setup.py",
         "raven/providers/azure_openai_provider.py",
         "raven/providers/base.py",
         "raven/providers/minimax_oauth_provider.py",
@@ -496,7 +496,7 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/subagent/backends/__init__.py",
         "raven/agent/subagent/backends/openai_api.py",
         "raven/agent/subagent/probe.py",
-        "raven/tui_rpc/methods/subagents.py",
+        "raven/rpc/methods/subagents.py",
         # The skill hub's endpoint credential, read to store or forward it.
         "raven/config/update_skills.py",
         "raven/web_rpc/methods_config.py",

@@ -4,9 +4,9 @@
 
 **Goal:** Add a `/subagents` command to `raven tui` that configures third-party sub-agents from the built-in presets - list with install/test status, add from preset (name + description, plus a masked api key for the openai kind), enable/disable, delete, probe, and test.
 
-**Architecture:** Eight new `subagents.*` TUI-RPC methods whose handlers are thin adapters over the config/preset/probe/verdict core the web RPC already uses, plus a native Ink overlay (`subagentsHub`) modelled on `skillsHub.tsx`'s structure. Every mutation writes through `update_subagents` (validated, atomic, read-modify-write) and then hot-applies to the live loop, so the roster inside the `spawn` and `run_subagent_dag` tool descriptions changes without restarting the TUI.
+**Architecture:** Eight new `subagents.*` RPC methods whose handlers are thin adapters over the config/preset/probe/verdict core the web RPC already uses, plus a native Ink overlay (`subagentsHub`) modelled on `skillsHub.tsx`'s structure. Every mutation writes through `update_subagents` (validated, atomic, read-modify-write) and then hot-applies to the live loop, so the roster inside the `spawn` and `run_subagent_dag` tool descriptions changes without restarting the TUI.
 
-**Tech Stack:** Python 3.12+ / pydantic v2 / `raven.tui_rpc` dispatcher; TypeScript / React / Ink (`@hermes/ink`) / nanostores; contract-first OpenRPC codegen.
+**Tech Stack:** Python 3.12+ / pydantic v2 / `raven.rpc` dispatcher; TypeScript / React / Ink (`@hermes/ink`) / nanostores; contract-first OpenRPC codegen.
 
 **Spec:** `docs/specs/2026-08-06-tui-subagents-command-design.md`
 
@@ -18,7 +18,7 @@
 - Commit messages: Conventional Commits, all-English, ASCII-only (no em-dash, curly quotes, ellipsis, `§`). Trailer: `Co-authored-by: Claude (<actual-session-model-id>) <noreply@anthropic.com>`.
 - Do not commit unprompted beyond the per-task commits this plan specifies.
 - `ui-tui/src/rpc/generated.ts` is generated. Never hand-edit it; run `npm run gen:rpc`.
-- `ui-tui/rpc-schema/openrpc.json` is the single source of truth for the RPC contract (REQ-5).
+- `rpc-schema/openrpc.json` is the single source of truth for the RPC contract (REQ-5).
 - Editing `ui-webui` i18n JSON is out of scope; this feature adds no web UI strings.
 - The api key is never returned by any RPC, not even masked. Only the boolean `has_api_key`.
 - Comments: English only, and only where the logic is non-obvious (repo `CLAUDE.md` section 1).
@@ -31,7 +31,7 @@
 Consequences for this plan:
 
 1. Copy `skillsHub.tsx` for **UI structure only** (staged views, `useInput`, error line, loading state). Do not copy its RPC wiring.
-2. Model the RPC wiring on a **registered** handler: `raven/tui_rpc/methods/config.py`.
+2. Model the RPC wiring on a **registered** handler: `raven/rpc/methods/config.py`.
 3. Task 1 adds a registration-coverage test so this class of drift cannot recur.
 4. A TS test that mocks `rpc` proves nothing about the backend. Every method needs a Python registration test too.
 
@@ -39,18 +39,18 @@ Consequences for this plan:
 
 | File | Responsibility |
 |---|---|
-| `raven/tui_rpc/models.py` (modify) | `SubagentRow` schema + 8 `Params`/`Result` pairs + 8 `METHOD_MODELS` entries |
-| `raven/tui_rpc/errors.py` (modify) | `SubagentNotFoundError` (code -32017, next free) |
-| `raven/tui_rpc/methods/subagents.py` (create) | the 8 handlers + `register_subagents_methods`; the only new backend logic |
-| `raven/tui_rpc/methods/__init__.py` (modify) | wire the helper into the umbrella |
-| `ui-tui/rpc-schema/openrpc.json` (modify) | 8 method entries, `SubagentRow` schema, `SubagentNotFound` error |
+| `raven/rpc/models.py` (modify) | `SubagentRow` schema + 8 `Params`/`Result` pairs + 8 `METHOD_MODELS` entries |
+| `raven/rpc/errors.py` (modify) | `SubagentNotFoundError` (code -32017, next free) |
+| `raven/rpc/methods/subagents.py` (create) | the 8 handlers + `register_subagents_methods`; the only new backend logic |
+| `raven/rpc/methods/__init__.py` (modify) | wire the helper into the umbrella |
+| `rpc-schema/openrpc.json` (modify) | 8 method entries, `SubagentRow` schema, `SubagentNotFound` error |
 | `ui-tui/src/rpc/generated.ts` (regenerate) | `npm run gen:rpc` output |
 | `ui-tui/src/app/overlayStore.ts` (modify) | `subagentsHub` key, preserved across turn resets |
 | `ui-tui/src/components/subagentsHub.tsx` (create) | the overlay: list, form, delete confirm |
 | `ui-tui/src/components/appOverlays.tsx` (modify) | mount the overlay |
 | `ui-tui/src/app/slash/commands/ops.ts` (modify) | `/subagents` + subcommands |
-| `tests/test_tui_rpc_subagents.py` (create) | handler tests |
-| `tests/test_tui_rpc_registration.py` (create) | every `METHODS` name is registered |
+| `tests/test_rpc_subagents.py` (create) | handler tests |
+| `tests/test_rpc_registration.py` (create) | every `METHODS` name is registered |
 | `ui-tui/src/__tests__/subagentsHub.test.tsx` (create) | overlay render + keyboard |
 | `ui-tui/src/__tests__/createSlashHandler.test.ts` (modify) | `/subagents` parse |
 
@@ -59,18 +59,18 @@ Consequences for this plan:
 ### Task 1: RPC contract + registration-coverage guard
 
 **Files:**
-- Modify: `raven/tui_rpc/errors.py`
-- Modify: `raven/tui_rpc/models.py`
-- Modify: `ui-tui/rpc-schema/openrpc.json`
+- Modify: `raven/rpc/errors.py`
+- Modify: `raven/rpc/models.py`
+- Modify: `rpc-schema/openrpc.json`
 - Regenerate: `ui-tui/src/rpc/generated.ts`
-- Test: `tests/test_tui_rpc_registration.py` (create)
+- Test: `tests/test_rpc_registration.py` (create)
 
 **Interfaces:**
 - Produces: `SubagentRow`, `SubagentsListParams/Result`, `SubagentsAddParams/Result`, `SubagentsUpdateParams/Result`, `SubagentsRemoveParams/Result`, `SubagentsToggleParams/Result`, `SubagentsProbeParams/Result`, `SubagentsTestParams/Result`, `SubagentsTestCancelParams/Result`, `SubagentNotFoundError`.
 
 - [ ] **Step 1: Write the failing registration-coverage test**
 
-Create `tests/test_tui_rpc_registration.py`:
+Create `tests/test_rpc_registration.py`:
 
 ```python
 """Every method in the RPC contract must have a handler.
@@ -85,9 +85,9 @@ cost of the gap going unnoticed.
 
 from __future__ import annotations
 
-from raven.tui_rpc.dispatcher import Dispatcher
-from raven.tui_rpc.methods import register_aligned_methods
-from raven.tui_rpc.models import METHODS
+from raven.rpc.dispatcher import Dispatcher
+from raven.rpc.methods import register_aligned_methods
+from raven.rpc.models import METHODS
 
 # Declared in the contract, deliberately unimplemented in v0.1. Shrinking this
 # set is progress; growing it needs a reason in the PR description.
@@ -125,13 +125,13 @@ suite failing between commits and reads as a broken commit to a reviewer.
 
 - [ ] **Step 2: Run it to see how it fails**
 
-Run: `uv run pytest tests/test_tui_rpc_registration.py -v`
+Run: `uv run pytest tests/test_rpc_registration.py -v`
 
-Expected: errors, not failures. `Dispatcher` may expose its registry under a different name than `methods()`, and `register_aligned_methods` requires no args but check its signature at `raven/tui_rpc/methods/__init__.py:59`. Read `raven/tui_rpc/dispatcher.py` and use the real accessor (if the registry is a private dict, use it and note why in a comment rather than adding a public accessor for a test). Once the accessor is right, both tests must PASS - they describe the tree as it already is, and they are the guard that Tasks 2-4 do not widen the gap.
+Expected: errors, not failures. `Dispatcher` may expose its registry under a different name than `methods()`, and `register_aligned_methods` requires no args but check its signature at `raven/rpc/methods/__init__.py:59`. Read `raven/rpc/dispatcher.py` and use the real accessor (if the registry is a private dict, use it and note why in a comment rather than adding a public accessor for a test). Once the accessor is right, both tests must PASS - they describe the tree as it already is, and they are the guard that Tasks 2-4 do not widen the gap.
 
 - [ ] **Step 3: Add the error class**
 
-In `raven/tui_rpc/errors.py`, after `NotDispatchCompatibleError` (the current highest, -32016):
+In `raven/rpc/errors.py`, after `NotDispatchCompatibleError` (the current highest, -32016):
 
 ```python
 class SubagentNotFoundError(RpcError):
@@ -142,7 +142,7 @@ Match the surrounding classes exactly - they are bare `CODE` assignments with no
 
 - [ ] **Step 4: Add the models**
 
-In `raven/tui_rpc/models.py`, add a `SubagentRow` schema next to the other shared schemas (beside `SkillInfo`, around line 84), then the eight pairs in their own `# subagents.* methods` section, then the `METHODS` entries after the `config.*` block:
+In `raven/rpc/models.py`, add a `SubagentRow` schema next to the other shared schemas (beside `SkillInfo`, around line 84), then the eight pairs in their own `# subagents.* methods` section, then the `METHODS` entries after the `config.*` block:
 
 ```python
 class SubagentRow(_Strict):
@@ -264,7 +264,7 @@ class SubagentsTestCancelResult(_Strict):
 
 - [ ] **Step 5: Add the schema entries**
 
-In `ui-tui/rpc-schema/openrpc.json`: add `SubagentRow` under `components/schemas` (properties mirroring the pydantic model exactly, `additionalProperties: false`, `required` listing every non-defaulted field), add `SubagentNotFound` under `components/errors` as `{"code": -32017, "message": "subagent_not_found"}`, and add the eight methods to `methods` following the `skill.pin` entry's shape (`name`, `summary`, `params` with `required` flags, `result` with a named schema, `errors` as `$ref`s).
+In `rpc-schema/openrpc.json`: add `SubagentRow` under `components/schemas` (properties mirroring the pydantic model exactly, `additionalProperties: false`, `required` listing every non-defaulted field), add `SubagentNotFound` under `components/errors` as `{"code": -32017, "message": "subagent_not_found"}`, and add the eight methods to `methods` following the `skill.pin` entry's shape (`name`, `summary`, `params` with `required` flags, `result` with a named schema, `errors` as `$ref`s).
 
 - [ ] **Step 6: Regenerate the TS types and verify they are clean**
 
@@ -276,16 +276,16 @@ Expected: `gen:rpc` writes `src/rpc/generated.ts` including `SubagentRow`, `Suba
 
 - [ ] **Step 7: Run the contract tests**
 
-Run: `uv run pytest tests/test_tui_rpc_registration.py -v`
+Run: `uv run pytest tests/test_rpc_registration.py -v`
 
 Expected: both tests PASS. Nothing in this task is left red.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add raven/tui_rpc/errors.py raven/tui_rpc/models.py \
-        ui-tui/rpc-schema/openrpc.json ui-tui/src/rpc/generated.ts \
-        tests/test_tui_rpc_registration.py
+git add raven/rpc/errors.py raven/rpc/models.py \
+        rpc-schema/openrpc.json ui-tui/src/rpc/generated.ts \
+        tests/test_rpc_registration.py
 git commit -m "feat(tui): declare the subagents RPC contract"
 ```
 
@@ -294,9 +294,9 @@ git commit -m "feat(tui): declare the subagents RPC contract"
 ### Task 2: read handlers - `subagents.list` and `subagents.probe`
 
 **Files:**
-- Create: `raven/tui_rpc/methods/subagents.py`
-- Modify: `raven/tui_rpc/methods/__init__.py`
-- Test: `tests/test_tui_rpc_subagents.py` (create)
+- Create: `raven/rpc/methods/subagents.py`
+- Modify: `raven/rpc/methods/__init__.py`
+- Test: `tests/test_rpc_subagents.py` (create)
 
 **Interfaces:**
 - Consumes: the models from Task 1.
@@ -304,10 +304,10 @@ git commit -m "feat(tui): declare the subagents RPC contract"
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/test_tui_rpc_subagents.py`:
+Create `tests/test_rpc_subagents.py`:
 
 ```python
-"""Tests for the ``subagents.*`` TUI-RPC handlers."""
+"""Tests for the ``subagents.*`` RPC handlers."""
 
 from __future__ import annotations
 
@@ -316,7 +316,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.tui_rpc.methods.subagents import (
+from raven.rpc.methods.subagents import (
     register_subagents_methods,
     subagents_list,
     subagents_probe,
@@ -358,7 +358,7 @@ def config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         encoding="utf-8",
     )
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
-    monkeypatch.setattr("raven.tui_rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
     return path
 
 
@@ -425,14 +425,14 @@ async def test_probe_returns_the_same_row_shape_as_list(config_path: Path) -> No
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_tui_rpc_subagents.py -v`
-Expected: FAIL with `ModuleNotFoundError: raven.tui_rpc.methods.subagents`.
+Run: `uv run pytest tests/test_rpc_subagents.py -v`
+Expected: FAIL with `ModuleNotFoundError: raven.rpc.methods.subagents`.
 
-Check first how the other `test_tui_rpc_*.py` files mark async tests (`pytestmark = pytest.mark.anyio`, an `anyio_backend` fixture, or `asyncio_mode = auto` in `pyproject.toml`) and match it. If the suite runs `asyncio_mode = auto`, delete the `pytestmark` line.
+Check first how the other `test_rpc_*.py` files mark async tests (`pytestmark = pytest.mark.anyio`, an `anyio_backend` fixture, or `asyncio_mode = auto` in `pyproject.toml`) and match it. If the suite runs `asyncio_mode = auto`, delete the `pytestmark` line.
 
 - [ ] **Step 3: Write the handlers**
 
-Create `raven/tui_rpc/methods/subagents.py`:
+Create `raven/rpc/methods/subagents.py`:
 
 ```python
 """``subagents.*`` RPC handlers: configure third-party sub-agents from the TUI.
@@ -460,8 +460,8 @@ from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import get_third_party_subagents
 
 if TYPE_CHECKING:
-    from raven.tui_rpc.dispatcher import Dispatcher
-    from raven.tui_rpc.methods import AgentLoopFactory
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods import AgentLoopFactory
 
 
 def _as_configs(entries: list[dict]) -> list[Any]:
@@ -549,11 +549,11 @@ Check `probe.ProbeResult` field names against `raven/agent/subagent/probe.py:50`
 
 - [ ] **Step 4: Wire it into the umbrella**
 
-In `raven/tui_rpc/methods/__init__.py`, import `register_subagents_methods` and call it inside `register_aligned_methods` beside `register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)` (line 126), passing `agent_loop_factory` the same way. Add it to the module docstring's method inventory if that list enumerates domains.
+In `raven/rpc/methods/__init__.py`, import `register_subagents_methods` and call it inside `register_aligned_methods` beside `register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)` (line 126), passing `agent_loop_factory` the same way. Add it to the module docstring's method inventory if that list enumerates domains.
 
 - [ ] **Step 5: Shrink the in-progress allowlist**
 
-`tests/test_tui_rpc_registration.py` carries an `IN_PROGRESS` set holding the
+`tests/test_rpc_registration.py` carries an `IN_PROGRESS` set holding the
 `subagents.*` names that are declared but not yet registered. Delete the two this
 task registers - `"subagents.list"` and `"subagents.probe"` - from it. Leaving them
 would let `test_neither_allowlist_names_a_method_that_is_registered` fail, which is
@@ -562,7 +562,7 @@ the guard telling you the set is stale.
 - [ ] **Step 6: Run the tests**
 
 ```bash
-uv run pytest tests/test_tui_rpc_subagents.py tests/test_tui_rpc_registration.py -v
+uv run pytest tests/test_rpc_subagents.py tests/test_rpc_registration.py -v
 ```
 
 Expected: every Task 2 test passes, and all three registration-guard tests pass.
@@ -570,8 +570,8 @@ Expected: every Task 2 test passes, and all three registration-guard tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add raven/tui_rpc/methods/subagents.py raven/tui_rpc/methods/__init__.py \
-        tests/test_tui_rpc_subagents.py tests/test_tui_rpc_registration.py
+git add raven/rpc/methods/subagents.py raven/rpc/methods/__init__.py \
+        tests/test_rpc_subagents.py tests/test_rpc_registration.py
 git commit -m "feat(tui): serve the subagent roster over RPC"
 ```
 
@@ -580,8 +580,8 @@ git commit -m "feat(tui): serve the subagent roster over RPC"
 ### Task 3: write handlers - add / update / remove / toggle
 
 **Files:**
-- Modify: `raven/tui_rpc/methods/subagents.py`
-- Test: `tests/test_tui_rpc_subagents.py`
+- Modify: `raven/rpc/methods/subagents.py`
+- Test: `tests/test_rpc_subagents.py`
 
 **Interfaces:**
 - Consumes: `_rows()`, `_as_configs()` from Task 2.
@@ -589,11 +589,11 @@ git commit -m "feat(tui): serve the subagent roster over RPC"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_tui_rpc_subagents.py`:
+Append to `tests/test_rpc_subagents.py`:
 
 ```python
-from raven.tui_rpc.errors import SubagentNotFoundError
-from raven.tui_rpc.methods.subagents import (
+from raven.rpc.errors import SubagentNotFoundError
+from raven.rpc.methods.subagents import (
     subagents_add,
     subagents_remove,
     subagents_toggle,
@@ -747,12 +747,12 @@ async def test_a_write_re_reads_the_file_first(config_path: Path) -> None:
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `uv run pytest tests/test_tui_rpc_subagents.py -v -k "add or update or toggle or remove or hot_apply or re_read"`
+Run: `uv run pytest tests/test_rpc_subagents.py -v -k "add or update or toggle or remove or hot_apply or re_read"`
 Expected: FAIL on the imports (`subagents_add` etc. do not exist).
 
 - [ ] **Step 3: Implement the write handlers**
 
-Add to `raven/tui_rpc/methods/subagents.py`:
+Add to `raven/rpc/methods/subagents.py`:
 
 ```python
 from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS, third_party_subagent_preset
@@ -761,7 +761,7 @@ from raven.config.update_subagents import (
     remove_third_party_subagent,
     set_third_party_subagents,
 )
-from raven.tui_rpc.errors import SubagentNotFoundError
+from raven.rpc.errors import SubagentNotFoundError
 
 
 def _hot_apply(agent_loop_factory: "AgentLoopFactory | None") -> None:
@@ -883,7 +883,7 @@ Then extend `register_subagents_methods` with closures that bind `agent_loop_fac
 - [ ] **Step 4: Run the tests**
 
 ```bash
-uv run pytest tests/test_tui_rpc_subagents.py -v
+uv run pytest tests/test_rpc_subagents.py -v
 ```
 
 Expected: all pass. If `test_add_rejects_a_duplicate_name_without_writing` fails, check that `set_third_party_subagents` raises before writing (it validates and checks duplicates first - `update_subagents.py:57-66`); do not add a second duplicate check here.
@@ -892,14 +892,14 @@ Expected: all pass. If `test_add_rejects_a_duplicate_name_without_writing` fails
 
 Delete the four names this task registers - `"subagents.add"`, `"subagents.update"`,
 `"subagents.toggle"`, `"subagents.remove"` - from `IN_PROGRESS` in
-`tests/test_tui_rpc_registration.py`, then re-run
-`uv run pytest tests/test_tui_rpc_registration.py -v` and confirm all three pass.
+`tests/test_rpc_registration.py`, then re-run
+`uv run pytest tests/test_rpc_registration.py -v` and confirm all three pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/tui_rpc/methods/subagents.py tests/test_tui_rpc_subagents.py \
-        tests/test_tui_rpc_registration.py
+git add raven/rpc/methods/subagents.py tests/test_rpc_subagents.py \
+        tests/test_rpc_registration.py
 git commit -m "feat(tui): add, update, toggle and remove subagents over RPC"
 ```
 
@@ -908,20 +908,20 @@ git commit -m "feat(tui): add, update, toggle and remove subagents over RPC"
 ### Task 4: test handlers - `subagents.test` and `subagents.test_cancel`
 
 **Files:**
-- Modify: `raven/tui_rpc/methods/subagents.py`
-- Test: `tests/test_tui_rpc_subagents.py`
+- Modify: `raven/rpc/methods/subagents.py`
+- Test: `tests/test_rpc_subagents.py`
 
 **Interfaces:**
 - Produces: `subagents_test`, `subagents_test_cancel`, and the module-level `_RUNNING: dict[str, asyncio.Task]`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_tui_rpc_subagents.py`:
+Append to `tests/test_rpc_subagents.py`:
 
 ```python
 import asyncio
 
-from raven.tui_rpc.methods.subagents import subagents_test, subagents_test_cancel
+from raven.rpc.methods.subagents import subagents_test, subagents_test_cancel
 
 
 async def test_test_records_a_verdict_for_a_configured_agent(config_path: Path, monkeypatch) -> None:
@@ -930,7 +930,7 @@ async def test_test_records_a_verdict_for_a_configured_agent(config_path: Path, 
     async def fake_run_test(cfg, *, source):
         return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", "PONG", 42)
 
-    monkeypatch.setattr("raven.tui_rpc.methods.subagents.run_test", fake_run_test)
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
     out = await subagents_test({"name": "Coder", "source": "config"})
     assert out["ok"] is True
     assert out["reply"] == "PONG"
@@ -954,7 +954,7 @@ async def test_test_can_target_an_unconfigured_preset(config_path: Path, monkeyp
     async def fake_run_test(cfg, *, source):
         return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 1)
 
-    monkeypatch.setattr("raven.tui_rpc.methods.subagents.run_test", fake_run_test)
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
     out = await subagents_test({"name": "opencode", "source": "preset"})
     assert out["ok"] is True
 
@@ -967,7 +967,7 @@ async def test_cancel_stops_a_running_test(config_path: Path, monkeypatch) -> No
         await asyncio.sleep(60)
         raise AssertionError("should have been cancelled")
 
-    monkeypatch.setattr("raven.tui_rpc.methods.subagents.run_test", slow_run_test)
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", slow_run_test)
     task = asyncio.create_task(subagents_test({"name": "Coder", "source": "config"}))
     await asyncio.wait_for(started.wait(), timeout=5)
 
@@ -983,24 +983,24 @@ async def test_cancel_reports_false_when_nothing_is_running(config_path: Path) -
 
 async def test_a_finished_test_is_not_left_in_the_running_map(config_path: Path, monkeypatch) -> None:
     from raven.agent.subagent.probe import TestResult
-    from raven.tui_rpc.methods.subagents import _RUNNING
+    from raven.rpc.methods.subagents import _RUNNING
 
     async def fake_run_test(cfg, *, source):
         return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 1)
 
-    monkeypatch.setattr("raven.tui_rpc.methods.subagents.run_test", fake_run_test)
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
     await subagents_test({"name": "Coder", "source": "config"})
     assert "Coder" not in _RUNNING
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `uv run pytest tests/test_tui_rpc_subagents.py -v -k "test_test or cancel or running_map"`
+Run: `uv run pytest tests/test_rpc_subagents.py -v -k "test_test or cancel or running_map"`
 Expected: FAIL on the imports.
 
 - [ ] **Step 3: Implement**
 
-Add to `raven/tui_rpc/methods/subagents.py`:
+Add to `raven/rpc/methods/subagents.py`:
 
 ```python
 import asyncio
@@ -1088,7 +1088,7 @@ Confirm `TestResult`'s field names at `probe.py:94` before using `result.elapsed
 
 - [ ] **Step 4: Add the registration assertion now that all eight exist**
 
-Append to `tests/test_tui_rpc_registration.py`:
+Append to `tests/test_rpc_registration.py`:
 
 ```python
 def test_subagents_methods_are_registered() -> None:
@@ -1113,7 +1113,7 @@ from `IN_PROGRESS`, then assert the set is now empty so it cannot quietly linger
 
 ```python
 def test_no_subagents_method_is_left_in_progress() -> None:
-    from tests.test_tui_rpc_registration import IN_PROGRESS  # noqa: PLC0415 - self-reference
+    from tests.test_rpc_registration import IN_PROGRESS  # noqa: PLC0415 - self-reference
 
     assert IN_PROGRESS == set()
 ```
@@ -1125,7 +1125,7 @@ accessor the registry exposes (`dispatcher.methods()` was confirmed to exist).
 - [ ] **Step 5: Run the full backend suite**
 
 ```bash
-uv run pytest tests/test_tui_rpc_subagents.py tests/test_tui_rpc_registration.py -v
+uv run pytest tests/test_rpc_subagents.py tests/test_rpc_registration.py -v
 ```
 
 Expected: all pass, including the new `test_subagents_methods_are_registered` - all eight names are now registered.
@@ -1133,8 +1133,8 @@ Expected: all pass, including the new `test_subagents_methods_are_registered` - 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add raven/tui_rpc/methods/subagents.py tests/test_tui_rpc_subagents.py \
-        tests/test_tui_rpc_registration.py
+git add raven/rpc/methods/subagents.py tests/test_rpc_subagents.py \
+        tests/test_rpc_registration.py
 git commit -m "feat(tui): run and cancel a subagent test over RPC"
 ```
 

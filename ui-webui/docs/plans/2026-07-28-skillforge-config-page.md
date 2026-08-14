@@ -282,7 +282,7 @@ async def test_skills_get_set_list(tmp_path, monkeypatch):
     p.write_text('{"skillForge": {"enabled": true}}', encoding="utf-8")
     monkeypatch.setattr(us, "get_config_path", lambda: p)
 
-    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.rpc.dispatcher import Dispatcher
     from raven.web_rpc.methods_config import register_config_methods
     d = Dispatcher()
     register_config_methods(d)

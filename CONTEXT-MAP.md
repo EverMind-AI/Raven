@@ -8,12 +8,12 @@
 ## Contexts
 
 - [Raven Runtime](./CONTEXT.md) — the Python agent runtime: channels, spine, agent loop, engines, providers
-- [TUI](./ui-tui/CONTEXT.md) — the terminal frontend (`ui-tui/`, React/Ink); talks to the Runtime only via TUI-RPC
+- [TUI](./ui-tui/CONTEXT.md) — the terminal frontend (`ui-tui/`, React/Ink); talks to the Runtime only via the RPC protocol
 
 ## Relationships
 
-- **TUI ↔ Runtime**: communicate exclusively over the TUI-RPC protocol (`raven/tui_rpc/`); the TUI never imports Runtime internals
-- **UI ↔ Runtime**: `ui/` is the served page, over the same protocol via `raven serve`'s WebSocket. Not a second front end for the desktop window: that window is a browser view of this page. The protocol's name is the terminal's for historical reasons only -- every client speaks it
+- **TUI ↔ Runtime**: communicate exclusively over the RPC protocol (`raven/rpc/`); the TUI never imports Runtime internals
+- **UI ↔ Runtime**: `ui/` is the served page, over the same protocol via `raven serve`'s WebSocket. Not a second front end for the desktop window: that window is a browser view of this page
 - **bridge/ (WhatsApp TS)**: part of the Runtime context's channel boundary, not a separate context
 
 ## Terms under review

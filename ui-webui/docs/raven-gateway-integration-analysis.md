@@ -63,7 +63,7 @@ class Outlet(Protocol):
 **现有 outlet —— 没有 HTTP/WS/gateway outlet。** 存在三个:
 - `ChannelOutletAdapter`(`raven/channels/outlet.py:19`)—— 包一个 IM channel;把 `Text`/`MediaOut` 经 `channel.send(...)` 渲染,吞掉流式事件。非流式(`Capabilities(streaming=False)`, `:33`)。
 - `CliOutlet`(`raven/cli/_repl_spine.py:30`)—— 渲染到终端;非流式。
-- `TuiOutlet`(`raven/tui_rpc/spine.py:116`)—— **流式**(`Capabilities(streaming=True)`, `:128`);把每个 spine 事件映射为 wire 事件(`token.delta`, `thinking.delta`, `tool.start/complete`),经 `SubscriptionEmitter`。**这是最接近 web surface 的现有类比。**
+- `RpcOutlet`(`raven/rpc/spine.py:116`)—— **流式**(`Capabilities(streaming=True)`, `:128`);把每个 spine 事件映射为 wire 事件(`token.delta`, `thinking.delta`, `tool.start/complete`),经 `SubscriptionEmitter`。**这是最接近 web surface 的现有类比。**
 
 ---
 
@@ -71,7 +71,7 @@ class Outlet(Protocol):
 
 子系统在 `raven/channels/`。**`ChannelManager`**(`raven/channels/manager.py:47`)从声明式 spec 构造启用的 adapter(`_init_channels`, `:56`;读 `config.channels.<name>.enabled`),start/stop 它们,报告 `enabled_channels`(`:133`)。它只做构造 + 生命周期 —— "Outbound delivery is the spine's DeliveryHub/Outlet ... inbound is each channel's Intake -> scheduler.submit"(`manager.py:3-6`)。
 
-**存在的 channel**(`raven/channels/adapters/`):whatsapp, telegram, discord, feishu, mochat, dingtalk, email, slack, qq, matrix, wecom, weixin(枚举于 `_GATEWAY_IM_CHANNELS`, `gateway_commands.py:66-79`)。加上 surface 内部伪 channel `cli`(CliOutlet)与 `tui`(TuiOutlet)。**没有 `web`/`http`/`gateway` channel。**
+**存在的 channel**(`raven/channels/adapters/`):whatsapp, telegram, discord, feishu, mochat, dingtalk, email, slack, qq, matrix, wecom, weixin(枚举于 `_GATEWAY_IM_CHANNELS`, `gateway_commands.py:66-79`)。加上 surface 内部伪 channel `cli`(CliOutlet)与 `tui`(RpcOutlet)。**没有 `web`/`http`/`gateway` channel。**
 
 **`Channel` 协议**(`raven/channels/contract.py:25-34`):`name`, `capabilities`, `start()`, `stop()`, `send(chat_id, content, media)`。可选 `SupportsLogin`(`:37`)。channel 导出 `ChannelSpec`(`:44`)含一个延迟 `factory`;registry 发现它们(`manager.py:63` `discover_specs()`)。
 
@@ -81,7 +81,7 @@ class Outlet(Protocol):
 
 **Node `bridge/` 是 WhatsApp 专用,不是通用 Python API。** `bridge/src/server.ts:32` `BridgeServer` 是一个 **WebSocket server**,绑 `127.0.0.1:3001`(`index.ts:27`, `server.ts:49-51`),token 鉴权(`server.ts:81`),拒绝浏览器 Origin 头(`server.ts:52-59`)。**Python 侧是 WS 客户端**:`whatsapp` channel adapter(`raven/channels/adapters/whatsapp/`, bridge client 在 `bridge.py`)连到这个 Node 进程,后者用 `@whiskeysockets/baileys` 说 WhatsApp Web 协议。这个 bridge 不连任何 Python HTTP/WS agent server —— Python raven runtime 没有。
 
-(另外 TUI 用 `raven/tui_rpc/server.py:39` `RpcServer` —— JSON-RPC 2.0 over TCP-loopback 到 spawn 的 Node TUI 子进程,token 鉴权 `:184-194`。这是 TUI 前端传输,不是公开 API。)
+(另外 TUI 用 `raven/rpc/server.py:39` `RpcServer` —— JSON-RPC 2.0 over TCP-loopback 到 spawn 的 Node TUI 子进程,token 鉴权 `:184-194`。这是 TUI 前端传输,不是公开 API。)
 
 ---
 
@@ -115,9 +115,9 @@ class Outlet(Protocol):
 
 **推荐接入点 —— 一个新的流式 `Outlet` + 一个新的 surface 装配,托管在 `raven gateway` 守护进程内。** 具体:
 
-1. **实现一个 `WebOutlet`,against `raven.spine.delivery.Outlet`**(`delivery.py:53-64`),几乎完全照抄 `TuiOutlet`(`raven/tui_rpc/spine.py:116-189`)—— 声明 `Capabilities(streaming=True)` 并实现 `SupportsStreaming.send_stream_chunk`,把每个 spine 事件 push 给浏览器客户端。**原样复用 `SubscriptionEmitter`**(`raven/tui_rpc/subscriptions.py:40`)作为 per-conversation 到 WS/SSE 连接的扇出 —— 它已经合并 `token.delta` 并管理有界的 per-subscriber 队列。你的 web 传输(你新增的 WS/SSE server)替换 `RpcServer` 的 JSON-RPC-over-TCP;emitter 的帧形状与传输无关。
+1. **实现一个 `WebOutlet`,against `raven.spine.delivery.Outlet`**(`delivery.py:53-64`),几乎完全照抄 `RpcOutlet`(`raven/rpc/spine.py:116-189`)—— 声明 `Capabilities(streaming=True)` 并实现 `SupportsStreaming.send_stream_chunk`,把每个 spine 事件 push 给浏览器客户端。**原样复用 `SubscriptionEmitter`**(`raven/rpc/subscriptions.py:40`)作为 per-conversation 到 WS/SSE 连接的扇出 —— 它已经合并 `token.delta` 并管理有界的 per-subscriber 队列。你的 web 传输(你新增的 WS/SSE server)替换 `RpcServer` 的 JSON-RPC-over-TCP;emitter 的帧形状与传输无关。
 
-2. **加一个 `build_web(...)` 装配**,仿 `build_gateway`(`raven/cli/_gateway_spine.py:113`)/ `build_tui`(`raven/tui_rpc/spine.py:250`):构建 `DeliveryHub`,把 `WebOutlet` 以固定名(如 `"web"`)注册,并构建带 web sink 的 `Scheduler`(照抄生命周期处理自 `_make_gateway_sink`, `_gateway_spine.py:80-110`,它 fire `on_turn_complete` 并投递 `TurnFailed` 错误文本)。返回 `(scheduler, hub, teardown)`。
+2. **加一个 `build_web(...)` 装配**,仿 `build_gateway`(`raven/cli/_gateway_spine.py:113`)/ `build_rpc_spine`(`raven/rpc/spine.py:250`):构建 `DeliveryHub`,把 `WebOutlet` 以固定名(如 `"web"`)注册,并构建带 web sink 的 `Scheduler`(照抄生命周期处理自 `_make_gateway_sink`, `_gateway_spine.py:80-110`,它 fire `on_turn_complete` 并投递 `TurnFailed` 错误文本)。返回 `(scheduler, hub, teardown)`。
 
 3. **入站**:web 用户消息到达时,构建 `TurnRequest(origin=Origin.USER, source=Source(channel="web", chat_id=<client/session id>, ...), conversation=<session key>)` 并调 `scheduler.submit`。复用 gateway 的 `_inbound_dispatch` 逻辑(`gateway_commands.py:501-531`)处理 `/stop`、`ask_user` 回复路由(`QuestionBroker`)与 mid-turn `BusyPolicy.INJECT`。
 
@@ -127,8 +127,8 @@ class Outlet(Protocol):
 
 **要实现的确切扩展点**:
 - Outlet 协议:`raven/spine/delivery.py:53-64`(`Outlet`)+ `:45-50`(`SupportsStreaming`)。
-- 照抄模型:`TuiOutlet` `raven/tui_rpc/spine.py:116`;`SubscriptionEmitter` `raven/tui_rpc/subscriptions.py:40`。
-- surface 装配照抄:`build_gateway` `raven/cli/_gateway_spine.py:113`(多源,readback + sources map)与 `build_tui` `raven/tui_rpc/spine.py:250`(流式 sink)。
+- 照抄模型:`RpcOutlet` `raven/rpc/spine.py:116`;`SubscriptionEmitter` `raven/rpc/subscriptions.py:40`。
+- surface 装配照抄:`build_gateway` `raven/cli/_gateway_spine.py:113`(多源,readback + sources map)与 `build_rpc_spine` `raven/rpc/spine.py:250`(流式 sink)。
 - submit 入口:`Scheduler.submit` `raven/spine/scheduler.py:327`,配 `TurnRequest` `raven/spine/turn.py:44` 与 `Origin` `turn.py:9`。
 - 主动接线旋钮:`make_on_cron_job` `raven/cli/_cron_handler.py:102`;`NudgeDispatcher.set_post` `.../sentinel/executor/dispatcher.py:73`;gateway 接线块 `gateway_commands.py:438-448`。
 - 托管命令:`raven/cli/gateway_commands.py:114`(`gateway`),内层 `run()` `:355`。

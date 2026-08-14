@@ -9,7 +9,7 @@
 
 **P1.1 已实现 + 单测通过**(步骤 1–4):
 - 配置 `GatewayWebConfig`(`raven/config/schema.py`):`web.{enabled=False, host=127.0.0.1, port=8765, auth_token}`。
-- 新增 `raven/web_rpc/{__init__,spine,server}.py`:`build_web` 薄包装 `build_tui(channel="web")`;`WebSocketRpcServer`(aiohttp WS + JSON-RPC + 可选 token 门 + `broadcast` 作 `SubscriptionEmitter.send_frame`)。
+- 新增 `raven/web_rpc/{__init__,spine,server}.py`:`build_web` 薄包装 `build_rpc_spine(channel="web")`;`WebSocketRpcServer`(aiohttp WS + JSON-RPC + 可选 token 门 + `broadcast` 作 `SubscriptionEmitter.send_frame`)。
 - gateway 接线(`raven/cli/gateway_commands.py` `run()`):开关内装配 emitter+dispatcher(system+turn methods)+`build_web`+WS server,挂进 `coros`,`finally` 加 teardown。
 - **测试发现并修的坑**:`turn.send` 原来把 `source.channel` 写死默认 `"tui"`,但 web 的 hub outlet 注册在 `"web"` —— hub 按 `source.channel` 路由,会把回复投到不存在的 `"tui"` outlet 而**丢弃**。修法:给 `turn_send`/`register_turn_methods` 加**向后兼容**的 `default_channel`(TUI 仍 `"tui"`,web 传 `"web"`)。→ 见 §4 补注。
 - 测试:`tests/web_rpc/test_web_rpc_roundtrip.py`(WS 握手→订阅→send→流式 token.delta 合批→message.complete;auth token 拒绝)+ TUI 回归全绿。`ruff` 干净。
@@ -44,18 +44,18 @@
 
 ## 1. 关键发现:几乎整套复用 TUI RPC 栈
 
-TUI 侧(`raven/tui_rpc/`)已实现我们需要的一切,且已按 `channel` 参数化:
+TUI 侧(`raven/rpc/`)已实现我们需要的一切,且已按 `channel` 参数化:
 
 | 组件 | 位置 | 作用 | P1 复用方式 |
 |---|---|---|---|
-| `TuiOutlet(channel, emitter)` | `tui_rpc/spine.py:116` | Deliverable→wire(`Reasoning`→thinking.delta / `ToolEvent`→tool.* / `Text`/流→token.delta) | 直接复用(channel="web"),或起个 `WebOutlet` 别名 |
-| `SubscriptionEmitter(send_frame)` | `tui_rpc/subscriptions.py:40` | 每会话订阅 + 16ms 合批 + 溢出保护 | 直接复用 |
-| `build_tui(agent_loop, emitter, channel, on_turn_end, ...)` | `tui_rpc/spine.py:250` | 流式 runner(`stream=True`)+ render-barrier sink + `message.complete` | 直接复用(或 `build_web` 薄包装) |
-| `register_turn_methods(dispatcher, emitter, scheduler, turn_ids)` | `tui_rpc/methods/turn.py:266` | `turn.{send,subscribe,unsubscribe,cancel}` | 直接复用 |
-| `register_system_methods` | `tui_rpc/methods/system.py` | `system.hello`/ping/version 握手 | 直接复用 |
-| `Dispatcher` | `tui_rpc/dispatcher.py` | JSON-RPC 2.0 路由 | 直接复用 |
+| `RpcOutlet(channel, emitter)` | `rpc/spine.py:116` | Deliverable→wire(`Reasoning`→thinking.delta / `ToolEvent`→tool.* / `Text`/流→token.delta) | 直接复用(channel="web"),或起个 `WebOutlet` 别名 |
+| `SubscriptionEmitter(send_frame)` | `rpc/subscriptions.py:40` | 每会话订阅 + 16ms 合批 + 溢出保护 | 直接复用 |
+| `build_rpc_spine(agent_loop, emitter, channel, on_turn_end, ...)` | `rpc/spine.py:250` | 流式 runner(`stream=True`)+ render-barrier sink + `message.complete` | 直接复用(或 `build_web` 薄包装) |
+| `register_turn_methods(dispatcher, emitter, scheduler, turn_ids)` | `rpc/methods/turn.py:266` | `turn.{send,subscribe,unsubscribe,cancel}` | 直接复用 |
+| `register_system_methods` | `rpc/methods/system.py` | `system.hello`/ping/version 握手 | 直接复用 |
+| `Dispatcher` | `rpc/dispatcher.py` | JSON-RPC 2.0 路由 | 直接复用 |
 
-**唯一新增**:传输层。TUI 的 `RpcServer`(`tui_rpc/server.py:39`)走 **TCP-loopback + 换行分隔 JSON + auth token**(供 Node 子进程连);而 MIGRATION §1 约束 web 走 **gateway 内置 WS,web 后端作 WS 客户端**。所以 P1 = 写一个 WS 版的 `RpcServer`,其余照搬。
+**唯一新增**:传输层。TUI 的 `RpcServer`(`rpc/server.py:39`)走 **TCP-loopback + 换行分隔 JSON + auth token**(供 Node 子进程连);而 MIGRATION §1 约束 web 走 **gateway 内置 WS,web 后端作 WS 客户端**。所以 P1 = 写一个 WS 版的 `RpcServer`,其余照搬。
 
 ---
 
@@ -77,15 +77,15 @@ TUI 侧(`raven/tui_rpc/`)已实现我们需要的一切,且已按 `channel` 参�
 
 ## 3. 文件改动清单
 
-### 新增 `raven/web_rpc/`(镜像 `tui_rpc/`,尽量 re-export)
+### 新增 `raven/web_rpc/`(镜像 `rpc/`,尽量 re-export)
 - `__init__.py`
-- `spine.py` —— `WebOutlet`(可 `WebOutlet = TuiOutlet` 或薄子类)+ `build_web(agent_loop, emitter, *, channel="web", on_turn_end=None, readback_texts=None, user_pool, system_pool)`(内部直接调 `build_tui(..., channel="web", ...)` 或复制其装配)。返回 `(scheduler, hub, turn_ids, teardown)`。
+- `spine.py` —— `WebOutlet`(可 `WebOutlet = RpcOutlet` 或薄子类)+ `build_web(agent_loop, emitter, *, channel="web", on_turn_end=None, readback_texts=None, user_pool, system_pool)`(内部直接调 `build_rpc_spine(..., channel="web", ...)` 或复制其装配)。返回 `(scheduler, hub, turn_ids, teardown)`。
 - `server.py` —— `WebSocketRpcServer`:基于 **aiohttp**(`aiohttp` 是 raven 核心依赖,见 `pyproject.toml`;`web.AppRunner` 可在 gateway 现有 asyncio loop 内起服务,最省)。职责:
   - 绑 `127.0.0.1:<port>`(单用户,不对外);
   - 每连接:可选首帧 auth token(照抄 `RpcServer` 的 token 门,`server.py:184`);
   - 读 WS text 帧 → `json.loads` → `dispatcher.dispatch(frame)` → 回 `send_frame`;
   - `SubscriptionEmitter` 的 `send_frame` = 向当前连接 `ws.send_str(json.dumps(frame))`(单连接即可满足单用户;多连接则广播)。
-- 复用 `tui_rpc` 的 `Dispatcher` / `SubscriptionEmitter` / `register_turn_methods` / `register_system_methods`(直接 import,不复制)。
+- 复用 `rpc` 的 `Dispatcher` / `SubscriptionEmitter` / `register_turn_methods` / `register_system_methods`(直接 import,不复制)。
 
 ### 修改
 - `raven/config/schema.py` —— `GatewayConfig` 加 `web: GatewayWebConfig`,字段 `{enabled: bool=False, host: str="127.0.0.1", port: int=8765, auth_token: str|None=None}`。
@@ -94,10 +94,10 @@ TUI 侧(`raven/tui_rpc/`)已实现我们需要的一切,且已按 `channel` 参�
   if config.gateway.web.enabled:
       from raven.web_rpc.server import WebSocketRpcServer
       from raven.web_rpc.spine import build_web
-      from raven.tui_rpc.dispatcher import Dispatcher
-      from raven.tui_rpc.subscriptions import SubscriptionEmitter
-      from raven.tui_rpc.methods.turn import register_turn_methods, clear_active
-      from raven.tui_rpc.methods.system import register_system_methods
+      from raven.rpc.dispatcher import Dispatcher
+      from raven.rpc.subscriptions import SubscriptionEmitter
+      from raven.rpc.methods.turn import register_turn_methods, clear_active
+      from raven.rpc.methods.system import register_system_methods
 
       web_server = WebSocketRpcServer(host=..., port=..., auth_token=...)
       emitter = SubscriptionEmitter(send_frame=web_server.broadcast)
@@ -131,7 +131,7 @@ TUI 侧(`raven/tui_rpc/`)已实现我们需要的一切,且已按 `channel` 参�
 - `turn.cancel {session_key}` → `{cancelled}`
 - `turn.unsubscribe {subscription_id}` → `{unsubscribed}`
 
-**Server→Client(通知)**:`{"jsonrpc":"2.0","method":"event","params":{"subscription_id","event":{"type","payload"}}}`,`event.type ∈ {message.start, token.delta, thinking.delta, tool.start, tool.complete, message.complete, error}`。与 TUI 完全一致(`tui_rpc/spine.py:131-189`、`methods/turn.py`)。
+**Server→Client(通知)**:`{"jsonrpc":"2.0","method":"event","params":{"subscription_id","event":{"type","payload"}}}`,`event.type ∈ {message.start, token.delta, thinking.delta, tool.start, tool.complete, message.complete, error}`。与 TUI 完全一致(`rpc/spine.py:131-189`、`methods/turn.py`)。
 
 > 注:这套是 **spine 原生 wire 事件**,不是 AgentScope 事件。把它翻译成前端要的 AgentScope `AgentEvent`(见 MIGRATION §10)是 **P2** 的活,在 `service/` 侧做。P1 只保证这套 wire 事件流出。
 
@@ -149,7 +149,7 @@ TUI 侧(`raven/tui_rpc/`)已实现我们需要的一切,且已按 `channel` 参�
 
 ## 6. 验证 / 工具
 
-- 新测 `tests/web_rpc/`(镜像 `tests/tui_rpc/` 的用例)。`uv run pytest tests/web_rpc -x`。
+- 新测 `tests/web_rpc/`(镜像 `tests/rpc/` 的用例)。`uv run pytest tests/web_rpc -x`。
 - `ruff check raven`。
 - **可编辑安装**让 gateway 用上改动源码:`uv tool install --editable /Evermind/sh_evermind/xuedizhan/Raven --force`。
 - scratchpad 冒烟脚本:一个 `aiohttp`/`websockets` WS 客户端跑 §4 的握手+send+订阅。

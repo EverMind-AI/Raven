@@ -4,7 +4,7 @@
 
 **Goal:** Make every tool the gateway `web` channel already exposes actually work on that channel: interactive tools can interact, produced media arrives, failures look like failures, call arguments are readable, and stop stops.
 
-**Architecture:** Three layers, changed in that order per feature. The Raven core owns the spine events and the question round trip (`raven/tui_rpc/spine.py`, `raven/cli/gateway_commands.py`, `raven/agent/tools/`). The service translates spine events into AgentScope events and owns the REST surface the browser talks to (`ui-webui/service/`). The frontend renders events and raises interaction cards (`ui-webui/frontend/src/components/chat/`). Nothing here invents a new transport: the question round trip rides the existing `custom` event lane, media rides the existing deliverables download route, and the answer rides a new REST route that deliberately bypasses the chat front door.
+**Architecture:** Three layers, changed in that order per feature. The Raven core owns the spine events and the question round trip (`raven/rpc/spine.py`, `raven/cli/gateway_commands.py`, `raven/agent/tools/`). The service translates spine events into AgentScope events and owns the REST surface the browser talks to (`ui-webui/service/`). The frontend renders events and raises interaction cards (`ui-webui/frontend/src/components/chat/`). Nothing here invents a new transport: the question round trip rides the existing `custom` event lane, media rides the existing deliverables download route, and the answer rides a new REST route that deliberately bypasses the chat front door.
 
 **Tech Stack:** Python 3.12+ (`uv` / `pytest`, `asyncio_mode = "auto"`), aiohttp (gateway WS + HTTP), FastAPI (service), React 19 + TypeScript + Vite + i18next (frontend, `pnpm`).
 
@@ -23,7 +23,7 @@
 - **Frontend gate (no JS unit-test runner):** `pnpm -C frontend lint` must report **0 errors** and `pnpm -C frontend build` must pass, run from `ui-webui/`.
 - **Frontend formatting is Prettier with tabs, width 4, single quotes, semicolons, print width 100.** Match it; a stray reformat is diff noise.
 - **i18n JSON: targeted text edits only.** Never rewrite `en.json` / `zh.json` wholesale.
-- **The outlet is shared with the TUI.** `raven/tui_rpc/spine.py` feeds both surfaces. Any new event type must be ignorable by the TUI client *before* the gateway starts emitting it.
+- **The outlet is shared with the TUI.** `raven/rpc/spine.py` feeds both surfaces. Any new event type must be ignorable by the TUI client *before* the gateway starts emitting it.
 - **Broker invariant: a question always resolves to a string.** Every fail-safe path in `QuestionBroker` returns the default rather than raising, and no change here may introduce a path that raises into the agent loop.
 - **Router invariant: an unknown channel falls back to the gateway broker, never to `None`.** `None` makes `ask_user` answer "not configured" instead of asking.
 
@@ -35,7 +35,7 @@
 
 | Path | Responsibility |
 |---|---|
-| `raven/tui_rpc/question_router.py` | `QuestionRouter`: holds one broker per channel plus a default, exposes the `await_question` / `pending_req` / `reply` / `cancel_all` surface the tools already use. No transport knowledge. |
+| `raven/rpc/question_router.py` | `QuestionRouter`: holds one broker per channel plus a default, exposes the `await_question` / `pending_req` / `reply` / `cancel_all` surface the tools already use. No transport knowledge. |
 
 **New - tests**
 
@@ -58,9 +58,9 @@
 | `raven/agent/tools/registry.py` | surface the existing `Error`-prefix classification on `ToolOutput` |
 | `raven/sandbox/direct_executor.py` | `start_new_session=True`; kill the process group on timeout and on cancellation |
 | `raven/spine/events.py` | `ToolEvent.ok`; nothing else |
-| `raven/tui_rpc/spine.py` | serialize `ok`; emit `media` and `progress` instead of eating `MediaOut` / `Notice` |
-| `raven/tui_rpc/models.py` | `TurnSendParams.media` |
-| `raven/tui_rpc/methods/turn.py` | carry `media` into the `TurnRequest` |
+| `raven/rpc/spine.py` | serialize `ok`; emit `media` and `progress` instead of eating `MediaOut` / `Notice` |
+| `raven/rpc/models.py` | `TurnSendParams.media` |
+| `raven/rpc/methods/turn.py` | carry `media` into the `TurnRequest` |
 | `raven/cli/gateway_commands.py` | second broker for web, router, `register_question_methods` on the web dispatcher, per-turn `cancel_all` |
 | `raven/cli/tui_commands.py` | wrap the TUI broker in a router (single entry) so both entry points share one type |
 
@@ -131,7 +131,7 @@ The five gaps here are a chain; the feature is dead until all of them are closed
 ### Task 1.1: QuestionRouter
 
 **Files:**
-- Create: `raven/tui_rpc/question_router.py`
+- Create: `raven/rpc/question_router.py`
 - Create: `tests/test_question_router.py`
 
 **Steps:**
@@ -257,7 +257,7 @@ four tasks in one change.
 **Steps:**
 - [ ] Add `GatewayClient.cancel(session_key)` calling `turn.cancel`.
 - [ ] Call it from the interrupt path *before* cancelling the local run, so the gateway ends the turn instead of being orphaned.
-- [ ] Treat an RPC timeout as success-in-progress, not failure: `turn_cancel` awaits the full unwind (`raven/tui_rpc/methods/turn.py:255-257`) while `GatewayClient.call` gives up after 30 s (`I5`). Log it; never surface it as a failed stop.
+- [ ] Treat an RPC timeout as success-in-progress, not failure: `turn_cancel` awaits the full unwind (`raven/rpc/methods/turn.py:255-257`) while `GatewayClient.call` gives up after 30 s (`I5`). Log it; never surface it as a failed stop.
 - [ ] A failed cancel must not block the local cancel.
 - [ ] Release any question pending for that conversation in the same handler (companion spec decision 5) so an `ask_user` card cannot outlive its turn.
 
@@ -368,12 +368,12 @@ Both tasks change the shared outlet. Do task 3.0 first or the TUI may throw on a
 ### Task 3.1: A media wire event
 
 **Files:**
-- Modify: `raven/tui_rpc/spine.py`, `raven/cli/gateway_commands.py`
+- Modify: `raven/rpc/spine.py`, `raven/cli/gateway_commands.py`
 - Modify: `ui-webui/service/raven_gateway_agent.py`, `ui-webui/frontend/src/components/chat/MessageBubble.tsx`
 - Create: `tests/test_spine_media_events.py`
 
 **Steps:**
-- [ ] Stop eating `MediaOut` in `TuiOutlet.deliver`; emit `{"type": "media", "payload": {"files": [{path, name, mime, kind, token}]}}`.
+- [ ] Stop eating `MediaOut` in `RpcOutlet.deliver`; emit `{"type": "media", "payload": {"files": [{path, name, mime, kind, token}]}}`.
 - [ ] Mint a download token per file through the existing `DeliverableStore`, so media reuses the one download trust boundary instead of adding a second. The outlet needs the store; pass it in from the gateway rather than importing a global.
 - [ ] Never put bytes in the payload. A generated video would exceed the RPC frame limit that motivated the deliverables route.
 - [ ] Service: translate `media` into content blocks the frontend already knows how to render, or into a custom event if that turns out cleaner - decide against the actual AgentScope block types, do not guess here.
@@ -389,7 +389,7 @@ Both tasks change the shared outlet. Do task 3.0 first or the TUI may throw on a
 ### Task 3.2: A progress wire event
 
 **Files:**
-- Modify: `raven/tui_rpc/spine.py`, `ui-webui/service/raven_gateway_agent.py`, `ui-webui/frontend/src/components/chat/MessageBubble.tsx`
+- Modify: `raven/rpc/spine.py`, `ui-webui/service/raven_gateway_agent.py`, `ui-webui/frontend/src/components/chat/MessageBubble.tsx`
 
 **Steps:**
 - [ ] Emit `Notice` as `{"type": "progress", "payload": {"kind": "progress" | "tool_hint", "text": ...}}`.
@@ -405,7 +405,7 @@ Both tasks change the shared outlet. Do task 3.0 first or the TUI may throw on a
 ### Task 4.1: Carry the error classification to the UI
 
 **Files:**
-- Modify: `raven/agent/tools/registry.py`, `raven/spine/events.py`, `raven/agent/loop/main.py`, `raven/tui_rpc/spine.py`
+- Modify: `raven/agent/tools/registry.py`, `raven/spine/events.py`, `raven/agent/loop/main.py`, `raven/rpc/spine.py`
 - Modify: `ui-webui/service/raven_gateway_agent.py`, `ui-webui/frontend/src/components/chat/tool-renderers/_shared.tsx`
 - Modify: `tests/test_tool_registry.py` (or the existing registry test file)
 
@@ -447,9 +447,9 @@ Both tasks change the shared outlet. Do task 3.0 first or the TUI may throw on a
 ### Task 6.1: Accept media on turn.send
 
 **Files:**
-- Modify: `raven/tui_rpc/models.py`, `raven/tui_rpc/methods/turn.py`, `raven/tui_rpc/openrpc.json`
+- Modify: `raven/rpc/models.py`, `raven/rpc/methods/turn.py`, `raven/rpc/openrpc.json`
 - Modify: `ui-webui/service/raven_gateway_agent.py`, `ui-webui/service/raven_config_routes.py`
-- Modify: `tests/test_tui_rpc_turn.py` (or the existing turn-method test file), plus the schema-parity test
+- Modify: `tests/test_rpc_turn.py` (or the existing turn-method test file), plus the schema-parity test
 
 **Steps:**
 - [ ] Add `media: list[str] | None = None` to `TurnSendParams`. The model is `_Strict`, so an undeclared key is rejected rather than ignored - the field must be declared, not smuggled.

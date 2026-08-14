@@ -167,7 +167,7 @@ _Avoid_: calling the TUI a channel — `channel="tui"` on a message is a routing
 
 **TUI**:
 The terminal front-end (`ui-tui/`) and the only interactive local front-end; talks to
-the Runtime solely via TUI-RPC. Not a Channel.
+the Runtime solely via the RPC protocol. Not a Channel.
 
 **CLI**:
 The one-shot command-line entry point (`raven <command>`) for operations and
@@ -328,13 +328,14 @@ their configured endpoints and every other model still resolves through it.
 _Avoid_: confusing it with ModelRouter / KNNModelRouter, which select a *model*;
 this selects the *vendor* for an already-chosen model.
 
-### TUI-RPC
+### RPC Protocol
 
-**TUI-RPC**:
-The single transport between Runtime and TUI (stdio pipe / Unix socket), carrying two
-message kinds: Request/Response (TUI → Runtime method calls) and Notification
-(Runtime → TUI one-way events).
-_Avoid_: calling a Notification "the bus" or "broadcast" — Spine events never cross into the TUI directly
+**RPC Protocol**:
+The single transport between Runtime and any interactive client (stdio pipe / Unix socket
+for the TUI, a WebSocket for `raven serve`), carrying two message kinds: Request/Response
+(client → Runtime method calls) and Notification (Runtime → client one-way events).
+_Avoid_: calling it TUI-RPC — the terminal is one of its clients, not its owner; and calling
+a Notification "the bus" or "broadcast" — Spine events never cross into a client directly
 
 **Turn Event**:
 A typed payload streamed to the TUI over Notifications while a turn runs

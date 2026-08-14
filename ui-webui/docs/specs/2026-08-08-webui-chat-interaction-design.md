@@ -114,7 +114,7 @@ what the *next* message does:
 
 Two false statements in one line. The gateway connection is fine, and the error is
 not a connection error - it is `turn.send` correctly rejecting a second turn with
-`-32003` (`raven/tui_rpc/methods/turn.py:139-142`), surfaced through
+`-32003` (`raven/rpc/methods/turn.py:139-142`), surfaced through
 `reply_stream`'s connect/submit `except` branch, which labels every failure a
 connection failure (`raven_gateway_agent.py:311-317`).
 

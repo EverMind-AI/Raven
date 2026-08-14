@@ -1656,7 +1656,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
 from raven.session.manager import SessionManager
-from raven.tui_rpc.dispatcher import Dispatcher
+from raven.rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
 
 
@@ -1759,7 +1759,7 @@ async def test_null_clears_the_override(dispatcher, agent, tmp_path):
 
 Errors come back as a JSON-RPC error object, not a raised exception: the
 dispatcher catches handler exceptions and returns `{"error": ...}`
-(`raven/tui_rpc/dispatcher.py:104-127`). Assert on the response, never with
+(`raven/rpc/dispatcher.py:104-127`). Assert on the response, never with
 `pytest.raises`.
 
 - [ ] **Step 2: Run the tests to verify they fail**

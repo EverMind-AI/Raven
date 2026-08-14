@@ -17,7 +17,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.rpc.dispatcher import Dispatcher
 
 
 _pending_tasks: set[asyncio.Task] = set()
@@ -119,7 +119,7 @@ def register_config_methods(
         reject_unsupported_openai_fields,
         set_third_party_subagents,
     )
-    from raven.tui_rpc.errors import RpcError
+    from raven.rpc.errors import RpcError
 
     async def _list(params: dict) -> dict:
         return {"agents": get_third_party_subagents()}

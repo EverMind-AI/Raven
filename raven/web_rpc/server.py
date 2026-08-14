@@ -1,10 +1,10 @@
 """WebSocket JSON-RPC 2.0 server for the gateway's web channel (ui-webui P1).
 
-Mirrors :class:`raven.tui_rpc.server.RpcServer`, but the transport is a
+Mirrors :class:`raven.rpc.server.RpcServer`, but the transport is a
 WebSocket (aiohttp) instead of a TCP-loopback newline-JSON socket: the web
 backend connects as a WS client (MIGRATION §1). Same JSON-RPC 2.0 framing and
-the same :class:`~raven.tui_rpc.dispatcher.Dispatcher`; turn events reach clients
-because the :class:`~raven.tui_rpc.subscriptions.SubscriptionEmitter` is
+the same :class:`~raven.rpc.dispatcher.Dispatcher`; turn events reach clients
+because the :class:`~raven.rpc.subscriptions.SubscriptionEmitter` is
 constructed with ``send_frame=<this server>.broadcast``.
 
 Single-user by design: bound to loopback and, if ``auth_token`` is set, the
@@ -25,9 +25,9 @@ from raven.web_rpc.files import add_files_routes
 
 if TYPE_CHECKING:
     from raven.agent.tools._deliverables import DeliverableStore
-    from raven.tui_rpc.dispatcher import Dispatcher
+    from raven.rpc.dispatcher import Dispatcher
 
-# Match tui_rpc.server.MAX_FRAME_BYTES (specs §2.5).
+# Match rpc.server.MAX_FRAME_BYTES (specs §2.5).
 MAX_FRAME_BYTES = 1 * 1024 * 1024  # 1 MiB
 _AUTH_TIMEOUT_S = 10.0
 

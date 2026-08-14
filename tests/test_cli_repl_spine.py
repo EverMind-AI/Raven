@@ -86,11 +86,11 @@ async def test_runner_stream_flag_is_forwarded():
     runner = AgentTurnRunner(loop, stream=True)
     events, emit = _collect()
     await runner.run(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"), emit, lambda: [])
-    assert loop.calls[0]["stream"] is True  # build_tui would pass True; build_repl False
+    assert loop.calls[0]["stream"] is True  # build_rpc_spine would pass True; build_repl False
 
 
 async def test_runner_forwards_inline_tool_stream():
-    # build_repl / build_tui wire inline_tool_stream=True so deep_research streams
+    # build_repl / build_rpc_spine wire inline_tool_stream=True so deep_research streams
     # its answer inline; the gateway leaves it False.
     loop = FakeAgentLoop()
     runner = AgentTurnRunner(loop, stream=False, inline_tool_stream=True)

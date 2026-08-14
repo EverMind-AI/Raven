@@ -8,8 +8,8 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
+from raven.rpc.dispatcher import Dispatcher
 from raven.session.manager import SessionManager
-from raven.tui_rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
 
 

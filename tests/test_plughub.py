@@ -607,7 +607,7 @@ async def test_a_plugin_skill_piece_refuses_to_replace_an_existing_skill(_isolat
         seen["if_absent"] = if_absent
         return {"name": "notes"}
 
-    monkeypatch.setattr("raven.tui_rpc.methods.skillhub.skillhub_install", _fake_install)
+    monkeypatch.setattr("raven.rpc.methods.skillhub.skillhub_install", _fake_install)
 
     entry = {
         "id": "with-skill",

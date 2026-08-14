@@ -378,7 +378,7 @@ raven/
 ├── spine/              # Per-turn backbone: submit -> lanes -> emit
 ├── agent/              # Agent loop, tools, hooks, subagents, context builder
 ├── channels/           # Telegram, Discord, Slack, Matrix, WhatsApp, WeCom, ...
-├── tui_rpc/            # Python side of the native TUI protocol
+├── rpc/            # Python side of the native TUI protocol
 ├── providers/          # LLM provider adapters
 ├── context_engine/     # Context assembly and Curator path
 ├── proactive_engine/   # Sentinel, scheduler, nudges, feedback

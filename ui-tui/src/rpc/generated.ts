@@ -1,6 +1,6 @@
 // AUTO-GENERATED — DO NOT EDIT — run `npm run gen:rpc`
 //
-// Source of truth: ui-tui/rpc-schema/openrpc.json (OpenRPC 1.2.6).
+// Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Regenerate via: cd ui-tui && npm run gen:rpc
 // Lint (drift check) via: cd ui-tui && npm run lint:rpc
 //

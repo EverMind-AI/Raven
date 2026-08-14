@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from raven.config import update_channels, update_everos, update_mcp, update_skills, update_subagents
-from raven.tui_rpc.dispatcher import Dispatcher
+from raven.rpc.dispatcher import Dispatcher
 from raven.web_rpc.methods_config import register_config_methods
 
 
