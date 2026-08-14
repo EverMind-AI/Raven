@@ -58,3 +58,47 @@ async def test_owning_process_claims_its_tui_job(tmp_path: Path) -> None:
 
     fired = await _fired_ids({"tui"}, store)
     assert job_id in fired
+
+
+async def test_legacy_channel_none_job_claimable_by_any_partition(tmp_path: Path) -> None:
+    store = tmp_path / "jobs.json"
+    svc = CronService(store, allowed_channels={"weixin"})
+    job = svc.add_job(
+        name="legacy",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="pre-attribution job",
+        channel=None,
+        to=None,
+    )
+    svc._store.jobs[0].state.next_run_at_ms = 1
+    svc._save_store()
+
+    fired = await _fired_ids({"weixin"}, store)
+    assert job.id in fired
+
+
+async def test_foreign_channel_skip_logs_once_per_job(tmp_path: Path) -> None:
+    from loguru import logger
+
+    store = tmp_path / "jobs.json"
+    job_id = _add_due_tui_job(CronService(store, allowed_channels={"tui"}))
+
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store, allowed_channels={"weixin"})
+    svc.on_job = on_job
+    lines: list[str] = []
+    sink_id = logger.add(lambda m: lines.append(str(m)), level="INFO")
+    try:
+        await svc._process_due()
+        await svc._process_due()
+    finally:
+        logger.remove(sink_id)
+
+    assert fired == []
+    skips = [ln for ln in lines if "not claiming job" in ln and job_id in ln]
+    assert len(skips) == 1, f"expected exactly one skip log for {job_id}, got {skips}"
+    assert "partition" in skips[0]

@@ -64,22 +64,6 @@ def build_model_routing(config, provider):
     return router, provider
 
 
-_GATEWAY_IM_CHANNELS: tuple[str, ...] = (
-    "whatsapp",
-    "telegram",
-    "discord",
-    "feishu",
-    "mochat",
-    "dingtalk",
-    "email",
-    "slack",
-    "qq",
-    "matrix",
-    "wecom",
-    "weixin",
-)
-
-
 def _risk_banner(config) -> str | None:
     """Startup banner for the dangerous default combo: no sandbox + a channel
     open to anyone. Returns the banner text, or None when either leg is safe.
@@ -115,15 +99,19 @@ def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
     enabled IM channels only.
 
-    The gateway owns cron jobs for its IM channels. It does NOT claim ephemeral
-    ``tui``/``cli`` jobs: those are fired by the interactive process that created
+    Derived from the channels config model: every ``config.channels`` field
+    whose value carries a truthy ``.enabled`` is part of the gateway's cron
+    partition, so a channel added to ``ChannelsConfig`` is covered without
+    touching this module.
+
+    The gateway owns cron jobs for its IM channels. It does NOT claim
+    ``tui``/``cli`` jobs: those fire in the interactive process that created
     them (the TUI / ``raven agent`` session), so a TUI-set reminder always
-    delivers to the TUI rather than racing the gateway and being forwarded to an
-    IM channel. The trade-off is no cross-process fallback while that process is
-    down; restoring "fire at origin, hand off only after the origin exits" is a
-    deferred cron-delivery-ownership design, not this set.
+    delivers to the TUI rather than racing the gateway — fire-at-origin, no
+    trigger-time re-routing.
     """
-    return {name for name in _GATEWAY_IM_CHANNELS if getattr(getattr(config.channels, name, None), "enabled", False)}
+    channels = config.channels
+    return {name for name in type(channels).model_fields if getattr(getattr(channels, name, None), "enabled", False)}
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

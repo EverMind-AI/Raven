@@ -287,8 +287,16 @@ class CronService:
             self._loop_task.cancel()
             self._loop_task = None
 
+    def _owns_channel(self, channel: str | None) -> bool:
+        """Whether this runner's partition covers ``channel``.
+
+        Falsy channel (legacy, pre-attribution) and ``allowed_channels is
+        None`` both mean yes; otherwise membership decides.
+        """
+        return not channel or self.allowed_channels is None or channel in self.allowed_channels
+
     def _recompute_next_runs(self) -> None:
-        """Recompute next run times for all enabled jobs.
+        """Recompute next run times for enabled jobs this runner may own.
 
         Past-due one-shot 'at' reminders are dropped — we don't re-deliver
         reminders missed while the service was down (matches iOS /
@@ -297,6 +305,11 @@ class CronService:
 
         Recurring ('every', 'cron') jobs just advance to the next future
         run — missed intervals are skipped, not backfilled.
+
+        Both the drop and the recompute are scoped to this runner's
+        partition: another runner's jobs pass through exactly as loaded, so
+        e.g. a gateway restart never drops a past-due TUI reminder that the
+        TUI process may still handle.
         """
         if not self._store:
             return
@@ -304,7 +317,7 @@ class CronService:
         dropped: list[str] = []
         kept = []
         for job in self._store.jobs:
-            if not job.enabled:
+            if not job.enabled or not self._owns_channel(job.payload.channel):
                 kept.append(job)
                 continue
             next_run = _compute_next_run(job.schedule, now)
@@ -377,9 +390,8 @@ class CronService:
         ca = job.state.claimed_at_ms
         if cb is not None and cb != os.getpid() and ca is not None and (now - ca) < _CLAIM_TTL_MS:
             reason = f"claimed by live peer pid {cb}"
-        elif self.allowed_channels is not None and job.payload.channel:
-            if job.payload.channel not in self.allowed_channels:
-                reason = f"channel '{job.payload.channel}' is outside this runner's partition"
+        elif not self._owns_channel(job.payload.channel):
+            reason = f"channel '{job.payload.channel}' is outside this runner's partition"
         if reason is None:
             return True, None
         if job.id not in self._skip_logged:
