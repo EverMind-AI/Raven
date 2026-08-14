@@ -27,6 +27,7 @@ from raven.agent.loop.recovery import (
     is_only_think_debris,
     strip_think_blocks,
 )
+from raven.agent.loop.truncation import flag_truncation
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
@@ -53,9 +54,7 @@ from raven.providers.base import (
     ErrorClassification,
     LLMProvider,
     LLMResponse,
-    RunMeta,
     ToolCallRequest,
-    TruncationInfo,
     send_max_tokens,
 )
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
@@ -1669,46 +1668,14 @@ class AgentLoop:
 
         tool_calls, args_parse_failed = _finalize_tool_calls(tool_call_slots)
 
-        # Three independent signals, OR'd. They cover different failure shapes
-        # and none subsumes the others, so a miss by one is not a miss overall:
-        #
-        #   upstream_finish_reason  costs nothing to trust, but some backends
-        #                           report a clean stop on a truncated reply
-        #   output_tokens vs cap    survives a lying finish_reason, needs the
-        #                           ceiling to be known
-        #   args_parse_failed       computed locally, but only exists when the
-        #                           turn produced a tool call
-        #
-        # Deliberately permissive: a false positive costs one extra sentence to
-        # the model, which it can weigh against what it just wrote. A false
-        # negative costs a retry loop -- the model re-sends the same oversized
-        # payload, is told again that a field is missing, and never learns the
-        # real reason.
-        sent_max_tokens = send_max_tokens(getattr(self.provider, "generation", None), model)
-        output_tokens = (final_usage or {}).get("completion_tokens")
-        hit_ceiling = (
-            sent_max_tokens is not None and isinstance(output_tokens, int) and output_tokens >= sent_max_tokens
+        sent_max_tokens, truncated = flag_truncation(
+            getattr(self.provider, "generation", None),
+            model=model,
+            finish_reason=upstream_finish_reason,
+            usage=final_usage,
+            tool_calls=tool_calls,
+            args_parse_failed=args_parse_failed,
         )
-        truncated = upstream_finish_reason == "length" or hit_ceiling or args_parse_failed
-
-        if truncated and tool_calls:
-            # The last call, and not only the ones whose JSON failed to parse:
-            # when the transport closes the braces for us the blob parses
-            # cleanly and simply lacks whatever the model had not reached yet,
-            # which schema validation then reports as a missing field. That
-            # message is true and useless -- it sends the model looking for a
-            # field it never omitted. Earlier calls need no marker: the stream
-            # emits them in order, so each of them finished before the ceiling.
-            tool_calls[-1].run_meta = RunMeta(truncation=TruncationInfo(at_tokens=sent_max_tokens))
-
-        if truncated:
-            logger.warning(
-                "LLM output truncated (finish_reason={}, output_tokens={}, max_tokens={}, tool_args_incomplete={})",
-                upstream_finish_reason,
-                output_tokens,
-                sent_max_tokens,
-                args_parse_failed,
-            )
 
         finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")
 
@@ -2012,6 +1979,18 @@ class AgentLoop:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
+                )
+                # Same decision as the streaming branch above, which reaches it
+                # inside _llm_call_stream. Without this the CLI -- which wires
+                # no token callback and so lands here -- reports a cut-off tool
+                # call as a missing required field, which is the misdiagnosis
+                # this whole path exists to remove.
+                _, response.truncated = flag_truncation(
+                    getattr(self.provider, "generation", None),
+                    model=call_model,
+                    finish_reason=response.finish_reason,
+                    usage=response.usage,
+                    tool_calls=response.tool_calls,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
