@@ -33,6 +33,7 @@ console = Console()
 class PathsInfo:
     config_path: str
     config_exists: bool
+    config_valid: bool = False
     workspace_path: str = ""
     workspace_exists: bool = False
 
@@ -119,6 +120,8 @@ class DoctorReport:
     def exit_code(self) -> int:
         if self.paths is None or not self.paths.config_exists:
             return 1
+        if not self.paths.config_valid:
+            return 1
         if not self.config_loaded:
             return 1
         if self.routing is None or self.routing.provider is None:
@@ -134,7 +137,12 @@ class DoctorReport:
 
 def _gather_static_checks() -> DoctorReport:
     """Inspect config / routing / features. Strictly zero-network."""
-    from raven.config.loader import get_config_path, load_config
+    from raven.config.loader import (
+        ConfigReadError,
+        get_config_path,
+        load_config,
+        read_raw_or_raise,
+    )
 
     config_path = get_config_path()
     paths = PathsInfo(
@@ -145,6 +153,15 @@ def _gather_static_checks() -> DoctorReport:
 
     if not paths.config_exists:
         return report
+
+    # Classify JSON validity directly: load_config swallows syntax errors
+    # and returns defaults, so it cannot distinguish valid from invalid.
+    try:
+        read_raw_or_raise(config_path)
+    except ConfigReadError:
+        paths.config_valid = False
+    else:
+        paths.config_valid = True
 
     try:
         config = load_config()
@@ -303,10 +320,12 @@ def _render_human_output(report: DoctorReport) -> None:
     paths = report.paths
     assert paths is not None  # _gather_static_checks always populates this
     console.print("[bold]Paths[/bold]")
-    if paths.config_exists:
-        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
-    else:
+    if not paths.config_exists:
         console.print(f"  Config:    {paths.config_path}  [red]✗  (not found)[/red]")
+    elif not paths.config_valid:
+        console.print(f"  Config:    {paths.config_path}  [yellow]⚠  invalid JSON (running on defaults)[/yellow]")
+    else:
+        console.print(f"  Config:    {paths.config_path}  [green]✓[/green]")
     if paths.config_exists:
         mark = "[green]✓[/green]" if paths.workspace_exists else "[red]✗[/red]"
         console.print(f"  Workspace: {paths.workspace_path}  {mark}")
@@ -383,6 +402,9 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print("Run [cyan]doctor --probe[/cyan] to send a test message and verify the LLM responds.")
         else:
             console.print("[green]✓ All checks passed.[/green]")
+    elif not paths.config_valid:
+        console.print("[yellow]⚠ Config file is invalid JSON; the checks above ran on built-in defaults.[/yellow]")
+        console.print(f"Fix [cyan]{paths.config_path}[/cyan] (JSON allows no comments or trailing commas).")
     elif routing and routing.provider is None:
         console.print(
             f"[red]✗ Model [bold]{routing.model}[/bold] could not be routed to any configured provider.[/red]"

@@ -402,3 +402,22 @@ def test_doctor_bad_config_warns_exactly_once(tmp_path: Path) -> None:
     home = _write_home_config(tmp_path, "bad", '{"providers": {},}')
     out, _ = _run_doctor_subprocess(home)
     assert out.count("not valid JSON") == 1, out
+
+
+def test_doctor_config_line_three_states(tmp_path: Path) -> None:
+    import re
+
+    home_bad = _write_home_config(tmp_path, "bad", '{"providers": {},}')
+    out_bad, _ = _run_doctor_subprocess(home_bad)
+    config_line = next(line for line in out_bad.splitlines() if "Config:" in line)
+    assert "✓" not in config_line, out_bad
+    assert re.search(r"invalid JSON", out_bad), out_bad
+
+    home_missing = _write_home_config(tmp_path, "missing", None)
+    out_missing, _ = _run_doctor_subprocess(home_missing)
+    assert re.search(r"missing|not found", out_missing), out_missing
+
+    home_good = _write_home_config(tmp_path, "good", "{}")
+    out_good, _ = _run_doctor_subprocess(home_good)
+    config_line = next(line for line in out_good.splitlines() if "Config:" in line)
+    assert "✓" in config_line, out_good
