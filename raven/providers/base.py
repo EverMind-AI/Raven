@@ -266,6 +266,11 @@ class LLMResponse:
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
+    # A tool call's arguments needed repairing to parse at all. Locally
+    # computed from what arrived, so it holds up where a backend reports a
+    # clean stop on a cut-off reply -- measured on gpt-4o, which answers a
+    # ceiling hit with finish_reason="tool_calls".
+    args_parse_failed: bool = False
 
     @property
     def has_tool_calls(self) -> bool:

@@ -317,3 +317,97 @@ def test_not_knowing_where_the_cut_landed_assumes_the_worst() -> None:
     flag_truncation(_gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=calls)
 
     assert calls[0].run_meta is not None
+
+
+# ---------------------------------------------------------------------------
+# The parse-failure signal on the non-streaming path
+# ---------------------------------------------------------------------------
+
+
+def test_repaired_arguments_are_reported_as_a_parse_failure() -> None:
+    """The provider must not swallow the fact that repair was needed.
+
+    Measured against openrouter: a cut mid-arguments arrives as an unclosed
+    blob from both Anthropic- and OpenAI-backed models, and `json_repair`
+    closes it silently. Discarding that left the non-streaming path with one
+    working signal on gpt-4o, which answers a ceiling hit with
+    `finish_reason="tool_calls"` rather than `"length"` (4 of 4 probes).
+    """
+    from types import SimpleNamespace as N
+
+    from raven.providers.litellm_provider import LiteLLMProvider
+
+    def response(arguments: str):
+        fn = N(name="write_file", arguments=arguments, provider_specific_fields=None)
+        tc = N(id="c1", function=fn, provider_specific_fields=None)
+        msg = N(content=None, tool_calls=[tc], reasoning_content=None, thinking_blocks=None)
+        return N(choices=[N(message=msg, finish_reason="tool_calls")], usage=None)
+
+    provider = LiteLLMProvider.__new__(LiteLLMProvider)
+
+    whole = LiteLLMProvider._parse_response(provider, response('{"path": "a.py"}'))
+    assert whole.args_parse_failed is False
+
+    cut = LiteLLMProvider._parse_response(provider, response('{"path": "a.py", "content": "import ran'))
+    assert cut.args_parse_failed is True
+    # Still repaired -- the signal is additional, not a replacement.
+    assert cut.tool_calls[0].arguments["content"] == "import ran"
+
+
+class _LyingFinishReason(LLMProvider):
+    """A backend that reports a clean tool_calls stop on a truncated turn.
+
+    Shaped after gpt-4o through openrouter: `finish_reason` says `tool_calls`,
+    usage sits below the ceiling, and only the unparseable arguments give it
+    away.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generation = GenerationSettings(max_tokens=100_000)
+        self.calls = 0
+        self.seen: list[list[dict[str, Any]]] = []
+
+    async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+        self.calls += 1
+        self.seen.append([dict(m) for m in messages])
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "snake.py"})],
+                finish_reason="tool_calls",
+                usage={"completion_tokens": 12},
+                args_parse_failed=True,
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_alone_carries_the_non_streaming_path(workspace) -> None:
+    """No usable finish_reason, no ceiling hit -- only the repaired arguments.
+
+    This is the gpt-4o shape. Without the signal reaching the loop, the turn
+    reads as a plain schema error and the model is told it forgot a field.
+    """
+    provider = _LyingFinishReason()
+    agent = AgentLoop(
+        provider=provider, workspace=workspace, model="stub", max_iterations=4, restrict_to_workspace=True
+    )
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="write a snake game",
+        ),
+        session_key="s1",
+    )
+
+    tool_replies = [m for m in provider.seen[1] if m.get("role") == "tool"]
+    assert tool_replies
+    text = str(tool_replies[-1].get("content", ""))
+    assert "[truncated]" in text
+    assert "missing required" not in text

@@ -1998,6 +1998,7 @@ class AgentLoop:
                     finish_reason=response.finish_reason,
                     usage=response.usage,
                     tool_calls=response.tool_calls,
+                    args_parse_failed=response.args_parse_failed,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
