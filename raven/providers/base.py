@@ -174,20 +174,18 @@ class TruncationInfo:
     at_tokens: int | None = None
 
     def as_error(self, tool_name: str) -> str:
-        """The part of the message that is true for every tool.
+        """States what happened. What to do about it is the tool's to say.
 
-        Deliberately stops at "do not resend this". What to do instead depends
-        on the tool -- a file can be appended to, a shell command cannot be
-        sent in halves -- so that sentence comes from ``Tool.truncation_hint``
-        and the registry joins the two. A generic instruction here read as
-        advice for tools it did not fit.
+        Two facts, both true of every tool: the call was cut off, and nothing
+        past the cut was kept -- the upstream drops the key it was still
+        writing and the stored assistant message carries the same stub, so
+        there is no copy anywhere. Everything after that is tool-specific and
+        comes from ``Tool.truncation_hint``, which the registry appends.
         """
         at = f" at {self.at_tokens} tokens" if self.at_tokens else ""
         return (
             f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}. "
-            f"Everything past that point never arrived and was not saved anywhere, "
-            f"so it has to be sent again -- but not as one call this size, or it "
-            f"will be cut at the same place."
+            f"Everything past that point was not saved."
         )
 
 

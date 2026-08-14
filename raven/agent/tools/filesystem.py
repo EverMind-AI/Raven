@@ -212,8 +212,8 @@ class WriteFileTool(_FsTool):
     @property
     def truncation_hint(self) -> str:
         return (
-            "Send a smaller first chunk with mode=overwrite, then append the rest "
-            "with mode=append across as many calls as it takes."
+            "Send it again in smaller pieces: a first chunk with mode=overwrite, "
+            "then the rest with mode=append, across as many calls as it takes."
         )
 
     async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:

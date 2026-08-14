@@ -137,7 +137,7 @@ class ExecTool(Tool):
         # "Send it in smaller pieces" is meaningless for a command: half a
         # command is not a command. What splits here is the work, not the
         # argument.
-        return "A command cannot be sent in pieces -- shorten it, or split the work across several runs."
+        return "Send a shorter command, or split the work across several runs."
 
     @property
     def parameters(self) -> dict[str, Any]:

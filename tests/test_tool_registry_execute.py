@@ -316,9 +316,11 @@ async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
     )
 
     assert "[truncated]" in out
-    assert "has to be sent again" in out
+    assert "was not saved" in out
+    # No instruction at all: the two facts stand, and nothing tells this tool
+    # to do something it may have no way of doing.
     assert "smaller pieces" not in out
-    assert out.rstrip().endswith("will be cut at the same place.")
+    assert out.rstrip().endswith("Everything past that point was not saved.")
 
 
 def test_shipped_tools_that_can_be_split_say_how() -> None:
@@ -328,7 +330,7 @@ def test_shipped_tools_that_can_be_split_say_how() -> None:
 
     assert "mode=append" in (WriteFileTool(".").truncation_hint or "")
     exec_hint = ExecTool().truncation_hint or ""
-    assert "cannot be sent in pieces" in exec_hint
+    assert "shorter command" in exec_hint
 
 
 @pytest.mark.asyncio
@@ -350,6 +352,5 @@ async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> 
         run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
     )
 
-    assert "not saved anywhere" in out
-    assert "sent again" in out
+    assert "was not saved" in out
     assert "not resend" not in out.lower()
