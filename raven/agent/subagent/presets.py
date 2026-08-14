@@ -1,82 +1,144 @@
 """Built-in third-party subagent presets (req5).
 
-Copy any of these into ``subagents.thirdParty`` in ``~/.raven/config.json`` (or
-add them from the web UI) so the main agent can dispatch to that agent via
-``spawn(agent=<name>)``. They are templates: adjust ``command`` / ``baseUrl`` /
-``model`` to your install.
+One preset per agent, and each one already carries the transport that agent is
+reached over. That choice is made *here*, in the repo, from a measurement -- not
+rediscovered on every user's machine at connect time. Whether hermes speaks ACP
+is a fact about hermes, and probing for it per install would mean trying a second
+transport whose own verification costs the user real tokens (the cli test
+dispatches a task) while telling them nothing new.
 
-- ``claude_code`` - Claude Code CLI headless, stateful. ``--output-format
-  stream-json --verbose`` is required: the plain text output buries the answer
-  in tens of kilobytes of hook and init noise, which ``maxOutputChars`` would
-  truncate away.
-- ``codex`` - OpenAI Codex CLI headless, stateful. The session id and the reply
-  are both read out of the ``exec --json`` JSONL stream.
-- ``mirothinker`` - MiroMind deep-research over an OpenAI-compatible endpoint
-  (set ``apiKey``).
-- ``openclaw`` - OpenClaw agent CLI, stateful. ``--json`` is required: plain
-  output interleaves ANSI-coloured diagnostics on stdout.
-- ``hermes`` - Hermes Agent CLI, stateful. The ``chat -Q`` subcommand is
-  required to join a session; the reply comes off stdout and the session id
-  off a stderr line.
-- ``opencode`` - OpenCode CLI, stateful. ``--format json`` is required for the
-  session id: the default output has no line carrying it, so a text transcript
-  could only ever produce a non-resumable run.
+So connecting is: verify the one path this table names. If it fails, say why
+(adapter not installed, gateway not running, not logged in). There is no
+fallback to another transport, because a silent fallback would hand the user an
+agent with different capabilities than the one they asked for.
+
+Measured on 2026-08-11, which is what fixed each transport below:
+
+- ``hermes`` - ACP, native (``hermes acp``). resume + fork + load.
+- ``claude_code`` - ACP through the ACP project's adapter. It reads the *local*
+  Claude Code credentials: a real prompt failed with exactly the error the local
+  ``claude -p`` gives ("Credit balance is too low") while no ANTHROPIC_API_KEY /
+  ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN was set anywhere in the
+  environment. That is the property that makes it usable at all: raven treats
+  these as *external* agents, so an adapter demanding its own credential would
+  not be acceptable.
+- ``codex`` - ACP through the ACP project's adapter. resume + load but **no
+  fork**, which is exactly why capabilities are negotiated rather than declared.
+- ``opencode`` - ACP, native (``opencode acp``). resume + fork + load.
+- ``openclaw`` - ACP, native (``openclaw acp``). This one is a bridge backed by
+  the OpenClaw Gateway rather than a self-contained server: with no reachable
+  gateway it never answers ``initialize``, so pass ``--url`` / ``--token`` when
+  yours needs them.
+- ``mirothinker`` - not a local agent at all: MiroMind deep-research over an
+  OpenAI-compatible endpoint (set ``apiKey``).
+
+Adapter versions are pinned. ``npx -y`` will fetch one that is not present, so an
+unpinned command would silently change which adapter build a user runs; the cost
+is that these need bumping deliberately.
+
+The cli transport is not offered by any preset any more, but it is not gone:
+entries already configured that way keep working untouched, and a row whose
+``kind`` disagrees with its preset's is what the UI reads as "upgradeable".
 
 Statefulness and local-file access are not spelled out in the ``description``
 text: both are structured fields the tool descriptions render as tags, so prose
-saying the same thing only costs prompt tokens and can drift out of step with
-the mechanism.
+saying the same thing only costs prompt tokens and can drift out of step with the
+mechanism. For an acp preset they are not spelled out because they are not
+*known* here -- the handshake reports them.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-_CLAUDE_TAIL = "--output-format stream-json --verbose"
-# The approval policy is a root-level codex flag: `codex exec -a never` is a
-# parse error, so it must sit before the subcommand.
-_CODEX_HEAD = (
-    "codex -a never exec --skip-git-repo-check -s workspace-write "
-    "-c 'sandbox_workspace_write.network_access=true' --json"
-)
-# Create and resume are the same call: an openclaw session is addressed by the id
-# the caller supplies. --json is required, not cosmetic - plain output interleaves
-# ANSI-coloured plugin and transport diagnostics on stdout, and --verbose off does
-# not suppress them, so a text transcript cannot yield the reply.
-_OPENCLAW_CMD = "openclaw agent --local --json --session-id {agent_id} -m {prompt}"
-# `chat -q` rather than the global `-z`: -z does not join a session, so
-# `-z --resume <id>` silently starts a new one. -Q keeps stdout to the final
-# answer alone, and prints the session id on stderr.
-_HERMES_ONESHOT = "hermes --yolo chat -Q -q {prompt}"
-# --format json is required, not cosmetic: it is the only output that carries the
-# session id, so without it every run would be non-resumable. --auto is the
-# headless-permission flag (the counterpart of claude's --permission-mode auto
-# and codex's -a never); without it a run needing a tool waits for an approval
-# nobody is there to give. Create takes no {agent_id}: `run --session` only
-# resumes an existing session and errors with "Session not found" on an id it
-# does not know, so opencode mints its own id and raven reads it back out.
-_OPENCODE_HEAD = "opencode run --format json --auto"
+# Command templates for the cli transport, kept as reference rather than as
+# presets. Nothing reads them: they exist because the cli backend still runs
+# entries configured before their agent's preset moved to acp, and someone
+# hand-writing or debugging one needs the flag knowledge that was verified the
+# hard way:
+#
+#   claude:   claude -p {prompt} --permission-mode auto --session-id {agent_id}
+#             --output-format stream-json --verbose
+#             (stream-json is required: plain output buries the answer in tens of
+#             kilobytes of hook and init noise that maxOutputChars would truncate)
+#   codex:    codex -a never exec --skip-git-repo-check -s workspace-write
+#             -c 'sandbox_workspace_write.network_access=true' --json {prompt}
+#             (-a is a root-level flag: `codex exec -a never` exits 2. And
+#             --skip-git-repo-check is required or every spawn fails at raven's
+#             non-git workspace cwd. Verified against codex-cli 0.144.5.)
+#   openclaw: openclaw agent --local --json --session-id {agent_id} -m {prompt}
+#             (create and resume are the same call; --json is required because
+#             plain output interleaves ANSI plugin diagnostics on stdout)
+#   opencode: opencode run --format json --auto {prompt}, resume with
+#             --session {agent_id} (--format json is the only output carrying the
+#             session id, so anything else is non-resumable)
+#   hermes:   hermes --yolo chat -Q -q {prompt}, resume with --resume {agent_id}
+#             (chat -Q joins a session and keeps stdout to the answer; the id is
+#             printed on stderr, matched by sessionIdPattern)
+
+# Pinned deliberately; see the module docstring.
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.66.0"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+_OPENCODE_ACP = "npx -y opencode-ai@1.18.16 acp"
 
 THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
     "claude_code": {
         "name": "claude_code",
         "preset": "claude_code",
-        "kind": "cli",
-        "description": "Claude Code CLI - strong general coding / agent tasks.",
-        "command": f"claude -p {{prompt}} --permission-mode auto --session-id {{agent_id}} {_CLAUDE_TAIL}",
-        "resumeCommand": f"claude -p {{prompt}} --permission-mode auto --resume {{agent_id}} {_CLAUDE_TAIL}",
-        "idSource": "provisioned",
-        "transcriptFormat": "claude_stream_json",
+        "kind": "acp",
+        "description": (
+            "Claude Code over ACP - strong general coding / agent tasks. Uses this machine's "
+            "existing Claude Code login. Fetched on first use via npx."
+        ),
+        "command": _CLAUDE_ACP,
+        # npx may have to download the adapter on the first connect, which is far
+        # slower than starting an installed binary.
+        "readyTimeoutMs": 120000,
     },
     "codex": {
         "name": "codex",
         "preset": "codex",
-        "kind": "cli",
-        "description": "OpenAI Codex CLI - coding tasks.",
-        "command": f"{_CODEX_HEAD} {{prompt}}",
-        "resumeCommand": f"{_CODEX_HEAD} resume {{agent_id}} {{prompt}}",
-        "idSource": "derived",
-        "transcriptFormat": "codex_jsonl",
+        "kind": "acp",
+        "description": (
+            "OpenAI Codex over ACP - coding tasks. Fetched on first use via npx. Supports "
+            "resuming a session but not forking one."
+        ),
+        "command": _CODEX_ACP,
+        "readyTimeoutMs": 120000,
+    },
+    "opencode": {
+        "name": "opencode",
+        "preset": "opencode",
+        "kind": "acp",
+        "description": (
+            "OpenCode over ACP - open-source coding agent. Uses whichever provider and model "
+            "the local opencode install is configured for. Fetched on first use via npx."
+        ),
+        "command": _OPENCODE_ACP,
+        "readyTimeoutMs": 120000,
+    },
+    "hermes": {
+        "name": "hermes",
+        "preset": "hermes",
+        "kind": "acp",
+        "description": "Hermes Agent over ACP - general assistant with tool calling.",
+        "command": "hermes acp",
+    },
+    "openclaw": {
+        "name": "openclaw",
+        "preset": "openclaw",
+        "kind": "acp",
+        "description": (
+            "OpenClaw over ACP - general assistant with its own tool set. This is a bridge "
+            "backed by the OpenClaw Gateway, not a self-contained server: with no reachable "
+            "gateway it never answers the handshake, so pass --url / --token when yours needs "
+            "them."
+        ),
+        "command": "openclaw acp",
+        # Measured: it did not answer `initialize` within 20s while waiting on a
+        # gateway, so the shared default would report a working install as
+        # unreachable.
+        "readyTimeoutMs": 45000,
     },
     "mirothinker": {
         "name": "mirothinker",
@@ -89,46 +151,6 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "baseUrl": "https://api.miromind.ai/v1",
         "model": "mirothinker-1-7-deepresearch",
         "apiKey": "",
-    },
-    "openclaw": {
-        "name": "openclaw",
-        "preset": "openclaw",
-        "kind": "cli",
-        "description": (
-            "OpenClaw agent CLI - general assistant with its own tool set. Needs a node "
-            "the CLI supports on PATH, and an agent id whose workspace has no persona "
-            "files, or the first turn of a fresh session answers the bootstrap instead "
-            "of the task."
-        ),
-        "command": _OPENCLAW_CMD,
-        "resumeCommand": _OPENCLAW_CMD,
-        "idSource": "provisioned",
-        "transcriptFormat": "openclaw_json",
-    },
-    "opencode": {
-        "name": "opencode",
-        "preset": "opencode",
-        "kind": "cli",
-        "description": (
-            "OpenCode CLI - open-source coding agent. Uses whichever provider and model "
-            "the local opencode install is configured for."
-        ),
-        "command": f"{_OPENCODE_HEAD} {{prompt}}",
-        "resumeCommand": f"{_OPENCODE_HEAD} --session {{agent_id}} {{prompt}}",
-        "idSource": "derived",
-        "transcriptFormat": "opencode_json",
-    },
-    "hermes": {
-        "name": "hermes",
-        "preset": "hermes",
-        "kind": "cli",
-        "description": "Hermes Agent CLI - general assistant with tool calling.",
-        "command": _HERMES_ONESHOT,
-        "resumeCommand": f"{_HERMES_ONESHOT} --resume {{agent_id}}",
-        "idSource": "derived",
-        "transcriptFormat": "text",
-        "sessionIdPattern": r"session_id:\s*(\S+)",
-        "outputPattern": r"(?s)\A(.*?)\s*\Z",
     },
 }
 

@@ -116,6 +116,7 @@ def register_config_methods(
     from raven.config.schema import SubagentsConfig
     from raven.config.update_subagents import (
         get_third_party_subagents,
+        reject_unsupported_acp_fields,
         reject_unsupported_openai_fields,
         set_third_party_subagents,
     )
@@ -131,6 +132,9 @@ def register_config_methods(
         # that still carries it was authored by the caller, who can act on the
         # error -- unlike on load, where raising would stop raven starting.
         reject_unsupported_openai_fields(agents)
+        # Same split for the acp kind: warned about on load so a stored config
+        # still starts raven, rejected here where the caller owns the value.
+        reject_unsupported_acp_fields(agents)
         # Validate + write atomically (raises on bad schema / duplicate names;
         # the dispatcher surfaces the error to the client, nothing is applied).
         set_third_party_subagents(agents)

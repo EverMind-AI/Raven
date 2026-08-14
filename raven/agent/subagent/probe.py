@@ -24,7 +24,8 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
-from raven.agent.subagent.backends import build_third_party_backend
+from raven.agent.acp.capabilities import SnapshotStore, verify_agent
+from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.test_state import LastTest
@@ -164,6 +165,48 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     return done("ready", f"installed at {resolved}", resolved)
 
 
+def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
+    """Free availability check for an acp agent: on PATH, and already verified?
+
+    Both halves are needed, and the second is the point. ``shutil.which`` on the
+    launch command answers "is the executable there", which for an ACP server is a
+    far weaker claim than for a cli agent: the process existing says nothing about
+    whether it speaks the protocol, has a usable credential, or (for a bridge like
+    ``openclaw acp``) can reach the thing it bridges to. Reporting ``ready`` off
+    ``which`` alone would be a green light for an agent that cannot run a task --
+    so an unverified entry is ``attention``, with the recorded verdict taking over
+    once one exists.
+    """
+    name = getattr(cfg, "name", "") or ""
+
+    def done(status: ProbeStatus, detail: str, target: str = "") -> ProbeResult:
+        return ProbeResult(name, source, "acp", status, detail, target, 0)
+
+    command = (getattr(cfg, "command", None) or "").strip()
+    if not command:
+        return done("unknown", "command is empty")
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return done("unknown", f"command cannot be parsed: {exc}")
+    if not argv:
+        return done("unknown", "command is empty")
+    exe = argv[0]
+    cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
+    resolved = shutil.which(exe, path=cfg_path or path)
+    if resolved is None:
+        return done("missing", f"{exe} is not on the login shell PATH", exe)
+
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None:
+        return done(
+            "attention",
+            f"installed at {resolved}, but its ACP capabilities have not been recorded yet -- run a test",
+            resolved,
+        )
+    return done(snapshot.status, snapshot.detail, resolved)
+
+
 def _model_ids(payload: Any) -> list[str] | None:
     """``data[].id`` from an OpenAI model list, or ``None`` if that is not the shape."""
     data = payload.get("data") if isinstance(payload, dict) else None
@@ -235,10 +278,13 @@ async def probe_one(cfg: Any, *, source: Source, path: str | None = None) -> Pro
     from the login shell. Pass it when probing a batch.
     """
     try:
-        if getattr(cfg, "kind", None) == "openai":
+        kind = getattr(cfg, "kind", None)
+        if kind == "openai":
             return await _probe_openai(cfg, source=source)
         if path is None:
             path = await _captured_login_path()
+        if kind == "acp":
+            return _probe_acp(cfg, source=source, path=path)
         return _probe_cli(cfg, source=source, path=path)
     except Exception as exc:  # noqa: BLE001 - a raising probe would blank the page
         name = getattr(cfg, "name", "") or ""
@@ -292,6 +338,8 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     kind = getattr(cfg, "kind", None)
     if kind == "openai":
         return TestResult(cfg.name, source, "openai", probe.status == "ready", probe.detail, None, elapsed())
+    if kind == "acp":
+        return await _test_acp(cfg, source=source, probe=probe, elapsed=elapsed)
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
@@ -316,6 +364,28 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     if not text:
         return TestResult(cfg.name, source, "cli", False, "the command exited 0 but returned nothing", None, elapsed())
     return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", text[:_DETAIL_CAP], elapsed())
+
+
+async def _test_acp(cfg: Any, *, source: Source, probe: ProbeResult, elapsed: Any) -> TestResult:
+    """Verify an acp agent by connecting to it, and remember what it reported.
+
+    Cheaper *and* stronger than the cli test, which is why the two differ. The cli
+    test has to dispatch a real task -- spending the agent's own quota -- because
+    nothing short of that exercises its auth. ACP answers the same question in the
+    handshake, so this costs no tokens and still reaches a real verdict; and unlike
+    the cli test it produces something reusable, since the snapshot it records is
+    what the roster later reads statefulness from.
+    """
+    if probe.status == "missing":
+        return TestResult(cfg.name, source, "acp", False, probe.detail, None, elapsed())
+    snapshot = await verify_agent(cfg)
+    if source == "config":
+        # Presets are templates, not entries: recording a snapshot for one would
+        # key it to a name no config claims, and the roster would then read
+        # capabilities off a preset the user never installed.
+        SnapshotStore().record(snapshot)
+    reply = ", ".join(snapshot.available_models[:5]) or None
+    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 
 
 __all__ = [

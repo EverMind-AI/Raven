@@ -69,20 +69,27 @@ class InstanceRegistry:
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._path)
 
-    async def lookup(self, session_key: str, agent: str, handle: str) -> str | None:
+    async def lookup(self, session_key: str, agent: str, handle: str, *, kind: str = "cli") -> str | None:
+        """The transport session id bound to this handle, or ``None``.
+
+        ``kind`` is matched, not ignored: the same key space also holds status
+        rows (``dag-node``), and a handle bound over one transport is meaningless
+        over another -- a cli session id cannot be resumed by ``session/load``.
+        Defaults to ``cli`` so every existing caller keeps its behaviour.
+        """
         async with self._lock:
             rec = self._load().get((session_key, agent, handle))
-        if not rec or rec.get("kind") != "cli":
+        if not rec or rec.get("kind") != kind:
             return None
         return rec.get("agentId")
 
-    async def commit(self, session_key: str, agent: str, handle: str, agent_id: str) -> None:
+    async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
             records = self._load()
             key = (session_key, agent, handle)
             now = int(time.time() * 1000)
             records[key] = {
-                "kind": "cli",
+                "kind": kind,
                 "sessionKey": session_key,
                 "agent": agent,
                 "handle": handle,
@@ -113,7 +120,10 @@ class InstanceRegistry:
             now = int(time.time() * 1000)
             existing = records.get(key) or {}
             records[key] = {
-                "kind": "cli",
+                # Carried forward, not hardcoded: a status write shares this key
+                # with the binding `commit` made, so stamping "cli" here would
+                # retype an acp binding and `lookup` would then refuse to find it.
+                "kind": existing.get("kind") or "cli",
                 "sessionKey": session_key,
                 "agent": agent,
                 "handle": handle,

@@ -553,10 +553,14 @@ export interface SkillInfo {
 export interface SubagentRow {
   name: string;
   preset?: string;
-  kind: 'cli' | 'openai';
+  kind: 'cli' | 'openai' | 'acp';
   description: string;
   enabled: boolean;
   configured: boolean;
+  /**
+   * The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead.
+   */
+  upgrade_to?: string;
   group: 'installed' | 'uninstalled';
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;

@@ -21,6 +21,7 @@ import re
 import shlex
 import signal
 import tempfile
+import time
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
@@ -29,6 +30,11 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.observability import (
+    external_agent_span,
+    record_outcome,
+    record_transcript,
+)
 from raven.agent.subagent.backends.transcript import (
     parse_claude_stream_json,
     parse_codex_jsonl,
@@ -133,7 +139,15 @@ class CliAgentBackend:
         if proc.returncode is None:
             await proc.wait()
 
-    async def _exec(self, template: str, task: str, task_id: str, cwd: str, agent_id: str | None) -> tuple[str, str]:
+    async def _exec(
+        self,
+        template: str,
+        task: str,
+        task_id: str,
+        cwd: str,
+        agent_id: str | None,
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str]:
         fd, prompt_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".prompt.txt")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -177,6 +191,20 @@ class CliAgentBackend:
                 raise
             stdout = out.decode("utf-8", "replace")
             stderr = err.decode("utf-8", "replace")
+            # Recorded before the exit-code check, so a *failed* invocation is
+            # kept too -- that is the one whose output is worth having, and it is
+            # exactly what used to be reduced to a 2000-char tail in an exception
+            # message and then discarded.
+            if attempts is not None:
+                attempts.append(
+                    {
+                        "argv0": argv[0] if argv else "",
+                        "agentId": agent_id,
+                        "exitCode": proc.returncode,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                    }
+                )
             if proc.returncode != 0:
                 tail = (stdout + "\n" + stderr).strip()[-2000:]
                 raise RuntimeError(f"CLI agent {self.name!r} exited {proc.returncode}: {tail}")
@@ -201,8 +229,75 @@ class CliAgentBackend:
     ) -> str:
         # The parent's provider/model are accepted and ignored: this backend
         # shells out to an agent that authenticates and picks a model itself.
-        skey = session_key or "default"
         handle = instance or task_id
+        started = time.monotonic()
+        # One span per dispatch, so a resume that fails and retries as a fresh
+        # create reads as two invocations of one task rather than two tasks. The
+        # span is opened here rather than by the caller for the reason
+        # `observability` gives: it nests on a contextvar, so neither `spawn` nor
+        # the DAG runner has to pass anything down.
+        attempts: list[dict[str, Any]] = []
+        output = ""
+        with external_agent_span(agent=self.name, transport="cli", task_id=task_id, instance=handle) as span:
+            try:
+                output = await self._dispatch(
+                    task,
+                    task_id,
+                    workspace,
+                    session_key=session_key,
+                    handle=handle,
+                    resumable=instance is not None,
+                    attempts=attempts,
+                )
+                return output
+            except Exception as exc:
+                span.error(exc)
+                raise
+            finally:
+                self._record(span, attempts, output=output, started=started)
+
+    def _record(self, span: Any, attempts: list[dict[str, Any]], *, output: str, started: float) -> None:
+        """Put this dispatch's raw material on the span.
+
+        No per-step timeline: this transport has none. A cli agent prints its
+        transcript once, at exit, so there is nothing to report while it runs --
+        which is why its roster rows are tagged ``no-progress`` and why the
+        outcome deliberately omits ``update_counts`` rather than reporting zero.
+
+        What is new is that the transcript survives at all. It used to be read for
+        a session id and a reply and then dropped, with a 2000-char tail reaching
+        an exception message on failure and nothing at all on success.
+        """
+        last = attempts[-1] if attempts else {}
+        record_outcome(
+            span,
+            answer_chars=len(output),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            exit_code=last.get("exitCode"),
+        )
+        span.set(**{"subagent.external.invocations": len(attempts)})
+        if attempts:
+            record_transcript(
+                span,
+                {
+                    "agent": self.name,
+                    "transcriptFormat": self.transcript_format,
+                    "invocations": attempts,
+                },
+            )
+
+    async def _dispatch(
+        self,
+        task: str,
+        task_id: str,
+        workspace: Path,
+        *,
+        session_key: str | None,
+        handle: str,
+        resumable: bool,
+        attempts: list[dict[str, Any]],
+    ) -> str:
+        skey = session_key or "default"
         cwd = self.cwd or str(workspace)
 
         if self.is_stateful:
@@ -212,22 +307,42 @@ class CliAgentBackend:
             # side by side. See ``hold_handle``.
             #
             # Only a named handle has such a session. Without one nothing is
-            # looked up (``resumable`` below), so each run mints its own
+            # looked up (``resumable``, decided by the caller), so each run mints
+            # its own
             # agent_id and there is nothing for a second run to interleave with
             # -- while the key it would serialize on is a DAG node's
             # author-chosen id, which repeats across graphs by design. Taking
             # the lock there stalls unrelated runs on the shared dispatch gate,
             # since a node holds its slot while it waits.
-            resumable = instance is not None
             guard = hold_handle(skey, self.name, handle) if resumable else nullcontext()
             async with guard:
-                return await self._run_stateful(task, task_id, cwd, skey, handle, resumable=resumable)
+                return await self._run_stateful(
+                    task, task_id, cwd, skey, handle, resumable=resumable, attempts=attempts
+                )
 
         return await self._attempt(
-            task, task_id, cwd, agent_id=None, template=self.command, created=False, skey=skey, handle=handle
+            task,
+            task_id,
+            cwd,
+            agent_id=None,
+            template=self.command,
+            created=False,
+            skey=skey,
+            handle=handle,
+            attempts=attempts,
         )
 
-    async def _run_stateful(self, task: str, task_id: str, cwd: str, skey: str, handle: str, *, resumable: bool) -> str:
+    async def _run_stateful(
+        self,
+        task: str,
+        task_id: str,
+        cwd: str,
+        skey: str,
+        handle: str,
+        *,
+        resumable: bool,
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> str:
         """Resume this handle's session, or mint one.
 
         Only an explicitly named ``instance`` resumes -- that is ``resumable``
@@ -260,6 +375,7 @@ class CliAgentBackend:
                     created=False,
                     skey=skey,
                     handle=handle,
+                    attempts=attempts,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -280,7 +396,15 @@ class CliAgentBackend:
         # id (claude rejects a non-UUID) while a handle is free-form.
         agent_id = None if self.id_source == "derived" else str(uuid.uuid4())
         return await self._attempt(
-            task, task_id, cwd, agent_id=agent_id, template=self.command, created=True, skey=skey, handle=handle
+            task,
+            task_id,
+            cwd,
+            agent_id=agent_id,
+            template=self.command,
+            created=True,
+            skey=skey,
+            handle=handle,
+            attempts=attempts,
         )
 
     async def _attempt(
@@ -294,9 +418,10 @@ class CliAgentBackend:
         created: bool,
         skey: str,
         handle: str,
+        attempts: list[dict[str, Any]] | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
-        stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id)
+        stdout, stderr = await self._exec(template, task, task_id, cwd, agent_id, attempts)
 
         jsonl_id: str | None = None
         jsonl_reply: str | None = None

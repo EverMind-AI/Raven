@@ -786,6 +786,16 @@ async def _run_rpc_server_until_done(
                 _logger.exception(
                     "tui: memory backend stop failed; continuing shutdown",
                 )
+        # ACP agents are launched with start_new_session, so they do not get the
+        # terminal's signals and outlive this process unless the pool is closed.
+        try:
+            from raven.agent.acp.pool import close_pool
+
+            await close_pool()
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: acp pool close failed; continuing shutdown")
         serve_task.cancel()
         try:
             await serve_task

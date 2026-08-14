@@ -4819,11 +4819,15 @@
           "preset": { "type": "string" },
           "kind": {
             "type": "string",
-            "enum": ["cli", "openai"]
+            "enum": ["cli", "openai", "acp"]
           },
           "description": { "type": "string" },
           "enabled": { "type": "boolean" },
           "configured": { "type": "boolean" },
+          "upgrade_to": {
+            "type": "string",
+            "description": "The transport this entry's preset has since moved to, or null when it is current. A configured entry is never rewritten underneath the user, so the mismatch is shown instead."
+          },
           "group": {
             "type": "string",
             "enum": ["installed", "uninstalled"]

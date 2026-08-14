@@ -24,11 +24,12 @@ Not covered, and each for a reason rather than for convenience:
   is the refusal, so there is no result to check. Its params are empty.
 * ``memory.delete`` -- the delete goes through EverOS's own repository layer,
   imported inside the call. Faking that is faking the thing under test.
-* the ``plug.* / plughub.* / skillhub.*`` group and ``subagents.*`` -- validated
-  against ``METHOD_MODELS`` in their own modules, where the fixtures that drive
-  those handlers already live. This file used to claim that and it was not true
-  of the market group: those tests exercised the handlers but asserted on
-  individual keys, so ten declarations had nothing holding them to the code.
+* the ``plug.* / plughub.* / skillhub.*`` group and the rest of ``subagents.*``
+  -- validated against ``METHOD_MODELS`` in their own modules, where the
+  fixtures that drive those handlers already live. This file used to claim that
+  of the market group and it was not true: those tests exercised the handlers
+  but asserted on individual keys, so ten declarations had nothing holding them
+  to the code.
 * ``turn.*`` and ``cli.dispatch`` -- driven by their own suites.
 """
 
@@ -440,3 +441,44 @@ async def test_a_stub_refuses_in_the_declared_shape(method: str) -> None:
 
     assert response["error"]["code"] == _NOT_SUPPORTED_IN_V01, response
     _check(method, response["error"]["data"])
+
+
+# ---------------------------------------------------------------------------
+# subagents.list
+# ---------------------------------------------------------------------------
+
+
+async def test_subagents_list(workspace: Path) -> None:
+    """`SubagentRow` is `extra="forbid"`, so a field the handler grew and the
+    contract did not fails here.
+
+    Covered because it happened: adding ACP as a third transport put an
+    `upgrade_to` on every row and a third value in `kind`, and neither the
+    registration gate (the method is declared) nor the schema-match test (the two
+    halves agreed with each other) can see that.
+    """
+    import json as _json
+
+    from raven.config.loader import get_config_path
+    from raven.rpc.methods.subagents import subagents_list
+
+    # A configured entry on the transport its preset has since left, which is the
+    # one row where `upgrade_to` is not null.
+    cfg_path = get_config_path()
+    cfg = _json.loads(cfg_path.read_text())
+    cfg["subagents"] = {
+        "thirdParty": [
+            {
+                "name": "claude_code",
+                "preset": "claude_code",
+                "kind": "cli",
+                "command": "true {prompt}",
+            }
+        ]
+    }
+    cfg_path.write_text(_json.dumps(cfg))
+
+    out = _check("subagents.list", await subagents_list({"probe": False}))
+
+    row = next(r for r in out.rows if r.name == "claude_code")
+    assert row.upgrade_to == "acp", "the preset moved to acp, so a cli entry should offer the upgrade"
