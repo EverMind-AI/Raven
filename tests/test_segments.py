@@ -16,6 +16,7 @@ from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
+    render,
 )
 from raven.memory_engine import Memory, TokenBudget
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
@@ -80,6 +81,19 @@ class TestIdentityBootstrap:
         assert seg is not None
         assert "## TOOLS.md" in seg.text
         assert "tool docs" in seg.text
+
+    def test_identity_contains_model_id(self, tmp_path: Path) -> None:
+        prompt = render.identity_text(tmp_path, model="openrouter/some-model")
+        assert "openrouter/some-model" in prompt
+
+    def test_identity_default_model_resolved_lazily(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
+        assert "openrouter/acme/lazy-model" in render.identity_text(tmp_path)
+
+    def test_legacy_identity_contains_model_id(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
+        legacy = ContextBuilder(workspace=tmp_path)._get_identity()
+        assert "openrouter/acme/lazy-model" in legacy
 
 
 class TestMemory:
