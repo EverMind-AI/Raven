@@ -4,14 +4,15 @@ User-facing "session id" is the bare chat_id (strip "cli:" prefix for
 display; re-prepend internally). Full session key = "cli:<chat_id>".
 
 Persistence semantics:
-- ``session create`` (bare): mints a new id and prints it. Nothing is
-  written to disk — the id materialises on first use (lazy). Note: a
-  lazily-minted id that was never used cannot be found by ``resume``
-  because no file exists yet; the output includes a reminder.
-- ``session create --title TEXT``: mints + immediately persists metadata
-  so the title survives process exit. This diverges from the TUI's lazy
-  semantics because the CLI process dies immediately after the command
-  returns, leaving no opportunity for a later lazy flush.
+- ``session create`` mints a new id and immediately persists minimal
+  metadata (zero messages, title optional), so the id shows up in
+  ``list`` and can be ``resume``d or ``delete``d right away. The CLI
+  process dies as soon as the command returns, so a lazy (in-memory)
+  session would be lost — hence eager persistence, diverging from the
+  TUI's lazy semantics.
+- Untitled sessions are auto-named from their first user message (see
+  ``raven.session.manager``); ``--title`` names the session up front
+  and is never overwritten.
 """
 
 from __future__ import annotations
@@ -114,28 +115,27 @@ def resolve_session_cross_channel(manager: SessionManager, value: str) -> str:
 def session_create(
     title: str | None = typer.Option(None, "--title", "-t", help="Optional session title"),
 ) -> None:
-    """Mint a new session id.
+    """Mint a new session id and persist it immediately.
 
-    Without --title: prints the bare id only; nothing is written to disk.
-    The id materialises on first use when ``raven agent --session`` is
-    called with it.
-
-    With --title: persists session metadata immediately so the title
-    survives process exit.
+    Minimal metadata is written to disk right away (zero messages), so
+    the new id shows up in ``list`` and can be deleted. Without --title
+    the session is auto-named from its first user message.
     """
     chat_id = new_chat_id()
     key = f"{_CLI_CHANNEL}:{chat_id}"
 
+    manager = _open_manager()
+    session = manager.get_or_create(key)
     if title is not None:
-        manager = _open_manager()
-        session = manager.get_or_create(key)
         session.metadata["title"] = title
-        manager.save(session)
+    manager.save(session)
+
+    if title is not None:
         console.print(f"[green]✓[/green] Created session [cyan]{chat_id}[/cyan] (title: {title!r})")
         console.print(f"  Use with: raven agent --session {key}")
     else:
         console.print(chat_id)
-        console.print(f"[dim]  (lazy — materialises on first use: raven agent --session {key})[/dim]")
+        console.print(f"[dim]  (use: raven agent --session {key})[/dim]")
 
 
 # ── list ──────────────────────────────────────────────────────────────
