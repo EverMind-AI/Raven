@@ -33,7 +33,9 @@ _STUB_CASES = [
     # session.* slash-command stubs.
     # session.branch promoted to a real handler in methods/session.py
     # (session fork) — see test_tui_rpc_session.py::test_session_branch_*
-    ("session.compress", "session.compress not supported", True),
+    # session.compress promoted to a real handler in methods/session.py
+    # (forces the consolidator's token pass early) — see
+    # test_tui_rpc_session.py::test_session_compress_*
     ("session.save", "session.save not supported", True),
     # session.status promoted to real handler in slash_routing.py —
     # see test_tui_rpc_slash_routing.py::test_session_status_*

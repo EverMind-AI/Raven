@@ -26,6 +26,7 @@ Known divergence: ``system.hello`` still advertises ``default_session_key``
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -37,9 +38,10 @@ from raven.config.loader import load_config
 from raven.providers.rates import resolve_context_window
 from raven.session.export import default_export_path, write_transcript
 from raven.session.manager import SessionManager, new_chat_id
-from raven.tui_rpc.errors import TurnInProgressError
+from raven.tui_rpc.errors import ConfigValidationError, TurnInProgressError
 from raven.tui_rpc.methods import turn as turn_module
 from raven.tui_rpc.methods.system import _raven_version
+from raven.utils.helpers import estimate_prompt_tokens
 
 if TYPE_CHECKING:
     from raven.agent.loop.main import AgentLoop
@@ -213,6 +215,18 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
     blocks dropped. role="tool" entries pass through with name/context; known
     degradation: the TS renderer collapses them into a generic tool trail line
     attached to the next assistant message.
+
+    Beyond that shape, three stored fields ride along so a resumed transcript
+    can be drawn with the same detail as a live one (the GUI restores thought
+    folds, per-call targets and answer times from them; clients that do not
+    read them are unaffected):
+
+    * ``reasoning_content`` — the assistant's thought for that message;
+    * ``tool_calls`` — flattened to ``[{id, name, arguments}]``, matched to a
+      later ``role="tool"`` entry through its ``tool_call_id``. The provider
+      shape is rebuilt rather than forwarded so a live-cache message holding
+      provider objects still serialises;
+    * ``timestamp`` — the stored ISO wall clock.
     """
     out = []
     for m in messages:
@@ -229,10 +243,44 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
             entry["text"] = content
         elif content is not None:
             entry["text"] = str(content)
-        for extra_key in ("context", "name"):
+        for extra_key in ("context", "name", "tool_call_id", "timestamp"):
             if extra_key in m:
                 entry[extra_key] = m[extra_key]
+        reasoning = m.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning.strip():
+            entry["reasoning_content"] = reasoning
+        calls = _wire_tool_calls(m.get("tool_calls"))
+        if calls:
+            entry["tool_calls"] = calls
         out.append(entry)
+    return out
+
+
+def _wire_tool_calls(raw: Any) -> list[dict[str, str]]:
+    """Flatten stored ``tool_calls`` to the ``[{id, name, arguments}]`` wire shape.
+
+    Entries that carry neither a name nor arguments are dropped: a row with
+    nothing to say about the call it made is worse than no row.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    for call in raw:
+        if isinstance(call, dict):
+            fn = call.get("function") if isinstance(call.get("function"), dict) else {}
+            cid, name, args = call.get("id"), fn.get("name"), fn.get("arguments")
+        else:
+            fn = getattr(call, "function", None)
+            cid, name, args = getattr(call, "id", None), getattr(fn, "name", None), getattr(fn, "arguments", None)
+        if not name and not args:
+            continue
+        out.append(
+            {
+                "id": str(cid or ""),
+                "name": str(name or ""),
+                "arguments": args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str),
+            }
+        )
     return out
 
 
@@ -296,6 +344,13 @@ async def session_resume(
 
     Wire shape: raw session.messages so N stored → N wire (not get_history(),
     which slices and drops leading non-user messages).
+
+    ``info.usage.context_used`` is filled in from the loaded transcript. The
+    zero baseline is right for a brand-new session and wrong for a resumed one:
+    a client that shows how full the window is would read 0% on a session
+    already carrying 40 messages, until the next turn happened to report real
+    usage. The number is a tiktoken estimate of what the next call will send, so
+    ``context_estimated`` marks it as such.
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
@@ -307,6 +362,7 @@ async def session_resume(
             mgr = _manager_for(agent_loop, config)
             raw = mgr.peek(session_key)
             if raw is not None:
+                _fill_resumed_context(info, raw)
                 return {
                     "session_id": session_key,
                     "info": info,
@@ -325,6 +381,49 @@ async def session_resume(
     }
 
 
+def _fill_resumed_context(info: dict[str, Any], session: Any) -> None:
+    """Estimate how full the context window is for a session being resumed.
+
+    Estimation, not measurement: no provider has been called yet in this
+    process, so the only honest number available is what the next call would
+    cost to send. Failures leave the zero baseline alone rather than guessing --
+    a wrong denominator is worse than an unknown one.
+
+    Measured over ``get_history(max_messages=0)``, not over the stored
+    transcript. Those are different lists: history slices at
+    ``last_consolidated``, and the runtime consolidates on every user-inbound
+    turn, so estimating over everything stored reported the size of a context
+    that was already archived. A session a quarter full read as 100%. That call
+    -- argument included -- is the one the next turn makes, which is what the
+    number claims to be.
+    """
+    usage = info.get("usage")
+    if not isinstance(usage, dict) or session is None:
+        return
+    try:
+        # max_messages=0 is "all of it", which is what both places that build or
+        # measure the real prompt pass (loop/main.py and the consolidator's own
+        # estimator). The default caps at the last 500, and the tail is bounded
+        # in tokens rather than in messages -- consolidation fires on the window
+        # -- so a chatty session on a large-window model sits well past 500 and
+        # the meter would go quiet exactly as it started to matter.
+        messages = session.get_history(max_messages=0)
+    except Exception:
+        logger.exception("session.resume: could not read the session history")
+        return
+    if not messages:
+        return
+    try:
+        used = estimate_prompt_tokens(messages)
+    except Exception:
+        logger.exception("session.resume: context estimate failed")
+        return
+    context_max = usage.get("context_max") or 0
+    usage["context_used"] = used
+    usage["context_percent"] = round(100 * used / context_max) if context_max else 0
+    usage["context_estimated"] = True
+
+
 def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
     """Convert a list_sessions entry to the SessionListItem wire shape.
 
@@ -333,23 +432,36 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
     started_at maps from created_at ISO string; preview is always empty in
     v0.1 — metadata carries no message content, and the TS picker falls back
     to title or "(untitled)".
+
+    ``updated_at`` rides along beside it: the list is already ordered by last
+    activity, so a row that shows when the session was *created* is ordered by
+    one clock and labelled with another. It is the newest message's own stamp --
+    i.e. when the model last finished answering -- because the metadata record's
+    updated_at only moves when a save writes metadata and can lag the transcript
+    by a turn. Falls back through the metadata stamp to started_at, so a row
+    always has a time.
     """
     key = info.get("key", "")
-    created_at_str = info.get("created_at") or ""
-    started_at: float = 0.0
-    if created_at_str:
+
+    def _ts(value: Any) -> float:
+        if not value:
+            return 0.0
         try:
-            started_at = datetime.fromisoformat(created_at_str).timestamp()
+            return datetime.fromisoformat(str(value)).timestamp()
         except ValueError:
-            pass
+            return 0.0
+
+    started_at = _ts(info.get("created_at"))
     meta = info.get("metadata") or {}
     title = meta.get("title") or ""
     return {
         "id": key,
         "message_count": info.get("message_count", 0),
-        "preview": "",
-        "source": "tui",
+        # The user's first message: what an untitled session gets titled with.
+        "preview": info.get("first_user_message", ""),
+        "source": key.partition(":")[0] or "tui",
         "started_at": started_at,
+        "updated_at": _ts(info.get("last_user_message_at")) or _ts(info.get("updated_at")) or started_at,
         "title": title,
     }
 
@@ -359,17 +471,27 @@ async def session_list(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> dict:
-    """``session.list`` — list tui-channel sessions sorted by updated_at desc.
+    """``session.list`` — list sessions sorted by updated_at desc.
 
-    Filters to channel="tui" (this RPC scopes to the TUI surface). An optional
-    positive integer ``limit`` slices after the sort (newest sessions win);
-    zero, negative, or non-integer limits are ignored.
+    ``channels`` (optional list of channel names) picks which session
+    channels to include; it defaults to ["tui"] so existing pickers are
+    unchanged — the GUI passes ["tui", "cron"] to also show scheduled runs
+    (each item's ``source`` carries its channel). An optional positive
+    integer ``limit`` slices after the sort (newest sessions win); zero,
+    negative, or non-integer limits are ignored.
     Returns the SessionListResponse shape: {sessions: SessionListItem[]}.
     """
     agent_loop = _safe_invoke_factory(agent_loop_factory)
     config = load_config()
     mgr = _manager_for(agent_loop, config)
-    entries = mgr.list_sessions(channel="tui")
+    channels = params.get("channels")
+    if not isinstance(channels, list) or not channels:
+        channels = ["tui"]
+    entries: list[dict] = []
+    for channel in channels:
+        if isinstance(channel, str) and channel:
+            entries.extend(mgr.list_sessions(channel=channel))
+    entries.sort(key=lambda x: x.get("last_user_message_at") or x.get("updated_at") or "", reverse=True)
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
         entries = entries[:limit]
@@ -530,6 +652,108 @@ async def session_undo(
     return {"removed": removed}
 
 
+async def session_compress(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.compress`` — archive old messages now instead of at the window.
+
+    The runtime already compacts on its own once a prompt outgrows the context
+    window (``maybe_consolidate_by_tokens`` on every user-inbound turn). This is
+    the deliberate version: it forces the same loop early, which is what a user
+    asks for when they know the earlier exploration is dead weight.
+
+    Returns the TUI's ``SessionCompressResponse`` subset — before/after token
+    estimates, message counts, and a ``summary`` the clients print verbatim.
+    ``noop`` marks the cases where nothing moved: no consolidator (the Curator
+    context engine owns compaction), an empty session, or no safe boundary.
+    """
+    session_key = params.get("session_id", "")
+    if not session_key:
+        raise ConfigValidationError(
+            "session.compress requires params.session_id",
+            data={"field": "session_id"},
+        )
+    if turn_module.is_turn_active(session_key):
+        raise TurnInProgressError(
+            f"session {session_key!r} has an active turn; interrupt it before compressing",
+            data={"session_key": session_key},
+        )
+
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    mgr = _manager_for(agent_loop, config)
+    session = mgr.get_or_create(session_key)
+    before_messages = len(session.messages)
+
+    consolidator = getattr(agent_loop, "memory_consolidator", None)
+    owns = bool(getattr(getattr(agent_loop, "context_engine", None), "owns_compaction", False))
+    if consolidator is None or owns:
+        note = "the context engine manages context on its own" if owns else "no memory consolidator in this runtime"
+        return {
+            "before_messages": before_messages,
+            "after_messages": before_messages,
+            "before_tokens": 0,
+            "after_tokens": 0,
+            "removed": 0,
+            "summary": {"headline": "nothing to compress", "noop": True, "note": note},
+        }
+
+    stats = await consolidator.maybe_consolidate_by_tokens(session, force=True)
+    before_tokens = int(stats.get("before_tokens", 0))
+    after_tokens = int(stats.get("after_tokens", before_tokens))
+    archived = int(stats.get("archived", 0))
+    if archived and mgr.exists(session_key):
+        try:
+            mgr.save(session)
+        except Exception:
+            logger.warning("session.compress: failed to persist {}", session_key)
+
+    # Consolidation annotates and advances ``last_consolidated``; it never
+    # removes anything from the list. So the survivors are the slice past that
+    # boundary, and the count comes from the same slice the payload does --
+    # deriving it as ``before - archived`` let the number and the messages
+    # beside it describe two different lists.
+    survivors = session.messages[session.last_consolidated :]
+    headline = f"archived {archived} messages" if archived else "nothing to compress"
+    result: dict[str, Any] = {
+        "before_messages": before_messages,
+        "after_messages": len(survivors),
+        "before_tokens": before_tokens,
+        "after_tokens": after_tokens,
+        "removed": archived,
+        "summary": {
+            "headline": headline,
+            "noop": archived == 0,
+            "token_line": f"{before_tokens} -> {after_tokens} tokens",
+        },
+    }
+    if archived:
+        # A caller that just archived half the transcript is looking at messages
+        # that no longer exist. Returning the survivors plus refreshed info and
+        # usage is what lets it redraw instead of reporting a compaction while
+        # still showing what was compacted -- the same three fields
+        # ``session.resume`` hands back, produced the same way.
+        #
+        # Best-effort on purpose: the archive is the operation and it has already
+        # committed. Failing the whole call because a redraw aid could not be
+        # assembled would report failure for work that succeeded, and would leave
+        # the caller with neither the new transcript nor the knowledge that its
+        # old one is stale.
+        try:
+            info = await _default_session_info(agent_loop, config)
+            _fill_resumed_context(info, session)
+            result["info"] = info
+            result["messages"] = _map_to_wire(survivors, session_key)
+            usage = info.get("usage")
+            if isinstance(usage, dict):
+                result["usage"] = usage
+        except Exception:
+            logger.warning("session.compress: archived {} but could not build the redraw payload", session_key)
+    return result
+
+
 async def session_branch(
     params: dict,
     *,
@@ -606,7 +830,7 @@ def register_session_methods(
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
 ) -> None:
-    """Register the 11 session handlers on a dispatcher.
+    """Register the 12 session handlers on a dispatcher.
 
     Mirrors :func:`raven.tui_rpc.methods.turn.register_turn_methods` —
     wraps the module-level handlers in single-argument closures that pre-bind
@@ -641,6 +865,9 @@ def register_session_methods(
     async def _undo(params: dict) -> dict:
         return await session_undo(params, agent_loop_factory=agent_loop_factory)
 
+    async def _compress(params: dict) -> dict:
+        return await session_compress(params, agent_loop_factory=agent_loop_factory)
+
     async def _branch(params: dict) -> dict:
         return await session_branch(params, agent_loop_factory=agent_loop_factory)
 
@@ -656,6 +883,7 @@ def register_session_methods(
     dispatcher.register("session.title", _title)
     dispatcher.register("session.clear", _clear)
     dispatcher.register("session.undo", _undo)
+    dispatcher.register("session.compress", _compress)
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
 
@@ -671,6 +899,7 @@ __all__ = [
     "session_title",
     "session_clear",
     "session_undo",
+    "session_compress",
     "session_branch",
     "session_export",
     "register_session_methods",

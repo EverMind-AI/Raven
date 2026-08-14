@@ -104,11 +104,9 @@ _STUB_DEFINITIONS: tuple[tuple[str, str, str | None], ...] = (
     # (``session.branch`` was promoted to a real handler in methods/session.py
     # by session fork; removed here so the dispatcher does not
     # double-register it.)
-    (
-        "session.compress",
-        "session.compress not supported in Raven v0.1",
-        "Raven uses Curator context engine to manage context size; manual compress not exposed.",
-    ),
+    # (``session.compress`` was promoted to a real handler in methods/session.py
+    # -- it forces the consolidator's token pass early; removed here so the
+    # dispatcher does not double-register it.)
     (
         "session.save",
         "session.save not supported in Raven v0.1",

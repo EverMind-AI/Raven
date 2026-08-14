@@ -411,6 +411,7 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     from raven.tui_rpc.methods.system import (
         system_hello,
         system_ping,
+        system_upgrade,
         system_version,
     )
 
@@ -418,10 +419,13 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     register_aligned_methods(umbrella)
     umbrella_methods = set(umbrella.methods())
 
+    # Mirrors the hand-expanded system.* block in tui_commands.py — keep the two
+    # in step when either gains a method.
     production = Dispatcher()
     production.register("system.hello", system_hello)
     production.register("system.ping", system_ping)
     production.register("system.version", system_version)
+    production.register("system.upgrade", system_upgrade)
     register_aligned_methods_except_system(production)
     production_methods = set(production.methods())
 

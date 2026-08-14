@@ -38,11 +38,41 @@ class ToolInstallTarget:
     bin_dir: Path
 
 
-_UPGRADE_HELPER_SOURCE = r"""import subprocess
+_UPGRADE_HELPER_SOURCE = r"""import json
+import os
+import subprocess
 import sys
+import time
 
 
 def wait_for_parent(parent_pid):
+    if sys.platform != "win32":
+        return wait_for_parent_posix(parent_pid)
+    return wait_for_parent_windows(parent_pid)
+
+
+def wait_for_parent_posix(parent_pid):
+    # POSIX has no waitable handle for a non-child process, so poll the pid.
+    # Bounded, so a parent that refuses to die cannot leave the helper resident.
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            os.kill(parent_pid, 0)
+        except ProcessLookupError:
+            return 0
+        except PermissionError:
+            # The pid exists but belongs to someone else, i.e. the parent is
+            # gone and its pid was recycled. Treat that as exited.
+            return 0
+        except OSError as exc:
+            print(f"Unable to upgrade Raven: could not watch Raven ({exc}).", file=sys.stderr)
+            return 1
+        time.sleep(0.2)
+    print("Unable to upgrade Raven: waiting for Raven to exit timed out.", file=sys.stderr)
+    return 1
+
+
+def wait_for_parent_windows(parent_pid):
     import ctypes
     from ctypes import wintypes
 
@@ -92,12 +122,26 @@ def wait_for_parent(parent_pid):
 
 def main(argv=None):
     args = sys.argv[1:] if argv is None else argv
-    if len(args) not in (4, 5):
+    if len(args) not in (4, 5, 6):
         print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
         return 2
 
     uv_path, wheel_url, current_version, latest_version = args[:4]
-    if len(args) == 5:
+    # A 6th argument is a JSON argv the helper runs after a successful install:
+    # `raven serve` uses it to bring the gateway back up on the same port, so an
+    # open GUI can reconnect instead of dying with the process it asked to
+    # replace. The CLI passes 4 args and keeps the old exec-in-place behaviour.
+    relaunch = None
+    if len(args) == 6:
+        try:
+            relaunch = json.loads(args[5])
+        except ValueError:
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+        if not (isinstance(relaunch, list) and relaunch and all(isinstance(x, str) for x in relaunch)):
+            print("Unable to upgrade Raven: invalid upgrade helper arguments.", file=sys.stderr)
+            return 2
+    if len(args) >= 5:
         try:
             parent_pid = int(args[4])
         except (TypeError, ValueError):
@@ -161,6 +205,15 @@ def main(argv=None):
         return 1
 
     print(f"Raven upgraded: {current_version} -> {latest_version}")
+    if relaunch is not None:
+        try:
+            kwargs = {} if sys.platform == "win32" else {"start_new_session": True}
+            subprocess.Popen(relaunch, **kwargs)
+        except OSError as exc:
+            print(f"Raven upgraded, but could not restart it: {exc}.", file=sys.stderr)
+            return 1
+        print("Raven restarted.")
+        return 0
     print("Restart any other running Raven process to use the new version.")
     return 0
 
@@ -406,6 +459,78 @@ def _handoff_upgrade(
     except OSError as exc:
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
+
+
+@dataclass(frozen=True)
+class UpgradePlan:
+    current_version: str
+    release: ReleaseInfo
+    target: ToolInstallTarget
+
+
+def plan_upgrade() -> UpgradePlan:
+    """Resolve what an upgrade would install, or raise ``UpgradeError`` with why.
+
+    Network-bound (fetches the latest release), so callers on an event loop must
+    run it in a thread.
+    """
+    current_version = _current_version()
+    release = _fetch_latest_release()
+    if _version_key(current_version) >= _version_key(release.version):
+        raise UpgradeError(f"Raven {current_version} is already up to date")
+    if _is_editable_install():
+        raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
+    target = _uv_tool_target()
+    if target is None:
+        raise UpgradeError("This Raven installation is not managed by uv")
+    return UpgradePlan(current_version=current_version, release=release, target=target)
+
+
+def spawn_detached_upgrade(
+    plan: UpgradePlan,
+    *,
+    parent_pid: int,
+    relaunch: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> None:
+    """Start the upgrade helper as a process that outlives this one.
+
+    The CLI's ``_handoff_upgrade`` execs the helper in place, which a server
+    cannot do: it still owes its caller a reply. So the helper is detached
+    instead, told which pid to wait for, and optionally given a command to run
+    once the install lands (see the helper's 6th argument).
+    """
+    uv_value = shutil.which("uv")
+    if uv_value is None:
+        raise UpgradeError("uv was not found on PATH")
+    uv_path = _external_executable(uv_value, label="uv")
+    base_python = _external_executable(getattr(sys, "_base_executable", None), label="Raven base Python")
+
+    env = os.environ.copy()
+    env["UV_TOOL_DIR"] = str(plan.target.tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(plan.target.bin_dir)
+    if extra_env:
+        env.update(extra_env)
+
+    argv = [
+        str(base_python),
+        "-I",
+        "-c",
+        _upgrade_helper_bootstrap(),
+        str(uv_path),
+        plan.release.wheel_url,
+        plan.current_version,
+        plan.release.version,
+        str(parent_pid),
+    ]
+    if relaunch is not None:
+        argv.append(json.dumps(relaunch))
+
+    kwargs: dict[str, object] = {} if sys.platform == "win32" else {"start_new_session": True}
+    try:
+        subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
+    except OSError as exc:
+        raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
 
 
 def register(app: typer.Typer) -> None:

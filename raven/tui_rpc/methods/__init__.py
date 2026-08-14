@@ -44,9 +44,11 @@ from raven.tui_rpc.methods.command_dispatch import register_command_dispatch_met
 from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
 from raven.tui_rpc.methods.confirm import register_confirm_methods
+from raven.tui_rpc.methods.console import register_console_methods
 from raven.tui_rpc.methods.dag import register_dag_methods
 from raven.tui_rpc.methods.delegation import register_delegation_methods
 from raven.tui_rpc.methods.input import register_input_methods
+from raven.tui_rpc.methods.memory import register_memory_methods
 from raven.tui_rpc.methods.model import register_model_methods
 from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
@@ -209,6 +211,15 @@ def register_aligned_methods_except_system(
     # umbrella-vs-production parity holds whether or not it is passed.
     if question_broker is not None:
         register_question_methods(dispatcher, question_broker=question_broker)
+    # ext.list / cron.* / settings.* / channels.status / fs.* — the extension,
+    # schedule, settings and workspace surface. Fresh namespaces, so they do
+    # not collide with the stub group, and the loop factory is optional: a
+    # transport without one still gets the read-only handlers.
+    register_console_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    # memory.* — a read-only view onto the memory engine, which shipped
+    # without an RPC surface. (A matching subagent.* view waits for the
+    # transcript writer that would give it anything to list.)
+    register_memory_methods(dispatcher)
 
 
 __all__ = [
@@ -222,6 +233,8 @@ __all__ = [
     "register_config_methods",
     "register_subagents_methods",
     "register_dag_methods",
+    "register_console_methods",
+    "register_memory_methods",
     "register_session_methods",
     "register_terminal_methods",
     "register_stub_methods",
