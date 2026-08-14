@@ -10,7 +10,14 @@ from urllib.parse import urljoin
 import httpx
 import json_repair
 
-from raven.providers.base import LLMProvider, LLMResponse, ProviderHTTPError, ToolCallRequest, format_llm_error
+from raven.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderHTTPError,
+    ToolCallRequest,
+    format_llm_error,
+    send_max_tokens,
+)
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -99,7 +106,7 @@ class AzureOpenAIProvider(LLMProvider):
         deployment_name: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,
@@ -110,7 +117,15 @@ class AzureOpenAIProvider(LLMProvider):
                 self._sanitize_empty_content(messages),
                 _AZURE_MSG_KEYS,
             ),
-            "max_completion_tokens": max(1, max_tokens),  # Azure API 2024-10-21 uses max_completion_tokens
+            # None means "no opinion" and reaches here from chat_with_retry, which
+            # resolves it from generation settings; those default to None so the
+            # ceiling comes from the model catalogue.
+            "max_completion_tokens": max(
+                1,
+                send_max_tokens(getattr(self, "generation", None), deployment_name)
+                if max_tokens is None
+                else max_tokens,
+            ),  # Azure API 2024-10-21 uses max_completion_tokens
         }
 
         if self._supports_temperature(deployment_name, reasoning_effort):
@@ -130,7 +145,7 @@ class AzureOpenAIProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
         tool_choice: str | dict[str, Any] | None = None,

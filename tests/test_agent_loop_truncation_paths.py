@@ -207,3 +207,57 @@ def test_generation_settings_ships_with_no_opinion_on_max_tokens() -> None:
 
     assert GenerationSettings().max_tokens is None
     assert LLMResponse(content="x").max_tokens is None
+
+
+# ---------------------------------------------------------------------------
+# No provider may reintroduce a hardcoded ceiling in its signature
+# ---------------------------------------------------------------------------
+
+
+def test_no_provider_signature_hardcodes_a_max_tokens_default() -> None:
+    """A literal default here silently shadows configuration.
+
+    This is the original defect of this whole branch: `chat_stream` declared
+    `max_tokens: int = 4096`, the loop called it without that argument, and
+    every streaming request went out at 4096 no matter what was configured.
+    It was fixed on two providers and missed on three others, which then took
+    a `None` from `chat_with_retry` -- one of them into `max(1, None)`.
+
+    Asked of every subclass rather than of a list, so a provider added later
+    cannot reintroduce it quietly.
+    """
+    import inspect
+    import pkgutil
+    from importlib import import_module
+
+    import raven.providers as providers_pkg
+    from raven.providers.base import LLMProvider
+
+    for mod in pkgutil.iter_modules(providers_pkg.__path__):
+        try:
+            import_module(f"raven.providers.{mod.name}")
+        except Exception:
+            continue  # optional backends whose deps are absent
+
+    offenders: list[str] = []
+    for cls in _all_subclasses(LLMProvider):
+        # Test doubles are free to hardcode anything -- they never build a real
+        # request. Only shipped providers can shadow a user's configuration.
+        if not cls.__module__.startswith("raven."):
+            continue
+        for method_name in ("chat", "chat_stream", "chat_with_retry"):
+            method = cls.__dict__.get(method_name)
+            if method is None:
+                continue
+            param = inspect.signature(method).parameters.get("max_tokens")
+            if param is None or param.default is inspect.Parameter.empty:
+                continue
+            if isinstance(param.default, int) and not isinstance(param.default, bool):
+                offenders.append(f"{cls.__module__}.{cls.__qualname__}.{method_name} = {param.default}")
+
+    assert not offenders, "hardcoded max_tokens defaults shadow configuration: " + "; ".join(offenders)
+
+
+def _all_subclasses(cls: type) -> set[type]:
+    direct = set(cls.__subclasses__())
+    return direct.union(*(_all_subclasses(c) for c in direct)) if direct else direct
