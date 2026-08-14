@@ -97,12 +97,8 @@ def _risk_banner(config) -> str | None:
 
 def _build_gateway_channels(config) -> set[str]:
     """Build the ``allowed_channels`` set used by gateway's ``CronService`` — the
-    enabled IM channels only.
-
-    Derived from the channels config model: every ``config.channels`` field
-    whose value carries a truthy ``.enabled`` is part of the gateway's cron
-    partition, so a channel added to ``ChannelsConfig`` is covered without
-    touching this module.
+    enabled IM channels only (field-driven via ``enabled_channel_names``, so a
+    channel added to ``ChannelsConfig`` is covered without touching this module).
 
     The gateway owns cron jobs for its IM channels. It does NOT claim
     ``tui``/``cli`` jobs: those fire in the interactive process that created
@@ -110,8 +106,7 @@ def _build_gateway_channels(config) -> set[str]:
     delivers to the TUI rather than racing the gateway — fire-at-origin, no
     trigger-time re-routing.
     """
-    channels = config.channels
-    return {name for name in type(channels).model_fields if getattr(getattr(channels, name, None), "enabled", False)}
+    return config.channels.enabled_channel_names()
 
 
 async def _health_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

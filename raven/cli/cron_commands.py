@@ -67,6 +67,70 @@ def _open_service() -> CronService:
     return CronService(get_cron_dir() / "jobs.json", allowed_channels=None)
 
 
+_INTERACTIVE_CHANNELS = ("tui", "cli")
+
+
+def _resolve_delivery_binding(channel: str, to: str | None) -> tuple[str, str]:
+    """Validate --channel against the channels this install can actually
+    fire, and resolve --to at creation time. The stored pair IS the
+    delivery target (fire-at-origin), so an invalid binding must fail
+    here instead of becoming a job that never fires."""
+    from raven.config.loader import load_config
+
+    config = load_config()
+    legal = sorted(config.channels.enabled_channel_names()) + list(_INTERACTIVE_CHANNELS)
+    if channel not in legal:
+        console.print(f"[red]Unknown or disabled channel {channel!r}. Valid channels: {', '.join(legal)}[/red]")
+        raise typer.Exit(code=2)
+    if channel in _INTERACTIVE_CHANNELS:
+        return channel, to or "direct"
+    if to:
+        return channel, to
+    from raven.session.manager import SessionManager
+
+    chat_id = SessionManager(config.workspace_path).find_most_recent_chat_id(channel)
+    if not chat_id:
+        console.print(
+            f"[red]No recent session on {channel!r} to resolve --to from. "
+            f"Message the bot once on that channel, or pass --to explicitly.[/red]"
+        )
+        raise typer.Exit(code=2)
+    return channel, chat_id
+
+
+def _print_runner_status(service: CronService) -> None:
+    """Show which processes will actually fire the listed jobs — jobs.json
+    is shared state and this CLI process is not a runner, so without this
+    the banner can honestly say "next wake due" while nothing ever fires."""
+    import time
+
+    from raven.cli._gateway_lock import read_status as read_gateway_status
+    from raven.config.loader import load_config
+
+    gateway = read_gateway_status(now=time.time())
+    console.print(
+        f"[dim]Runners: {f'gateway (pid {gateway.pid})' if gateway else 'none'} — "
+        "tui/cli jobs fire in their own session while it is open[/dim]"
+    )
+
+    enabled_jobs = [j for j in service.list_jobs(include_disabled=True) if j.enabled]
+    im_channels = load_config().channels.enabled_channel_names()
+    im_jobs = [j for j in enabled_jobs if j.payload.channel in im_channels]
+    dead = [
+        j
+        for j in enabled_jobs
+        if j.payload.channel and j.payload.channel not in im_channels and j.payload.channel not in _INTERACTIVE_CHANNELS
+    ]
+    if im_jobs and gateway is None:
+        console.print(f"[yellow]⚠[/yellow] {len(im_jobs)} IM job(s) will not fire until `raven gateway` is running")
+    if dead:
+        names = ", ".join(sorted({j.payload.channel for j in dead}))
+        console.print(
+            f"[yellow]⚠[/yellow] {len(dead)} job(s) bound to disabled channel(s): {names} — "
+            "re-enable the channel, or delete and re-add with a valid --channel"
+        )
+
+
 def _format_schedule(schedule: CronSchedule) -> str:
     if schedule.kind == "at":
         if schedule.at_ms is None:
@@ -206,6 +270,7 @@ def cron_list(
         f"({enabled_count} enabled, {total_count - enabled_count} disabled), "
         f"next wake {next_wake_str}[/dim]"
     )
+    _print_runner_status(service)
 
     if not jobs:
         console.print("[dim]  (no jobs to list — pass --all to include disabled)[/dim]")
@@ -581,14 +646,20 @@ def cron_add(
         help="IANA timezone for cron expressions (e.g. 'Asia/Shanghai')",
     ),
     channel: str = typer.Option(
-        None,
+        ...,
         "--channel",
-        help="Delivery channel the job is bound to; defaults to 'cli'",
+        help=(
+            "Delivery channel the job is bound to (required): 'tui', 'cli', "
+            "or an enabled IM channel (e.g. 'telegram')"
+        ),
     ),
     to: str = typer.Option(
         None,
         "--to",
-        help="Recipient chat_id; defaults to 'direct' for the cli channel",
+        help=(
+            "Recipient chat_id. IM channels: defaults to the most recent "
+            "session on that channel; tui/cli: defaults to 'direct'"
+        ),
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts"),
 ):
@@ -610,11 +681,11 @@ def cron_add(
     years are rejected (the latter belong under ``--cron`` for
     calendar-anchored schedules).
 
-    When ``--channel`` / ``--to`` are omitted, the job is stored as
-    ``channel="cli"`` / ``to="direct"``. The stored (channel, to) is the
-    delivery target: the runner that owns that channel fires the job
-    (fire-at-origin), so a cli-bound job only fires while a cli session
-    is open.
+    The stored (channel, to) IS the delivery target — the runner that owns
+    that channel fires the job (fire-at-origin, no trigger-time
+    re-routing), so a tui/cli-bound job only fires while its session is
+    open. That is why ``--channel`` is required: an implicit default would
+    silently create a job the user expects to fire elsewhere.
     """
     # Validate schedule: exactly one of the three
     schedule_flags = [
@@ -679,10 +750,7 @@ def cron_add(
         schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
         delete_after = False
 
-    if channel is None:
-        channel = "cli"
-    if to is None:
-        to = "direct"
+    channel, to = _resolve_delivery_binding(channel, to)
 
     service = _open_service()
     try:
@@ -701,6 +769,10 @@ def cron_add(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=2)
     console.print(f"[green]✓[/green] Created job '{job.name}' (id: {job.id})")
+    if channel in _INTERACTIVE_CHANNELS:
+        console.print(f"[dim]  fires in the {channel} session (only while one is open)[/dim]")
+    else:
+        console.print(f"[dim]  fires via {channel} → chat {to}[/dim]")
 
 
 # ── config (cron section read/write) ──────────────────────────────────

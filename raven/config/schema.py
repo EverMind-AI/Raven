@@ -241,6 +241,12 @@ class ChannelsConfig(Base):
     wecom: WecomConfig = Field(default_factory=WecomConfig)
     weixin: WeixinConfig = Field(default_factory=WeixinConfig)
 
+    def enabled_channel_names(self) -> set[str]:
+        """Names of every enabled IM channel. Field-driven, so a channel
+        added to this model is covered without touching consumers (the
+        gateway cron partition, cron add's target validation)."""
+        return {name for name in type(self).model_fields if getattr(getattr(self, name, None), "enabled", False)}
+
 
 class AgentDefaults(Base):
     """Default agent configuration."""
