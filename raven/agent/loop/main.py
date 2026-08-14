@@ -1985,7 +1985,7 @@ class AgentLoop:
                 # no token callback and so lands here -- reports a cut-off tool
                 # call as a missing required field, which is the misdiagnosis
                 # this whole path exists to remove.
-                _, response.truncated = flag_truncation(
+                response.max_tokens, response.truncated = flag_truncation(
                     getattr(self.provider, "generation", None),
                     model=call_model,
                     finish_reason=response.finish_reason,
