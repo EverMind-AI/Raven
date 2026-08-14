@@ -284,6 +284,49 @@ def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memor
     assert "running" in r.stdout
 
 
+def test_doctor_answers_where_the_memories_are(healthy_config: Path, no_memory_server, tmp_path) -> None:
+    """Nothing used to answer this. The wizard printed the root once while
+    converging and no command showed it again, so a user asking "where are my
+    memories" had to read config.json by hand. Doctor is where that question
+    gets asked."""
+    from raven.config import update_everos as ue
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
+    no_memory_server.setattr(ue, "everos_owned", lambda: True)
+
+    r = runner.invoke(app, ["doctor"])
+
+    assert r.exit_code == 0, r.stdout
+    # Asserting the tail segment, not the whole path: rich wraps long paths and
+    # the full string is not contiguous in stdout.
+    assert "Memories:" in r.stdout
+    assert "mem-root" in r.stdout
+    assert "Address:" in r.stdout
+    assert "Managed by you" not in r.stdout
+
+
+def test_doctor_says_when_the_memories_are_not_ravens_to_touch(
+    healthy_config: Path, no_memory_server, tmp_path
+) -> None:
+    """A user-managed root is read-only, and doctor is the one place a user is
+    asking about state rather than being walked through a decision -- so it has to
+    say which of the two situations they are in."""
+    from raven.config import update_everos as ue
+
+    _configured(no_memory_server, "llm")
+    _capabilities(no_memory_server, llm=True)
+    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "theirs")
+    no_memory_server.setattr(ue, "everos_owned", lambda: False)
+
+    r = runner.invoke(app, ["doctor"])
+
+    out = " ".join(r.stdout.split())
+    assert "Managed by you" in out
+    assert "never writes or restarts it" in out
+
+
 def test_an_unbuilt_optional_role_is_reported_without_failing(healthy_config: Path, no_memory_server) -> None:
     """Without embedding the adapter searches lexically instead of semantically:
     weaker memory, not broken memory. Worth saying, not worth an exit code."""

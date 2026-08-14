@@ -329,7 +329,16 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
             # Inside the lock: losing the race means another process is already
             # spawning, and rewriting the declared address on the way out would
             # move the goalposts for a server that is starting or already up.
-            set_everos_api(host=parsed.hostname or "127.0.0.1", port=int(parsed.port or 80))
+            # Host and port come from the address the caller asked for, so what
+            # gets written is what will be probed -- one spelling, no resolver
+            # disagreement between the bind and the health check. The fallbacks
+            # are taken from the default URL rather than restated, so there is
+            # one place that decides how loopback is spelled.
+            _default = urlparse(DEFAULT_EVEROS_BASE_URL)
+            set_everos_api(
+                host=parsed.hostname or _default.hostname or "localhost",
+                port=int(parsed.port or _default.port or 18791),
+            )
             log_path = server_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a") as log_file:

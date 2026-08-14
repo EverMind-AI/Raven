@@ -72,6 +72,9 @@ class MemoryInfo:
     """
 
     backend: Optional[str] = None
+    root: Optional[str] = None
+    owned: bool = True
+    address: Optional[str] = None
     server_running: bool = False
     reports_capabilities: bool = False
     configured: list[str] = field(default_factory=list)
@@ -223,13 +226,21 @@ def _probe_memory(config: "RavenConfig") -> MemoryInfo:
     info = MemoryInfo(backend=backend)
     if backend != "everos":
         return info
-    from raven.config.update_everos import everos_role_configured
+    from raven.config.update_everos import everos_owned, everos_role_configured, everos_root
     from raven.plugin.memory.everos._health import (
         DEGRADING_SECTIONS,
         REQUIRED_SECTIONS,
         configured_base_url,
         probe_capabilities,
     )
+
+    # Which memories, and whose. Neither was reachable from any command before:
+    # the wizard printed the path once while converging and nothing showed it
+    # again, so "where are my memories" had no answer short of reading
+    # config.json by hand. This is the place that question gets asked.
+    info.root = str(everos_root())
+    info.owned = everos_owned()
+    info.address = configured_base_url(config)
 
     info.configured = [s for s in (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS) if everos_role_configured(s)]
     # Recall quality is decided by the embedding role in the user-level
@@ -261,6 +272,10 @@ def _render_memory_capabilities(memory: MemoryInfo) -> None:
 
     if memory.backend != "everos":
         return
+    console.print(f"  Memories:   {memory.root}")
+    if not memory.owned:
+        console.print("  [dim]Managed by you -- Raven reads this one and never writes or restarts it.[/dim]")
+    console.print(f"  Address:    {memory.address}")
     if not memory.server_running:
         console.print("  Server:     [dim]not running  (starts on demand)[/dim]")
         if memory.configured:

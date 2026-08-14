@@ -1452,15 +1452,18 @@ def _converge_owned_root(state: Any) -> bool:
         oc.console.print()
         oc.console.print(
             oc._t(
-                f"  [green]✓ Found Raven's EverOS service, running[/green]\n"
-                f"      memory dir  {state.root}\n"
-                f"      address     {state.declared_url}   [dim]<- a port an earlier "
-                f"Raven version used[/dim]\n"
-                f"  [dim]Moving it to the standard address {target}...[/dim]",
-                f"  [green]✓ 找到 Raven 管理的 EverOS 服务，正在运行[/green]\n"
-                f"      记忆目录   {state.root}\n"
-                f"      地址       {state.declared_url}   [dim]<- 早期版本用过的端口[/dim]\n"
-                f"  [dim]正在统一到标准端口 {target}...[/dim]",
+                # No memory dir here: nothing on this screen is the user's to
+                # decide -- convergence is automatic -- so a path they never
+                # chose and cannot act on is noise. `raven doctor` answers
+                # "where are my memories". The address and why it is moving stay,
+                # because they are what justifies stopping a running service.
+                f"  [green]✓ Found Raven's EverOS service, running at "
+                f"{state.declared_url}[/green]\n"
+                f"  [dim]That is a port an earlier Raven version used. "
+                f"Moving it to {target}...[/dim]",
+                f"  [green]✓ 找到 Raven 管理的 EverOS 服务，正在运行于 "
+                f"{state.declared_url}[/green]\n"
+                f"  [dim]那是早期版本用过的端口，正在统一到 {target}...[/dim]",
             ),
             highlight=False,
         )
