@@ -604,7 +604,7 @@ demoted to `APPEND`.
 The `ask_user` tool (`raven/agent/tools/ask_user.py`) pauses a turn to ask the
 user a structured question and awaits the reply. It hands the turn's
 conversation_id and prompt to a `QuestionBroker`
-(`raven/tui_rpc/question_broker.py`), which emits a `clarify.request`
+(`raven/rpc/question_broker.py`), which emits a `clarify.request`
 notification and blocks (on a future keyed by conversation_id) until an answer
 arrives, with a fail-safe default so the loop always gets a string back.
 `clarify.request` / `clarify.respond` is the ui-tui frontend's existing
@@ -613,7 +613,7 @@ multi-choice prompt contract (ClarifyPrompt), which the broker reuses.
 The answer reaches the broker by two routes:
 
 - TUI: the frontend renders the ClarifyPrompt and answers with a
-  `clarify.respond` RPC, handled in `raven/tui_rpc/methods/question.py`,
+  `clarify.respond` RPC, handled in `raven/rpc/methods/question.py`,
   which calls `broker.reply(...)`.
 - Channel: the broker renders the question as an outbound Text to the
   conversation's channel; the gateway inbound dispatch, on the next message for a

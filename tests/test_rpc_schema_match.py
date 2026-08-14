@@ -1,7 +1,7 @@
-"""Schema-match test: Pydantic models (raven.tui_rpc.models) ↔ OpenRPC schema.
+"""Schema-match test: Pydantic models (raven.rpc.models) ↔ OpenRPC schema.
 
 This test is the CI guardrail that catches drift between the single source of
-truth (``ui-tui/rpc-schema/openrpc.json``) and the Python-side Pydantic models.
+truth (``rpc-schema/openrpc.json``) and the Python-side Pydantic models.
 
 Strategy
 --------
@@ -34,9 +34,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from raven.tui_rpc.models import METHOD_MODELS
+from raven.rpc.models import METHOD_MODELS
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "ui-tui" / "rpc-schema" / "openrpc.json"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "rpc-schema" / "openrpc.json"
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +357,7 @@ def test_schema_match_turn_event_discriminated_union(schema: dict[str, Any]) -> 
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import TurnEvent
+    from raven.rpc.models import TurnEvent
 
     oas = schema["components"]["schemas"]["TurnEvent"]
     assert oas.get("discriminator", {}).get("propertyName") == "type"

@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from raven.cli.tui_commands import _build_tui_agent_loop
-from raven.tui_rpc.errors import InternalError, RpcError
+from raven.cli.tui_commands import _build_agent_loop
+from raven.rpc.errors import InternalError, RpcError
 
 # ---------------------------------------------------------------------------
-# _build_tui_agent_loop — narrow exception → InternalError(-32603)
+# _build_agent_loop — narrow exception → InternalError(-32603)
 # ---------------------------------------------------------------------------
 
 
@@ -23,7 +23,7 @@ from raven.tui_rpc.errors import InternalError, RpcError
 def _hermetic_preagentloop(monkeypatch):
     """Isolate the AgentLoop-ctor error path from ambient config.
 
-    _build_tui_agent_loop builds a lazy provider before constructing AgentLoop;
+    _build_agent_loop builds a lazy provider before constructing AgentLoop;
     with no provider configured (clean CI, or a prior test that reset config
     state) make_lazy_provider raises typer.Exit(1) before AgentLoop is reached,
     so the ctor-error classification under test never runs. Stub it so these
@@ -36,7 +36,7 @@ def _hermetic_preagentloop(monkeypatch):
 def _patch_agent_loop_to_raise(monkeypatch: pytest.MonkeyPatch, exc: BaseException) -> None:
     """Replace ``AgentLoop`` constructor so that calling it raises ``exc``.
 
-    ``_build_tui_agent_loop`` imports ``AgentLoop`` lazily from
+    ``_build_agent_loop`` imports ``AgentLoop`` lazily from
     ``raven.agent.loop`` inside the function body, so we patch the module
     attribute (not a copy in tui_commands).
     """
@@ -61,7 +61,7 @@ def test_typeerror_in_build_raises_internal_error_minus_32603(monkeypatch: pytes
     )
 
     with pytest.raises(InternalError) as excinfo:
-        _build_tui_agent_loop()
+        _build_agent_loop()
 
     assert excinfo.value.code == -32603
     assert excinfo.value.message == "internal_error"
@@ -81,7 +81,7 @@ def test_attributeerror_in_build_raises_internal_error_minus_32603(monkeypatch: 
     )
 
     with pytest.raises(InternalError) as excinfo:
-        _build_tui_agent_loop()
+        _build_agent_loop()
 
     assert excinfo.value.code == -32603
     data = excinfo.value.data or {}
@@ -103,7 +103,7 @@ def test_uncaught_exception_in_build_raises_internal_error_with_uncaught_reason(
     _patch_agent_loop_to_raise(monkeypatch, RuntimeError("boom"))
 
     with pytest.raises(InternalError) as excinfo:
-        _build_tui_agent_loop()
+        _build_agent_loop()
 
     assert excinfo.value.code == -32603
     data = excinfo.value.data or {}

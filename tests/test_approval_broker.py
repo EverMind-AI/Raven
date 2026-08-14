@@ -5,7 +5,7 @@ import hashlib
 
 import pytest
 
-from raven.tui_rpc.approval_broker import ApprovalBroker
+from raven.rpc.approval_broker import ApprovalBroker
 
 
 async def _wait_for_frame(frames: list[dict]) -> dict:

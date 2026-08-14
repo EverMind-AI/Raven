@@ -138,7 +138,7 @@ async def _install_skill_piece(contrib: dict) -> tuple[dict, Any]:
     hub_id = str(contrib.get("skillhub_id") or "")
     if not hub_id:
         raise PlugInstallError("catalog skill contribution carries no skillhub_id")
-    from raven.tui_rpc.methods.skillhub import skillhub_install
+    from raven.rpc.methods.skillhub import skillhub_install
 
     # if_absent: undoing this piece deletes the skill directory, so the
     # transaction must only ever delete a directory it created. Without it, an
@@ -153,7 +153,7 @@ async def _undo_skill_piece(piece: dict) -> None:
     name = str(piece.get("name") or "")
     if not name:
         return
-    from raven.tui_rpc.methods.skillhub import skillhub_remove
+    from raven.rpc.methods.skillhub import skillhub_remove
 
     try:
         await skillhub_remove({"name": name})

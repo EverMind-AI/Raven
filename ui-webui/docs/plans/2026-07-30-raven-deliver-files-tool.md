@@ -49,7 +49,7 @@
 | `raven/agent/tools/base.py` | `take_metadata()` hook, default `None` |
 | `raven/spine/events.py` | `ToolEvent.metadata` field |
 | `raven/agent/loop/main.py` | `deliverables` ctor param, registration guard, `_set_tool_context` whitelist entry, metadata pickup, `ToolEvent(metadata=...)` |
-| `raven/tui_rpc/spine.py` | serialize `metadata` on `tool.complete` |
+| `raven/rpc/spine.py` | serialize `metadata` on `tool.complete` |
 | `raven/web_rpc/server.py` | accept the store, register the two routes |
 | `raven/cli/gateway_commands.py` | build the store when the web channel is on; pass it to `AgentLoop` and to `WebSocketRpcServer` |
 | `raven/config/paths.py` | `get_deliverables_path()` |
@@ -344,7 +344,7 @@ git commit -m "feat(agent): add persisted deliverable token store"
 - Modify: `raven/agent/tools/base.py` (after `blocking_for`, around line 35)
 - Modify: `raven/spine/events.py:64-76` (the `ToolEvent` dataclass)
 - Modify: `raven/agent/loop/main.py:1727-1735` (tool-event payload) and `:2455-2462` (`ToolEvent` construction)
-- Modify: `raven/tui_rpc/spine.py:151-161` (the `tool.complete` payload)
+- Modify: `raven/rpc/spine.py:151-161` (the `tool.complete` payload)
 - Create: `tests/test_tool_metadata_channel.py`
 
 **Interfaces:**
@@ -403,7 +403,7 @@ def test_tool_event_carries_metadata() -> None:
     assert event.metadata == {"raven_delivery": {"files": []}}
 ```
 
-Append to `tests/test_tui_rpc_tool_events.py`:
+Append to `tests/test_rpc_tool_events.py`:
 
 ```python
 async def test_tool_complete_wire_payload_carries_metadata() -> None:
@@ -417,9 +417,9 @@ async def test_tool_complete_wire_payload_carries_metadata() -> None:
         async def emit(self, cid: str, frame: dict) -> None:
             emitted.append(frame)
 
-    from raven.tui_rpc.spine import TuiOutlet
+    from raven.rpc.spine import RpcOutlet
 
-    outlet = TuiOutlet(emitter=_Emitter())
+    outlet = RpcOutlet(emitter=_Emitter())
     await outlet.deliver(
         ToolEvent(
             phase=ToolPhase.COMPLETE,
@@ -434,11 +434,11 @@ async def test_tool_complete_wire_payload_carries_metadata() -> None:
     assert complete[0]["payload"]["metadata"] == {"raven_delivery": {"files": [], "invalid": []}}
 ```
 
-> **Note for the implementer:** read `tests/test_tui_rpc_tool_events.py` and `raven/tui_rpc/spine.py` first and adapt the outlet construction above to the real `TuiOutlet` signature and delivery entry point (the constructor takes the emitter plus a channel; the method that consumes a spine event may be named differently). Keep the assertion exactly as written — that is the contract under test.
+> **Note for the implementer:** read `tests/test_rpc_tool_events.py` and `raven/rpc/spine.py` first and adapt the outlet construction above to the real `RpcOutlet` signature and delivery entry point (the constructor takes the emitter plus a channel; the method that consumes a spine event may be named differently). Keep the assertion exactly as written — that is the contract under test.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/test_tool_metadata_channel.py tests/test_tui_rpc_tool_events.py -q`
+Run: `uv run pytest tests/test_tool_metadata_channel.py tests/test_rpc_tool_events.py -q`
 Expected: FAIL — `AttributeError: 'Tool' object has no attribute 'take_metadata'` and `TypeError: ToolEvent.__init__() got an unexpected keyword argument 'metadata'`
 
 - [ ] **Step 3: Add the hook to the tool base class**
@@ -503,7 +503,7 @@ And in the `on_tool` handler inside `run_turn` (`:2454-2462`), pass it through:
 
 - [ ] **Step 6: Serialize it on the wire**
 
-In `raven/tui_rpc/spine.py`, in the `tool.complete` payload at `:151-161`:
+In `raven/rpc/spine.py`, in the `tool.complete` payload at `:151-161`:
 
 ```python
                         "payload": {
@@ -516,18 +516,18 @@ In `raven/tui_rpc/spine.py`, in the `tool.complete` payload at `:151-161`:
 
 - [ ] **Step 7: Run the tests to verify they pass**
 
-Run: `uv run pytest tests/test_tool_metadata_channel.py tests/test_tui_rpc_tool_events.py tests/test_spine_events.py -q`
+Run: `uv run pytest tests/test_tool_metadata_channel.py tests/test_rpc_tool_events.py tests/test_spine_events.py -q`
 Expected: PASS
 
 - [ ] **Step 8: Guard against regressions elsewhere on the turn stream**
 
-Run: `uv run pytest tests/test_tui_rpc_turn_send.py tests/test_tui_rpc_spine.py tests/test_cli_repl_spine.py tests/test_spine_scheduler_lane.py -q`
+Run: `uv run pytest tests/test_rpc_turn_send.py tests/test_rpc_spine.py tests/test_cli_repl_spine.py tests/test_spine_scheduler_lane.py -q`
 Expected: PASS (the field is additive with a default; any failure here means a construction site was broken)
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add raven/agent/tools/base.py raven/spine/events.py raven/agent/loop/main.py raven/tui_rpc/spine.py tests/test_tool_metadata_channel.py tests/test_tui_rpc_tool_events.py
+git add raven/agent/tools/base.py raven/spine/events.py raven/agent/loop/main.py raven/rpc/spine.py tests/test_tool_metadata_channel.py tests/test_rpc_tool_events.py
 git commit -m "feat(spine): carry opt-in tool metadata on the turn stream"
 ```
 
@@ -957,9 +957,9 @@ def test_tui_agent_loop_receives_no_deliverables_store(patched_tui_loop_deps) ->
     """deliver_files is a web-UI-only tool (its download box exists only there),
     and registration is gated on the store's presence, so the TUI must pass
     nothing. Passing a store here would put the tool in the TUI model's schema."""
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     kwargs = patched_tui_loop_deps["agent_loop_kwargs"]
     assert kwargs.get("deliverables") is None
@@ -1428,7 +1428,7 @@ Expected: PASS (10 tests)
 
 - [ ] **Step 6: Verify no regression on the WS server**
 
-Run: `uv run pytest tests/test_tui_rpc_server_socket.py tests/test_cli_gateway_commands.py -q`
+Run: `uv run pytest tests/test_rpc_server_socket.py tests/test_cli_gateway_commands.py -q`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -1837,7 +1837,7 @@ Run:
 ```bash
 uv run pytest tests/test_deliverable_store.py tests/test_deliver_files_tool.py \
   tests/test_web_rpc_files_download.py tests/test_tool_metadata_channel.py \
-  tests/test_tui_rpc_tool_events.py tests/test_spine_events.py \
+  tests/test_rpc_tool_events.py tests/test_spine_events.py \
   tests/test_cli_tui_commands.py tests/test_cli_gateway_commands.py \
   tests/test_cli_agent_commands.py tests/integration/test_file_delivery_smoke.py -q
 ```
@@ -1876,6 +1876,6 @@ git commit -m "test(agent): smoke the deliver_files download round trip"
 **Spec coverage.** Spec section 5 (tool) -> Task 3; 5.1 (registration gate) -> Task 4 steps 3, 5, 6; 5.2 (channel gate) -> Task 3 plus Task 4 step 4; 5.3-5.5 -> Task 3; section 6 (manifest channel) -> Task 2; section 7 (routes and store) -> Tasks 1 and 5; section 8 (service proxy) -> Task 6; section 9 (frontend) -> Task 7; section 10 (error handling) -> covered by the tests in Tasks 3, 5 and the manual list in Task 8; section 11 (testing) -> Tasks 1-8; decision 6 (no size cap, size shown) -> `_human_size` in Task 3 plus the streaming anchor in Task 7; `AGENTS.md` §6 (domain terms) -> Task 4 step 7.
 
 **Known soft spots, called out rather than hidden.**
-- Task 2 step 1 and Task 4 step 1 contain a harness note instead of final test code, because the exact `TuiOutlet` entry point and the gateway test fixture must be read from the existing files first. The assertions are fixed; only the scaffolding is to be adapted.
+- Task 2 step 1 and Task 4 step 1 contain a harness note instead of final test code, because the exact `RpcOutlet` entry point and the gateway test fixture must be read from the existing files first. The assertions are fixed; only the scaffolding is to be adapted.
 - `ui-webui/service/` has no test runner, so Task 6 is gated by import and derivation checks plus the manual list, not by unit tests. Task 6 says so explicitly.
 - `DeliverableStore.register` scans linearly for the reuse lookup. Fine at the expected scale (tens of entries); revisit only if a registry ever grows large.

@@ -3,11 +3,11 @@
 The web channel streams a turn exactly like the TUI does — token.delta /
 thinking.delta / tool.start / tool.complete from the runner, message.complete /
 error from the sink after the render barrier. That machinery is already
-channel-parameterized in :mod:`raven.tui_rpc.spine`, so ``build_web`` reuses it
+channel-parameterized in :mod:`raven.rpc.spine`, so ``build_web`` reuses it
 with ``channel="web"``; the only genuinely web-specific piece is the WebSocket
 transport (:mod:`raven.web_rpc.server`).
 
-spine never imports web_rpc; web_rpc imports spine + tui_rpc.
+spine never imports web_rpc; web_rpc imports spine + rpc.
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from raven.rpc.spine import RpcOutlet, build_rpc_spine
+from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import Scheduler
 from raven.spine.delivery import DeliveryHub
-from raven.tui_rpc.spine import TuiOutlet, build_tui
-from raven.tui_rpc.subscriptions import SubscriptionEmitter
 
 # The web outlet is byte-for-byte the TUI outlet (same wire events, only the
 # channel name differs). Alias it so call sites read as "web" and a future
 # web-only divergence has a named seam to grow from.
-WebOutlet = TuiOutlet
+WebOutlet = RpcOutlet
 
 
 def build_web(
@@ -39,7 +39,7 @@ def build_web(
     """Assemble the web channel's spine: a streaming ``Scheduler`` + ``DeliveryHub``
     whose outlet maps spine events to the TUI wire protocol on ``emitter``, keyed
     by the ``web`` channel. Returns ``(scheduler, hub, turn_ids, teardown)`` — the
-    same shape as ``build_tui`` / ``build_gateway``.
+    same shape as ``build_rpc_spine`` / ``build_gateway``.
 
     This is a distinct spine from the gateway's own (``build_gateway``): the
     gateway runner is non-streaming (proactive replies are one Text), while the
@@ -47,7 +47,7 @@ def build_web(
     drive the same ``agent_loop`` (concurrency-safe: per-turn tool state is
     turn-local). See ui-webui/docs/plans/2026-07-23-p1-gateway-web-channel.md.
     """
-    return build_tui(
+    return build_rpc_spine(
         agent_loop,
         emitter,
         channel=channel,

@@ -207,7 +207,7 @@ appends a metadata record built from its **stale** in-memory dict, and last
 record wins on load — silently overwriting the web service's write.
 
 **R3 — concurrency.** `_active_turns` is keyed by session
-([turn.py:172](../../../raven/tui_rpc/methods/turn.py#L172)), so turns in
+([turn.py:172](../../../raven/rpc/methods/turn.py#L172)), so turns in
 different sessions run concurrently. C5 is what makes this safe: no shared
 mutable provider. Setting a session's model while that same session has a turn
 in flight is benign — `effective_model` was already captured (C1).

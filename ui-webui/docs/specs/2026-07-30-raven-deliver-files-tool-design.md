@@ -103,7 +103,7 @@ register each file in the persisted store -> opaque token
   +--> return value to the model: a short text summary (names + sizes)
   |
   +--> manifest via Tool.take_metadata() -> ToolEvent.metadata
-         -> tool.complete wire payload   (raven/tui_rpc/spine.py)
+         -> tool.complete wire payload   (raven/rpc/spine.py)
          -> ToolResultEndEvent.metadata  (ui-webui/service/)
          -> persisted ToolResultBlock.metadata
          -> inline card + Deliverables panel (survives reload)
@@ -280,8 +280,8 @@ Three additive changes:
 
 Then the two transport hops:
 
-- `raven/tui_rpc/spine.py:151-161` — the single `tool.complete` serialization
-  site, shared by the TUI and the web (`build_web` reuses `build_tui`,
+- `raven/rpc/spine.py:151-161` — the single `tool.complete` serialization
+  site, shared by the TUI and the web (`build_web` reuses `build_rpc_spine`,
   `raven/web_rpc/spine.py:33`) — adds `"metadata": out.metadata` to the payload.
 - `ui-webui/service/raven_gateway_agent.py:367-371` — merges it into the
   existing `ToolResultEndEvent(metadata=...)`, which today carries only
@@ -425,7 +425,7 @@ Python, `uv run pytest`, naming per repo section 5.1:
 | `tests/test_deliver_files_tool.py` | full manifest shape on the happy path; missing file / non-regular file / outside `allowed_dir` when `restrict_to_workspace` → `invalid` with reason; duplicate paths de-duplicated; re-delivery in one conversation reuses the token; two different paths get different tokens **not derivable from the path**; `channel != "web"` → refusal **and no filesystem access even for a path that exists** |
 | `tests/test_deliverable_store.py` | atomic write; a token still resolves after a reload (the core promise of decision 5); startup pruning drops entries whose file is gone |
 | `tests/test_web_rpc_files_download.py` | unknown token → 404; known token with a deleted file → 404 and entry pruned; happy path → 200 with the right `Content-Disposition` and byte-identical body; HEAD agrees with GET; archive → zip with the expected members, missing members skipped, all-missing → 404 |
-| `tests/test_tui_rpc_tool_events.py` (existing) | `ToolEvent.metadata` reaches the `tool.complete` payload |
+| `tests/test_rpc_tool_events.py` (existing) | `ToolEvent.metadata` reaches the `tool.complete` payload |
 | `tests/test_cli_tui_commands.py` (existing) | no store → the TUI does **not** register `deliver_files` |
 | `tests/test_cli_gateway_commands.py` (existing) | web channel enabled → registered; disabled → not registered |
 | `tests/integration/test_file_delivery_smoke.py` | real aiohttp app plus a real temp file: register, download, compare bytes |
@@ -455,7 +455,7 @@ guidance string.
 - `raven/spine/events.py` — `ToolEvent.metadata`.
 - `raven/agent/loop/main.py` — `deliverables` ctor param, registration guard,
   `_set_tool_context` whitelist, metadata pickup on the tool event.
-- `raven/tui_rpc/spine.py` — serialize `metadata` on `tool.complete`.
+- `raven/rpc/spine.py` — serialize `metadata` on `tool.complete`.
 - `raven/web_rpc/server.py` — register the two routes (GET + HEAD).
 - `raven/cli/gateway_commands.py` — build the store when the web channel is on
   and pass it to `AgentLoop`.

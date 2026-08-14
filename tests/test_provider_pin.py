@@ -128,8 +128,8 @@ def _cli_writes(tmp_path: Path, model: str, provider: str, pinned: str) -> tuple
 
 
 def _tui_writes(tmp_path: Path, model: str, provider: str, pinned: str) -> tuple[str, str] | None:
-    from raven.tui_rpc.errors import ConfigValidationError
-    from raven.tui_rpc.methods import config as config_methods
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods import config as config_methods
 
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"agents": {"defaults": {"provider": pinned}}}), encoding="utf-8")
@@ -157,7 +157,7 @@ def test_the_cli_and_the_picker_write_the_same_pair(monkeypatch, tmp_path, model
 
     path = tmp_path / "config.json"
     set_config_path(path)
-    monkeypatch.setattr("raven.tui_rpc.methods.config._config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.config._config_path", lambda: path)
     monkeypatch.setattr("raven.config.update.get_config_path", lambda: path)
 
     cli = _cli_writes(tmp_path, model, provider, pinned)
@@ -188,7 +188,7 @@ def test_no_surface_writes_the_default_model_without_deciding_its_pin():
     Scanned rather than asserted per call site, because the next writer is the
     one nobody thought of -- and **both spellings count**. An earlier version of
     this guard looked only for ``set_default_model`` and was therefore blind to
-    ``tui_rpc/methods/config.py``, which writes the same field through
+    ``rpc/methods/config.py``, which writes the same field through
     ``_set_nested`` and happens to be correct.
     """
     import ast

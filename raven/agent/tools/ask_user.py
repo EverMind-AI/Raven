@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from raven.agent.tools.base import Tool, ToolResult
-from raven.tui_rpc.question_broker import QuestionBroker
+from raven.rpc.question_broker import QuestionBroker
 
 # How many times an argument may be JSON-decoded before it is treated as text.
 _MAX_JSON_LAYERS = 3

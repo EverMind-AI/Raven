@@ -38,7 +38,7 @@ critical path for this feature.
 | D2 | A preset's editable fields are **name + description** only (plus `apiKey` for openai kind) | Everything else comes from the preset template, which is already correct and verified. |
 | D3 | Free probe on open; explicit test opt-in, async and cancellable | A cli test dispatches the real agent: it spends quota and may run 120s. It must never be implicit and must never wedge the UI. |
 | D4 | Secret entry copies `modelPicker.tsx`'s masking exactly | A second masking style in the same app is a defect surface. |
-| D5 | New `subagents.*` TUI-RPC namespace over the shared config/probe core | `config.set` is a scalar key/value RPC (`{key, value}` + `applied`/`previous`); a list of discriminated unions is not that shape. |
+| D5 | New `subagents.*` RPC namespace over the shared config/probe core | `config.set` is a scalar key/value RPC (`{key, value}` + `applied`/`previous`); a list of discriminated unions is not that shape. |
 | D6 | The install group is computed server-side | The web UI computes it client-side in `catalog.ts`; a second copy in TS is how the two surfaces drift. |
 
 ## Architecture
@@ -54,7 +54,7 @@ sub-agent semantics are reimplemented for the TUI:
 | `raven/agent/subagent/test_state.py` | `TestStateStore().load(entries)` / `.record(cfg, source, ok=, detail=, tested_at_ms=)` |
 
 ```
-/subagents (slash)  ->  subagentsHub overlay  ->  TUI-RPC subagents.*
+/subagents (slash)  ->  subagentsHub overlay  ->  RPC subagents.*
                                                       |
                         update_subagents / presets / probe / test_state
                                                       |
@@ -63,7 +63,7 @@ sub-agent semantics are reimplemented for the TUI:
 
 ### RPC surface
 
-Eight methods in a new `raven/tui_rpc/methods/subagents.py` exposing
+Eight methods in a new `raven/rpc/methods/subagents.py` exposing
 `register_subagents_methods(dispatcher, *, agent_loop_factory=None)`, wired into
 `register_aligned_methods` beside `register_config_methods` (the umbrella already
 forwards `agent_loop_factory`, so new helpers are picked up without registration
@@ -92,11 +92,11 @@ global client timeout, so no `timeout_s` plumbing is needed elsewhere. A blocked
 120s test still leaves the overlay responsive because the TS side awaits a
 promise rather than blocking a thread.
 
-Contract-first, per the existing pipeline: `ui-tui/rpc-schema/openrpc.json` is
+Contract-first, per the existing pipeline: `rpc-schema/openrpc.json` is
 the source of truth (each method gets `name` / `summary` / `params` / `result` /
 `errors`, as `skill.pin` does), `npm run gen:rpc` emits
 `ui-tui/src/rpc/generated.ts`, and `npm run lint:rpc` is the drift gate. Python
-adds eight `METHODS` entries to `raven/tui_rpc/models.py` with a
+adds eight `METHODS` entries to `raven/rpc/models.py` with a
 `Params`/`Result` pair each.
 
 ### Hot-apply
@@ -215,7 +215,7 @@ argument it runs non-interactively, mirroring `/skills pin <x>`:
 
 ## Testing
 
-**Python** - `tests/test_tui_rpc_subagents.py` (matches the `test_tui_rpc_*.py`
+**Python** - `tests/test_rpc_subagents.py` (matches the `test_rpc_*.py`
 convention):
 
 - `subagents.list` shape; `apiKey` absent and `has_api_key` correct

@@ -87,13 +87,13 @@ if TYPE_CHECKING:
     from raven.memory_engine.backend import MemoryBackend
     from raven.proactive_engine.schedulers.cron.service import CronService
     from raven.routing.router import ModelRouter
+    from raven.rpc.question_broker import QuestionBroker
     from raven.sandbox.debug_server import SandboxDebugServer
     from raven.skill_hub import SkillHubClient
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
     from raven.token_wise.base import UsageSnapshot
     from raven.token_wise.registry import StrategyRegistry
-    from raven.tui_rpc.question_broker import QuestionBroker
 
 
 @dataclass
@@ -740,7 +740,7 @@ class AgentLoop:
 
         The park is the second line of defence, not the first: the RPC
         rejects a switch outright when the caller's own session has a turn
-        in flight (``is_turn_active`` in ``tui_rpc.methods.config``). This
+        in flight (``is_turn_active`` in ``rpc.methods.config``). This
         covers what that guard cannot see -- a caller that passes no
         ``session_id``, and the proactive turns that run in their own lanes.
         Note the RPC still answers ``applied: True`` and the config file is

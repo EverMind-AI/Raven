@@ -431,10 +431,10 @@ def register(app: typer.Typer) -> None:
                 web_scheduler = None
                 web_hub = None
                 if web_cfg.enabled:
-                    from raven.tui_rpc.dispatcher import Dispatcher
-                    from raven.tui_rpc.methods.system import register_system_methods
-                    from raven.tui_rpc.methods.turn import clear_active, register_turn_methods
-                    from raven.tui_rpc.subscriptions import SubscriptionEmitter
+                    from raven.rpc.dispatcher import Dispatcher
+                    from raven.rpc.methods.system import register_system_methods
+                    from raven.rpc.methods.turn import clear_active, register_turn_methods
+                    from raven.rpc.subscriptions import SubscriptionEmitter
                     from raven.web_rpc.server import WebSocketRpcServer
                     from raven.web_rpc.spine import build_web
 
@@ -589,8 +589,8 @@ def register(app: typer.Typer) -> None:
                 # so the live turn's real inbound Source is still in gw_sources
                 # (keyed by conversation id) — reuse it so a topic / thread address
                 # is exact, rather than reconstructing it from the conversation id.
+                from raven.rpc.question_broker import QuestionBroker
                 from raven.spine import Text as _Text
-                from raven.tui_rpc.question_broker import QuestionBroker
 
                 async def _question_to_channel(frame: dict) -> None:
                     params = frame.get("params", {})

@@ -20,7 +20,7 @@ def test_cron_delivered_event_pydantic_validates() -> None:
     """``CronDeliveredEvent`` SHALL be a member of the ``TurnEvent``
     discriminated union with payload {job_id, name, text, fired_at}.
     """
-    from raven.tui_rpc.models import CronDeliveredEvent
+    from raven.rpc.models import CronDeliveredEvent
 
     event = CronDeliveredEvent(
         type="cron.delivered",
@@ -44,7 +44,7 @@ def test_cron_delivered_event_in_turn_event_union() -> None:
     """
     from pydantic import TypeAdapter
 
-    from raven.tui_rpc.models import CronDeliveredEvent, TurnEvent
+    from raven.rpc.models import CronDeliveredEvent, TurnEvent
 
     adapter = TypeAdapter(TurnEvent)
     parsed = adapter.validate_python(

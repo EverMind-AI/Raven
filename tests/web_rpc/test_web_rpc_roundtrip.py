@@ -8,7 +8,7 @@ drives the full path that ``build_web`` + the gateway wiring stand up:
     turn.send      -> {turn_id, accepted}; message.start streams back
     (simulated turn events) -> token.delta / message.complete reach the client
 
-The spine turn execution itself is covered elsewhere (test_tui_rpc_spine); here a
+The spine turn execution itself is covered elsewhere (test_rpc_spine); here a
 FakeScheduler stands in for the agent loop, and streamed events are injected
 through the real SubscriptionEmitter so the WS transport + coalesce loop +
 broadcast are all exercised together.
@@ -24,10 +24,10 @@ from contextlib import closing
 import aiohttp
 import pytest
 
-from raven.tui_rpc.dispatcher import Dispatcher
-from raven.tui_rpc.methods.system import register_system_methods
-from raven.tui_rpc.methods.turn import register_turn_methods
-from raven.tui_rpc.subscriptions import SubscriptionEmitter
+from raven.rpc.dispatcher import Dispatcher
+from raven.rpc.methods.system import register_system_methods
+from raven.rpc.methods.turn import register_turn_methods
+from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.web_rpc.server import WebSocketRpcServer
 
 
@@ -52,7 +52,7 @@ class _FakeScheduler:
 
 @pytest.fixture(autouse=True)
 def _clear_active_turns():
-    from raven.tui_rpc.methods import turn as _turn_mod
+    from raven.rpc.methods import turn as _turn_mod
 
     _turn_mod._active_turns.clear()
     yield

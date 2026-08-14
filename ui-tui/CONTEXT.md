@@ -5,7 +5,7 @@
 > ChatStream, Composer, Slash Command System, …) — owner @sheng.zhao to select.
 
 The terminal front-end (`ui-tui/`, React/Ink). Renders the chat transcript and overlays;
-talks to the Runtime only via TUI-RPC. Single-session per client in v0.1.
+talks to the Runtime only via the RPC protocol. Single-session per client in v0.1.
 
 ## Language
 

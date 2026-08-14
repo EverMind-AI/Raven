@@ -50,7 +50,7 @@ than smoothed over:
 
 - The tool surface of the gateway `web` channel: what reaches the browser between
   `turn.send` and `message.complete`, and what the browser can send back.
-- The wire protocol between the gateway (`raven/tui_rpc/spine.py` outlet, shared
+- The wire protocol between the gateway (`raven/rpc/spine.py` outlet, shared
   with the TUI) and the service.
 - The service's event translation (`ui-webui/service/raven_gateway_agent.py`) and
   its REST surface.
@@ -78,14 +78,14 @@ the user is misinformed; **C** = works but is hard to read.
 | G3 | The service ignores every frame that is not `method == "event"` | A | `ui-webui/service/raven_gateway_agent.py:148` |
 | G4 | No answer UI, and the only inbound path rejects an answer with 409 | A | `ui-webui/service/agentscope/app/_router/_chat.py:154` |
 | G5 | `deliver_files` inline card crashes the chat route | A | `ui-webui/frontend/src/components/chat/MessageBubble.tsx:462` |
-| G6 | `MediaOut` is eaten, so tool-produced media never reaches the user | A | `raven/tui_rpc/spine.py:254` |
-| G7 | `Notice` is eaten, so mid-tool progress never reaches the user | C | `raven/tui_rpc/spine.py:254` |
+| G6 | `MediaOut` is eaten, so tool-produced media never reaches the user | A | `raven/rpc/spine.py:254` |
+| G7 | `Notice` is eaten, so mid-tool progress never reaches the user | C | `raven/rpc/spine.py:254` |
 | G8 | `tool.complete` carries no success/failure signal | B | `raven/spine/events.py:64-81` |
 | G9 | The service drops the tool's `display` label | B | `ui-webui/service/raven_gateway_agent.py:369-374` |
 | G10 | The default renderer never shows call input | C | `ui-webui/frontend/src/components/chat/tool-renderers/DefaultRenderer.tsx:71` |
 | G11 | The renderer registry is keyed on AgentScope tool names | C | `ui-webui/frontend/src/components/chat/tool-renderers/index.tsx:24-34` |
 | G12 | Stop does not reach the gateway | A | `ui-webui/service/raven_gateway_agent.py:196-206` |
-| G13 | `turn.send` is text-only, so uploads never reach the agent | B | `raven/tui_rpc/models.py:552-557` |
+| G13 | `turn.send` is text-only, so uploads never reach the agent | B | `raven/rpc/models.py:552-557` |
 
 ### G1 - ask_user questions are dropped on the web channel
 
@@ -119,7 +119,7 @@ broker prompts, is inert there.
 ### G2 - the web dispatcher never registers clarify.respond
 
 `register_question_methods` is called only from the TUI method umbrella
-(`raven/tui_rpc/methods/__init__.py:173`). The gateway builds the web dispatcher
+(`raven/rpc/methods/__init__.py:173`). The gateway builds the web dispatcher
 by hand and registers system, turn and config methods only. Even a client that
 knew the contract has no method to call.
 
@@ -170,7 +170,7 @@ crash, because it takes `t` as a prop instead of calling the hook.
 
 ### G6 - MediaOut is eaten
 
-`TuiOutlet.deliver` handles `Reasoning`, `ToolEvent`, `Text` and `EpisodeStart`,
+`RpcOutlet.deliver` handles `Reasoning`, `ToolEvent`, `Text` and `EpisodeStart`,
 and drops `Notice` and `MediaOut` with the comment *"no wire event today ... a
 known gap, deferred"*. The `message` tool's `media` argument becomes a `MediaOut`
 (`raven/agent/loop/main.py:2826-2846`), and that is also the documented route for
@@ -278,7 +278,7 @@ reach the agent.
    Rejected: a new top-level wire event type. It would need a matching branch in
    the TUI client, an `openrpc.json` entry and cross-language schema parity, for
    a payload the custom lane already carries. The confirm/question pair is
-   deliberately outside that contract today (`raven/tui_rpc/methods/question.py`
+   deliberately outside that contract today (`raven/rpc/methods/question.py`
    docstring) and stays outside it.
 
 3. **The answer travels on its own REST route, not through /chat/**
@@ -323,7 +323,7 @@ reach the agent.
    lost and the curated label is what the user reads first.
 
 8. **A new `media` wire event, emitted by the shared outlet** (2026-08-08) -
-   `TuiOutlet.deliver` stops eating `MediaOut` and emits
+   `RpcOutlet.deliver` stops eating `MediaOut` and emits
    `{"type": "media", "payload": {"files": [{path, mime, kind}]}}`. Bytes do not
    travel on the wire: the payload is a reference, and the browser fetches
    content through the deliverable download route, which already exists and is
@@ -423,7 +423,7 @@ belong to that contract (see decision 2).
 - **`ok` is a prefix convention** (decision 6). It will mark some genuine
   failures green. That is strictly better than marking all of them green, and the
   doc says so rather than implying the signal is exact.
-- **Shared outlet.** Decisions 8 and 9 change `TuiOutlet`, which the TUI also
+- **Shared outlet.** Decisions 8 and 9 change `RpcOutlet`, which the TUI also
   uses. The TUI must tolerate the new event types before they are emitted.
 
 ## 9. Deferred
@@ -452,4 +452,4 @@ belong to that contract (see decision 2).
   `deliver_files` call without a crash, an `ask_user` question answered from the
   card, a failing tool rendered as an error, and a stop that actually stops.
 - **Regression.** The TUI must be exercised after the outlet changes - it shares
-  `TuiOutlet` and must ignore the new event types rather than throwing.
+  `RpcOutlet` and must ignore the new event types rather than throwing.

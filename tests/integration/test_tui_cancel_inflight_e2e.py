@@ -8,7 +8,7 @@ empty subscriber list and silently dropped.
 
 This drives the real ``RpcServer`` over a unix socket + a real
 ``SubscriptionEmitter`` (NOT an AsyncMock stub), with the turn path on the
-spine (``build_tui`` scheduler/hub/sink) and a fake streaming agent loop whose
+spine (``build_rpc_spine`` scheduler/hub/sink) and a fake streaming agent loop whose
 ``run_turn`` parks for the cancelled turn and streams a token for the
 next. Pre-fix the client never receives turn-2's ``message.complete``; post-fix
 it does — proving the per-turn cancel leaves the session subscription intact
@@ -26,12 +26,12 @@ from pathlib import Path
 
 import pytest
 
+from raven.rpc.dispatcher import Dispatcher
+from raven.rpc.methods.turn import clear_active, register_turn_methods
+from raven.rpc.server import RpcServer
+from raven.rpc.spine import build_rpc_spine
+from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import StreamDelta, TurnOutcome, Usage
-from raven.tui_rpc.dispatcher import Dispatcher
-from raven.tui_rpc.methods.turn import clear_active, register_turn_methods
-from raven.tui_rpc.server import RpcServer
-from raven.tui_rpc.spine import build_tui
-from raven.tui_rpc.subscriptions import SubscriptionEmitter
 
 SESSION_KEY = "tui:default"
 
@@ -108,7 +108,7 @@ async def _drain_events(client: socket.socket, *, duration: float = 0.6) -> list
 
 @pytest.fixture(autouse=True)
 def _clear_active_turns():
-    from raven.tui_rpc.methods import turn as _turn_mod
+    from raven.rpc.methods import turn as _turn_mod
 
     _turn_mod._active_turns.clear()
     yield
@@ -122,7 +122,7 @@ async def test_turn2_streams_after_turn1_cancel_over_real_rpc() -> None:
     """Cancel turn 1 mid-stream, then turn 2 must still reach the client.
 
     End-to-end through the real RpcServer + SubscriptionEmitter, with the turn
-    path submitting onto the spine (build_tui). The single per-session
+    path submitting onto the spine (build_rpc_spine). The single per-session
     subscription (subscribe-once) must survive the turn-1 cancel so turn 2's
     ``message.complete`` is delivered.
     """
@@ -136,7 +136,7 @@ async def test_turn2_streams_after_turn1_cancel_over_real_rpc() -> None:
         disp = Dispatcher()
         server = RpcServer(req_fd, notif_fd, disp)
         emitter = SubscriptionEmitter(send_frame=server.send_frame)
-        scheduler, _hub, turn_ids, teardown = build_tui(FakeStreamingAgent(), emitter, on_turn_end=clear_active)
+        scheduler, _hub, turn_ids, teardown = build_rpc_spine(FakeStreamingAgent(), emitter, on_turn_end=clear_active)
         register_turn_methods(disp, emitter=emitter, scheduler=scheduler, turn_ids=turn_ids)
 
         serve_task = asyncio.create_task(server.serve_forever())

@@ -99,7 +99,7 @@ ui-webui/
 - 唯一长驻多源守护进程 = **`raven gateway`**(`raven/cli/gateway_commands.py:114`,内层 `run()` `:355`),已拥有 `agent.run()` keep-alive + cron + heartbeat + sentinel + 单例锁。
 - spine = `Scheduler`(`raven/spine/scheduler.py:327` `submit`)+ `DeliveryHub`(`raven/spine/delivery.py:81`,**按 `source.channel` 路由,非广播**)+ `Outlet`(`delivery.py:53-64`)。
 - **没有现成 web/HTTP/WS gateway** —— 要新增传输,但**不用碰 spine**。
-- 最干净接入:新增 **`WebOutlet`**(`Outlet` + `SupportsStreaming`,照抄 `TuiOutlet` `raven/tui_rpc/spine.py:116`)+ 复用 `SubscriptionEmitter`(`raven/tui_rpc/subscriptions.py:40`)+ `build_web(...)` 装配(照抄 `build_gateway` `raven/cli/_gateway_spine.py:113`),挂进 `raven gateway`。
+- 最干净接入:新增 **`WebOutlet`**(`Outlet` + `SupportsStreaming`,照抄 `RpcOutlet` `raven/rpc/spine.py:116`)+ 复用 `SubscriptionEmitter`(`raven/rpc/subscriptions.py:40`)+ `build_web(...)` 装配(照抄 `build_gateway` `raven/cli/_gateway_spine.py:113`),挂进 `raven gateway`。
 - 入站:`TurnRequest(origin=USER, source=Source(channel="web", ...))` → `scheduler.submit`。
 - **要收 cron/sentinel/heartbeat 输出**:因 hub 按 `source.channel` 路由,必须让这些生产者的 deliverable 的 `source.channel == "web"` —— 用 `make_on_cron_job(default_channel="web")`(`_cron_handler.py:110`)、`dispatcher.set_post(web_hub.post)`(`.../sentinel/executor/dispatcher.py:73`)、heartbeat 目标 `channel="web"`、`agent.subagents.set_submit(web_scheduler.submit)`。
 

@@ -1,6 +1,6 @@
 """Tests for the ``tui-cron-tool`` wiring.
 
-Validates that ``_build_tui_agent_loop`` wires ``cron_service``,
+Validates that ``_build_agent_loop`` wires ``cron_service``,
 constructs the cron callback with the MessageTool swap wrapper, and starts
 the cron tick loop.
 """
@@ -15,7 +15,7 @@ import pytest
 
 @pytest.fixture
 def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    """Patch everything ``_build_tui_agent_loop`` imports lazily so we can
+    """Patch everything ``_build_agent_loop`` imports lazily so we can
     capture AgentLoop ctor kwargs + cron callback assignment without
     spinning up real provider / SessionManager / asyncio loop.
 
@@ -106,13 +106,13 @@ def patched_tui_build_deps(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
 
 def test_tui_agent_loop_receives_cron_service(patched_tui_build_deps) -> None:
-    """``_build_tui_agent_loop`` SHALL pass a ``CronService`` instance to
+    """``_build_agent_loop`` SHALL pass a ``CronService`` instance to
     ``AgentLoop(cron_service=...)`` so that ``CronTool`` auto-registers
     per ``agent/loop/main.py:314-321``.
     """
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     kwargs = patched_tui_build_deps["agent_loop_kwargs"]
     assert "cron_service" in kwargs, "AgentLoop ctor must receive cron_service kwarg for CronTool auto-register"
@@ -130,35 +130,33 @@ def test_tui_cron_service_allowed_channels_is_tui(patched_tui_build_deps) -> Non
     """TUI process's ``CronService`` SHALL be scoped to ``allowed_channels={"tui"}``
     so it only claims TUI-channel cron jobs and does not race gateway IM crons.
     """
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     cls = patched_tui_build_deps["cron_service_class"]
-    assert len(cls.instances) >= 1, "CronService should be constructed once in _build_tui_agent_loop"
+    assert len(cls.instances) >= 1, "CronService should be constructed once in _build_agent_loop"
     cron = cls.instances[0]
     assert cron.allowed_channels == {"tui"}
 
 
 # ---------------------------------------------------------------------------
-# 2.3 — cron.on_job is wired in run(), not in _build_tui_agent_loop
+# 2.3 — cron.on_job is wired in run(), not in _build_agent_loop
 # ---------------------------------------------------------------------------
 
 
 def test_tui_cron_on_job_wired_in_run_not_build(patched_tui_build_deps) -> None:
     """``cron.on_job`` is wired in the RPC server run loop once the spine
     scheduler exists (a reminder submits a CRON turn through it and its
-    reply is fanned out as cron.delivered). ``_build_tui_agent_loop`` only builds
+    reply is fanned out as cron.delivered). ``_build_agent_loop`` only builds
     the cron service — it must NOT set on_job (the scheduler doesn't exist yet)."""
-    from raven.cli.tui_commands import _build_tui_agent_loop
+    from raven.cli.tui_commands import _build_agent_loop
 
-    _build_tui_agent_loop()
+    _build_agent_loop()
 
     cls = patched_tui_build_deps["cron_service_class"]
     cron = cls.instances[0]
-    assert cron.on_job is None, (
-        "on_job must be wired in run() (needs the spine scheduler), not in _build_tui_agent_loop"
-    )
+    assert cron.on_job is None, "on_job must be wired in run() (needs the spine scheduler), not in _build_agent_loop"
 
 
 # The message-tool-swap wrapper and the bus outbound handler are gone

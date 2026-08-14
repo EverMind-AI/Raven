@@ -67,7 +67,7 @@ LEDGER: dict[str, Difference] = {
         reason=(
             "Sentinel hook. The gateway process owns Sentinel proactivity in "
             "v0.1 and the REPL builds its own stack; the TUI deliberately wires "
-            "neither (see the _build_tui_agent_loop docstring)."
+            "neither (see the _build_agent_loop docstring)."
         ),
     ),
     "on_user_inbound": Difference(
