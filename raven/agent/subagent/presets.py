@@ -66,9 +66,19 @@ from typing import Any
 #             (-a is a root-level flag: `codex exec -a never` exits 2. And
 #             --skip-git-repo-check is required or every spawn fails at raven's
 #             non-git workspace cwd. Verified against codex-cli 0.144.5.)
-#   openclaw: openclaw agent --local --json --session-id {agent_id} -m {prompt}
+#   openclaw: openclaw agent --json --session-id {agent_id} -m {prompt}
 #             (create and resume are the same call; --json is required because
-#             plain output interleaves ANSI plugin diagnostics on stdout)
+#             plain output interleaves ANSI plugin diagnostics on stdout.
+#             NOT --local, which the shipped preset used to carry: it bypasses
+#             the OpenClaw Gateway and resolves models in-process, so it needs
+#             every model registered under models.providers[].models[] -- a table
+#             an install that talks to its gateway never has to fill in.
+#             Measured: the same prompt fails through --local with a chain of
+#             `Unknown model ... no matching models.providers["openrouter"]`
+#             failovers and succeeds in reaching the gateway without it. The
+#             general rule this is an instance of: invoke an external agent the
+#             way its user already runs it, rather than through a flag that
+#             bypasses their working setup.)
 #   opencode: opencode run --format json --auto {prompt}, resume with
 #             --session {agent_id} (--format json is the only output carrying the
 #             session id, so anything else is non-resumable)

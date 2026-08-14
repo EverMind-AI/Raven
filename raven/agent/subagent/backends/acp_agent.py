@@ -165,9 +165,21 @@ class AcpAgentBackend:
         started = time.monotonic()
 
         with external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span:
-            connection = await get_pool().acquire(name=self.name, command=self.command, cwd=cwd, env=dict(self.env))
-            client = connection.client
+            # The entry's own budget, not the pool's default: `readyTimeoutMs` is
+            # documented as how long the `initialize` handshake may take, and
+            # after the handshake moved into the connection it was the one thing
+            # that stopped honouring it -- so an operator who raised it for a
+            # slow adapter had `verify` pass at 150s and every dispatch fail at
+            # the module constant.
             budget = max(1.0, self.ready_timeout_ms / 1000)
+            connection = await get_pool().acquire(
+                name=self.name,
+                command=self.command,
+                cwd=cwd,
+                env=dict(self.env),
+                ready_timeout_s=budget,
+            )
+            client = connection.client
 
             session_id, resumed = await self._open_session(client, cwd=cwd, skey=skey, handle=handle, budget=budget)
             record_session(span, session_id=session_id, resumed=resumed)
