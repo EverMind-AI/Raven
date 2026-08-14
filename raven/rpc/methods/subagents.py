@@ -44,6 +44,27 @@ def _as_configs(entries: list[dict]) -> list[Any]:
     return list(SubagentsConfig(third_party=entries).third_party)
 
 
+def _upgrade_transport(cfg: Any, source: str) -> str | None:
+    """The transport this entry's preset moved to, or ``None`` when it is current.
+
+    A preset fixes one transport per agent, and that choice can change in a
+    release: ``codex`` used to be reached by shelling out to its CLI and is now
+    reached over ACP. A configured entry is never rewritten underneath the user --
+    its command would change and every session handle bound to it would stop
+    meaning anything -- so the mismatch is surfaced here and acted on by hand.
+
+    Only for configured rows: a preset row *is* the current transport.
+    """
+    if source != "config":
+        return None
+    preset_name = getattr(cfg, "preset", None)
+    preset = THIRD_PARTY_SUBAGENT_PRESETS.get(preset_name) if preset_name else None
+    if preset is None:
+        return None
+    preset_kind = preset.get("kind")
+    return preset_kind if preset_kind != getattr(cfg, "kind", None) else None
+
+
 def _group(cfg: Any, probe_status: str) -> str:
     """Which install group a row belongs to.
 
@@ -143,6 +164,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "enabled": bool(getattr(cfg, "enabled", True)) if source == "config" else False,
                 "configured": source == "config",
                 "group": _group(cfg, result.status),
+                "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
                 "probe_detail": result.detail,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),

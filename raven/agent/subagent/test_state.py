@@ -41,6 +41,14 @@ _CLI_FIELDS = (
     "timeout",
 )
 _OPENAI_FIELDS = ("base_url", "model", "api_key")
+# An acp entry declares only how to launch its server; everything else about how
+# it runs comes from the handshake. Listed separately rather than folded into the
+# cli tuple because falling through to that one would read every field as absent
+# and give two different acp agents the same digest -- which would hand agent A's
+# remembered verdict to agent B.
+_ACP_FIELDS = ("command", "cwd", "env", "ready_timeout_ms", "timeout")
+
+_FIELDS_BY_KIND = {"cli": _CLI_FIELDS, "openai": _OPENAI_FIELDS, "acp": _ACP_FIELDS}
 
 
 def default_state_path() -> Path:
@@ -66,8 +74,21 @@ def fingerprint(cfg: Any) -> str:
     so that fixing a rejected key clears the old failure, and only the digest is
     ever written, never the key.
     """
-    fields = _OPENAI_FIELDS if getattr(cfg, "kind", None) == "openai" else _CLI_FIELDS
-    payload = {name: getattr(cfg, name, None) for name in fields}
+    kind = getattr(cfg, "kind", None)
+    fields = _FIELDS_BY_KIND.get(kind)
+    if fields is None:
+        # An unrecognised kind has no field list to read, and defaulting to the
+        # cli one would read every field as absent and collapse every such kind
+        # onto a single digest. The kind name alone at least keeps them apart.
+        # Unreachable through the validated config path; here because this
+        # function is duck-typed on its argument.
+        payload: dict[str, Any] = {"kind": kind}
+    else:
+        # Deliberately not including `kind` for a known one: adding a key would
+        # change every stored digest and silently discard every remembered
+        # verdict on upgrade, and the per-kind field names already differ enough
+        # that two kinds cannot collide.
+        payload = {name: getattr(cfg, name, None) for name in fields}
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

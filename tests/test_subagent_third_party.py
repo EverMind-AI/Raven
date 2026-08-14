@@ -467,24 +467,26 @@ class TestSharedRosterHelpers:
         stateless = ThirdPartyCliSubagentConfig(name="codex", command="codex exec {prompt}")
         boxed = ThirdPartyCliSubagentConfig(name="boxed", command="cat", reads_local_files=False)
         remote = ThirdPartyOpenAISubagentConfig(name="miro", base_url="http://x", model="m")
-        assert third_party_agent_meta(stateful) == AgentMeta("claude_code", "Claude Code", True, True)
-        assert third_party_agent_meta(stateless) == AgentMeta("codex", "", False, True)
-        assert third_party_agent_meta(boxed) == AgentMeta("boxed", "", False, False)
+        assert third_party_agent_meta(stateful) == AgentMeta("claude_code", "Claude Code", True, True, False)
+        assert third_party_agent_meta(stateless) == AgentMeta("codex", "", False, True, False)
+        assert third_party_agent_meta(boxed) == AgentMeta("boxed", "", False, False, False)
         # An HTTP endpoint is remote by default, so it reads no local path.
-        assert third_party_agent_meta(remote) == AgentMeta("miro", "", False, False)
+        assert third_party_agent_meta(remote) == AgentMeta("miro", "", False, False, False)
 
     def test_listing_degrades_to_the_bare_name_without_a_description(self) -> None:
         listing = format_agent_listing([AgentMeta("a", "does A", False, True), AgentMeta("b", "", True, False)])
-        assert listing == "a [stateless, local-files] (does A); b [stateful, no-local-files]"
+        assert listing == (
+            "a [stateless, local-files, no-progress] (does A); b [stateful, no-local-files, no-progress]"
+        )
 
     def test_listing_renders_both_capabilities_for_every_agent(self) -> None:
         """A capability the roster leaves out reads the same as one it denies,
         and the DAG pre-check rejects graphs on exactly these two facts."""
         for meta, expected in (
-            (AgentMeta("x", "", True, True), "x [stateful, local-files]"),
-            (AgentMeta("x", "", True, False), "x [stateful, no-local-files]"),
-            (AgentMeta("x", "", False, True), "x [stateless, local-files]"),
-            (AgentMeta("x", "", False, False), "x [stateless, no-local-files]"),
+            (AgentMeta("x", "", True, True), "x [stateful, local-files, no-progress]"),
+            (AgentMeta("x", "", True, False), "x [stateful, no-local-files, no-progress]"),
+            (AgentMeta("x", "", False, True), "x [stateless, local-files, no-progress]"),
+            (AgentMeta("x", "", False, False), "x [stateless, no-local-files, no-progress]"),
         ):
             assert format_agent_listing([meta]) == expected
 
@@ -1680,74 +1682,38 @@ def test_presets_are_valid_and_complete() -> None:
     for entry in cfg.third_party:
         assert build_third_party_backend(entry) is not None
 
-    claude = presets["claude_code"]
-    assert "--output-format stream-json" in claude["command"]
-    assert "--verbose" in claude["command"]
-    assert "--session-id {agent_id}" in claude["command"]
-    assert "--resume {agent_id}" in claude["resumeCommand"]
-    assert claude["transcriptFormat"] == "claude_stream_json"
-    assert claude["idSource"] == "provisioned"
+    # One preset per agent, each already carrying that agent's transport: there is
+    # no second preset for the same tool over a different one, because connecting
+    # must not have to try two transports (and the cli test dispatch spends the
+    # user's own quota to answer a question the repo already knows).
+    assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
+        "claude_code",
+        "codex",
+        "opencode",
+        "hermes",
+        "openclaw",
+    }
+    assert presets["mirothinker"]["kind"] == "openai"
 
-    codex = presets["codex"]
-    assert "-s workspace-write" in codex["command"]
-    assert "--json" in codex["command"]
-    assert codex["transcriptFormat"] == "codex_jsonl"
-    assert codex["idSource"] == "derived"
-    assert "{agent_id}" not in codex["command"]
-    # -a/--ask-for-approval is a root-level codex flag: `codex exec -a never`
-    # exits 2 with "unexpected argument '-a'", so it has to precede the
-    # subcommand. --skip-git-repo-check is required or every spawn fails at
-    # Raven's default (non-git) workspace cwd. Both verified against
-    # codex-cli 0.144.5.
-    assert codex["command"].startswith("codex -a never exec --skip-git-repo-check")
-    assert codex["resumeCommand"].startswith("codex -a never exec --skip-git-repo-check")
-    assert "resume {agent_id}" in codex["resumeCommand"]
-    # `resume` is an `exec` subcommand and must follow the option flags.
-    assert codex["resumeCommand"].index("--json") < codex["resumeCommand"].index("resume {agent_id}")
+    for name, acp in ((n, p) for n, p in presets.items() if p["kind"] == "acp"):
+        # An acp command starts a server, so it carries no task placeholder, and
+        # none of the cli fields that declare what a handshake reports.
+        assert not any(ph in acp["command"] for ph in ("{prompt}", "{prompt_file}", "{agent_id}")), name
+        assert not (set(acp) & {"resumeCommand", "idSource", "transcriptFormat", "stateful", "readsLocalFiles"}), name
 
-    assert presets["mirothinker"]["baseUrl"] == "https://api.miromind.ai/v1"
+    # Adapter versions are pinned: `npx -y` fetches what is absent, so an unpinned
+    # command would silently change which build a user runs.
+    for name in ("claude_code", "codex", "opencode"):
+        assert "npx -y " in presets[name]["command"], name
+        assert "@" in presets[name]["command"].split("npx -y ")[1], name
+        # npx may download on the first connect, which is far slower than starting
+        # an installed binary.
+        assert presets[name]["readyTimeoutMs"] >= 120000, name
 
-    openclaw = presets["openclaw"]
-    # Create and resume are intentionally identical: an openclaw session is
-    # addressed by the id the caller supplies, so re-passing it continues that
-    # session. Verified against openclaw 2026.7.1-2.
-    assert openclaw["command"] == openclaw["resumeCommand"]
-    assert "--session-id {agent_id}" in openclaw["command"]
-    assert openclaw["idSource"] == "provisioned"
-    # --json is required, not cosmetic: plain output interleaves ANSI-coloured
-    # plugin and transport diagnostics on stdout and --verbose off keeps them.
-    assert "--json" in openclaw["command"]
-    assert openclaw["transcriptFormat"] == "openclaw_json"
-
-    opencode = presets["opencode"]
-    # Verified against opencode 1.18.4. --format json is the only output carrying
-    # the session id: the default format prints the reply on stdout and an
-    # agent/model header on stderr, with no id anywhere, so a text transcript
-    # could only ever produce a non-resumable run. --session resumes an existing
-    # session and exits 1 with "Session not found" on an unknown id, so it cannot
-    # double as create -- hence derived, with opencode minting its own id.
-    assert opencode["command"].startswith("opencode run --format json --auto")
-    assert opencode["idSource"] == "derived"
-    assert opencode["transcriptFormat"] == "opencode_json"
-    assert "{agent_id}" not in opencode["command"]
-    assert "--session {agent_id}" in opencode["resumeCommand"]
-    assert "--format json" in opencode["resumeCommand"]
-
-    hermes = presets["hermes"]
-    # The global -z flag does not join a session: `-z --resume <id>` answers with
-    # no prior context and opens a new session, in either flag order. So a
-    # stateful hermes has to go through the `chat` subcommand, whose -Q keeps
-    # stdout to the final answer and puts the session id on stderr.
-    assert hermes["command"].startswith("hermes --yolo chat ")
-    assert "-z" not in hermes["command"]
-    assert "-Q" in hermes["command"]
-    assert hermes["idSource"] == "derived"
-    assert hermes["transcriptFormat"] == "text"
-    assert "--resume {agent_id}" in hermes["resumeCommand"]
-    assert "{agent_id}" not in hermes["command"]
-    assert hermes["sessionIdPattern"] == r"session_id:\s*(\S+)"
-    # Keeps the stderr session-id line out of the reply.
-    assert hermes["outputPattern"] == r"(?s)\A(.*?)\s*\Z"
+    # Measured: `openclaw acp` is a gateway-backed bridge and did not answer
+    # `initialize` within 20s, so the shared default would report a working
+    # install unreachable.
+    assert presets["openclaw"]["readyTimeoutMs"] > presets["hermes"]["readyTimeoutMs"]
 
 
 def test_presets_declare_their_own_provenance() -> None:

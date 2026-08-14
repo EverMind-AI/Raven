@@ -887,6 +887,13 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     both dodge the reserved-name guard and hide the real Hermes preset from
     the Presets group.
 
+    Matched on name alone, deliberately not on ``kind``. There is exactly one
+    preset per agent, and it already fixes that agent's transport, so a stored
+    entry on an older transport (a cli ``codex`` from before its preset moved to
+    acp) still belongs to that preset -- and saying so is what lets the UI offer
+    it an upgrade. Gating on kind would instead read it as hand-written, hide the
+    upgrade, and offer the preset again as unconfigured.
+
     The preset name set is imported inside this function, not at module
     level: ``raven.agent.subagent.presets`` imports ``SubagentsConfig`` from
     this module (deferred inside ``_normalized``), and importing back here at
@@ -894,10 +901,10 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     """
     from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 
-    preset_names = THIRD_PARTY_SUBAGENT_PRESETS.keys()
+    presets = THIRD_PARTY_SUBAGENT_PRESETS
     if preset is None:
-        return name if name in preset_names else None
-    if preset not in preset_names:
+        return name if name in presets else None
+    if preset not in presets:
         raise ValueError(f"preset {preset!r} is not a known built-in preset name")
     return preset
 
@@ -1083,8 +1090,129 @@ class ThirdPartyOpenAISubagentConfig(Base):
         return self
 
 
+ACP_UNSUPPORTED_FIELDS: tuple[str, ...] = (
+    "resume_command",
+    "id_source",
+    "session_id_pattern",
+    "output_pattern",
+    "transcript_format",
+    "stateful",
+    "reads_local_files",
+)
+"""Fields a cli entry uses to *declare* behaviour, which an acp entry negotiates.
+
+Kept as data rather than inline so the write-path rejector
+(``raven.config.update_subagents.reject_unsupported_acp_fields``) and the
+load-path coercion below cannot drift onto different lists.
+"""
+
+ACP_PROMPT_PLACEHOLDERS: tuple[str, ...] = ("{prompt}", "{prompt_file}", "{agent_id}")
+
+
+class ThirdPartyAcpSubagentConfig(Base):
+    """A third-party agent reached over ACP (Agent Client Protocol), e.g. ``hermes acp``.
+
+    ``command`` starts a *server* and is spawned once per connection, not once
+    per task: a task is delivered as a ``session/prompt`` request on the running
+    connection. So unlike a cli entry it carries no ``{prompt}`` placeholder,
+    and none of the fields listed in :data:`ACP_UNSUPPORTED_FIELDS`.
+
+    Those seven are absent by design rather than by omission. Each one is a cli
+    *declaration* about behaviour (can it resume, who mints the session id, how
+    is its transcript shaped) whose acp counterpart comes from the ``initialize``
+    handshake instead. Accepting both would make every one of them a second
+    source of truth, and the first time a declaration disagreed with the
+    handshake nothing in the code would know which to believe.
+    """
+
+    name: str
+    kind: Literal["acp"] = "acp"
+    description: str = ""
+    """Operator override for the roster line. Blank means "use what the handshake
+    reported" (``agentInfo.name`` plus version), which is the point of ACP: the
+    agent describes itself, so a human does not have to."""
+    preset: str | None = None
+    """Which built-in preset this entry was created from, or ``None`` for a
+    hand-written one. Provenance only -- see the cli config for why the web UI
+    needs it."""
+    enabled: bool = True
+    command: str
+    cwd: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+    ready_timeout_ms: int = 30000
+    """How long the ``initialize`` handshake may take before the agent is
+    reported unreachable. Generous by default because a bridge-backed server can
+    be slow to come up: ``openclaw acp`` did not answer within 20s on the host
+    this was measured on, and a too-tight budget reports a working agent as
+    broken."""
+    timeout: int | None = None
+    """Per-task ceiling for one ``session/prompt``. ``None`` means no automatic
+    limit, matching the cli config: a long task is ended by hand, not a timer."""
+    max_output_chars: int = 30000
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_on_declared_cli_fields(cls, data: Any) -> Any:
+        """Warn about, rather than reject, a cli-only field on an acp entry.
+
+        Warn-and-drop on load for the reason ``_drop_declared_local_file_access``
+        gives: a hard reject here surfaces as a ``ValidationError`` on the whole
+        top-level ``Config``, so raven would stop starting and the UI that could
+        fix the field would sit behind the config that no longer loads. Dropping
+        needs no code -- ``Base`` ignores unknown keys -- but the operator still
+        has to be told that the field they wrote is doing nothing.
+
+        Inspected here rather than in an ``after`` validator because by then the
+        unknown key is already gone: ``Base`` does not set ``extra="allow"``, so
+        ``model_extra`` is empty and there is nothing left to notice.
+
+        The hard reject lives at the write path instead
+        (``update_subagents.reject_unsupported_acp_fields``), where the caller owns
+        the value and can act on the error.
+        """
+        if not isinstance(data, dict):
+            return data
+        declared = [
+            spelling for field in ACP_UNSUPPORTED_FIELDS for spelling in (field, to_camel(field)) if spelling in data
+        ]
+        if declared:
+            logger.warning(
+                "{} not supported for kind 'acp' (sub-agent {!r}); ignoring -- an acp agent reports "
+                "these through the initialize handshake instead",
+                sorted(set(declared)),
+                data.get("name") or "<unnamed>",
+            )
+        return data
+
+    @model_validator(mode="after")
+    def _warn_on_prompt_placeholders(self) -> "ThirdPartyAcpSubagentConfig":
+        """Warn that a task placeholder in ``command`` cannot work here.
+
+        Not a reject, for the same startup reason as above, and not a coercion
+        either because there is no correct value to substitute. Left in place, the
+        placeholder reaches the child as a literal argv token, the handshake
+        fails, and the agent is reported ``unreachable`` with the launch error --
+        a degraded but self-explaining state, which beats not starting.
+        """
+        found = [p for p in ACP_PROMPT_PLACEHOLDERS if p in self.command]
+        if found:
+            logger.warning(
+                "acp sub-agent {!r} has task placeholder(s) {} in `command`, which starts a server "
+                "rather than one task; they will be passed through literally and the handshake will "
+                "fail",
+                self.name,
+                found,
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_preset(self) -> "ThirdPartyAcpSubagentConfig":
+        self.preset = _resolve_preset_provenance(self.name, self.preset)
+        return self
+
+
 ThirdPartySubagentConfig = Annotated[
-    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig,
+    ThirdPartyCliSubagentConfig | ThirdPartyOpenAISubagentConfig | ThirdPartyAcpSubagentConfig,
     Field(discriminator="kind"),
 ]
 

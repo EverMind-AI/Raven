@@ -181,9 +181,12 @@ async def test_add_writes_the_preset_template_under_a_chosen_name(config_path: P
 
     entry = next(e for e in _stored(config_path) if e["name"] == "Builder")
     assert entry["preset"] == "opencode"
-    # The template's execution fields come from the preset, not the caller.
-    assert entry["command"] == "opencode run --format json --auto {prompt}"
-    assert entry["idSource"] == "derived"
+    # The template's execution fields come from the preset, not the caller -- and
+    # they carry the transport the preset fixes, so this is an acp entry with a
+    # launch command rather than a task template.
+    assert entry["kind"] == "acp"
+    assert entry["command"].endswith("acp")
+    assert "{prompt}" not in entry["command"]
     assert entry["description"] == "builds"
 
 

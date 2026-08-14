@@ -872,8 +872,8 @@ class TestSubagentRoster:
             ],
         ).description
 
-        assert "Coder [stateful, local-files]" in desc
-        assert "Boxed [stateless, no-local-files]" in desc
+        assert "Coder [stateful, local-files, no-progress]" in desc
+        assert "Boxed [stateless, no-local-files, no-progress]" in desc
 
     def test_the_tags_are_explained_once_in_the_field_that_they_gate(self, tmp_path: Path) -> None:
         """Tags the model cannot interpret are just noise, and the pre-check would
@@ -890,7 +890,7 @@ class TestSubagentRoster:
         assert "[stateful]" in node["instance"]["description"]
         assert "[no-local-files]" in node["prompt_template"]["description"]
         # The roster still shows each agent's tags; the rules are not restated.
-        assert "[stateless, local-files]" in tool.description
+        assert "[stateless, local-files, no-progress]" in tool.description
         assert "[no-local-files]" not in tool.description
 
     def test_descriptions_are_surfaced_not_just_names(self, tmp_path: Path) -> None:
@@ -906,8 +906,8 @@ class TestSubagentRoster:
             ],
         ).description
 
-        assert "Coder [stateless, local-files] (Handles coding tasks.)" in desc
-        assert "Bare [stateless, local-files]" in desc
+        assert "Coder [stateless, local-files, no-progress] (Handles coding tasks.)" in desc
+        assert "Bare [stateless, local-files, no-progress]" in desc
         assert "Bare [stateless, local-files] (" not in desc  # no description -> no empty parens
 
     def test_roster_matches_spawns_rendering(self, tmp_path: Path) -> None:
@@ -1315,7 +1315,7 @@ class TestCapabilityGate:
             [ThirdPartyCliSubagentConfig(name="agent", command="cat", reads_local_files=False)]
         )
 
-        assert "agent [stateless, no-local-files]" in tool.description
+        assert "agent [stateless, no-local-files, no-progress]" in tool.description
         out = await tool.execute(
             nodes=[
                 {"id": "a", "subagent": "agent", "prompt_template": "upstream"},

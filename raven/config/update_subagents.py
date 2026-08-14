@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic.alias_generators import to_camel
 
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import SubagentsConfig
@@ -57,6 +58,52 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
                 f"readsLocalFiles is not supported for kind 'openai' (sub-agent {name!r}): the "
                 "backend posts one chat message, so nothing can open a path on this machine; "
                 "remove the field or set it false"
+            )
+
+
+def reject_unsupported_acp_fields(entries: list[dict]) -> None:
+    """Raise on an incoming acp entry that declares a cli-only field.
+
+    Same split as ``reject_unsupported_openai_fields`` and for the same reason: the
+    schema only warns on load, because raising there would stop raven starting for
+    anyone whose stored config carries the field, and the UI that could fix it sits
+    behind the config that no longer loads. On a *write* the caller is holding the
+    value and can be told.
+
+    Each of these is a cli *declaration* about behaviour whose acp counterpart is
+    negotiated in the ``initialize`` handshake. Accepting both would make every one
+    a second source of truth, and nothing in the code would know which to believe
+    when they disagreed.
+
+    Deliberately not called from ``set_third_party_subagents``, again matching the
+    openai rejector: that function is also how ``add_`` / ``remove_`` re-write
+    entries they read back raw from disk, so one legacy field in an unrelated entry
+    would make every later add or remove fail.
+    """
+    from raven.config.schema import ACP_PROMPT_PLACEHOLDERS, ACP_UNSUPPORTED_FIELDS
+
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("kind") != "acp":
+            continue
+        name = entry.get("name") or "<unnamed>"
+        # Both spellings reach here: the schema accepts either, so a payload that
+        # skipped the camel alias must not skip the check with it.
+        declared = sorted(
+            {spelling for field in ACP_UNSUPPORTED_FIELDS for spelling in (field, to_camel(field)) if spelling in entry}
+        )
+        if declared:
+            raise ValueError(
+                f"{declared} not supported for kind 'acp' (sub-agent {name!r}): an acp agent reports "
+                "these in its initialize handshake, so a declared value here would be a second, "
+                "unverifiable source of truth; remove the field(s)"
+            )
+        command = entry.get("command")
+        found = [p for p in ACP_PROMPT_PLACEHOLDERS if isinstance(command, str) and p in command]
+        if found:
+            raise ValueError(
+                f"command for acp sub-agent {name!r} contains {found}: an acp command starts a "
+                "server, not one task -- the task is delivered as a session/prompt request, so the "
+                "placeholder would be passed through literally and the handshake would fail"
             )
 
 
@@ -127,5 +174,6 @@ __all__ = [
     "set_third_party_subagents",
     "add_third_party_subagent",
     "remove_third_party_subagent",
+    "reject_unsupported_acp_fields",
     "reject_unsupported_openai_fields",
 ]

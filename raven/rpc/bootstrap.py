@@ -171,6 +171,14 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
+        # ACP agents are launched with start_new_session, so they do not get the
+        # terminal's signals and outlive this process unless the pool is closed.
+        try:
+            from raven.agent.acp.pool import close_pool
+
+            await close_pool()
+        except Exception:
+            logger.exception("serve: acp pool close failed; continuing shutdown")
 
     return RpcStack(
         dispatcher=dispatcher,

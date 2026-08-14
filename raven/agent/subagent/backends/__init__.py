@@ -11,6 +11,9 @@ result re-injection stay backend-agnostic.
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+from loguru import logger
+
+from raven.agent.subagent.backends.acp_agent import AcpAgentBackend
 from raven.agent.subagent.backends.base import (
     ABORTED_ACTION_RESULT,
     IN_SUBAGENT_RUN,
@@ -35,25 +38,74 @@ class AgentMeta(NamedTuple):
     description: str
     stateful: bool
     reads_local_files: bool
+    live_progress: bool = False
+    """Whether this agent reports its work while it runs.
+
+    Advertised because the absence is otherwise indistinguishable from a quiet
+    run: a cli agent prints its transcript once, at exit, so an empty timeline is
+    a property of the transport rather than a hung task. Defaulted so a
+    duck-typed construction cannot claim a capability the transport lacks."""
 
 
-def third_party_agent_meta(cfg: Any) -> AgentMeta:
+def third_party_agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one third-party subagent config.
 
-    "Stateful" means the config carries a resume command, i.e. reusing an
-    instance handle continues that agent's session instead of starting a fresh
-    one — derived from ``resume_command``, never from the ``stateful``
-    declaration, which the schema already forces to agree with it. OpenAI-kind
-    configs have no resume command and are stateless. Defined once here because
-    three callers derive it — the spawn manager, the DAG tool's roster, and the
-    DAG capability pre-check — and a split definition would let them disagree.
+    "Stateful" means reusing an instance handle continues that agent's session
+    instead of starting a fresh one, and it is always read from the mechanism
+    that would have to deliver it -- never from a declaration:
+
+    - ``cli``: from ``resume_command``. The schema already forces the optional
+      ``stateful`` field to agree with it.
+    - ``acp``: from the agent's own ``sessionCapabilities.resume``, recorded in a
+      capability snapshot at registration. An acp config has no
+      ``resume_command`` at all, so falling through to the cli rule would report
+      every acp agent stateless -- which would strip the ``instance`` parameter
+      out of the spawn schema entirely and make the DAG pre-check reject any
+      graph that shares a handle.
+    - ``openai``: stateless; an HTTP call has no session to resume.
+
+    ``snapshot`` is the already-loaded snapshot for this config, for callers
+    handling a batch. Omitted, it is read from the store -- so a caller that
+    knows nothing about ACP (the spawn manager, the DAG tool) needs no change.
+
+    Defined once here because three callers derive it -- the spawn manager, the
+    DAG tool's roster, and the DAG capability pre-check -- and a split definition
+    would let them disagree.
     """
+    kind = getattr(cfg, "kind", None)
+    if kind == "acp":
+        if snapshot is None:
+            snapshot = acp_snapshot_for(cfg)
+        stateful = bool(snapshot is not None and snapshot.can_resume)
+    else:
+        stateful = bool(getattr(cfg, "resume_command", None))
     return AgentMeta(
         getattr(cfg, "name", "") or "",
         getattr(cfg, "description", "") or "",
-        bool(getattr(cfg, "resume_command", None)),
+        stateful,
         bool(getattr(cfg, "reads_local_files", True)),
+        # Only the acp transport carries a live event stream. This is a fact about
+        # the transport, not about the agent, so it is read from `kind` rather
+        # than from anything the agent or the operator says.
+        kind == "acp",
     )
+
+
+def acp_snapshot_for(cfg: Any) -> Any:
+    """The stored capability snapshot for one acp config, or ``None``.
+
+    Reads the store on every call rather than caching: the setters that need it
+    run at startup and on a config hot-apply, so the cost is a small JSON read a
+    handful of times, and a cache here would be the thing that keeps serving a
+    stale "stateless" after a verify has already fixed it.
+    """
+    from raven.agent.acp.capabilities import SnapshotStore
+
+    try:
+        return SnapshotStore().load([cfg]).get(getattr(cfg, "name", "") or "")
+    except Exception as exc:  # noqa: BLE001 - a missing snapshot is a degraded roster, not a crash
+        logger.warning("acp capability snapshot read failed for {!r}: {}", getattr(cfg, "name", None), exc)
+        return None
 
 
 def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
@@ -63,7 +115,7 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
     roster wherever it picks an agent. A blank description degrades to the bare
     name plus its tags; nameless entries are dropped.
 
-    Both capabilities render as an explicit tag, positive or negative, rather
+    Every capability renders as an explicit tag, positive or negative, rather
     than only flagging the negative case: the model has to *confirm* an agent is
     stateful before reusing an ``instance`` handle, and "no tag" is indistinguishable
     from "the roster does not say".
@@ -76,6 +128,7 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
             (
                 "stateful" if entry.stateful else "stateless",
                 "local-files" if entry.reads_local_files else "no-local-files",
+                "live-progress" if entry.live_progress else "no-progress",
             )
         )
         head = f"{entry.name} [{tags}]"
@@ -133,6 +186,21 @@ def build_third_party_backend(cfg: Any, *, registry: Any = None, timeout: int | 
             max_output_chars=cfg.max_output_chars,
             registry=registry,
         )
+    if kind == "acp":
+        from raven.agent.acp.capabilities import CapabilitySnapshot
+
+        snapshot = acp_snapshot_for(cfg)
+        return AcpAgentBackend(
+            name=cfg.name,
+            command=cfg.command,
+            cwd=cfg.cwd,
+            env=dict(cfg.env),
+            ready_timeout_ms=cfg.ready_timeout_ms,
+            timeout=cfg.timeout if timeout is None else timeout,
+            max_output_chars=cfg.max_output_chars,
+            snapshot=snapshot if isinstance(snapshot, CapabilitySnapshot) else None,
+            registry=registry,
+        )
     if kind == "openai":
         return OpenAIApiBackend(
             name=cfg.name,
@@ -154,10 +222,12 @@ __all__ = [
     "AgentMeta",
     "SubagentActionAbortedError",
     "SubagentBackend",
+    "acp_snapshot_for",
     "enabled_third_party",
     "format_agent_listing",
     "third_party_agent_meta",
     "RavenLoopBackend",
+    "AcpAgentBackend",
     "CliAgentBackend",
     "OpenAIApiBackend",
     "build_subagent_prompt",

@@ -101,11 +101,18 @@ class SubagentRow(_Strict):
 
     name: str
     preset: str | None
-    kind: Literal["cli", "openai"]
+    kind: Literal["cli", "openai", "acp"]
     description: str
     enabled: bool
     configured: bool
     group: Literal["installed", "uninstalled"]
+    upgrade_to: str | None = Field(
+        default=None,
+        description=(
+            "The transport this entry's preset has since moved to, or null when it is current. "
+            "A configured entry is never rewritten underneath the user, so the mismatch is shown instead."
+        ),
+    )
     probe_status: Literal["ready", "attention", "missing", "unknown"]
     probe_detail: str
     has_api_key: bool
