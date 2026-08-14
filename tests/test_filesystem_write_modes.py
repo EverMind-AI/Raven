@@ -83,17 +83,36 @@ async def test_unknown_mode_is_refused_rather_than_guessed(workspace) -> None:
     assert target.read_text() == "original"
 
 
-def test_the_schema_says_what_append_is_for_before_anything_fails() -> None:
-    """The schema is the only thing the model reads before its first call.
+def test_the_schema_says_what_append_is_for_without_borrowing_one_caller() -> None:
+    """Every caller of write_file reads this, not only a truncated one.
 
-    An error message arrives too late to prevent the call that produced it, so
-    both the description and the parameter say what append is used for -- not
-    what goes wrong without it, and with no invented threshold for "long",
-    which depends on a ceiling this file knows nothing about.
+    So it says what the parameter does and when it is useful, in terms that
+    hold for appending to a log or resuming a file. What happens when a call
+    runs past the argument limit belongs to `truncation_hint`, which only that
+    caller ever sees -- putting it here would let one scenario rewrite a shared
+    tool's contract.
     """
     tool = WriteFileTool(".")
 
+    assert "Write content to a file at the given path" in tool.description
     assert "mode=append" in tool.description
+    for scenario_specific in ("truncat", "cut off", "limit", "discard"):
+        assert scenario_specific not in tool.description.lower(), (
+            f"{scenario_specific!r} is one caller's concern, not the tool's contract"
+        )
+
     mode = tool.parameters["properties"]["mode"]["description"]
     assert "continue a file you have already started" in mode
     assert "across several calls" in mode
+
+
+def test_the_truncation_hint_carries_what_only_that_caller_needs() -> None:
+    """The fact a model cannot infer: an over-long call is lost whole.
+
+    Without it there is no reason to split anything up -- a model may well
+    assume the part that fit was saved.
+    """
+    hint = WriteFileTool(".").truncation_hint or ""
+
+    assert "discarded whole" in hint
+    assert "mode=append" in hint

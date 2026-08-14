@@ -345,13 +345,14 @@ def test_shipped_tools_that_can_be_split_say_how() -> None:
 
     write_hint = WriteFileTool(".").truncation_hint or ""
     assert "mode=append" in write_hint
-    # Conditional, not imperative: a call that arrived whole must not be told
-    # to split itself up.
-    assert write_hint.startswith("If it was too long")
-
     exec_hint = ExecTool().truncation_hint or ""
     assert "shorten the command" in exec_hint
-    assert exec_hint.startswith("If it was too long")
+
+    # Conditional, not imperative. Refusing the last call of a truncated turn
+    # is a guess -- it can have arrived whole -- so neither hint may order a
+    # model to split up something that was never too long.
+    for hint in (write_hint, exec_hint):
+        assert "if that is what happened" in hint or hint.startswith("If it was too long")
 
 
 @pytest.mark.asyncio
