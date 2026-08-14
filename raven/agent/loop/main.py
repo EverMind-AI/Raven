@@ -1608,10 +1608,6 @@ class AgentLoop:
         content_buf: list[str] = []
         reasoning_buf: list[str] = []
         tool_call_slots: list[dict[str, Any]] = []
-        # What the stream was writing when it last produced anything: True
-        # while inside tool arguments, False once prose follows them. Decides
-        # whether a ceiling hit cut a call or merely the text after one.
-        cut_inside_tool_call: bool | None = None
         final_usage: dict[str, Any] | None = None
         had_error = False
         error_content: str | None = None
@@ -1647,11 +1643,9 @@ class AgentLoop:
                             await on_reasoning_delta(reasoning_delta)
                     if delta.content:
                         content_buf.append(delta.content)
-                        cut_inside_tool_call = False
                         if on_token_delta is not None:
                             await on_token_delta(delta.content)
                     if delta.tool_call_delta:
-                        cut_inside_tool_call = True
                         _merge_tool_call_fragments(
                             tool_call_slots,
                             delta.tool_call_delta,
@@ -1681,7 +1675,6 @@ class AgentLoop:
             finish_reason=upstream_finish_reason,
             usage=final_usage,
             tool_calls=tool_calls,
-            cut_inside_tool_call=cut_inside_tool_call,
         )
 
         finish_reason = upstream_finish_reason or ("tool_calls" if tool_calls else "stop")

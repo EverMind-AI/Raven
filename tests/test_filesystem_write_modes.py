@@ -83,13 +83,17 @@ async def test_unknown_mode_is_refused_rather_than_guessed(workspace) -> None:
     assert target.read_text() == "original"
 
 
-def test_description_tells_the_model_how_to_write_a_long_file() -> None:
-    """The tool schema is the only place the model reads before choosing.
+def test_the_schema_says_what_append_is_for_before_anything_fails() -> None:
+    """The schema is the only thing the model reads before its first call.
 
-    Without this, the reasonable move for a long file is one large call --
-    the call shape that gets truncated.
+    An error message arrives too late to prevent the call that produced it, so
+    both the description and the parameter say what append is used for -- not
+    what goes wrong without it, and with no invented threshold for "long",
+    which depends on a ceiling this file knows nothing about.
     """
-    description = WriteFileTool(".").description
+    tool = WriteFileTool(".")
 
-    assert "mode=append" in description
-    assert "cut off" in description
+    assert "mode=append" in tool.description
+    mode = tool.parameters["properties"]["mode"]["description"]
+    assert "continue a file you have already started" in mode
+    assert "across several calls" in mode

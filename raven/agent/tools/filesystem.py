@@ -188,9 +188,8 @@ class WriteFileTool(_FsTool):
     def description(self) -> str:
         return (
             "Write content to a file at the given path. Creates parent directories if needed. "
-            "For a long file, write the first part with mode=overwrite and add the rest with "
-            "mode=append: one oversized call risks being cut off mid-argument, and the whole "
-            "call is then lost."
+            "A file too long to send in one call can be written across several: the first with "
+            "mode=overwrite, each next one with mode=append."
         )
 
     @property
@@ -203,7 +202,12 @@ class WriteFileTool(_FsTool):
                 "mode": {
                     "type": "string",
                     "enum": ["overwrite", "append"],
-                    "description": "overwrite (default) replaces the file; append adds to the end",
+                    "description": (
+                        "append adds to the end of the file; overwrite (default) replaces it. "
+                        "Use append to continue a file you have already started -- to write "
+                        "something long across several calls, or to add to a file written "
+                        "earlier in this turn."
+                    ),
                 },
             },
             "required": ["path", "content"],
@@ -212,8 +216,8 @@ class WriteFileTool(_FsTool):
     @property
     def truncation_hint(self) -> str:
         return (
-            "Send it again in smaller pieces: a first chunk with mode=overwrite, "
-            "then the rest with mode=append, across as many calls as it takes."
+            "If it was too long to arrive whole, write it in chunks: the first with "
+            "mode=overwrite, then the rest with mode=append."
         )
 
     async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:

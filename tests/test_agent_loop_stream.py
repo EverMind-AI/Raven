@@ -624,33 +624,6 @@ async def test_a_pin_above_the_model_ceiling_is_bounded_by_it() -> None:
     assert response.max_tokens == 16384  # gpt-4o's catalogue ceiling, not the pin
 
 
-async def test_a_cut_in_prose_after_a_tool_call_leaves_the_call_dispatchable() -> None:
-    """The stream wrote the call, then some text, and hit the ceiling there.
-
-    Deltas arrive in generation order, so this path can see that the call
-    itself finished. Marking it would refuse a good call and cost a turn --
-    and since a marked call is now never dispatched, that cost is real.
-    """
-    chunks = [
-        StreamDelta(
-            content=None,
-            tool_call_delta={
-                "tool_calls": [
-                    {"index": 0, "id": "c1", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}
-                ]
-            },
-        ),
-        StreamDelta(content="and now let me explain what I just did at length"),
-        StreamDelta(content=None, finish_reason="length"),
-    ]
-    response = await _bind_helper(_provider_with_ceiling(chunks, max_tokens=4096))(
-        messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
-    )
-
-    assert response.truncated is True, "the turn was still cut off"
-    assert response.tool_calls[0].run_meta is None, "but this call arrived whole"
-
-
 async def test_a_cut_inside_tool_arguments_still_marks_the_call() -> None:
     """The other order: text first, then the call, cut while writing it."""
     chunks = [

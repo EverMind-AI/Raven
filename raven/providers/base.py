@@ -174,25 +174,23 @@ class TruncationInfo:
     at_tokens: int | None = None
 
     def as_error(self, tool_name: str) -> str:
-        """States what happened and why nothing ran. Advice is the tool's job.
+        """What is known, and what is only inferred, kept apart.
 
-        Three clauses, all true of every tool: where it stopped, that it was
-        therefore not executed, and why that matters -- a call missing part of
-        its arguments is not a smaller version of itself, it can be a different
-        call. An optional parameter cut off before it arrived falls back to its
-        default, which for ``write_file`` turns an append into an overwrite.
+        Known: the turn stopped at the output limit. Inferred: that this call
+        was cut, which follows from generation being sequential but not from
+        anything the upstream said -- a turn can finish a call and then hit the
+        limit in the prose after it. Saying "this call was cut" as a fact sends
+        a model to split up a call that was whole.
 
-        Deliberately avoids "saved": the one tool most likely to be truncated
-        is the one that saves files, and "not saved" reads there as "the write
-        failed" rather than "your arguments never arrived".
+        The refusal is not conditional on that inference. A call that may be
+        incomplete is not dispatched either way; being wrong costs one retry.
 
-        What to send instead comes from ``Tool.truncation_hint``, appended by
-        the registry.
+        What to do about it is the tool's, via ``Tool.truncation_hint``.
         """
-        at = f" at the {self.at_tokens}-token limit" if self.at_tokens else ""
+        at = f" at the {self.at_tokens}-token output limit" if self.at_tokens else " at the output limit"
         return (
-            f"Error: [truncated] This call was cut{at}, so it was not run -- "
-            f"the missing part could have changed what it does."
+            f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
+            f"being written, so it may have been cut short. It was not run. Send it again."
         )
 
 

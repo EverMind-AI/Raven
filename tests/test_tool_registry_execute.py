@@ -202,7 +202,7 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
     )
 
     assert "[truncated]" in out
-    assert "4096-token limit" in out
+    assert "4096-token output limit" in out
     assert "missing required" not in out
     # The generic hint would still point at "try a different approach", which is
     # the advice that produced the retry loop.
@@ -331,11 +331,11 @@ async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
     )
 
     assert "[truncated]" in out
-    assert "was not run" in out
+    assert "may have been cut short" in out
     # No instruction at all: the facts stand, and nothing tells this tool to do
     # something it may have no way of doing.
     assert "smaller pieces" not in out
-    assert out.rstrip().endswith("the missing part could have changed what it does.")
+    assert out.rstrip().endswith("It was not run. Send it again.")
 
 
 def test_shipped_tools_that_can_be_split_say_how() -> None:
@@ -343,9 +343,15 @@ def test_shipped_tools_that_can_be_split_say_how() -> None:
     from raven.agent.tools.filesystem import WriteFileTool
     from raven.agent.tools.shell import ExecTool
 
-    assert "mode=append" in (WriteFileTool(".").truncation_hint or "")
+    write_hint = WriteFileTool(".").truncation_hint or ""
+    assert "mode=append" in write_hint
+    # Conditional, not imperative: a call that arrived whole must not be told
+    # to split itself up.
+    assert write_hint.startswith("If it was too long")
+
     exec_hint = ExecTool().truncation_hint or ""
-    assert "shorter command" in exec_hint
+    assert "shorten the command" in exec_hint
+    assert exec_hint.startswith("If it was too long")
 
 
 @pytest.mark.asyncio
@@ -367,5 +373,6 @@ async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> 
         run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
     )
 
-    assert "could have changed what it does" in out
+    assert "may have been cut short" in out
+    assert "Send it again" in out
     assert "not resend" not in out.lower()
