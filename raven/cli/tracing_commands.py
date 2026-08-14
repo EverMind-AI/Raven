@@ -9,15 +9,23 @@ that reads the captured spans from ``~/.raven/traces``.
 then opens the browser. It reuses raven's own Node discovery (:func:`find_node`),
 so it needs the same Node >= 22 that ``raven tui`` already requires.
 
+The background viewer's pid + port are recorded in ``<state_dir>/viewer.pid``
+so a later ``raven tracing`` reuses the live instance instead of stacking
+orphans, and ``raven tracing stop`` can shut it down. The stop path only
+signals a pid whose command line still matches the node viewer — a recycled
+pid is never killed.
+
 Registered as a top-level leaf command (not a subcommand group) so the TUI
 command catalog lists it as a plain ``/tracing`` slash under "(top-level)".
-Foreground mode and port are options, not subcommands.
+``stop`` is an optional positional action; foreground mode and port are
+options, not subcommands.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -78,6 +86,70 @@ def _viewer_env(port: int) -> dict:
     return env
 
 
+def _pid_file() -> Path:
+    return tracing_config.state_dir() / "viewer.pid"
+
+
+def _read_pid_file() -> dict | None:
+    try:
+        data = json.loads(_pid_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("pid"), int) and isinstance(data.get("port"), int):
+        return data
+    return None
+
+
+def _write_pid_file(pid: int, port: int) -> None:
+    path = _pid_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pid": pid, "port": port}), encoding="utf-8")
+
+
+def _clear_pid_file() -> None:
+    _pid_file().unlink(missing_ok=True)
+
+
+def _pid_is_viewer(pid: int) -> bool:
+    """True only when ``pid`` is alive and its command line is our node viewer.
+
+    A pid from the pid file may have been recycled by the OS for an unrelated
+    process, so liveness alone is never enough to signal it — the command line
+    must still look like ``node .../server.js``.
+    """
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except OSError:
+        return False
+    if not out:
+        return False
+    argv0 = out.split()[0]
+    return "node" in Path(argv0).name and "server.js" in out
+
+
+def _stop_viewer() -> None:
+    entry = _read_pid_file()
+    if entry is None:
+        console.print("Tracing viewer is not running.")
+        return
+    pid = entry["pid"]
+    if not _pid_is_viewer(pid):
+        _clear_pid_file()
+        console.print("Tracing viewer is not running (cleared a stale pid file).")
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    _clear_pid_file()
+    console.print(f"Stopped tracing viewer (pid {pid}).")
+
+
 def _resolve_node() -> str:
     from raven.cli.tui_commands import find_node
 
@@ -101,6 +173,15 @@ def _server_js() -> Path:
 
 
 def _open_dashboard(port: int) -> None:
+    entry = _read_pid_file()
+    if entry is not None:
+        if _pid_is_viewer(entry["pid"]) and _viewer_health(entry["port"]):
+            url = f"http://127.0.0.1:{entry['port']}/"
+            console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+            webbrowser.open(url)
+            return
+        _clear_pid_file()
+
     if _port_live(port):
         if _viewer_health(port):
             url = f"http://127.0.0.1:{port}/"
@@ -128,7 +209,7 @@ def _open_dashboard(port: int) -> None:
     log_dir = tracing_config.state_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = open(log_dir / "viewer.log", "a", encoding="utf-8")  # noqa: SIM115 — handed to the child
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [node, str(server_js)],
         cwd=str(_viewer_dir()),
         env=_viewer_env(port),
@@ -136,6 +217,7 @@ def _open_dashboard(port: int) -> None:
         stderr=log_file,
         start_new_session=True,
     )
+    _write_pid_file(proc.pid, port)
 
     for _ in range(24):  # wait up to ~6s for the server to actually serve
         if _viewer_health(port):
@@ -171,12 +253,19 @@ def register(app: typer.Typer) -> None:
 
     @app.command("tracing")
     def tracing(
+        action: str = typer.Argument(None, help="Optional action: 'stop' shuts down the background viewer."),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
         foreground: bool = typer.Option(
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
+        if action == "stop":
+            _stop_viewer()
+            return
+        if action is not None:
+            console.print(f"[red]Unknown action '{action}'.[/red] Supported action: stop")
+            raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:
             _serve_foreground(bind_port)
