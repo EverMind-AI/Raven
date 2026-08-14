@@ -24,6 +24,7 @@ import {
   estimateTokensRough,
   isTransientTrailLine,
   sameToolTrailGroup,
+  toolResultPreview,
   toolTrailLabel
 } from '../lib/text.js'
 import { resetFlowOverlays } from './overlayStore.js'
@@ -812,7 +813,7 @@ class TurnController {
       if (et) {
         et.ok = !error
         et.done = true
-        et.resultPreview = (error || summary || '').slice(0, 200) || undefined
+        et.resultPreview = toolResultPreview(error || summary || '') || undefined
         // Fall back to the client-measured span: the typed RPC path does not
         // carry a duration, and leaving it unset made the row's live timer keep
         // ticking after the step had moved on.
