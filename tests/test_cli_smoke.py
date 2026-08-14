@@ -189,6 +189,9 @@ REGISTERED_COMMAND_NAMES = {
     "tracing",
     "tui",
     "upgrade",
+    # The page, beside `serve`, which is the gateway. `web` attaches to a
+    # gateway already running rather than starting a second one.
+    "web",
 }
 
 
