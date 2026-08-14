@@ -87,7 +87,7 @@ export const opsCommands: SlashCommand[] = [
     name: 'tracing',
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<SlashExecResponse>('slash.exec', { command: 'tracing', session_id: ctx.sid })
+        .rpc<SlashExecResponse>('slash.exec', { command: 'tracing', session_id: ctx.sid }, { quiet: true })
         .then(
           ctx.guarded<SlashExecResponse>(r => {
             const body = r?.output || 'tracing dashboard'
@@ -103,7 +103,7 @@ export const opsCommands: SlashCommand[] = [
     supported: false,
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<ProcessStopResponse>('process.stop', {})
+        .rpc<ProcessStopResponse>('process.stop', {}, { quiet: true })
         .then(
           ctx.guarded<ProcessStopResponse>(r => {
             const killed = Number(r.killed ?? 0)
@@ -169,7 +169,7 @@ export const opsCommands: SlashCommand[] = [
     supported: false,
     run: (_arg, ctx) => {
       ctx.gateway
-        .rpc<ReloadEnvResponse>('reload.env', {})
+        .rpc<ReloadEnvResponse>('reload.env', {}, { quiet: true })
         .then(
           ctx.guarded<ReloadEnvResponse>(r => {
             const n = Number(r.updated ?? 0)
@@ -641,7 +641,7 @@ export const opsCommands: SlashCommand[] = [
 
         sys(`installing ${query}…`)
 
-        rpc<SkillsInstallResponse>('skills.manage', { action: 'install', query })
+        rpc<SkillsInstallResponse>('skills.manage', { action: 'install', query }, { quiet: true })
           .then(
             ctx.guarded<SkillsInstallResponse>(r =>
               sys(r.installed ? `installed ${r.name ?? query}` : 'install failed')
@@ -734,7 +734,7 @@ export const opsCommands: SlashCommand[] = [
 
           const chosen = nameParts.join(' ').trim()
 
-          rpc<SubagentsAddResponse>('subagents.add', chosen ? { name: chosen, preset } : { preset })
+          rpc<SubagentsAddResponse>('subagents.add', chosen ? { name: chosen, preset } : { preset }, { quiet: true })
             .then(
               ctx.guarded<SubagentsAddResponse>(r =>
                 sys(r.added ? `added subagent: ${r.name ?? chosen ?? preset}` : 'add failed')
@@ -753,7 +753,7 @@ export const opsCommands: SlashCommand[] = [
 
           const enabled = sub === 'on'
 
-          rpc<SubagentsToggleResponse>('subagents.toggle', { enabled, name })
+          rpc<SubagentsToggleResponse>('subagents.toggle', { enabled, name }, { quiet: true })
             .then(ctx.guarded<SubagentsToggleResponse>(r => sys(`${name}: ${r.enabled ? 'enabled' : 'disabled'}`)))
             .catch(ctx.guardedErr)
 
@@ -765,7 +765,7 @@ export const opsCommands: SlashCommand[] = [
             return sys('usage: /subagents test <name>')
           }
 
-          rpc<SubagentsTestResponse>('subagents.test', { name, source: 'config' })
+          rpc<SubagentsTestResponse>('subagents.test', { name, source: 'config' }, { quiet: true })
             .then(
               ctx.guarded<SubagentsTestResponse>(r =>
                 sys(`${name}: ${r.ok ? 'test ok' : 'test failed'}${r.detail ? ` · ${r.detail}` : ''}`)

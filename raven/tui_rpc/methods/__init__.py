@@ -16,13 +16,20 @@ the ui-tui frontend currently calls:
 * ``session.{create, close, resume}`` (3) — Wave 6.5 lifecycle return-shape
   stubs (real SessionManager wiring deferred)
 * ``terminal.resize`` (1) — Wave 6.5 SIGWINCH no-op + cols record
+* ``delegation.{status, pause}`` / ``subagent.interrupt`` (3) — spawn HUD caps,
+  the pause kill switch, and the overlay's per-row kill
+* ``shell.exec`` (1) — the composer's ``!command`` escape
+* ``skills.manage`` (1) — ``/skills`` over the on-disk registry and the hub
+* ``clipboard.paste`` / ``input.detect_drop`` (2) — pasted image and dropped path
+* ``command.dispatch`` (1) — slash fallback: skill load, else CLI
+* ``session.interrupt`` (1) — Ctrl+C on the pre-typed-chat path
 * hermes-only stub groups (27 names after Wave 6.5): 6 original groups
   (voice / browser / spawn_tree / process.stop / rollback / tools.configure)
   + 17 Wave 6.5 unaligned method names that return -32012
 
-Domains that are NOT yet aligned (turn.* / skill.* / model.* / mcp.*) are
-deliberately omitted from the umbrella — they wait for the frontend/backend
-alignment audit before being wired in.
+``skill.*`` and ``mcp.*`` are still declared in the contract with no handler, so
+they answer -32601; ``tests/test_tui_rpc_registration.py`` allowlists them by
+name and fails on any addition to that set.
 """
 
 from __future__ import annotations
@@ -32,20 +39,29 @@ from typing import TYPE_CHECKING
 from raven.tui_rpc.methods._stubs import register_stub_methods
 from raven.tui_rpc.methods.approval import register_approval_methods
 from raven.tui_rpc.methods.cli_dispatch import register_cli_methods
+from raven.tui_rpc.methods.clipboard import register_clipboard_methods
+from raven.tui_rpc.methods.command_dispatch import register_command_dispatch_methods
 from raven.tui_rpc.methods.commands import register_commands_methods
 from raven.tui_rpc.methods.config import register_config_methods
 from raven.tui_rpc.methods.confirm import register_confirm_methods
 from raven.tui_rpc.methods.dag import register_dag_methods
+from raven.tui_rpc.methods.delegation import register_delegation_methods
+from raven.tui_rpc.methods.input import register_input_methods
 from raven.tui_rpc.methods.model import register_model_methods
 from raven.tui_rpc.methods.question import register_question_methods
 from raven.tui_rpc.methods.reload import register_reload_methods
 from raven.tui_rpc.methods.session import register_session_methods
 from raven.tui_rpc.methods.setup import register_setup_methods
+from raven.tui_rpc.methods.shell import register_shell_methods
+from raven.tui_rpc.methods.skills import register_skills_methods
 from raven.tui_rpc.methods.slash_routing import register_slash_routing_methods
 from raven.tui_rpc.methods.subagents import register_subagents_methods
 from raven.tui_rpc.methods.system import register_system_methods
 from raven.tui_rpc.methods.terminal import register_terminal_methods
-from raven.tui_rpc.methods.turn import register_turn_methods
+from raven.tui_rpc.methods.turn import (
+    register_session_interrupt_method,
+    register_turn_methods,
+)
 
 if TYPE_CHECKING:
     from raven.spine.scheduler import Scheduler
@@ -146,6 +162,24 @@ def register_aligned_methods_except_system(
     # come AFTER register_stub_methods so session.status's real handler
     # supersedes the (now-removed) hermes-only stub entry.
     register_slash_routing_methods(dispatcher, confirm_broker=confirm_broker)
+    # The group ui-tui calls but nothing ever backed, so each came back -32601.
+    # None of these names is in the stub table, so ordering against
+    # ``register_stub_methods`` does not matter -- but they must stay after it
+    # for the same reason the two groups above do, if one is ever stubbed.
+    register_delegation_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_shell_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_skills_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_clipboard_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_input_methods(dispatcher)
+    register_command_dispatch_methods(
+        dispatcher,
+        agent_loop_factory=agent_loop_factory,
+        confirm_broker=confirm_broker,
+    )
+    # Not gated on ``emitter`` unlike the rest of turn.*: the legacy Ctrl+C path
+    # needs no subscription channel, and gating it would leave exactly the
+    # configurations that still use it on -32601.
+    register_session_interrupt_method(dispatcher)
     # Unlike generic stubs, approval.respond is a capability-bearing endpoint.
     # Register it only when this gateway owns an interactive approval broker.
     if approval_broker is not None:
@@ -194,6 +228,13 @@ __all__ = [
     "register_model_methods",
     "register_slash_routing_methods",
     "register_turn_methods",
+    "register_session_interrupt_method",
+    "register_delegation_methods",
+    "register_shell_methods",
+    "register_skills_methods",
+    "register_clipboard_methods",
+    "register_input_methods",
+    "register_command_dispatch_methods",
     "register_approval_methods",
     "register_confirm_methods",
     "register_question_methods",

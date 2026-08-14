@@ -44,7 +44,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/status')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('session.status', { session_id: 'sid-abc' })
+    expect(rpc).toHaveBeenCalledWith('session.status', { session_id: 'sid-abc' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.page).toHaveBeenCalledWith('Raven TUI Status', 'Status')
@@ -143,10 +143,7 @@ describe('createSlashHandler', () => {
 
     expect(createSlashHandler(ctx)('/skills install foo')).toBe(true)
     expect(getOverlayState().skillsHub).toBe(false)
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', {
-      action: 'install',
-      query: 'foo'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith('skills.manage', { action: 'install', query: 'foo' }, { quiet: true })
   })
 
   it('routes /skills inspect <name> to skills.manage', () => {
@@ -202,7 +199,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents add opencode Builder')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode', name: 'Builder' })
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode', name: 'Builder' }, { quiet: true })
     expect(getOverlayState().subagentsHub).toBe(false)
   })
 
@@ -211,7 +208,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents on Coder')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Coder' })
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Coder' }, { quiet: true })
   })
 
   it('routes /subagents off <name> to subagents.toggle with enabled false', () => {
@@ -219,7 +216,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents off Coder')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Coder' })
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'Coder' }, { quiet: true })
   })
 
   it('routes /subagents test <name> to subagents.test', () => {
@@ -227,7 +224,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents test Coder')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.test', { name: 'Coder', source: 'config' })
+    expect(rpc).toHaveBeenCalledWith('subagents.test', { name: 'Coder', source: 'config' }, { quiet: true })
   })
 
   it('supports a multi-word agent name after on/off/test', () => {
@@ -237,7 +234,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents off General Agent')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'General Agent' })
+    expect(rpc).toHaveBeenCalledWith('subagents.toggle', { enabled: false, name: 'General Agent' }, { quiet: true })
   })
 
   it('matches the subcommand case-insensitively while leaving the name untouched', () => {
@@ -245,7 +242,7 @@ describe('createSlashHandler', () => {
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)('/subagents ADD opencode')).toBe(true)
-    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode' })
+    expect(rpc).toHaveBeenCalledWith('subagents.add', { preset: 'opencode' }, { quiet: true })
   })
 
   it('prints a usage line for an unrecognized subcommand without opening the overlay or calling the gateway', () => {
@@ -364,10 +361,11 @@ describe('createSlashHandler', () => {
       subagents: 'expanded',
       activity: 'expanded'
     })
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
-      key: 'details_mode',
-      value: 'expanded'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      { key: 'details_mode', value: 'expanded' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details: expanded')
   })
 
@@ -376,10 +374,11 @@ describe('createSlashHandler', () => {
 
     expect(createSlashHandler(ctx)('/details activity hidden')).toBe(true)
     expect(getUiState().sections.activity).toBe('hidden')
-    expect(ctx.gateway.rpc).toHaveBeenCalledWith('config.set', {
-      key: 'details_mode.activity',
-      value: 'hidden'
-    })
+    expect(ctx.gateway.rpc).toHaveBeenCalledWith(
+      'config.set',
+      { key: 'details_mode.activity', value: 'hidden' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details activity: hidden')
   })
 
@@ -390,10 +389,11 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/details tools reset')
     expect(getUiState().sections.tools).toBeUndefined()
-    expect(ctx.gateway.rpc).toHaveBeenLastCalledWith('config.set', {
-      key: 'details_mode.tools',
-      value: ''
-    })
+    expect(ctx.gateway.rpc).toHaveBeenLastCalledWith(
+      'config.set',
+      { key: 'details_mode.tools', value: '' },
+      { quiet: true }
+    )
     expect(ctx.transcript.sys).toHaveBeenCalledWith('details tools: reset')
   })
 
@@ -413,21 +413,29 @@ describe('createSlashHandler', () => {
     expect(ctx.transcript.sys).toHaveBeenNthCalledWith(3, 'MCP tool: /tools enable github:create_issue')
   })
 
+  // The fourth column is the rpc-helper option bag. A command that installs
+  // its own `.catch` must pass `{quiet: true}`, or the helper reports the
+  // failure into the transcript itself and that handler never runs.
   it.each([
-    ['/browser status', 'browser.manage', { action: 'status', session_id: null }],
-    ['/browser connect', 'browser.manage', { action: 'connect', session_id: null, url: 'http://127.0.0.1:9222' }],
-    ['/reload-mcp', 'reload.mcp', { session_id: null }],
-    ['/reload', 'reload.env', {}],
-    ['/stop', 'process.stop', {}],
-    ['/fast status', 'config.get', { key: 'fast', session_id: null }],
-    ['/busy status', 'config.get', { key: 'busy' }],
-    ['/indicator', 'config.get', { key: 'indicator' }]
-  ])('routes %s through native RPC (no slash worker)', (command, method, params) => {
+    ['/browser status', 'browser.manage', { action: 'status', session_id: null }, undefined],
+    [
+      '/browser connect',
+      'browser.manage',
+      { action: 'connect', session_id: null, url: 'http://127.0.0.1:9222' },
+      undefined
+    ],
+    ['/reload-mcp', 'reload.mcp', { session_id: null }, undefined],
+    ['/reload', 'reload.env', {}, { quiet: true }],
+    ['/stop', 'process.stop', {}, { quiet: true }],
+    ['/fast status', 'config.get', { key: 'fast', session_id: null }, { quiet: true }],
+    ['/busy status', 'config.get', { key: 'busy' }, { quiet: true }],
+    ['/indicator', 'config.get', { key: 'indicator' }, undefined]
+  ])('routes %s through native RPC (no slash worker)', (command, method, params, opts) => {
     const rpc = vi.fn(() => Promise.resolve({}))
     const ctx = buildCtx({ gateway: { ...buildGateway(), rpc } })
 
     expect(createSlashHandler(ctx)(command)).toBe(true)
-    expect(rpc).toHaveBeenCalledWith(method, params)
+    expect(rpc).toHaveBeenCalledWith(method, params, ...(opts ? [opts] : []))
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
   })
 
@@ -749,7 +757,7 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/title my title')
 
-    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc', title: 'my title' })
+    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc', title: 'my title' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('session title set: my title')
@@ -763,7 +771,7 @@ describe('createSlashHandler', () => {
 
     createSlashHandler(ctx)('/title')
 
-    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc' })
+    expect(rpc).toHaveBeenCalledWith('session.title', { session_id: 'sid-abc' }, { quiet: true })
     expect(ctx.gateway.gw.request).not.toHaveBeenCalled()
     await vi.waitFor(() => {
       expect(ctx.transcript.sys).toHaveBeenCalledWith('title: demo title')

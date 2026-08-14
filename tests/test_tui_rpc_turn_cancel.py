@@ -20,7 +20,9 @@ from pydantic import ValidationError
 
 from raven.tui_rpc.dispatcher import Dispatcher
 from raven.tui_rpc.methods.turn import (
+    register_session_interrupt_method,
     register_turn_methods,
+    session_interrupt,
     turn_cancel,
     turn_send,
     turn_subscribe,
@@ -198,3 +200,38 @@ async def test_turn_cancel_dispatches_via_dispatcher_with_active_turn(
 
     assert "error" not in resp
     assert resp["result"] == {"cancelled": True}
+
+
+# --- session.interrupt (the pre-typed-chat Ctrl+C path) ---
+
+
+async def test_session_interrupt_cancels_the_active_turn(emitter: SubscriptionEmitter) -> None:
+    await turn_send(
+        {"session_key": "tui:default", "content": "hello"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+    assert await session_interrupt({"session_id": "tui:default"}) == {"ok": True}
+
+
+async def test_session_interrupt_with_no_turn_in_flight_is_not_an_error() -> None:
+    assert await session_interrupt({"session_id": "tui:default"}) == {"ok": False}
+    assert await session_interrupt({}) == {"ok": False}
+
+
+async def test_session_interrupt_emits_nothing(emitter: SubscriptionEmitter, send_frame_capture: AsyncMock) -> None:
+    # Unlike turn.cancel: the client draws the interrupted state itself before
+    # firing this, so a second error frame would double-report the same event.
+    await turn_subscribe({"session_key": "tui:default"}, emitter=emitter)
+    await turn_send(
+        {"session_key": "tui:default", "content": "hello"}, emitter=emitter, scheduler=FakeScheduler(), turn_ids={}
+    )
+    before = len(_collect_events(send_frame_capture))
+    await session_interrupt({"session_id": "tui:default"})
+    assert len(_collect_events(send_frame_capture)) == before
+
+
+async def test_session_interrupt_is_registered_without_an_emitter() -> None:
+    # The legacy path has no subscription channel; gating it on one the way
+    # turn.* is gated would put it back on -32601 exactly where it is used.
+    d = Dispatcher()
+    register_session_interrupt_method(d)
+    assert "session.interrupt" in d.methods()

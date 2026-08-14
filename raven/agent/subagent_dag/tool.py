@@ -105,7 +105,13 @@ class SubAgentDagTool(Tool):
         max_concurrency: int = 5,
         guide_skill_id: str | None = GUIDE_SKILL_ID,
         session_dir: "Callable[[str], Path] | None" = None,
+        is_paused: "Callable[[], bool] | None" = None,
     ) -> None:
+        # Read through to SubagentManager's flag rather than mirroring it: this
+        # tool dispatches to its own backends without ever calling ``spawn``, so
+        # a pause set from the agents overlay would otherwise stop single spawns
+        # while a graph kept fanning out behind a HUD reading "paused".
+        self._is_paused = is_paused
         self._guide_skill_id = guide_skill_id
         self._workspace = workspace
         self._session_dir = session_dir
@@ -364,6 +370,14 @@ class SubAgentDagTool(Tool):
             return (
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
+            )
+        # Refused whole rather than per node, and ahead of validation, for the
+        # same reason validation runs early: a refused graph must cost zero
+        # sub-agent dispatches.
+        if self._is_paused is not None and self._is_paused():
+            return (
+                "Error: delegation is paused. The user paused sub-agent spawning; "
+                "do the work in this turn instead, or ask them to resume."
             )
         # Validation is a distinct phase, ahead of the run: a graph that fails
         # any check costs zero sub-agent dispatches, so a rejection is always

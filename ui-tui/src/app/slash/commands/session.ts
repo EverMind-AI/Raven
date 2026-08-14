@@ -546,7 +546,7 @@ export const sessionCommands: SlashCommand[] = [
 
       if (!mode || mode === 'status') {
         return ctx.gateway
-          .rpc<ConfigGetValueResponse>('config.get', { key: 'fast', session_id: ctx.sid })
+          .rpc<ConfigGetValueResponse>('config.get', { key: 'fast', session_id: ctx.sid }, { quiet: true })
           .then(
             ctx.guarded<ConfigGetValueResponse>(r =>
               ctx.transcript.sys(`fast mode: ${r.value === 'fast' ? 'fast' : 'normal'}`)
@@ -591,7 +591,7 @@ export const sessionCommands: SlashCommand[] = [
 
       if (!mode || mode === 'status') {
         return ctx.gateway
-          .rpc<ConfigGetValueResponse>('config.get', { key: 'busy' })
+          .rpc<ConfigGetValueResponse>('config.get', { key: 'busy' }, { quiet: true })
           .then(
             ctx.guarded<ConfigGetValueResponse>(r => {
               const current = r.value || 'interrupt'
@@ -602,7 +602,7 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       ctx.gateway
-        .rpc<ConfigSetResponse>('config.set', { key: 'busy', value: mode })
+        .rpc<ConfigSetResponse>('config.set', { key: 'busy', value: mode }, { quiet: true })
         .then(
           ctx.guarded<ConfigSetResponse>(r => {
             const next = r.value || mode

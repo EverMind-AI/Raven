@@ -112,6 +112,15 @@ class SubagentManager:
         # just whichever spawn happened to overwrite the slot last.
         self._instance_tasks: dict[tuple[str, str, str], set[str]] = {}
         self._gate = asyncio.Semaphore(max_concurrent)
+        # Kept alongside the gate because a Semaphore does not expose the value
+        # it was built with, and the TUI's spawn HUD needs the cap to render a
+        # "widest level / cap" ratio rather than a bare count.
+        self.max_concurrent = max_concurrent
+        # Operator kill switch for delegation, toggled from the TUI's agents
+        # overlay. Refuses new spawns while set; running ones are left alone,
+        # because pausing is how a user stops a fan-out from growing without
+        # throwing away the work already in flight.
+        self._paused = False
         self._max_spawns_per_hour = max_spawns_per_hour
         # Per-session spawn timestamps (monotonic), kept per session (not
         # per-process) so one busy session can't throttle others. Each deque is
@@ -194,6 +203,12 @@ class SubagentManager:
         turn, and the turn's working-directory binding is released once that
         turn returns.
         """
+        if self._paused:
+            logger.info("Spawn refused: delegation is paused")
+            return (
+                "Spawn refused: delegation is paused. The user paused sub-agent "
+                "spawning; do the work in this turn instead, or ask them to resume."
+            )
         quota_key = session_key or "default"
         now = time.monotonic()
         window = self._session_spawn_times.setdefault(quota_key, deque())
@@ -482,6 +497,30 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        return True
+
+    @property
+    def paused(self) -> bool:
+        """Whether new spawns are currently refused."""
+        return self._paused
+
+    def set_paused(self, paused: bool) -> bool:
+        """Set the delegation pause flag. Returns the value now in effect."""
+        self._paused = bool(paused)
+        return self._paused
+
+    async def cancel_by_id(self, task_id: str) -> bool:
+        """Cancel one spawn by the id ``spawn`` handed back. Returns whether it was live.
+
+        The instance-keyed variant cannot serve the overlay's kill button: rows
+        there are keyed by task id, and a spawn made without an ``agent`` has no
+        instance key at all.
+        """
+        task = self._running_tasks.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
         return True
 
     def has_active(self, session_key: str) -> bool:
