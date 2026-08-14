@@ -19,6 +19,7 @@ from raven.providers.base import (
     GenerationSettings,
     LLMProvider,
     LLMResponse,
+    RunMeta,
     StreamDelta,
     ToolCallRequest,
     format_llm_error,
@@ -747,7 +748,6 @@ class LiteLLMProvider(LLMProvider):
             )
 
         tool_calls = []
-        args_parse_failed = False
         for tc in raw_tool_calls:
             # Parse arguments from JSON string if needed. Strict first, so that
             # "this needed repairing" survives as a signal: an upstream cut mid
@@ -756,12 +756,13 @@ class LiteLLMProvider(LLMProvider):
             # backends send the raw fragment here, so this is the one locally
             # computable clue that the call was cut.
             args = tc.function.arguments
+            repaired = False
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except Exception:
                     args = json_repair.loads(args)
-                    args_parse_failed = True
+                    repaired = True
 
             provider_specific_fields = getattr(tc, "provider_specific_fields", None) or None
             function_provider_specific_fields = getattr(tc.function, "provider_specific_fields", None) or None
@@ -773,6 +774,7 @@ class LiteLLMProvider(LLMProvider):
                     arguments=args,
                     provider_specific_fields=provider_specific_fields,
                     function_provider_specific_fields=function_provider_specific_fields,
+                    run_meta=RunMeta(arguments_repaired=True) if repaired else None,
                 )
             )
 
@@ -822,7 +824,6 @@ class LiteLLMProvider(LLMProvider):
             usage=usage,
             reasoning_content=reasoning_content,
             thinking_blocks=thinking_blocks,
-            args_parse_failed=args_parse_failed,
         )
 
     @property

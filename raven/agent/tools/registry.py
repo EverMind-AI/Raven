@@ -79,6 +79,16 @@ class ToolRegistry:
         if truncation:
             hint = tool.truncation_hint
             return truncation.as_error(name) + (f" {hint}" if hint else "")
+        if run_meta and run_meta.arguments_repaired:
+            # Same refusal, different cause. Nothing about the turn says it was
+            # cut -- no ceiling hit, no length stop -- so the arguments are
+            # malformed rather than incomplete, and telling this model to send
+            # the content in smaller pieces would send it after a problem it
+            # does not have.
+            return (
+                f"Error: [invalid arguments] The arguments for '{name}' were not valid JSON, "
+                f"so this call was not run. Send it again with well-formed arguments."
+            )
 
         try:
             # Attempt to cast parameters to match schema types

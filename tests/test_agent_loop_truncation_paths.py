@@ -23,7 +23,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.truncation import flag_truncation
-from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
+from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, RunMeta, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -71,9 +71,15 @@ def test_usage_reaching_the_ceiling_flags_truncation_without_finish_reason() -> 
     assert calls[0].run_meta is not None
 
 
-def test_parse_failure_alone_flags_truncation() -> None:
-    """Signal 3 on its own -- only the streaming path can supply it."""
+def test_a_repair_alone_is_malformed_json_not_a_ceiling_hit() -> None:
+    """No length stop, no ceiling hit -- just JSON the model got wrong.
+
+    The call is still refused (its arguments cannot be trusted), but nothing
+    about the turn says it was cut, so it must not be recorded as truncated
+    nor told to resend in smaller pieces.
+    """
     calls = [_call()]
+    calls[0].run_meta = RunMeta(arguments_repaired=True)
 
     _, truncated = flag_truncation(
         _gen(60),
@@ -81,10 +87,49 @@ def test_parse_failure_alone_flags_truncation() -> None:
         finish_reason="tool_calls",
         usage={"completion_tokens": 12},
         tool_calls=calls,
-        args_parse_failed=True,
+    )
+
+    assert truncated is False
+    assert calls[0].run_meta.truncation is None
+    assert calls[0].run_meta.arguments_repaired is True
+
+
+def test_a_repair_under_a_ceiling_hit_is_a_cut() -> None:
+    """Same repair, but usage says the turn hit the ceiling."""
+    calls = [_call()]
+    calls[0].run_meta = RunMeta(arguments_repaired=True)
+
+    _, truncated = flag_truncation(
+        _gen(60),
+        model="anthropic/claude-opus-4-5",
+        finish_reason="tool_calls",
+        usage={"completion_tokens": 60},
+        tool_calls=calls,
     )
 
     assert truncated is True
+    assert calls[0].run_meta.truncation is not None
+
+
+def test_a_repair_on_an_earlier_call_marks_that_call_not_the_last() -> None:
+    """Three calls, the first one malformed. This is the shape that made the
+    response-level flag wrong: it would refuse the third and dispatch the first.
+    """
+    calls = [_call("write_file"), _call("read_file"), _call("list_dir")]
+    calls[0].run_meta = RunMeta(arguments_repaired=True)
+
+    flag_truncation(
+        _gen(60),
+        model="anthropic/claude-opus-4-5",
+        finish_reason="length",
+        usage=None,
+        tool_calls=calls,
+        cut_inside_tool_call=True,
+    )
+
+    assert calls[0].run_meta.truncation is not None, "the malformed call must be marked"
+    assert calls[2].run_meta is not None, "the last call is marked by the response-level signal"
+    assert calls[1].run_meta is None, "the untouched middle call stays dispatchable"
 
 
 def test_a_complete_turn_is_left_alone() -> None:
@@ -152,7 +197,14 @@ class _TruncatedThenDone(LLMProvider):
         if self.calls == 1:
             return LLMResponse(
                 content="",
-                tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "snake.py"})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="write_file",
+                        arguments={"path": "snake.py"},
+                        run_meta=RunMeta(arguments_repaired=True),
+                    )
+                ],
                 finish_reason="length",
             )
         return LLMResponse(content="done", finish_reason="stop")
@@ -346,10 +398,10 @@ def test_repaired_arguments_are_reported_as_a_parse_failure() -> None:
     provider = LiteLLMProvider.__new__(LiteLLMProvider)
 
     whole = LiteLLMProvider._parse_response(provider, response('{"path": "a.py"}'))
-    assert whole.args_parse_failed is False
+    assert whole.tool_calls[0].run_meta is None
 
     cut = LiteLLMProvider._parse_response(provider, response('{"path": "a.py", "content": "import ran'))
-    assert cut.args_parse_failed is True
+    assert cut.tool_calls[0].run_meta.arguments_repaired is True
     # Still repaired -- the signal is additional, not a replacement.
     assert cut.tool_calls[0].arguments["content"] == "import ran"
 
@@ -374,10 +426,16 @@ class _LyingFinishReason(LLMProvider):
         if self.calls == 1:
             return LLMResponse(
                 content="",
-                tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "snake.py"})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="write_file",
+                        arguments={"path": "snake.py"},
+                        run_meta=RunMeta(arguments_repaired=True),
+                    )
+                ],
                 finish_reason="tool_calls",
                 usage={"completion_tokens": 12},
-                args_parse_failed=True,
             )
         return LLMResponse(content="done", finish_reason="stop")
 
@@ -386,11 +444,11 @@ class _LyingFinishReason(LLMProvider):
 
 
 @pytest.mark.asyncio
-async def test_parse_failure_alone_carries_the_non_streaming_path(workspace) -> None:
+async def test_a_malformed_call_is_refused_on_the_non_streaming_path(workspace) -> None:
     """No usable finish_reason, no ceiling hit -- only the repaired arguments.
 
-    This is the gpt-4o shape. Without the signal reaching the loop, the turn
-    reads as a plain schema error and the model is told it forgot a field.
+    Without the observation reaching the loop, the turn reads as a plain schema
+    error and the model is told it forgot a field it did send.
     """
     provider = _LyingFinishReason()
     agent = AgentLoop(
@@ -409,5 +467,5 @@ async def test_parse_failure_alone_carries_the_non_streaming_path(workspace) -> 
     tool_replies = [m for m in provider.seen[1] if m.get("role") == "tool"]
     assert tool_replies
     text = str(tool_replies[-1].get("content", ""))
-    assert "[truncated]" in text
+    assert "invalid arguments" in text
     assert "missing required" not in text

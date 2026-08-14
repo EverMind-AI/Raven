@@ -208,12 +208,21 @@ class RunMeta:
     never wrote.
 
     An empty instance means "nothing worth noting", which is the normal turn.
+
+    The two fields sit at different layers on purpose. ``arguments_repaired``
+    is an observation the provider can make -- this call's JSON had to be
+    repaired to parse. ``truncation`` is the loop's conclusion drawn from it
+    plus the response-level signals. Keeping the observation separate is what
+    lets a single decision point serve both response paths: the streaming one
+    assembles its tool calls in the loop, where a provider has nothing to
+    attach a conclusion to.
+
+    No ``__bool__``: it would have to pick one field to mean "non-empty", and
+    every later field would silently fall outside it.
     """
 
     truncation: TruncationInfo | None = None
-
-    def __bool__(self) -> bool:
-        return self.truncation is not None
+    arguments_repaired: bool = False
 
 
 @dataclass
@@ -266,11 +275,6 @@ class LLMResponse:
     truncated: bool = False
     # The ceiling that produced it, for the message shown to the model.
     max_tokens: int | None = None
-    # A tool call's arguments needed repairing to parse at all. Locally
-    # computed from what arrived, so it holds up where a backend reports a
-    # clean stop on a cut-off reply -- measured on gpt-4o, which answers a
-    # ceiling hit with finish_reason="tool_calls".
-    args_parse_failed: bool = False
 
     @property
     def has_tool_calls(self) -> bool:

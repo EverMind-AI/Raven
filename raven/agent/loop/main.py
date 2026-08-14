@@ -54,6 +54,7 @@ from raven.providers.base import (
     ErrorClassification,
     LLMProvider,
     LLMResponse,
+    RunMeta,
     ToolCallRequest,
     send_max_tokens,
 )
@@ -1672,7 +1673,7 @@ class AgentLoop:
                 usage=final_usage or {},
             )
 
-        tool_calls, args_parse_failed = _finalize_tool_calls(tool_call_slots)
+        tool_calls = _finalize_tool_calls(tool_call_slots)
 
         sent_max_tokens, truncated = flag_truncation(
             getattr(self.provider, "generation", None),
@@ -1680,7 +1681,6 @@ class AgentLoop:
             finish_reason=upstream_finish_reason,
             usage=final_usage,
             tool_calls=tool_calls,
-            args_parse_failed=args_parse_failed,
             cut_inside_tool_call=cut_inside_tool_call,
         )
 
@@ -1998,7 +1998,6 @@ class AgentLoop:
                     finish_reason=response.finish_reason,
                     usage=response.usage,
                     tool_calls=response.tool_calls,
-                    args_parse_failed=response.args_parse_failed,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
@@ -3178,31 +3177,34 @@ def _merge_tool_call_fragments(
             slot["function"]["arguments_buf"].append(fn["arguments"])
 
 
-def _finalize_tool_calls(slots: list[dict[str, Any]]) -> tuple[list[ToolCallRequest], bool]:
+def _finalize_tool_calls(slots: list[dict[str, Any]]) -> list[ToolCallRequest]:
     """Convert accumulator slots into final ToolCallRequest list.
 
-    Also reports whether any slot's arguments failed to parse. An incomplete
-    JSON blob is the local, zero-dependency evidence that generation was cut
-    short: it needs no cooperation from the backend, and it is available even
-    when the backend reports a clean stop.
+    A slot whose arguments do not parse is flagged on that call, not on the
+    turn: an unparseable blob is evidence about one call, and reducing it to
+    "something in this turn failed" would leave the loop guessing which. An
+    incomplete JSON blob is also the one piece of evidence that needs no
+    cooperation from the backend, which matters where a backend reports a
+    clean stop on a cut-off reply.
     """
     result: list[ToolCallRequest] = []
-    parse_failed = False
     for slot in slots:
         name = slot["function"]["name"]
         if not name:
             continue
         args_text = "".join(slot["function"]["arguments_buf"])
+        repaired = False
         try:
             args = json.loads(args_text) if args_text else {}
         except json.JSONDecodeError:
             args = {"_raw_arguments": args_text}
-            parse_failed = True
+            repaired = True
         result.append(
             ToolCallRequest(
                 id=slot["id"] or "",
                 name=name,
                 arguments=args,
+                run_meta=RunMeta(arguments_repaired=True) if repaired else None,
             )
         )
-    return result, parse_failed
+    return result

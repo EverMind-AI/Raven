@@ -415,11 +415,14 @@ async def test_truncation_detected_from_output_tokens_alone() -> None:
     assert response.max_tokens == 4096
 
 
-async def test_truncation_detected_from_incomplete_tool_arguments() -> None:
-    """Signal 3: the tool call's JSON was cut mid-string.
+async def test_unparseable_arguments_alone_are_malformed_json_not_a_cut() -> None:
+    """Arguments that do not parse, and nothing else saying the turn was cut.
 
-    Needs no cooperation from the backend at all -- this one is computed from
-    what actually arrived.
+    This used to count as truncation on its own. It cannot: a model writing
+    bad JSON produces exactly this, and reporting it as a ceiling hit both
+    mis-records the turn in tracing and tells the model to send its content in
+    smaller pieces -- advice for a problem it does not have. The call is still
+    refused; only the stated cause differs.
     """
     chunks = [
         StreamDelta(
@@ -440,7 +443,9 @@ async def test_truncation_detected_from_incomplete_tool_arguments() -> None:
         messages=[{"role": "user", "content": "hi"}], tools=None, model="m"
     )
 
-    assert response.truncated is True
+    assert response.truncated is False
+    assert response.tool_calls[0].run_meta.arguments_repaired is True
+    assert response.tool_calls[0].run_meta.truncation is None
     assert response.tool_calls[0].arguments["_raw_arguments"] == '{"content": "def foo('
 
 
