@@ -34,10 +34,11 @@ name and fails on any addition to that set.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from raven.rpc.methods._stubs import register_stub_methods
 from raven.rpc.methods.approval import register_approval_methods
+from raven.rpc.methods.browser import register_browser_methods
 from raven.rpc.methods.cli_dispatch import register_cli_methods
 from raven.rpc.methods.clipboard import register_clipboard_methods
 from raven.rpc.methods.command_dispatch import register_command_dispatch_methods
@@ -89,6 +90,7 @@ def register_aligned_methods(
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
     build_error: "RpcError | None" = None,
+    send_frame: "Any" = None,
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -116,6 +118,7 @@ def register_aligned_methods(
         scheduler=scheduler,
         turn_ids=turn_ids,
         build_error=build_error,
+        send_frame=send_frame,
     )
 
 
@@ -130,6 +133,7 @@ def register_aligned_methods_except_system(
     scheduler: "Scheduler | None" = None,
     turn_ids: "dict[str, str] | None" = None,
     build_error: "RpcError | None" = None,
+    send_frame: "Any" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -228,6 +232,12 @@ def register_aligned_methods_except_system(
     # handler error a caller can show, not as -32601.
     register_skillhub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_plughub_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    # browser.* — the reader's half of the page the agent's browser tools
+    # drive. Registered unconditionally: browser.state is what tells a caller
+    # the optional extra is missing, so it has to answer even then. The
+    # streaming half (browser.watch) needs the transport's notification sink;
+    # a transport without one simply has no live view.
+    register_browser_methods(dispatcher, send_frame=send_frame)
 
 
 __all__ = [
@@ -259,6 +269,7 @@ __all__ = [
     "register_input_methods",
     "register_command_dispatch_methods",
     "register_approval_methods",
+    "register_browser_methods",
     "register_confirm_methods",
     "register_question_methods",
 ]

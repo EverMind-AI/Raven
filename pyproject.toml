@@ -36,6 +36,11 @@ dependencies = [
     "watchfiles>=0.21,<2.0",
     "everos[multimodal]==1.2.1",
     "tomli-w>=1.2.0",
+    # UTS-46 host mapping for the browser's navigation check. Already present
+    # transitively (httpx), declared here because the check is security-load-
+    # bearing: it has to fold a host the way Chromium does before deciding, and
+    # a dependency that only arrives by accident is one an upgrade can remove.
+    "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
     "mcp>=1.27.0",
     "orjson>=3.11.6,<4.0",
@@ -103,6 +108,12 @@ tools = [
 sandbox = [
     "anyio>=4.0",
     "boxlite==0.9.5 ; sys_platform != 'win32'",
+]
+# Driving a real browser is an opt-in extra: playwright pulls a browser binary
+# of its own, which no other capability needs. raven.browser imports it lazily
+# and reports the extra as missing rather than failing to start.
+browser = [
+    "playwright>=1.49,<2.0",
 ]
 dev = [
     "pytest>=8.0,<10.0",

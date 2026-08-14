@@ -141,6 +141,7 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
         scheduler=turn_scheduler,
         turn_ids=turn_ids,
         build_error=build_error,
+        send_frame=send_frame,
     )
 
     if agent_loop is not None and agent_loop.backend is not None:
@@ -171,6 +172,14 @@ async def build_rpc_stack(send_frame: SendFrame) -> RpcStack:
                 await agent_loop.backend.stop()
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
+        # Chromium is a child process too, and a persistent-profile one: leaving
+        # it running holds the profile lock the next launch needs.
+        try:
+            from raven.browser import get_browser
+
+            await get_browser().close()
+        except Exception:
+            logger.exception("serve: browser close failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:

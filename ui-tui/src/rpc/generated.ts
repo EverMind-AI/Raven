@@ -54,6 +54,44 @@ export type TurnEvent =
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserTab".
+ */
+export interface BrowserTab {
+  index: number;
+  url: string;
+  title: string;
+  active: boolean;
+  loading?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserConsoleLine".
+ */
+export interface BrowserConsoleLine {
+  type: string;
+  text: string;
+}
+/**
+ * One actionable element, with the id a click can be aimed at.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserRef".
+ */
+export interface BrowserRef {
+  ref: string;
+  role: string;
+  name: string;
+  x: number;
+  y: number;
+  href?: string;
+  /**
+   * Never present for a password field.
+   */
+  value?: string;
+  disabled?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionCompressSummary".
  */
 export interface SessionCompressSummary {
@@ -2812,6 +2850,356 @@ export interface PromptSubmitParams {
 export interface PromptBackgroundParams {
   session_id?: string;
   text?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserStateParams".
+ */
+export interface BrowserStateParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserStateResult".
+ */
+export interface BrowserStateResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserOpenParams".
+ */
+export interface BrowserOpenParams {
+  /**
+   * http or https only; a bare host is completed to https. Other schemes are refused.
+   */
+  url?: string;
+  /**
+   * back | forward | reload | stop, instead of a url.
+   */
+  action?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserOpenResult".
+ */
+export interface BrowserOpenResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserTabsParams".
+ */
+export interface BrowserTabsParams {
+  /**
+   * list (default) | new | activate | close.
+   */
+  action?: string;
+  index?: number;
+  /**
+   * Navigate a freshly opened tab in the same call.
+   */
+  url?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserTabsResult".
+ */
+export interface BrowserTabsResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+  tabs?: BrowserTab[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserFrameParams".
+ */
+export interface BrowserFrameParams {
+  /**
+   * JPEG quality; 55 by default.
+   */
+  quality?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserFrameResult".
+ */
+export interface BrowserFrameResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+  /**
+   * Base64 JPEG of the page, absent when nothing is started.
+   */
+  jpeg?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserReadParams".
+ */
+export interface BrowserReadParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserReadResult".
+ */
+export interface BrowserReadResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+  /**
+   * Page text, capped.
+   */
+  text?: string;
+  refs?: BrowserRef[];
+  console?: BrowserConsoleLine[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserInputParams".
+ */
+export interface BrowserInputParams {
+  /**
+   * click | text | key | scroll, or the raw stream kinds move/down/up/wheel/keydown/keyup.
+   */
+  kind: string;
+  ref?: string;
+  x?: number;
+  y?: number;
+  dx?: number;
+  dy?: number;
+  button?: string;
+  count?: number;
+  key?: string;
+  text?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserInputResult".
+ */
+export interface BrowserInputResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserModeParams".
+ */
+export interface BrowserModeParams {
+  /**
+   * True pops the page into a real window; false folds it back.
+   */
+  headful: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserModeResult".
+ */
+export interface BrowserModeResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserCloseParams".
+ */
+export interface BrowserCloseParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserCloseResult".
+ */
+export interface BrowserCloseResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserWatchParams".
+ */
+export interface BrowserWatchParams {
+  on: boolean;
+  width?: number;
+  height?: number;
+  quality?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "BrowserWatchResult".
+ */
+export interface BrowserWatchResult {
+  ok: boolean;
+  url?: string;
+  title?: string;
+  started?: boolean;
+  headful?: boolean;
+  /**
+   * False when playwright or its Chromium is missing.
+   */
+  available?: boolean;
+  /**
+   * Why a browser cannot be started, when it cannot.
+   */
+  reason?: string;
+  loading?: boolean;
+  can_back?: boolean;
+  can_forward?: boolean;
+  tab_count?: number;
+  /**
+   * A refused navigation or a failed action; the call still answers rather than raising.
+   */
+  error?: string;
+  watching?: boolean;
+  vw?: number;
+  vh?: number;
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
