@@ -261,3 +261,59 @@ def test_no_provider_signature_hardcodes_a_max_tokens_default() -> None:
 def _all_subclasses(cls: type) -> set[type]:
     direct = set(cls.__subclasses__())
     return direct.union(*(_all_subclasses(c) for c in direct)) if direct else direct
+
+
+# ---------------------------------------------------------------------------
+# Where the cut landed, when the caller can tell
+# ---------------------------------------------------------------------------
+
+
+def test_a_cut_in_prose_after_a_complete_call_leaves_it_alone() -> None:
+    """A turn can finish its tool call and then hit the ceiling in text.
+
+    Refusing that call would waste a turn on one that was fine. Only the
+    streaming path can tell -- deltas arrive in generation order -- so it is
+    the only caller that passes this.
+    """
+    calls = [_call()]
+
+    _, truncated = flag_truncation(
+        _gen(60),
+        model="anthropic/claude-opus-4-5",
+        finish_reason="length",
+        usage=None,
+        tool_calls=calls,
+        cut_inside_tool_call=False,
+    )
+
+    assert truncated is True, "the turn was still truncated"
+    assert calls[0].run_meta is None, "but this call was complete, so it must stay dispatchable"
+
+
+def test_a_cut_inside_tool_arguments_marks_the_call() -> None:
+    calls = [_call()]
+
+    flag_truncation(
+        _gen(60),
+        model="anthropic/claude-opus-4-5",
+        finish_reason="length",
+        usage=None,
+        tool_calls=calls,
+        cut_inside_tool_call=True,
+    )
+
+    assert calls[0].run_meta is not None
+
+
+def test_not_knowing_where_the_cut_landed_assumes_the_worst() -> None:
+    """The non-streaming path cannot tell, and passes None.
+
+    litellm flattens the response into separate `content` and `tool_calls`
+    fields, so which one the model was writing last is not recoverable. One
+    wasted retry beats dispatching a call whose arguments are incomplete.
+    """
+    calls = [_call()]
+
+    flag_truncation(_gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=calls)
+
+    assert calls[0].run_meta is not None

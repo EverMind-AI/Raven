@@ -64,6 +64,22 @@ class ToolRegistry:
         if not tool:
             return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
 
+        # Refused before dispatch, not after validation: a truncated call whose
+        # required fields happen to have arrived still validates, and running it
+        # executes an intent that was never fully transmitted. For write_file
+        # that is not merely an incomplete write -- `mode` is optional, so a cut
+        # before it arrives falls back to "overwrite" and silently replaces
+        # everything an earlier append had written, then reports success.
+        #
+        # The cost of being wrong here is one retry: a turn can end with a
+        # complete tool call and be cut in prose that follows it, which the
+        # non-streaming path cannot tell apart (see agent/loop/truncation.py).
+        # A wasted turn is cheaper than a silent overwrite.
+        truncation = run_meta.truncation if run_meta else None
+        if truncation:
+            hint = tool.truncation_hint
+            return truncation.as_error(name) + (f" {hint}" if hint else "")
+
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
@@ -71,16 +87,6 @@ class ToolRegistry:
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
-                truncation = run_meta.truncation if run_meta else None
-                if truncation:
-                    # The schema is right that something is missing, but not
-                    # about why. Saying "missing required path" to a model that
-                    # wrote a path sends it hunting for a mistake it did not
-                    # make -- and its most reasonable next move is to send the
-                    # same oversized payload again. Name the real cause and
-                    # drop the generic try-another-approach hint with it.
-                    hint = tool.truncation_hint
-                    return truncation.as_error(name) + (f" {hint}" if hint else "")
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 
             ceiling = tool.timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S

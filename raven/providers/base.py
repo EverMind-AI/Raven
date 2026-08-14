@@ -174,18 +174,25 @@ class TruncationInfo:
     at_tokens: int | None = None
 
     def as_error(self, tool_name: str) -> str:
-        """States what happened. What to do about it is the tool's to say.
+        """States what happened and why nothing ran. Advice is the tool's job.
 
-        Two facts, both true of every tool: the call was cut off, and nothing
-        past the cut was kept -- the upstream drops the key it was still
-        writing and the stored assistant message carries the same stub, so
-        there is no copy anywhere. Everything after that is tool-specific and
-        comes from ``Tool.truncation_hint``, which the registry appends.
+        Three clauses, all true of every tool: where it stopped, that it was
+        therefore not executed, and why that matters -- a call missing part of
+        its arguments is not a smaller version of itself, it can be a different
+        call. An optional parameter cut off before it arrived falls back to its
+        default, which for ``write_file`` turns an append into an overwrite.
+
+        Deliberately avoids "saved": the one tool most likely to be truncated
+        is the one that saves files, and "not saved" reads there as "the write
+        failed" rather than "your arguments never arrived".
+
+        What to send instead comes from ``Tool.truncation_hint``, appended by
+        the registry.
         """
-        at = f" at {self.at_tokens} tokens" if self.at_tokens else ""
+        at = f" at the {self.at_tokens}-token limit" if self.at_tokens else ""
         return (
-            f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}. "
-            f"Everything past that point was not saved."
+            f"Error: [truncated] This call was cut{at}, so it was not run -- "
+            f"the missing part could have changed what it does."
         )
 
 

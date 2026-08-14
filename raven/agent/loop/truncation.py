@@ -25,6 +25,7 @@ def flag_truncation(
     usage: dict[str, Any] | None,
     tool_calls: list[ToolCallRequest],
     args_parse_failed: bool = False,
+    cut_inside_tool_call: bool | None = None,
 ) -> tuple[int, bool]:
     """Decide truncation, mark the call that was cut, and log it.
 
@@ -47,13 +48,22 @@ def flag_truncation(
     sentence it can weigh against what it just wrote. A false negative costs a
     retry loop -- the model re-sends the same oversized payload, is told again
     that a field is missing, and never learns the real reason.
+
+    ``cut_inside_tool_call`` says whether the stream was still writing tool
+    arguments when it stopped. A turn can hit the ceiling in prose that follows
+    a complete call, and marking that call would refuse a good one. Only the
+    streaming path can answer: deltas arrive in generation order, while the
+    non-streaming response has already been flattened into separate `content`
+    and `tool_calls` fields with no record of which came last. ``None`` means
+    "cannot tell", and is treated as "assume it was cut" -- one wasted retry
+    is cheaper than dispatching a call whose arguments are incomplete.
     """
     sent_max_tokens = send_max_tokens(generation, model)
     output_tokens = (usage or {}).get("completion_tokens")
     hit_ceiling = isinstance(output_tokens, int) and output_tokens >= sent_max_tokens
     truncated = finish_reason == "length" or hit_ceiling or args_parse_failed
 
-    if truncated and tool_calls:
+    if truncated and tool_calls and cut_inside_tool_call is not False:
         # The last call, and not only the ones whose JSON failed to parse: when
         # the transport closes the braces for us the blob parses cleanly and
         # simply lacks whatever the model had not reached yet, which schema

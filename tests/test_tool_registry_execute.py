@@ -202,7 +202,7 @@ async def test_truncated_arguments_reported_as_truncation() -> None:
     )
 
     assert "[truncated]" in out
-    assert "4096 tokens" in out
+    assert "4096-token limit" in out
     assert "missing required" not in out
     # The generic hint would still point at "try a different approach", which is
     # the advice that produced the retry loop.
@@ -244,25 +244,40 @@ async def test_untruncated_invalid_arguments_keep_the_schema_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_truncation_note_never_reaches_the_tool() -> None:
-    """The note travels beside the arguments, never inside them.
+async def test_a_truncated_call_is_never_dispatched() -> None:
+    """Not even when every required field happens to have arrived.
 
-    Note what this pins down as a side effect: when the arguments validate,
-    the tool runs even though the turn was truncated. That is the remaining
-    gap -- a call whose fields are all present but whose last string value was
-    cut mid-word passes validation and executes, writing a half-file and
-    reporting success. Closing it means refusing the call before dispatch,
-    which is a control-flow change and deliberately out of scope here.
+    A truncated call is not a smaller version of itself; it can be a different
+    call. `mode` is optional on the real write_file, so a cut landing before it
+    falls back to "overwrite" and silently replaces everything an earlier
+    append had written -- then reports success. Validation cannot see that: the
+    call is well-formed. Only the fact that it was cut says otherwise.
+
+    The cost of being wrong is one retry, since a turn can end with a complete
+    call and be cut in the prose after it. That is cheaper than the overwrite.
     """
     tool = _NeedsPath()
     reg = ToolRegistry()
     reg.register(tool)
 
-    await reg.execute(
+    out = await reg.execute(
         "write_file",
         {"path": "a.py", "content": "x"},
         run_meta=RunMeta(truncation=TruncationInfo(at_tokens=4096)),
     )
+
+    assert tool.received is None, "a truncated call must not reach the tool"
+    assert "[truncated]" in out
+
+
+@pytest.mark.asyncio
+async def test_an_untruncated_call_still_reaches_the_tool() -> None:
+    """The refusal is keyed on truncation alone, not on anything else."""
+    tool = _NeedsPath()
+    reg = ToolRegistry()
+    reg.register(tool)
+
+    await reg.execute("write_file", {"path": "a.py", "content": "x"})
 
     assert tool.received == {"path": "a.py", "content": "x"}
 
@@ -316,11 +331,11 @@ async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
     )
 
     assert "[truncated]" in out
-    assert "was not saved" in out
-    # No instruction at all: the two facts stand, and nothing tells this tool
-    # to do something it may have no way of doing.
+    assert "was not run" in out
+    # No instruction at all: the facts stand, and nothing tells this tool to do
+    # something it may have no way of doing.
     assert "smaller pieces" not in out
-    assert out.rstrip().endswith("Everything past that point was not saved.")
+    assert out.rstrip().endswith("the missing part could have changed what it does.")
 
 
 def test_shipped_tools_that_can_be_split_say_how() -> None:
@@ -352,5 +367,5 @@ async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> 
         run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
     )
 
-    assert "was not saved" in out
+    assert "could have changed what it does" in out
     assert "not resend" not in out.lower()
