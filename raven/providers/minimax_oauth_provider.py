@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from raven.providers.base import LLMResponse, StreamDelta
+from raven.providers.base import LLMProvider, LLMResponse, StreamDelta
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.providers.minimax_oauth import get_token, oauth_config
 
@@ -53,9 +53,12 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int | None = None,
-        temperature: float = 0.7,
-        reasoning_effort: str | None = None,
+        # Sentinels, forwarded unresolved: the agent loop calls chat_stream with
+        # messages/tools/model only, so a literal here becomes the value that is
+        # sent and the parent's fallback to self.generation never runs.
+        max_tokens: object = LLMProvider._SENTINEL,
+        temperature: object = LLMProvider._SENTINEL,
+        reasoning_effort: object = LLMProvider._SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> AsyncIterator[StreamDelta]:
         await self._prepare_token()

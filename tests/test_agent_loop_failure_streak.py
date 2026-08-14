@@ -59,3 +59,19 @@ def test_nudge_does_not_assert_a_cause_it_cannot_know() -> None:
     assert "error text above" in text
     for guess in ("external dependency", "network/API/search", "file or path error", "EXACT path"):
         assert guess not in text
+
+
+def test_a_malformed_arguments_failure_has_its_own_class() -> None:
+    """`[invalid arguments]` is a distinct failure, not an uncategorised one.
+
+    It reached the registry after this classifier was written, so it fell into
+    `other` -- the same bucket as every unrelated error. A model alternating
+    between malformed JSON and some other failure would then read as stuck on
+    one thing, which is exactly the conflation this key exists to prevent.
+    """
+    malformed = failure_class("Error: [invalid arguments] The arguments for 'write_file' were not valid JSON")
+    schema = failure_class("Error: Invalid parameters for tool 'write_file': missing required content")
+    other = failure_class("Error: broker unavailable")
+
+    assert malformed == "invalid_arguments"
+    assert len({malformed, schema, other}) == 3

@@ -886,6 +886,21 @@ class LLMProvider(ABC):
                 tool_choice=tool_choice,
             )
             if response.finish_reason != "error":
+                # Judged here, not by the caller: this runs inside the
+                # ``llm.call`` span (``trace.instrument`` extracts attributes in
+                # a ``finally`` and closes the span before the caller sees the
+                # result), and ``current_model`` is the model that actually
+                # answered -- a fallback hop makes the requested one the wrong
+                # ceiling to compare usage against.
+                from raven.providers.truncation import flag_truncation
+
+                response.max_tokens, response.truncated = flag_truncation(
+                    self.generation,
+                    model=current_model,
+                    finish_reason=response.finish_reason,
+                    usage=response.usage,
+                    tool_calls=response.tool_calls,
+                )
                 return response
 
             classification = response.error_classification or self.classify_error(content=response.content)

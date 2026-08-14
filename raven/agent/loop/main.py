@@ -27,7 +27,6 @@ from raven.agent.loop.recovery import (
     is_only_think_debris,
     strip_think_blocks,
 )
-from raven.agent.loop.truncation import flag_truncation
 from raven.agent.subagent import SubagentManager
 from raven.agent.tools.ask_user import AskUserTool
 from raven.agent.tools.deep_research import (
@@ -61,6 +60,7 @@ from raven.providers.base import (
 from raven.providers.capabilities import image_placeholder_text, supports_image_tool_result, vision_verdict
 from raven.providers.rates import effective_context_window, resolve_context_window
 from raven.providers.reasoning import split_orphan_think
+from raven.providers.truncation import flag_truncation
 from raven.sandbox import SandboxConfig, SandboxExecutor, SandboxInitError, build_executor
 from raven.session.manager import Session, SessionManager
 from raven.spine.turn import Origin
@@ -186,10 +186,6 @@ _SKIP_AFTER_SEND_ORIGINS = frozenset({Origin.SENTINEL, Origin.SUBAGENT})
 _ATTACHED_IMAGE_KEY = "_attached_image"
 
 
-# Opening or closing reasoning tag, with or without a vendor namespace prefix
-# (<think>, </thinking>, <mm:think>, ...). Used only to ask whether a stripped
-# response is nothing but tag debris -- matching a spelling wrong costs a
-# missed recovery, never a mangled answer.
 def _strip_inline_images(content: list[Any]) -> list[Any]:
     """Replace inline base64 images with a text placeholder, for persistence.
 
@@ -1979,18 +1975,6 @@ class AgentLoop:
                     tools=call_tools,
                     model=call_model,
                     fallback_models=fallback_models,
-                )
-                # Same decision as the streaming branch above, which reaches it
-                # inside _llm_call_stream. Without this the CLI -- which wires
-                # no token callback and so lands here -- reports a cut-off tool
-                # call as a missing required field, which is the misdiagnosis
-                # this whole path exists to remove.
-                response.max_tokens, response.truncated = flag_truncation(
-                    getattr(self.provider, "generation", None),
-                    model=call_model,
-                    finish_reason=response.finish_reason,
-                    usage=response.usage,
-                    tool_calls=response.tool_calls,
                 )
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.

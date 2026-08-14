@@ -39,6 +39,11 @@ def failure_class(model_text: str) -> str:
     low = model_text[:200].lower()
     if "[truncated]" in low:
         return "truncated"
+    if "[invalid arguments]" in low:
+        # Its own class, not "schema": a model that sent malformed JSON and
+        # then sent a well-formed call missing a field has changed what it is
+        # doing, which is the distinction this key exists to make.
+        return "invalid_arguments"
     if "invalid parameters" in low:
         return "schema"
     if "not found" in low:
@@ -48,15 +53,6 @@ def failure_class(model_text: str) -> str:
     if "timed out" in low:
         return "timeout"
     return "other"
-
-
-# Marks the synthetic user message that carries images a transport cannot put in
-# a tool result. Not persisted: the tool result above it already names the file
-# path, so the only thing this message would add to the transcript is a user turn
-# saying "[image]" that the user never sent -- misleading on resume and in
-# session export. Deliberately a different key from ``_recovery_synthetic``:
-# that one marks empty-response recovery scaffolding, and collapsing the two
-# would make either meaning impossible to reason about separately.
 
 
 def is_hard_tool_failure(result: object) -> bool:

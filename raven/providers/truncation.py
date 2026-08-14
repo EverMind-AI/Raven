@@ -1,5 +1,11 @@
 """Was this turn cut off, and which call did it cut.
 
+Lives beside the provider rather than in the agent loop: everything it reads --
+tool calls, generation settings, the model catalogue -- belongs to this layer,
+and the non-streaming caller has to reach it *before* returning, while its
+tracing span is still open and while it still knows which model in a fallback
+chain actually answered.
+
 Both response paths ask this. The streaming path assembles the reply chunk by
 chunk; the non-streaming one gets it whole. What they can observe differs --
 only the streaming path sees whether a tool call's JSON failed to parse, since
@@ -61,6 +67,11 @@ def flag_truncation(
             last.run_meta or RunMeta(),
             truncation=TruncationInfo(at_tokens=sent_max_tokens),
         )
+
+    # Outside the branch above: a turn can be cut off with no tool call at all
+    # -- a plain reply that ran past the ceiling -- and that is worth seeing in
+    # the log even though there is nothing to refuse.
+    if truncated:
         logger.warning(
             "LLM output truncated (finish_reason={}, output_tokens={}, max_tokens={})",
             finish_reason,

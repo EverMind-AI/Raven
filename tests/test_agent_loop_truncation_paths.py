@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 
 from raven.agent.loop import AgentLoop
-from raven.agent.loop.truncation import flag_truncation
 from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, RunMeta, ToolCallRequest
+from raven.providers.truncation import flag_truncation
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -273,17 +273,21 @@ def test_generation_settings_ships_with_no_opinion_on_max_tokens() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_no_provider_signature_hardcodes_a_max_tokens_default() -> None:
-    """A literal default here silently shadows configuration.
+def test_no_chat_stream_override_hardcodes_a_generation_setting() -> None:
+    """A literal default on `chat_stream` silently replaces configuration.
 
-    This is the original defect of this whole branch: `chat_stream` declared
-    `max_tokens: int = 4096`, the loop called it without that argument, and
-    every streaming request went out at 4096 no matter what was configured.
-    It was fixed on two providers and missed on three others, which then took
-    a `None` from `chat_with_retry` -- one of them into `max(1, None)`.
+    This is the defect the whole branch starts from: `chat_stream` declared
+    `max_tokens: int = 4096`, the loop called it with messages/tools/model
+    only, and every streaming request went out at 4096 whatever was configured.
 
-    Asked of every subclass rather than of a list, so a provider added later
-    cannot reintroduce it quietly.
+    `chat_stream` is the exposed one because the loop calls it directly. `chat`
+    is shielded by `chat_with_retry`, which resolves all three against
+    `self.generation` and always passes them explicitly.
+
+    All three parameters, not just the one that started this: fixing
+    `max_tokens` alone on three providers left `temperature` and
+    `reasoning_effort` shadowed on MiniMax, which is what a reviewer found
+    after this test had already been written to check one field.
     """
     import inspect
     import pkgutil
@@ -299,22 +303,23 @@ def test_no_provider_signature_hardcodes_a_max_tokens_default() -> None:
             continue  # optional backends whose deps are absent
 
     offenders: list[str] = []
-    for cls in _all_subclasses(LLMProvider):
+    for cls in _all_subclasses(LLMProvider) | {LLMProvider}:
         # Test doubles are free to hardcode anything -- they never build a real
         # request. Only shipped providers can shadow a user's configuration.
         if not cls.__module__.startswith("raven."):
             continue
-        for method_name in ("chat", "chat_stream", "chat_with_retry"):
-            method = cls.__dict__.get(method_name)
-            if method is None:
-                continue
-            param = inspect.signature(method).parameters.get("max_tokens")
+        method = cls.__dict__.get("chat_stream")
+        if method is None:
+            continue
+        params = inspect.signature(method).parameters
+        for field in ("max_tokens", "temperature", "reasoning_effort"):
+            param = params.get(field)
             if param is None or param.default is inspect.Parameter.empty:
                 continue
-            if isinstance(param.default, int) and not isinstance(param.default, bool):
-                offenders.append(f"{cls.__module__}.{cls.__qualname__}.{method_name} = {param.default}")
+            if param.default is not LLMProvider._SENTINEL:
+                offenders.append(f"{cls.__module__}.{cls.__qualname__}.chat_stream({field}={param.default!r})")
 
-    assert not offenders, "hardcoded max_tokens defaults shadow configuration: " + "; ".join(offenders)
+    assert not offenders, "chat_stream defaults shadow configuration: " + "; ".join(offenders)
 
 
 def _all_subclasses(cls: type) -> set[type]:
@@ -434,3 +439,114 @@ async def test_a_malformed_call_is_refused_on_the_non_streaming_path(workspace) 
     text = str(tool_replies[-1].get("content", ""))
     assert "invalid arguments" in text
     assert "missing required" not in text
+
+
+# ---------------------------------------------------------------------------
+# The tracing span must carry the verdict, which means judging before it closes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_llm_call_span_records_a_truncated_non_streaming_turn() -> None:
+    """`llm.truncated` is stamped only when true, so it has to be true by then.
+
+    `trace.instrument` extracts span attributes in a `finally` and closes the
+    span before handing the result back, so a caller that decides truncation
+    after `chat_with_retry` returns records nothing -- the span read `False`
+    and is already written. That is why the decision lives inside the method
+    rather than at its call site.
+    """
+    from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse, ToolCallRequest
+    from raven.tracing import semconv
+
+    class _CutOff(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.generation = GenerationSettings(max_tokens=60)
+
+        async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="write_file", arguments={"path": "a.py"})],
+                finish_reason="length",
+                usage={"completion_tokens": 60},
+            )
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    provider = _CutOff()
+    response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hi"}], model="stub")
+
+    # What the extractor would read at the moment the span closes.
+    attrs = semconv.llm_attrs(response, "stub", "stub", "_CutOff")
+
+    assert attrs.get("llm.truncated") is True
+    assert attrs.get("llm.max_tokens") == 60
+
+
+@pytest.mark.asyncio
+async def test_the_ceiling_comes_from_the_model_that_actually_answered() -> None:
+    """A fallback hop changes which ceiling the usage should be measured against.
+
+    `chat_with_retry` walks `[model, *fallback_models]` and `LLMResponse` does
+    not record which one answered, so a caller judging afterwards can only use
+    the model it asked for. When a fallback serves the turn, that is the wrong
+    ceiling: too small and a complete call reads as truncated, too large and a
+    real cut goes unnoticed.
+    """
+    from raven.providers.base import GenerationSettings, LLMProvider, LLMResponse
+
+    class _FirstModelFails(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.generation = GenerationSettings()  # no pin: ceiling comes from the catalogue
+            self.served: list[str] = []
+
+        async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+            self.served.append(model or "")
+            if model == "openai/gpt-4o":
+                return LLMResponse(content="", finish_reason="error", error_classification=None)
+            # 20000 tokens: over gpt-4o's 16384 ceiling, under claude's 64000
+            return LLMResponse(content="ok", finish_reason="stop", usage={"completion_tokens": 20000})
+
+        def classify_error(self, exc=None, content=None):
+            from raven.providers.base import ErrorClassification
+
+            return ErrorClassification(category="server", retryable=False, should_fallback=True)
+
+        def get_default_model(self) -> str:
+            return "openai/gpt-4o"
+
+    provider = _FirstModelFails()
+    response = await provider.chat_with_retry(
+        messages=[{"role": "user", "content": "hi"}],
+        model="openai/gpt-4o",
+        fallback_models=["anthropic/claude-opus-4-5"],
+    )
+
+    assert provider.served == ["openai/gpt-4o", "anthropic/claude-opus-4-5"]
+    assert response.max_tokens == 64000, "the ceiling must be the fallback's, not the requested model's"
+    assert response.truncated is False, "20000 tokens is a normal reply for the model that answered"
+
+
+def test_a_truncated_reply_with_no_tool_calls_is_still_logged() -> None:
+    """A plain answer cut at the ceiling has nothing to refuse, but is still
+    the event an operator goes looking for in the log.
+
+    The warning had been nested under "there is a tool call to mark", which
+    made exactly this shape invisible.
+    """
+    from loguru import logger
+
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level="WARNING")
+    try:
+        _, truncated = flag_truncation(
+            _gen(60), model="anthropic/claude-opus-4-5", finish_reason="length", usage=None, tool_calls=[]
+        )
+    finally:
+        logger.remove(sink)
+
+    assert truncated is True
+    assert any("truncated" in line for line in seen)
