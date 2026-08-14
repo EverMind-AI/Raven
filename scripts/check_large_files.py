@@ -57,6 +57,9 @@ BLOCKED_ASSET_EXTENSIONS = {
 # these trees are exempt from the extension list. The size limit still applies.
 APP_SOURCE_PREFIXES = (
     "bridge/",
+    # Not a prefix of "ui-tui/" or "ui-webui/", so those two keep matching
+    # exactly what they matched before.
+    "ui/",
     "ui-tui/",
     "ui-webui/",
 )
