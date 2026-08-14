@@ -184,8 +184,10 @@ class TruncationInfo:
         """
         at = f" at {self.at_tokens} tokens" if self.at_tokens else ""
         return (
-            f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}, "
-            f"so this call is incomplete. Do not resend the same content."
+            f"Error: [truncated] Arguments for '{tool_name}' were cut off{at}. "
+            f"Everything past that point never arrived and was not saved anywhere, "
+            f"so it has to be sent again -- but not as one call this size, or it "
+            f"will be cut at the same place."
         )
 
 

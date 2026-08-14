@@ -316,9 +316,9 @@ async def test_a_tool_without_advice_still_gets_the_neutral_message() -> None:
     )
 
     assert "[truncated]" in out
-    assert "Do not resend the same content." in out
+    assert "has to be sent again" in out
     assert "smaller pieces" not in out
-    assert out.rstrip().endswith("Do not resend the same content.")
+    assert out.rstrip().endswith("will be cut at the same place.")
 
 
 def test_shipped_tools_that_can_be_split_say_how() -> None:
@@ -329,3 +329,27 @@ def test_shipped_tools_that_can_be_split_say_how() -> None:
     assert "mode=append" in (WriteFileTool(".").truncation_hint or "")
     exec_hint = ExecTool().truncation_hint or ""
     assert "cannot be sent in pieces" in exec_hint
+
+
+@pytest.mark.asyncio
+async def test_the_message_does_not_tell_the_model_to_withhold_the_content() -> None:
+    """It used to say "do not resend the same content", and that was wrong.
+
+    Nothing past the cut is saved: the upstream drops the unfinished key, so
+    the call that reaches the tool carries only the fields that completed, and
+    the conversation history stores that same stub. The content genuinely has
+    to come again. Observed live: the model followed the old sentence exactly
+    -- forty turns of `write_file({"path": ...})` with the content withheld.
+    """
+    reg = ToolRegistry()
+    reg.register(_NeedsPath())
+
+    out = await reg.execute(
+        "write_file",
+        {"path": "snake.py"},
+        run_meta=RunMeta(truncation=TruncationInfo(at_tokens=1200)),
+    )
+
+    assert "not saved anywhere" in out
+    assert "sent again" in out
+    assert "not resend" not in out.lower()
